@@ -54,7 +54,7 @@ switch — never by tidiness.
   a plan is in (`off` · `on <reason>` · `waived <reason>`).
 
 All artifacts live in the **project repo** under `docs/` (versioned + pushed, so any account/machine
-can pull and continue); the skill itself lives in the synced `claude-skills` repo. The plan holds the
+can pull and continue); the skill itself lives wherever it was installed. The plan holds the
 roadmap; handoffs **link** to it and never re-list all phases. The handoff holds
 operational next-session state. Memory holds durable facts. Full schemas/templates:
 `references/plan-format.md`, `references/handoff-format.md`, `references/conventions.md`,
@@ -303,6 +303,6 @@ The load-bearing rules a session must not get wrong; full rationale in `referenc
   (conventions §QA gating)
 - **Validate before you trust the board** — `scripts/validate.sh <slug>` catches malformed rows, undefined
   deps, cycles, and inconsistent handoffs; a silently-wrong board is the worst failure.
-- **Skill vs work-state split.** The skill lives in the synced `claude-skills` repo (edit one clone, then
-  `commit → push → pull`); plans/handoffs/reports/test-status/locks are work-state in the project repo's
-  `docs/`. (conventions §Docs layout & repo split)
+- **Skill vs work-state split.** The skill lives in its own install (a plugin, or a clone under
+  `~/.claude*/skills/`); plans/handoffs/reports/test-status/locks are work-state in the project repo's
+  `docs/`. Never write work-state into the skill folder. (conventions §Docs layout & repo split)

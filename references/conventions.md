@@ -149,9 +149,9 @@ run scripts from the repo root or set `DOCS_ROOT=/path/to/repo` explicitly when 
 - **Work-state lives in the project repo** under `docs/` (its `.gitignore` tracks only `/docs/`):
   `plans/<slug>.md` and `handoffs/<slug>/{INDEX.md, phase-NN-*.md, reports/phase-NN-qa.md, test-status.md,
   .locks/phase-NN.lock}`. Commit + push so any account/machine can pull and continue.
-- **The skill lives in the `claude-skills` repo** (cloned to each account's `~/.claude*/skills/`). Edit in
-  one clone, then **commit → push → pull** in the others so all stay byte-identical. Never put work-state in
-  the skill repo, or skill code in the project repo.
+- **The skill lives in its own install** — a plugin, or a clone under `~/.claude*/skills/`. If you keep
+  several clones, edit one and **commit → push → pull** in the others so all stay byte-identical. Never put
+  work-state in the skill folder, or skill code in the project repo.
 
 ## Multi-repo commit atomicity (F11)
 - A phase touching several repos makes one commit per repo — there's no cross-repo transaction. Guard
