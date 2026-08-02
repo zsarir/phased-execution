@@ -245,3 +245,20 @@ test('model fallback walks down the ladder and then gives up', () => {
   assert.equal(nextModel('sonnet'), 'haiku');
   assert.equal(nextModel('haiku'), null, 'nothing below the last rung');
 });
+
+test('a session that could not authenticate is not a success, whatever it reports', () => {
+  // Seen in a real run: OAuth expired, the CLI still reported
+  // `subtype: success` after one turn and $0.00 having done nothing, and the
+  // runner went on to verify work that was never attempted. What the output
+  // says has to outrank what the exit status claims.
+  const d = classify(stop({
+    subtype: 'success',
+    text: 'Failed to authenticate: OAuth session expired and could not be refreshed',
+  }));
+  assert.equal(d.kind, 'needs-human');
+  assert.match(d.kind === 'needs-human' ? d.reason : '', /authentication/);
+});
+
+test('a genuine success is still a success', () => {
+  assert.equal(classify(stop({ subtype: 'success', text: 'Wrote three files and ran the tests.' })).kind, 'ok');
+});

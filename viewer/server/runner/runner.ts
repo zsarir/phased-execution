@@ -436,7 +436,11 @@ export class Runner {
         prompt,
         cwd: state.root,
         model: currentModel,
-        sessionId: record.sessionId,
+        // Deliberately not `record.sessionId`. That is the id of a session that
+        // has already run; handing it back as `--session-id` asks the CLI to
+        // create a session that exists, and it refuses — "Session ID … is
+        // already in use", which is what killed two real retries. A new attempt
+        // gets a new id; continuing an existing one goes through `resume`.
         resume,
         budgetUsd: budget,
         maxTurns,

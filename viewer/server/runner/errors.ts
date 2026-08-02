@@ -262,6 +262,21 @@ export function classify(signal: StopSignal, now = new Date()): Disposition {
   const text = signal.text ?? '';
   const cats = signal.retryCategories ?? [];
 
+  // Credentials are checked BEFORE `success` is believed. A session whose OAuth
+  // token had expired was seen reporting `subtype: success` after one turn and
+  // $0.00, having done nothing at all — and a runner that takes that at face
+  // value goes on to verify work that was never attempted, on every remaining
+  // phase, until something else stops it. What the output says outranks what
+  // the exit status claims.
+  const brokenCredentials = RE.orgPolicy.test(text) || cats.includes('oauth_org_not_allowed')
+    ? 'organization policy blocks this credential'
+    : RE.auth.test(text) || cats.includes('authentication_failed')
+      ? 'authentication failed — run /login in this workspace, then start the run again'
+      : RE.billing.test(text) || cats.includes('billing_error')
+        ? 'billing or credit balance needs attention'
+        : null;
+  if (brokenCredentials) return { kind: 'needs-human', reason: brokenCredentials };
+
   if (signal.subtype === 'success') return { kind: 'ok' };
 
   // Killed by a supervisor or the OS — not the model's doing.
@@ -277,17 +292,6 @@ export function classify(signal: StopSignal, now = new Date()): Disposition {
   }
   if (signal.subtype === 'error_max_turns') {
     return { kind: 'resume', raise: 'turns', reason: 'phase hit its turn cap mid-work' };
-  }
-
-  // Human-only. Retrying these is pure waste and can lock an account harder.
-  if (RE.orgPolicy.test(text) || cats.includes('oauth_org_not_allowed')) {
-    return { kind: 'needs-human', reason: 'organization policy blocks this credential' };
-  }
-  if (RE.auth.test(text) || cats.includes('authentication_failed')) {
-    return { kind: 'needs-human', reason: 'authentication failed — run /login or fix the API key' };
-  }
-  if (RE.billing.test(text) || cats.includes('billing_error')) {
-    return { kind: 'needs-human', reason: 'billing or credit balance needs attention' };
   }
 
   // Model-specific exhaustion. Checked BEFORE the plan limit: the message

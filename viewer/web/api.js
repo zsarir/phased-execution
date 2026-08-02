@@ -99,18 +99,66 @@ export const api = {
   decide: (id, decision, reason) => post(`/api/approvals/${encodeURIComponent(id)}`, { decision, reason, by: 'console' }),
 };
 
+/* ------------------------------------------------------------------ *
+ * One connection, many listeners
+ * ------------------------------------------------------------------ *
+ *
+ * Every view that wanted live data used to open its own `EventSource`. A
+ * browser allows about six connections per host over HTTP/1.1, and the shell,
+ * the dashboard, the runs page and a plan's autopilot tab together held most of
+ * them open forever — so the *fetches* those same views depend on queued behind
+ * connections that never finish. The symptom is precise and misleading: the
+ * page looks alive, and nothing updates until you reload.
+ *
+ * So there is exactly one stream, and it is shared. Views subscribe to it.
+ */
+
+const listeners = new Map(); // event name → Set<fn>
+let stream = null;
+let generation = 0;
+
+function ensureStream() {
+  if (stream) return;
+  const source = new EventSource('/events');
+  stream = source;
+
+  const relay = (name) => source.addEventListener(name, (event) => {
+    let data;
+    try { data = JSON.parse(event.data); } catch { return; }
+    if (name === 'changed') clearCache(data.slugs);
+    if (name === 'warm') clearCache();
+    for (const fn of listeners.get(name) ?? []) {
+      try { fn(data); } catch { /* one bad listener must not stop the rest */ }
+    }
+  });
+
+  for (const name of [
+    'changed', 'warm', 'health', 'approval',
+    'run:run', 'run:phase', 'run:stream', 'run:journal', 'run:verify', 'run:state',
+  ]) relay(name);
+
+  // The browser reconnects on its own and the server replays from Last-Event-ID,
+  // so an error here is worth noting and nothing more.
+  source.addEventListener('error', () => { generation++; });
+}
+
+function on(name, fn) {
+  if (!fn) return () => {};
+  ensureStream();
+  if (!listeners.has(name)) listeners.set(name, new Set());
+  listeners.get(name).add(fn);
+  return () => {
+    listeners.get(name)?.delete(fn);
+    // The stream stays open even with no listeners: opening and closing it as
+    // views mount costs a reconnect each time and buys nothing.
+  };
+}
+
 /** Server-sent events: the board on screen follows the repo. */
 export function subscribe(onChange) {
-  const source = new EventSource('/events');
-  source.addEventListener('changed', (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      clearCache(data.slugs);
-      onChange(data);
-    } catch { /* malformed event — ignore */ }
-  });
-  source.addEventListener('warm', () => { clearCache(); onChange({ warm: true }); });
-  return () => source.close();
+  const offChanged = on('changed', onChange);
+  const offWarm = on('warm', () => onChange({ warm: true }));
+  return () => { offChanged(); offWarm(); };
 }
 
 /**
@@ -123,14 +171,11 @@ export function subscribe(onChange) {
  * rather than showing a run frozen where it left off.
  */
 export function subscribeRun(handlers = {}) {
-  const source = new EventSource('/events');
-  const on = (name, fn) => source.addEventListener(name, (event) => {
-    try { fn(JSON.parse(event.data)); } catch { /* malformed event — ignore */ }
-  });
+  const offs = [];
   for (const name of ['run', 'phase', 'stream', 'journal', 'verify']) {
-    on(`run:${name}`, (data) => handlers[name]?.(data));
+    if (handlers[name]) offs.push(on(`run:${name}`, handlers[name]));
   }
-  on('approval', (data) => handlers.approval?.(data));
-  on('health', (data) => handlers.health?.(data));
-  return () => source.close();
+  if (handlers.approval) offs.push(on('approval', handlers.approval));
+  if (handlers.health) offs.push(on('health', handlers.health));
+  return () => { for (const off of offs) off(); };
 }

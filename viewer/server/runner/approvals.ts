@@ -86,7 +86,26 @@ export const DEFAULT_ASK = [
   'WebFetch',
 ];
 
-export type AutopilotPolicy = { deny: string[]; ask: string[] };
+/**
+ * Read-only work a phase does constantly, pre-approved so it never round-trips
+ * to the hook.
+ *
+ * These ride at CLI scope, and permission rules **merge** across scopes rather
+ * than override — so this adds to whatever the repository already allows, never
+ * replaces it. That matters because a repository's own `.claude/settings.json`
+ * allow rules are ignored until someone has accepted the workspace trust prompt
+ * there, and a session that has lost them still has to be able to look around.
+ */
+export const DEFAULT_ALLOW = [
+  'Read', 'Glob', 'Grep', 'TodoWrite', 'NotebookRead',
+  'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)',
+  'Bash(git branch:*)', 'Bash(git rev-parse:*)', 'Bash(git ls-files:*)',
+  'Bash(ls:*)', 'Bash(cat:*)', 'Bash(head:*)', 'Bash(tail:*)', 'Bash(wc:*)',
+  'Bash(find:*)', 'Bash(grep:*)', 'Bash(rg:*)', 'Bash(jq:*)', 'Bash(pwd:*)',
+  'Bash(echo:*)', 'Bash(which:*)', 'Bash(node --version:*)', 'Bash(python3 --version:*)',
+];
+
+export type AutopilotPolicy = { deny: string[]; ask: string[]; allow: string[] };
 
 /* ------------------------------------------------------------------ *
  * Which calls are worth asking about
@@ -192,6 +211,7 @@ export function loadPolicy(file = POLICY_FILE): AutopilotPolicy {
   return {
     deny: [...new Set([...DEFAULT_DENY, ...strings(extra.deny)])],
     ask: [...new Set([...DEFAULT_ASK, ...strings(extra.ask)])],
+    allow: [...new Set([...DEFAULT_ALLOW, ...strings(extra.allow)])],
   };
 }
 
@@ -362,6 +382,10 @@ export function buildSettings(opts: SettingsOptions): Record<string, unknown> {
   const policy = opts.policy ?? loadPolicy();
   return {
     permissions: {
+      // `allow` rides along because permission rules merge across scopes: it
+      // adds to what the repository already permits and cannot take anything
+      // away. Only `deny` and `allow` go to the CLI.
+      allow: policy.allow,
       // Only `deny` goes to the CLI. It is the layer that holds with the console
       // dead — verified, not assumed.
       //

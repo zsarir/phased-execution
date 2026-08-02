@@ -46,6 +46,10 @@ test('the ask list is never handed to the CLI — headless has nobody to ask', (
   // sat waiting for a prompt that could never appear. Asking is the hook's job.
   const permissions = buildSettings({ runId: 'r1', token: 't', origin: 'http://x' }).permissions as Record<string, unknown>;
   assert.equal(permissions.ask, undefined);
+  // allow does go, because it merges with the repository's rules rather than
+  // replacing them — and a session that lost them to an untrusted workspace
+  // still has to be able to read the files it was sent to work on.
+  assert.ok(Array.isArray(permissions.allow) && permissions.allow.includes('Read'));
   assert.ok(Array.isArray(permissions.deny) && permissions.deny.length > 0);
   // The patterns still exist — they decide what becomes a card.
   assert.equal(classifyTool('Bash', { command: 'git commit -m x' }, loadPolicy('/nonexistent')), 'ask');
@@ -97,7 +101,7 @@ test('the settings file is not world-readable — it holds the run token', () =>
  * Which calls are worth asking about
  * ------------------------------------------------------------------ */
 
-const policy = { deny: DEFAULT_DENY, ask: DEFAULT_ASK };
+const policy = { deny: DEFAULT_DENY, ask: DEFAULT_ASK, allow: [] };
 const bash = (command: string) => classifyTool('Bash', { command }, policy);
 
 test('ordinary work is allowed without troubling anyone', () => {
