@@ -34,13 +34,13 @@ test('a signed-in answer is read in full', () => {
     loggedIn: true,
     authMethod: 'claude.ai',
     apiProvider: 'firstParty',
-    email: 'info@themarketrobo.com',
-    orgName: "info@themarketrobo.com's Organization",
+    email: 'you@example.com',
+    orgName: "you@example.com's Organization",
     subscriptionType: 'max',
   }), '', AT);
 
   assert.equal(status.loggedIn, true);
-  assert.equal(status.email, 'info@themarketrobo.com');
+  assert.equal(status.email, 'you@example.com');
   assert.equal(status.subscription, 'max');
   assert.equal(status.detail, undefined, 'a clean answer needs no caveat');
 });

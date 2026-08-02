@@ -88,7 +88,13 @@ memory: project_<slug>      # or pre-existing project_<other> when reusing an ex
    ### Phase N — <title>
    - **Goal:** what ships.
    - **Size:** S | M | L   (rough working-set; drives batching — see `references/sizing.md`).
-     Optionally add `- **Model:** <alias>` if this phase wants a specific model.
+     Optionally add `- **Model:** <alias>` if this phase wants a specific model, and
+     `- **Effort:** low|medium|high|xhigh|max` if it wants a specific reasoning level. Both are
+     machine-read: the Phase Console's autopilot resolves what a phase runs as from the operator's
+     choice for that run, then these bullets, then the run's own defaults — **per field**, so naming
+     a model here does not discard an effort, or the reverse. Write the alias anywhere in the line
+     (`**Model:** Opus — the hard reasoning` parses); anything unrecognised is ignored rather than
+     guessed at.
    - **Read first:** exact artifacts to load (phase 1: just this plan; later: the prior handoff + this
      plan §Phase N + memory project_<slug>).
    - **Files to create/modify:** concrete paths.

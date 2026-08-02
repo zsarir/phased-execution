@@ -103,11 +103,25 @@ scripts/phase-graph.sh my-feature</pre>
     lede: 'Fresh plan or half-finished plan — the same button. There is no cursor to set.',
     body: html`
       <p>
-        Open the plan, go to <strong>Autopilot</strong>, pick a model and a budget, and start.
-        Readiness is derived from the set of finished phases, so a plan with 1, 4 and 5 done and
-        2 and 3 outstanding needs no special handling: it simply begins at 2.
+        Open the plan, go to <strong>Autopilot</strong>, pick a model, an effort and a budget, and
+        start. Readiness is derived from the set of finished phases, so a plan with 1, 4 and 5 done
+        and 2 and 3 outstanding needs no special handling: it simply begins at 2.
       </p>
       <dl class="defs">
+        <dt>Model and effort</dt>
+        <dd>
+          Set for the run, and overridable per phase under <strong>Per phase</strong>. What a phase
+          runs as is resolved from your choice for this run, then the plan's own
+          <code>**Model:**</code> and <code>**Effort:**</code> bullets, then the run's defaults —
+          field by field, so choosing a model does not throw away an effort the plan asked for.
+        </dd>
+        <dt>Skills</dt>
+        <dd>
+          Every skill a session could invoke — yours, this repository's, and every installed
+          plugin's — with what each one is for. Ticked skills are named in the boot prompt of every
+          phase, on top of whatever the plan's own <code>Skills (every session)</code> line asks
+          for, which stays fixed because it belongs to the plan and not to one run.
+        </dd>
         <dt>Stop and ask me <span class="hint">(default)</span></dt>
         <dd>
           Halts on anything ambiguous — a failed phase, a verification the runner could not fully
@@ -143,7 +157,32 @@ scripts/phase-graph.sh my-feature</pre>
       <p class="callout">
         The last three are the point. A session that exits cleanly claiming success while writing
         nothing halts the run, because nothing here takes the session's word for it.
-      </p>`,
+      </p>
+      <dl class="defs">
+        <dt>Watching it</dt>
+        <dd>
+          The session console shows text as it is written, the tool calls it makes, and the work of
+          any subagent it dispatches — without that last one, a phase that delegates is a silent gap
+          of several minutes. <strong>Detail</strong> adds the model's own reasoning and every hook
+          call, which are worth having when something is wrong and noise when it is not.
+        </dd>
+        <dt>Asking it something</dt>
+        <dd>
+          The box under the console puts a question to the session that is running <em>now</em>. It
+          becomes one more turn in the same conversation — the context is intact and the phase
+          carries on afterwards — rather than a reason to stop it. The same question works from any
+          terminal with <code>btw "…"</code>. It is framed as out-of-band before it is sent, so an
+          answer does not turn into a change of direction.
+        </dd>
+        <dt>Pausing it</dt>
+        <dd>
+          <strong>Pause after this phase</strong> arms a pause and names the phase that has to
+          finish first; nothing is cut off, and it can be cancelled until it arrives.
+          <strong>Stop now</strong> is the one that interrupts, and it records the phase as
+          interrupted rather than failed, because a phase cut off partway may have half-finished
+          something.
+        </dd>
+      </dl>`,
   },
   {
     id: 'approve',

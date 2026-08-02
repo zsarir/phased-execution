@@ -173,7 +173,7 @@ function recordingSession(r: Repo, seen: { phase: number; model?: string; effort
  * ------------------------------------------------------------------ */
 
 test('a continuation fragment is reported, never executed', () => {
-  // Straight out of docs/plans/trade-marketplace.md. Running `…` is nonsense,
+  // Straight out of a real plan. Running `…` is nonsense,
   // and guessing what it continues would be worse than admitting we cannot.
   const text = 'targeted pytest + full safe set `… -m "not slow and not soak" -q` + `task audit:schema`.';
   const { commands, notRun } = extractCommands(text);
@@ -196,7 +196,7 @@ test('paths and prose spans are not mistaken for commands', () => {
 });
 
 test('a mutating command is refused even when it is well-formed', () => {
-  for (const text of ['`task hetzner:update`', '`git push origin main`', '`rm -rf build`', '`terraform apply`']) {
+  for (const text of ['`task infra:update`', '`git push origin main`', '`rm -rf build`', '`terraform apply`']) {
     const { commands, notRun } = extractCommands(text);
     assert.deepEqual(commands, [], text);
     assert.match(notRun[0].reason, /mutates|not a recognised/, text);
@@ -1193,6 +1193,50 @@ test('a settings patch carries only the keys that were sent', async () => {
     body: { model: 'fable', status: 'finished', spentUsd: 0, runBudgetUsd: 9 },
   });
   assert.deepEqual(calls[0].args[1], { model: 'fable', runBudgetUsd: 9 });
+});
+
+test('the policy can be tightened from the console and never widened', async () => {
+  const seen: unknown[] = [];
+  const service = {
+    policy: () => ({ defaults: {}, extra: {}, effective: {}, file: '/x' }),
+    addPolicy: (rules: unknown) => { seen.push(rules); return { ok: true }; },
+  };
+
+  const read = await call('/api/policy', { overrides: service });
+  assert.equal(read.status, 200);
+
+  // Adding to allow would widen what an unattended agent may do at 3am. That
+  // is a deliberate file edit, not something a click can do.
+  const widened = await call('/api/policy', {
+    method: 'POST', headers: { 'x-phase-console': '1' }, body: { allow: ['Bash(rm:*)'] },
+    overrides: { ...service, flags: { allowWrites: true, allowRun: true, scriptsDir: '/x' } },
+  });
+  assert.equal(widened.status, 400);
+  assert.equal(seen.length, 0, 'nothing was written behind the refusal');
+
+  const tightened = await call('/api/policy', {
+    method: 'POST', headers: { 'x-phase-console': '1' }, body: { deny: ['Bash(task deploy:*)'], junk: 1 },
+    overrides: { ...service, flags: { allowWrites: true, allowRun: true, scriptsDir: '/x' } },
+  });
+  assert.equal(tightened.status, 200);
+  assert.deepEqual(seen, [{ deny: ['Bash(task deploy:*)'], ask: [] }]);
+});
+
+test('changing the policy needs --allow-writes, and reading it does not', async () => {
+  const refused = await call('/api/policy', {
+    method: 'POST', headers: { 'x-phase-console': '1' }, body: { deny: ['Bash(x:*)'] },
+    overrides: { policy: () => ({}), addPolicy: () => { throw new Error('must not be reached'); } },
+  });
+  assert.equal(refused.status, 403);
+  assert.match(String((refused.payload as { error: string }).error), /--allow-writes/);
+});
+
+test('the skills a session could invoke are readable without any flag', async () => {
+  const listed = await call('/api/skills', {
+    overrides: { skills: () => [{ id: 'investigate', name: 'investigate', description: 'x', source: 'personal' }] },
+  });
+  assert.equal(listed.status, 200);
+  assert.equal((listed.payload as { id: string }[])[0].id, 'investigate');
 });
 
 test('reading a run needs no flag — only changing one does', async () => {

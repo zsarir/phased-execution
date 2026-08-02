@@ -298,6 +298,52 @@ test('an answered question leaves nothing outstanding on disk', () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * The operator's own rules
+ * ------------------------------------------------------------------ */
+
+test('the policy file adds to the defaults and can never subtract from them', async () => {
+  const { policyExtras, addPolicyRules } = await import('../server/runner/approvals.ts');
+  const file = join(STATE_HOME, 'autopilot.json');
+
+  // A policy file that forgot `git push` must not quietly become one that
+  // permits it, so the merge is one-way by construction.
+  writeFileSync(file, JSON.stringify({ deny: [], ask: [], allow: [] }));
+  assert.ok(loadPolicy(file).deny.includes('Bash(git push:*)'));
+
+  addPolicyRules({ deny: ['Bash(task deploy:*)'], ask: ['Bash(make release:*)'] }, file);
+  const merged = loadPolicy(file);
+  assert.ok(merged.deny.includes('Bash(task deploy:*)'), 'the operator rule is in force');
+  assert.ok(merged.deny.includes('Bash(git push:*)'), 'and every default still is');
+  assert.ok(merged.ask.includes('Bash(make release:*)'));
+
+  // Added to, never replaced — a second call keeps the first.
+  addPolicyRules({ deny: ['Bash(kubectl drain:*)'] }, file);
+  const extras = policyExtras(file);
+  assert.deepEqual(extras.deny, ['Bash(task deploy:*)', 'Bash(kubectl drain:*)']);
+  assert.deepEqual(extras.ask, ['Bash(make release:*)']);
+  assert.deepEqual(extras.allow, [], 'nothing widened what a session may do');
+});
+
+test('a malformed rule is dropped rather than written into the policy', async () => {
+  const { addPolicyRules } = await import('../server/runner/approvals.ts');
+  const file = join(STATE_HOME, 'autopilot-junk.json');
+  const written = addPolicyRules({
+    deny: ['Bash(ok:*)', '', '   ', 'not a rule at all', '../../etc/passwd', 'x'.repeat(300)],
+  }, file);
+  assert.deepEqual(written.deny, ['Bash(ok:*)']);
+});
+
+test('WebSearch is asked about, like the sibling it was always shown beside', () => {
+  // The PreToolUse matcher has always covered WebSearch. The ask list did not,
+  // so it was silently auto-allowed while WebFetch raised a card.
+  const settings = buildSettings({ runId: 'r', token: 't', origin: 'http://127.0.0.1:4123' });
+  const matcher = ((settings.hooks as { PreToolUse: { matcher: string }[] }).PreToolUse)[0].matcher;
+  assert.match(matcher, /WebSearch/);
+  assert.ok(DEFAULT_ASK.includes('WebSearch'));
+  assert.equal(classifyTool('WebSearch', { query: 'anything' }, loadPolicy('/nowhere')), 'ask');
+});
+
+/* ------------------------------------------------------------------ *
  * Reaching someone who is not looking at a tab
  * ------------------------------------------------------------------ */
 

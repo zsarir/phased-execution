@@ -29,7 +29,21 @@ import { Runner } from '../server/runner/runner.ts';
 import { Approvals } from '../server/runner/approvals.ts';
 import type { VerifySummary } from '../server/runner/state.ts';
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * An approvals broker that can be awaited rather than polled for.
+ *
+ * These tests used to spin on `pending()` for a fixed two seconds, which is not
+ * an assertion about anything — it is a guess about how fast this machine is,
+ * and it failed the first time the suite got busy enough to make the guess
+ * wrong. The broker already announces a new card to a callback, so waiting on
+ * that is both exact and immune to load.
+ */
+function watchedApprovals() {
+  let announce: (approval: { id: string }) => void = () => {};
+  const first = new Promise<{ id: string }>((resolve) => { announce = resolve; });
+  const approvals = new Approvals((approval) => announce(approval));
+  return { approvals, first };
+}
 
 /**
  * A scripts directory whose `phase-graph.sh` reports one ready phase that is
@@ -109,14 +123,14 @@ test('a command that ran and failed still halts the run', async () => {
 
 test('a verification that ran nothing raises a card instead of failing the phase', async () => {
   const h = harness();
-  const approvals = new Approvals();
+  const { approvals, first } = watchedApprovals();
   try {
     const runner = makeRunner(h, NOTHING_RAN, approvals);
     void runner.start({ slug: 'demo', root: h.root, autonomy: 'keep-going' });
 
     // The loop parks here, waiting on a person, rather than marking it failed.
-    let pending = approvals.pending();
-    for (let i = 0; i < 100 && !pending.length; i++) { await wait(20); pending = approvals.pending(); }
+    await first;
+    const pending = approvals.pending();
 
     assert.equal(pending.length, 1, 'the unrunnable checks should become one card');
     const card = pending[0];
@@ -135,29 +149,29 @@ test('a verification that ran nothing raises a card instead of failing the phase
     // And the phase says so, rather than reading `failed`.
     assert.equal(runner.current()?.phases['1'].status, 'awaiting-verification');
 
-    approvals.settle(card.id, 'allow', 'mobin', 'checked the gate stack in the browser');
+    approvals.settle(card.id, 'allow', 'a reviewer', 'checked the gate stack in the browser');
     await runner.wait();
 
     const state = runner.current()!;
     assert.equal(state.phases['1'].status, 'done', 'a confirmed check should let the phase finish');
     assert.equal(state.phases['1'].verification?.ok, true);
-    assert.match(state.phases['1'].verification?.reason ?? '', /confirmed by mobin/,
+    assert.match(state.phases['1'].verification?.reason ?? '', /confirmed by a reviewer/,
       'who confirmed it belongs on the record');
   } finally { h.cleanup(); }
 });
 
 test('saying the manual check failed halts, and says who said so', async () => {
   const h = harness();
-  const approvals = new Approvals();
+  const { approvals, first } = watchedApprovals();
   try {
     const runner = makeRunner(h, NOTHING_RAN, approvals);
     void runner.start({ slug: 'demo', root: h.root, autonomy: 'keep-going' });
 
-    let pending = approvals.pending();
-    for (let i = 0; i < 100 && !pending.length; i++) { await wait(20); pending = approvals.pending(); }
+    await first;
+    const pending = approvals.pending();
     assert.equal(pending.length, 1);
 
-    approvals.settle(pending[0].id, 'deny', 'mobin', 'the gate box never rendered');
+    approvals.settle(pending[0].id, 'deny', 'a reviewer', 'the gate box never rendered');
     await runner.wait();
 
     const state = runner.current()!;

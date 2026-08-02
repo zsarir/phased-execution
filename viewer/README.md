@@ -59,10 +59,54 @@ answer.
 | **Overview** | Context, architecture, session budget, the phase-graph table, end-to-end verification and the plan's memory entry. |
 | **Ready now** | Every ready phase across every plan, ranked by how much it unblocks, each with a copyable prompt. |
 | **Statistics** | Portfolio totals, velocity, completions calendar, size mix, repos, skills, models, locks and every health issue. |
+| **Autopilot** | Drive a plan unattended: one `claude -p` per phase, with the model, effort, skills and tool set chosen per run or per phase; the live session console; the approval queue; and the controls to pause, stop, retry, skip or run a single phase. |
 | **Search** | Full text across all plans and handoffs, grouped by plan. |
 
 The page updates itself: a watch on `docs/` pushes changes over server-sent events, so a handoff
 written by an agent session appears without a reload.
+
+## The autopilot
+
+`--allow-run` lets the console spawn agent sessions. It is a separate flag from `--allow-writes` on
+purpose: a write scaffolds a file, a run edits a repository for hours.
+
+Each phase is one `claude -p` process, so "clear the session between phases" needs no implementing —
+the process exits and takes its context with it. A phase advances only when three independent checks
+agree: the plan's own verification commands pass, `validate.sh` still passes, and the board re-read
+**from disk** says done. Nothing asks the session whether it succeeded.
+
+**What a phase runs as** is resolved from three places, in this order: what you chose for this run,
+then the plan's own `**Model:**` / `**Effort:**` bullets for that phase, then the run's defaults —
+per field, so choosing a model does not discard an effort the plan asked for. The journal records
+which source answered each one.
+
+**Skills.** The console lists every skill a session could invoke — personal, this repository's, and
+every installed plugin's — and appends the ones you pick to the boot prompt, per run or per phase.
+The plan's own `Skills (every session)` line still comes from the engine and is shown as fixed.
+
+**Talking to a running phase.** The session's stdin stays open, so a question is one more turn in the
+same conversation rather than a reason to stop it:
+
+```bash
+btw "why did you skip the cache?"     # or the box under the session console
+```
+
+It is framed as out-of-band before it is sent, so an answer does not become a change of direction.
+
+**Being told.** Browser notifications fire when a run halts, parks or finishes — never per phase.
+`PHASE_CONSOLE_NOTIFY=<command>` covers the case a browser cannot: it is run with the title and body,
+so an unattended run can reach an operator who is asleep. It is an environment variable rather than a
+setting because it runs a command on this machine.
+
+**What it will not do.** `permissions.deny` is handed to every session at CLI scope and is the layer
+that holds with this console dead — measured, not assumed. The `ask` list goes through an HTTP hook
+that **fails open**, so it carries workflow and never safety. Settings shows both, and says which is
+which. Rules can be added from there to `deny` and `ask` only: widening what an agent may do at 3am
+is a deliberate edit of `~/.config/phase-console/autopilot.json`.
+
+The runner will also not execute a verification command that reaches outside the working tree unless
+it can be shown read-only — `curl -X POST`, `ssh box 'systemctl restart …'` and `psql -c 'DELETE …'`
+all go to a person with the reason attached, while `docker ps` and `psql -c 'SELECT …'` still run.
 
 ## The rule it follows
 
