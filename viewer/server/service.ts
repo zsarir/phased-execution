@@ -32,7 +32,7 @@ import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
 import { Runner, type StartOptions } from './runner/runner.ts';
 import { Journal } from './runner/journal.ts';
 import { latestRun, listRuns, type RunState } from './runner/state.ts';
-import { Approvals, type Evidence } from './runner/approvals.ts';
+import { Approvals, classifyTool, loadPolicy, type Evidence } from './runner/approvals.ts';
 
 /** One live update, with the id a reconnecting client replays from. */
 export type LiveEvent = { id: number; event: string; data: unknown };
@@ -609,6 +609,23 @@ export class Service {
     const toolName = String(body.tool_name ?? 'unknown');
     const input = body.tool_input;
     const phase = run?.activePhase ?? null;
+
+    // The hook fires on every matching tool, so most calls have to be answered
+    // here without troubling anyone. Only what the policy marks `ask` becomes a
+    // card — a queue that fills up with `find docs -type f` is a queue nobody
+    // reads, and one nobody reads trains the answer "yes".
+    const verdict = classifyTool(toolName, input, loadPolicy());
+    if (verdict !== 'ask') {
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: verdict,
+          permissionDecisionReason: verdict === 'allow'
+            ? 'not on the autopilot ask list'
+            : 'on the autopilot deny list — a person must run this themselves',
+        },
+      };
+    }
 
     const { decided } = this.approvals.request({
       runId: run?.id ?? 'unknown',

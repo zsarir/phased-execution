@@ -84,11 +84,17 @@ case "$mode" in
 esac
 `);
 
+  // Mirrors the real script's shape: `status` is informational and always
+  // exits 0, so the holder has to be read out of its output.
   write(join(scripts, 'phase-lock.sh'), `#!/usr/bin/env bash
 set -u
 S="${state}"
-if [ -f "$S/lock-refused" ]; then echo "held by other@host" >&2; exit 1; fi
 echo "$*" >> "$S/locks"
+if [ "\${2:-}" = "status" ]; then
+  if [ -f "$S/lock-refused" ]; then echo "phase \${3:-?}: held by someone/else since now, lease until later"
+  else echo "phase \${3:-?}: free"; fi
+  exit 0
+fi
 exit 0
 `);
 
@@ -270,6 +276,30 @@ test('a fresh plan runs every phase, each in its own process', async () => {
   r.cleanup();
 });
 
+test('every session runs under the run\'s own lock identity', async () => {
+  // PE_OWNER is how a lock the session claims gets attributed to this run, so
+  // the runner can release it afterwards and a second console can see who is
+  // working the phase.
+  const r = repo();
+  const envs: (string | undefined)[] = [];
+  const spy: SpawnFn = async (request) => {
+    envs.push(request.env?.PE_OWNER);
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  };
+  const { instance } = runner(r, spy);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const owner = `autopilot/${instance.current()!.id}`;
+  assert.deepEqual(envs, [owner, owner, owner], 'every session runs as the lock holder');
+
+  // And the runner releases under that same identity.
+  const calls = readFileSync(join(r.state, 'locks'), 'utf8');
+  assert.ok(calls.includes(`release 1 --owner ${owner}`), `released as someone else:\n${calls}`);
+  r.cleanup();
+});
+
 test('a half-finished plan resumes at the phase that is left', async () => {
   const r = repo();
   r.markDone(1);
@@ -347,7 +377,21 @@ test('a lock held elsewhere parks the phase instead of racing for it', async () 
   await instance.wait();
 
   assert.equal(instance.current()!.phases['1'].status, 'parked');
-  assert.match(instance.current()!.phases['1'].note!, /held by/);
+  assert.match(instance.current()!.phases['1'].note!, /locked by someone\/else/);
+  r.cleanup();
+});
+
+test('the runner looks at the lock but does not take it', async () => {
+  // Claiming it first is what deadlocked two real runs: the session then reads
+  // a lock owned by a stranger and stops. Only the worker claims.
+  const r = repo();
+  const { instance } = runner(r, workingSession(r));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const calls = readFileSync(join(r.state, 'locks'), 'utf8').split('\n').filter(Boolean);
+  assert.ok(calls.some((c) => c.includes(' status ')), 'it must check');
+  assert.ok(!calls.some((c) => c.includes(' claim ')), `it must not claim:\n${calls.join('\n')}`);
   r.cleanup();
 });
 

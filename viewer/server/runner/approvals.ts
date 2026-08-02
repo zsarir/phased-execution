@@ -65,8 +65,6 @@ export const DEFAULT_DENY = [
   'Bash(reboot:*)',
   'Bash(mkfs:*)',
   'Bash(dd:*)',
-  'Bash(curl:* | sh)',
-  'Bash(curl:* | bash)',
 ];
 
 /**
@@ -89,6 +87,90 @@ export const DEFAULT_ASK = [
 ];
 
 export type AutopilotPolicy = { deny: string[]; ask: string[] };
+
+/* ------------------------------------------------------------------ *
+ * Which calls are worth asking about
+ * ------------------------------------------------------------------ */
+
+/** The part of a tool call a rule is written against. */
+function subjectOf(toolName: string, input: unknown): string {
+  if (!input || typeof input !== 'object') return '';
+  const record = input as Record<string, unknown>;
+  const key = toolName === 'Bash' ? 'command'
+    : toolName === 'WebFetch' || toolName === 'WebSearch' ? 'url'
+      : 'file_path';
+  const value = record[key] ?? record.command ?? record.file_path ?? record.path ?? record.url;
+  return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Does a permission rule cover this call?
+ *
+ * `Tool` matches every use of that tool; `Tool(prefix:*)` matches when the
+ * subject starts with the prefix, which is how Claude Code's own rules read.
+ */
+export function ruleMatches(rule: string, toolName: string, input: unknown): boolean {
+  const parsed = /^([A-Za-z_][\w]*)(?:\((.*)\))?$/.exec(rule.trim());
+  if (!parsed || parsed[1] !== toolName) return false;
+  const spec = parsed[2];
+  if (spec === undefined || spec === '*') return true;
+
+  const subject = subjectOf(toolName, input);
+  if (!subject) return false;
+  if (spec.endsWith(':*')) return subject.startsWith(spec.slice(0, -2));
+  if (spec.includes('*')) {
+    const pattern = spec.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+    return new RegExp(`^${pattern}$`).test(subject);
+  }
+  return subject === spec || subject.startsWith(`${spec} `);
+}
+
+/**
+ * Every command a shell line would actually run.
+ *
+ * Prefix rules match the start of a command, so `git add x && git commit -m y`
+ * begins with `git add` and slips past a `Bash(git commit:*)` rule entirely.
+ * That is not a corner case — it is how anyone naturally writes it, and a real
+ * run committed straight through the ask list this way. Worse, the same hole
+ * applies to the deny rules: `cd /tmp && git push` begins with `cd`.
+ *
+ * The CLI's own matching is what it is and we cannot change it. What we can do
+ * is look at each segment ourselves, so the hook is stricter than the rule list
+ * it was given rather than exactly as leaky.
+ */
+export function commandSegments(command: string): string[] {
+  return command
+    .split(/&&|\|\||[;\n|]/)
+    .map((part) => part.trim().replace(/^\(\s*/, ''))
+    .filter(Boolean);
+}
+
+/**
+ * What to do with one tool call, before any human is involved.
+ *
+ * The filter the first real run proved was missing. The PreToolUse hook fires
+ * on every matching tool, so without it a phase parks on `find docs -type f`
+ * and waits for someone to tap Allow on a read-only listing. A supervisor that
+ * asks about everything is one nobody reads, and a queue nobody reads is worse
+ * than no queue: it trains the answer "yes".
+ */
+export function classifyTool(
+  toolName: string, input: unknown, policy: AutopilotPolicy,
+): 'deny' | 'ask' | 'allow' {
+  const subjects: unknown[] = [input];
+  if (toolName === 'Bash') {
+    const command = (input as { command?: unknown } | null)?.command;
+    if (typeof command === 'string') {
+      for (const segment of commandSegments(command)) subjects.push({ command: segment });
+    }
+  }
+  const hits = (rules: string[]) =>
+    rules.some((rule) => subjects.some((subject) => ruleMatches(rule, toolName, subject)));
+
+  if (hits(policy.deny)) return 'deny';
+  if (hits(policy.ask)) return 'ask';
+  return 'allow';
+}
 
 const POLICY_FILE = join(
   process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'phase-console', 'autopilot.json',
@@ -280,9 +362,16 @@ export function buildSettings(opts: SettingsOptions): Record<string, unknown> {
   const policy = opts.policy ?? loadPolicy();
   return {
     permissions: {
-      // The layer that holds with the console dead. Verified, not assumed.
+      // Only `deny` goes to the CLI. It is the layer that holds with the console
+      // dead — verified, not assumed.
+      //
+      // `ask` deliberately does NOT: there is nobody at a terminal to prompt in
+      // `-p` mode, so an ask rule resolves to a refusal the session cannot get
+      // past. A real run stalled exactly there — `notes/one.md` written, commit
+      // refused, the session politely waiting for a prompt that would never
+      // appear. Asking a human is the hook's job, because the hook is the only
+      // part of this that can actually reach one.
       deny: policy.deny,
-      ask: policy.ask,
     },
     hooks: {
       PreToolUse: [

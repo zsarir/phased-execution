@@ -327,13 +327,22 @@ export class Runner {
       return true;
     }
 
-    /* ---- lock ---- */
+    /* ---- lock ----
+     * Checked, not claimed. The boot prompt already tells the session to claim
+     * its own phase, and a lock the runner took first is a lock the session
+     * reads as a stranger's — it then refuses to touch the phase, exactly as
+     * the skill's concurrency guardrail says it should, and the supervisor
+     * deadlocks against its own worker. Seen in a real run twice.
+     *
+     * So the entity doing the work holds the lock. The runner only looks, so it
+     * can park rather than start a session that would immediately stop. */
     const owner = `autopilot/${state.id}`;
-    const claim = await this.script('phase-lock.sh', [state.slug, 'claim', String(phase), '--owner', owner]);
-    if (claim.code !== 0) {
+    const status = await this.script('phase-lock.sh', [state.slug, 'status', String(phase)]);
+    const holder = /held by (\S+)/.exec(status.stdout)?.[1];
+    if (holder && holder !== owner) {
       record.status = 'parked';
-      record.note = `the phase lock is held by another session: ${(claim.stdout || claim.stderr).trim().slice(0, 200)}`;
-      this.record('phase.lock-refused', { detail: record.note }, phase);
+      record.note = `phase ${phase} is locked by ${holder} — ${status.stdout.trim().slice(0, 160)}`;
+      this.record('phase.lock-refused', { holder, detail: record.note }, phase);
       return true;
     }
 
@@ -352,7 +361,7 @@ export class Runner {
     this.emit('phase', { phase, status: 'running', model: record.model });
 
     /* ---- the session, with the error policy driving retries ---- */
-    const settled = await this.attempt(phase, prompt, record.model!);
+    const settled = await this.attempt(phase, prompt, record.model!, owner);
     await this.release(phase, owner);
     if (!settled.carryOn) return false;
     if (!settled.completed) return true;
@@ -366,7 +375,7 @@ export class Runner {
    * Every disposition from `classify` is handled here and nowhere else.
    */
   private async attempt(
-    phase: number, prompt: string, model: string,
+    phase: number, prompt: string, model: string, owner: string,
   ): Promise<{ carryOn: boolean; completed: boolean }> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
@@ -387,6 +396,14 @@ export class Runner {
         budgetUsd: budget,
         maxTurns,
         settings: this.settingsPath ?? undefined,
+        // The child must know it IS the lock holder. Without this the runner
+        // claims the phase as `autopilot/<runId>`, the session it spawns reads
+        // a lock owned by a stranger, and — correctly, per the skill's own
+        // guardrail — refuses to touch the phase rather than force it. The
+        // supervisor deadlocks against its own worker. Sharing PE_OWNER makes
+        // phase-lock.sh report the lock as the session's own, so it refreshes
+        // instead of stopping, while everyone else still sees it held.
+        env: { ...process.env, PE_OWNER: owner },
         signal: this.abort?.signal,
         onPid: (pid) => {
           this.childPid = pid;
@@ -404,6 +421,10 @@ export class Runner {
       this.record('phase.session', {
         attempt, model: currentModel, costUsd: outcome.costUsd, turns: outcome.turns,
         subtype: outcome.signal.subtype, ms: outcome.durationMs, argv: outcome.argv,
+        // The session's own closing words. When a phase exits clean but changes
+        // nothing, this is the only place that says why — without it, diagnosing
+        // the failure means re-running it and watching.
+        said: outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200),
       }, phase);
 
       // An operator stop is not a failure to diagnose — we caused it.
@@ -595,10 +616,18 @@ export class Runner {
     return readMemoryBlock(await this.engine(['--memory-block']));
   }
 
+  /**
+   * Release the phase lock the session took. A session that finished cleanly
+   * has usually released it already, so a refusal here is normal rather than a
+   * fault — it is only worth a line in the log when the lock turns out to
+   * belong to somebody else entirely.
+   */
   private async release(phase: number, owner: string): Promise<void> {
     // `--git` is never passed: the console does not commit, here or anywhere.
     const result = await this.script('phase-lock.sh', [this.state!.slug, 'release', String(phase), '--owner', owner]);
-    if (result.code !== 0) log.warn('runner.release', { phase, stderr: result.stderr.trim().slice(0, 200) });
+    if (result.code !== 0 && !/no lock|not held|free/i.test(result.stdout + result.stderr)) {
+      log.warn('runner.release', { phase, detail: (result.stdout || result.stderr).trim().slice(0, 200) });
+    }
   }
 
   private onStream(phase: number, event: StreamEvent): void {

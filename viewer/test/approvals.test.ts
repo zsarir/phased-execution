@@ -20,7 +20,8 @@ process.env.XDG_STATE_HOME = STATE_HOME;
 process.env.PHASE_CONSOLE_LOG = '';
 
 const {
-  Approvals, buildSettings, writeSettingsFile, loadPolicy, DEFAULT_DENY, DEFAULT_ASK, HOOK_TIMEOUT_SECONDS,
+  Approvals, buildSettings, writeSettingsFile, loadPolicy, classifyTool, ruleMatches,
+  DEFAULT_DENY, DEFAULT_ASK, HOOK_TIMEOUT_SECONDS,
 } = await import('../server/runner/approvals.ts');
 
 /* ------------------------------------------------------------------ *
@@ -30,14 +31,24 @@ const {
 test('everything irreversible sits in deny, where it holds without the console', () => {
   const settings = buildSettings({ runId: 'r1', token: 't', origin: 'http://127.0.0.1:4123' });
   const deny = (settings.permissions as { deny: string[] }).deny;
-  const ask = (settings.permissions as { ask: string[] }).ask;
 
   // These reach a remote or destroy something. The hook cannot be trusted to
   // stop them, because with the console down the hook does not run at all.
   for (const rule of ['Bash(git push:*)', 'Bash(terraform apply:*)', 'Bash(terraform destroy:*)', 'Bash(sudo:*)']) {
     assert.ok(deny.includes(rule), `${rule} must be denied outright, never merely asked`);
-    assert.ok(!ask.includes(rule), `${rule} must not be approvable from a phone`);
+    assert.ok(!DEFAULT_ASK.includes(rule), `${rule} must not be approvable from a phone`);
   }
+});
+
+test('the ask list is never handed to the CLI — headless has nobody to ask', () => {
+  // An `ask` rule in `-p` mode is a refusal with extra steps: there is no
+  // terminal to prompt. A real run wrote its file, had the commit refused, and
+  // sat waiting for a prompt that could never appear. Asking is the hook's job.
+  const permissions = buildSettings({ runId: 'r1', token: 't', origin: 'http://x' }).permissions as Record<string, unknown>;
+  assert.equal(permissions.ask, undefined);
+  assert.ok(Array.isArray(permissions.deny) && permissions.deny.length > 0);
+  // The patterns still exist — they decide what becomes a card.
+  assert.equal(classifyTool('Bash', { command: 'git commit -m x' }, loadPolicy('/nonexistent')), 'ask');
 });
 
 test('the hook is pointed at this console and given a bearer token', () => {
@@ -80,6 +91,66 @@ test('the settings file is not world-readable — it holds the run token', () =>
   // Rewriting an existing file must not leave a looser mode behind.
   writeSettingsFile('r2', buildSettings({ runId: 'r2', token: 'shh2', origin: 'http://x' }));
   assert.equal(statSync(path).mode & 0o777, 0o600);
+});
+
+/* ------------------------------------------------------------------ *
+ * Which calls are worth asking about
+ * ------------------------------------------------------------------ */
+
+const policy = { deny: DEFAULT_DENY, ask: DEFAULT_ASK };
+const bash = (command: string) => classifyTool('Bash', { command }, policy);
+
+test('ordinary work is allowed without troubling anyone', () => {
+  // The first real run parked on `find docs -type f` and sat there. A queue
+  // that fills with read-only listings is a queue nobody reads, and one nobody
+  // reads trains the answer "yes".
+  for (const command of [
+    'find docs -type f',
+    'grep -rn TODO src',
+    'npm test',
+    'pytest tests/unit -q',
+    'git status --short',
+    'git diff --stat',
+    'cat README.md',
+  ]) {
+    assert.equal(bash(command), 'allow', command);
+  }
+  assert.equal(classifyTool('Read', { file_path: '/tmp/x' }, policy), 'allow');
+});
+
+test('the irreversible is denied outright, with no card offered', () => {
+  for (const command of ['git push origin main', 'sudo rm -rf /x', 'terraform apply', 'npm publish']) {
+    assert.equal(bash(command), 'deny', command);
+  }
+});
+
+test('the in-between asks a person', () => {
+  for (const command of ['git commit -m "wip"', 'npm install left-pad', 'ssh box uptime']) {
+    assert.equal(bash(command), 'ask', command);
+  }
+  assert.equal(classifyTool('WebFetch', { url: 'https://example.com' }, policy), 'ask',
+    'a bare tool name in the rules covers every use of it');
+});
+
+test('chaining does not smuggle a command past its rule', () => {
+  // The hole a real run walked through: `git add x && git commit -m y` starts
+  // with `git add`, so a prefix rule never sees the commit. The same shape
+  // applies to the deny list, which is the part that actually matters.
+  assert.equal(bash('git add notes/two.md && git commit -m "phase 2"'), 'ask');
+  assert.equal(bash('cd /tmp && git push origin main'), 'deny');
+  assert.equal(bash('npm test; sudo rm -rf /x'), 'deny');
+  assert.equal(bash('echo hi | terraform apply'), 'deny');
+  assert.equal(bash('(cd sub && npm publish)'), 'deny');
+  // And a chain of harmless things is still harmless.
+  assert.equal(bash('npm ci && npm test && npm run lint'), 'allow');
+});
+
+test('a rule matches on a prefix, not on the word appearing anywhere', () => {
+  assert.equal(ruleMatches('Bash(git push:*)', 'Bash', { command: 'git push origin main' }), true);
+  assert.equal(ruleMatches('Bash(git push:*)', 'Bash', { command: 'echo "git push" >> notes.md' }), false,
+    'mentioning a command is not running it');
+  assert.equal(ruleMatches('Bash(git push:*)', 'Write', { command: 'git push' }), false,
+    'a Bash rule must not govern a Write');
 });
 
 /* ------------------------------------------------------------------ *
