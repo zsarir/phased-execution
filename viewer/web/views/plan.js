@@ -7,6 +7,7 @@ import { Markdown } from '../components/markdown.js';
 import { RouteMap } from '../components/dag.js';
 import { PromptCard } from '../components/prompt.js';
 import { WriteMenu } from '../components/writes.js';
+import { RunView } from './run.js';
 import {
   StateChip, Chip, Tabs, Progress, KeyValue, CopyButton, Spinner, Banner, Empty,
   relativeTime, weight, countdown, STATE_BOARD,
@@ -15,6 +16,7 @@ import {
 const TABS = [
   { id: 'route', label: 'Route' },
   { id: 'phases', label: 'Phases' },
+  { id: 'run', label: 'Autopilot' },
   { id: 'handoffs', label: 'Handoffs' },
   { id: 'analysis', label: 'Analysis' },
   { id: 'overview', label: 'Overview' },
@@ -726,6 +728,7 @@ export function PlanView({ slug, tab, arg, state }) {
   else if (active === 'analysis') body = html`<${AnalysisTab} detail=${detail} />`;
   else if (active === 'overview') body = html`<${OverviewTab} detail=${detail} />`;
   else if (active === 'raw') body = html`<${RawTab} slug=${slug} />`;
+  else if (active === 'run') body = html`<${RunView} slug=${slug} state=${state} />`;
   else body = html`<${RouteTab} detail=${detail} />`;
 
   const tabId = ['phase', 'handoff'].includes(active) ? (active === 'phase' ? 'phases' : 'handoffs') : active;

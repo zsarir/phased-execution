@@ -392,3 +392,84 @@
 }
 .ready-card .where { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-faint); }
 .ready-card .what { font-family: var(--font-display); font-size: var(--text-md); font-weight: 600; }
+
+/* ---------------- autopilot ----------------
+   Scoped under .run-view so nothing here can reach another view. The run page
+   is the one screen someone reads on a phone at 11pm, so approvals are the
+   loudest thing on it and the transcript is the quietest. */
+
+.run-view .card {
+  padding: var(--s4);
+  margin-bottom: var(--s4);
+}
+.run-view .card-title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: var(--s3);
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.run-view .field > span:first-child {
+  font-family: var(--font-display);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.run-view .field input { width: 7ch; }
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s3);
+  margin-bottom: var(--s4);
+}
+
+/* The transcript is capped and scrolls on its own: a phase can emit thousands
+   of lines, and the controls above must never scroll off to make room. */
+.stream {
+  max-height: 340px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  background: var(--ground-deep);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--s3);
+}
+.stream-line { white-space: pre-wrap; word-break: break-word; padding: 1px 0; }
+.stream-line.tool { color: var(--line-ready); }
+.stream-line.verify { color: var(--line-done); }
+.stream-line.retry { color: var(--line-stuck, var(--ink-muted)); }
+.stream-line.result { color: var(--ink-faint); border-top: 1px solid var(--rule); margin-top: 4px; padding-top: 4px; }
+.stream-line.text { color: var(--ink-muted); }
+
+/* An approval is an interruption; it should look like one. */
+.run-view .approvals { border-color: var(--line-ready); }
+.approval {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--line-ready);
+  border-radius: var(--radius);
+  padding: var(--s3);
+  margin-bottom: var(--s3);
+  background: var(--surface-raised);
+}
+.approval:last-child { margin-bottom: 0; }
+.approval .code { max-height: 150px; overflow: auto; margin: var(--s2) 0; }
+.evidence details { margin-top: var(--s2); }
+.evidence summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+}
+.evidence .code { max-height: 220px; }
+
+.run-view tr.is-active { background: color-mix(in oklab, var(--line-ready) 12%, transparent); }
+.run-view .ok { color: var(--line-done); }
+.run-view .bad { color: var(--line-stuck, crimson); }
+.page-head .sub { color: var(--ink-muted); font-size: var(--text-sm); }

@@ -1,7 +1,7 @@
 /** Phase Console — client entry: shell, rail, routing and live refresh. */
 
 import { html, render, useState, useEffect, useCallback } from './html.js';
-import { api, subscribe, clearCache } from './api.js';
+import { api, subscribe, subscribeRun, clearCache } from './api.js';
 import { useRoute, navigate } from './router.js';
 import { usePrefs, useToasts, applyTheme, getPrefs } from './store.js';
 import { Spinner, Banner } from './components/ui.js';
@@ -13,6 +13,7 @@ import { ReadyView } from './views/ready.js';
 import { StatsView } from './views/stats.js';
 import { SearchView } from './views/search.js';
 import { SettingsView } from './views/settings.js';
+import { RunsView } from './views/run.js';
 
 function RouteGlyph() {
   return html`
@@ -50,6 +51,7 @@ function Rail({ state, counts, route, onPickSource }) {
       <div class="nav">
         ${item('ready', 'Ready now', counts.ready, counts.ready > 0)}
         ${item('plans', 'Plans', counts.plans)}
+        ${item('runs', 'Runs', counts.approvals || null, counts.approvals > 0)}
         ${item('stats', 'Statistics')}
         ${item('search', 'Search')}
       </div>
@@ -106,6 +108,7 @@ function App() {
   const [plans, setPlans] = useState([]);
   const [error, setError] = useState(null);
   const [tick, setTick] = useState(0);
+  const [pendingApprovals, setPendingApprovals] = useState(0);
 
   const reload = useCallback(async () => {
     try {
@@ -123,6 +126,21 @@ function App() {
 
   // Live: the server tells us which plans changed; drop their cache and redraw.
   useEffect(() => subscribe(() => setTick((n) => n + 1)), []);
+
+  // A session parked on an approval is invisible until someone looks, so the
+  // badge is kept current from wherever you happen to be in the app.
+  useEffect(() => {
+    let alive = true;
+    const count = async () => {
+      try {
+        const queue = await api.approvals();
+        if (alive) setPendingApprovals(queue.filter((a) => a.status === 'pending').length);
+      } catch { /* an older server has no approvals endpoint */ }
+    };
+    void count();
+    const unsubscribe = subscribeRun({ approval: count, run: count });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
 
   useEffect(() => {
     const onKey = (event) => {
@@ -155,11 +173,15 @@ function App() {
     plans: plans.filter((p) => p.kind === 'plan').length,
     phases: plans.reduce((n, p) => n + p.phases, 0),
     ready: plans.reduce((n, p) => n + p.ready.length, 0),
+    // A run parked on an approval is the one thing worth interrupting someone
+    // for, so it gets a badge on the rail rather than waiting to be discovered.
+    approvals: pendingApprovals,
   };
 
   const [head, ...rest] = route.segments;
   let view;
   if (head === 'plan') view = html`<${PlanView} slug=${rest[0]} tab=${rest[1]} arg=${rest[2]} state=${state} />`;
+  else if (head === 'runs') view = html`<${RunsView} state=${state} />`;
   else if (head === 'ready') view = html`<${ReadyView} plans=${plans} state=${state} />`;
   else if (head === 'stats') view = html`<${StatsView} state=${state} />`;
   else if (head === 'search') view = html`<${SearchView} query=${route.query.q ?? ''} />`;
