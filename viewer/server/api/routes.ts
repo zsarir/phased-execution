@@ -12,6 +12,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Service } from '../service.ts';
 import { checkRoot, listDirs } from '../config.ts';
 import { isClientDisconnect, log } from '../log.ts';
+import { isEffort } from '../runner/spawn.ts';
 import { planWrite, runWrite, openInEditor, WriteError, type WriteRequest } from '../writes.ts';
 
 export type ApiContext = { service: Service };
@@ -80,6 +81,13 @@ function guardMutation(req: IncomingMessage, disabled: string | null): string | 
 function numberOrNull(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** A phase list from a browser: whole positive integers only, deduped, capped. */
+function phaseList(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const phases = [...new Set(value.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  return phases.slice(0, 500);
 }
 
 export async function handleApi(
@@ -317,28 +325,48 @@ export async function handleApi(
         const refusal = guardRun(req, service);
         if (refusal) { json(res, 403, { error: refusal }); return true; }
         const body = await readBody(req);
-        const runner = service.runner;
 
         switch (verb) {
           case 'start': {
             const state = await service.startRun(slug, {
               model: typeof body.model === 'string' ? body.model : undefined,
+              // Checked here rather than passed through: the CLI only *warns*
+              // on an unknown effort and carries on at its own default, so a
+              // typo would quietly run every phase of a plan at the wrong one.
+              effort: isEffort(body.effort) ? body.effort : undefined,
               autonomy: body.autonomy === 'keep-going' ? 'keep-going' : 'halt-on-everything',
               phaseBudgetUsd: numberOrNull(body.phaseBudgetUsd),
               runBudgetUsd: numberOrNull(body.runBudgetUsd),
               resumeRunId: typeof body.resumeRunId === 'string' ? body.resumeRunId : undefined,
+              onlyPhases: phaseList(body.onlyPhases),
             });
             json(res, 200, { run: state });
             return true;
           }
-          case 'pause': runner.pause(); json(res, 200, { run: runner.current() }); return true;
-          // These three go through the service, not the runner: after a console
-          // restart there is no in-memory run to act on, and the runner's own
-          // methods return silently — a button that answers 200 and does
-          // nothing. The service edits the checkpoint on disk instead.
+          // Every one of these goes through the service, not the runner: after a
+          // console restart there is no in-memory run to act on, and the
+          // runner's own methods return silently — a button that answers 200
+          // and does nothing. The service edits the checkpoint on disk instead.
+          case 'pause': json(res, 200, { run: service.pauseRun(slug) }); return true;
+          case 'resume': json(res, 200, { run: service.resumePause(slug) }); return true;
           case 'stop': json(res, 200, { run: await service.stopRun(slug) }); return true;
           case 'skip': json(res, 200, { run: service.skipPhase(slug, Number(body.phase)) }); return true;
           case 'retry': json(res, 200, { run: service.retryPhase(slug, Number(body.phase)) }); return true;
+          case 'settings': {
+            const run = service.configureRun(slug, {
+              ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
+              ...('effort' in body ? { effort: isEffort(body.effort) ? body.effort : '' } : {}),
+              ...(body.autonomy === 'keep-going' || body.autonomy === 'halt-on-everything'
+                ? { autonomy: body.autonomy } : {}),
+              ...('phaseBudgetUsd' in body ? { phaseBudgetUsd: numberOrNull(body.phaseBudgetUsd) } : {}),
+              ...('runBudgetUsd' in body ? { runBudgetUsd: numberOrNull(body.runBudgetUsd) } : {}),
+              ...('maxConsecutiveFailures' in body
+                ? { maxConsecutiveFailures: Number(body.maxConsecutiveFailures) } : {}),
+              ...('onlyPhases' in body ? { onlyPhases: phaseList(body.onlyPhases) ?? null } : {}),
+            });
+            json(res, 200, { run });
+            return true;
+          }
           default:
             json(res, 404, { error: `No run verb "${verb}"` });
             return true;

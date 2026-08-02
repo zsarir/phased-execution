@@ -30,8 +30,8 @@ import { join } from 'node:path';
 import { log } from '../log.ts';
 import { onShutdown, offShutdown } from '../lifecycle.ts';
 import { run as engineRun, readMemoryBlock, readGateStatus, readLint, readText, type Board } from '../engine.ts';
-import { classify, nextModel, type Disposition } from './errors.ts';
-import { spawnClaude, type SpawnFn, type StreamEvent } from './spawn.ts';
+import { classify, fallbackChain, nextModel, type Disposition } from './errors.ts';
+import { spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
 import { verifyPhase } from './verify.ts';
 import {
   loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
@@ -55,6 +55,13 @@ export type RunnerDeps = {
   approvals?: Approvals;
   /** Where the child posts its hook calls, e.g. `http://127.0.0.1:4123`. */
   origin?: string;
+  /**
+   * What the session streams back. All three cost nothing but volume, and the
+   * volume is what makes an unattended phase legible: without `subagentText` a
+   * phase that delegates is a silent gap, and without `partialMessages` its
+   * words arrive in lumps minutes apart.
+   */
+  stream?: { partialMessages?: boolean; subagentText?: boolean; hookEvents?: boolean };
   onEvent?: RunnerEvent;
   now?: () => Date;
 };
@@ -63,11 +70,14 @@ export type StartOptions = {
   slug: string;
   root: string;
   model?: string;
+  effort?: string;
   autonomy?: Autonomy;
   phaseBudgetUsd?: number | null;
   runBudgetUsd?: number | null;
   /** Continue this run id instead of creating one. */
   resumeRunId?: string;
+  /** Drive only these phases, then finish. Absent means the whole plan. */
+  onlyPhases?: number[];
 };
 
 /** Per phase: one first try, plus room for a model switch, a resume and a retry. */
@@ -120,6 +130,8 @@ export class Runner {
   private abort: AbortController | null = null;
   private driving: Promise<void> | null = null;
   private childPid: number | null = null;
+  /** The live session, while there is one — what `/btw` talks to. */
+  private handle: SpawnHandle | null = null;
   /** Set when the operator stopped us, so exit 143 is not read as a mystery. */
   private stopRequested = false;
   /** Path to the 0600 settings file carrying this run's deny rules and hook. */
@@ -153,9 +165,11 @@ export class Runner {
       slug: options.slug,
       root: options.root,
       model: options.model,
+      effort: options.effort,
       autonomy: options.autonomy,
       phaseBudgetUsd: options.phaseBudgetUsd,
       runBudgetUsd: options.runBudgetUsd,
+      onlyPhases: options.onlyPhases,
     });
 
     if (state) {
@@ -163,10 +177,20 @@ export class Runner {
       // mid-flight is reconciled before a new child is started.
       this.state.halt = null;
       this.state.waitUntil = null;
+      // A pause recorded by a console that is no longer here would otherwise
+      // stop this loop before it ran anything.
+      this.state.pause = null;
       const blocked = this.adopt(this.state);
       if (blocked) { this.persist(); return this.state; }
       if (options.model) this.state.model = options.model;
+      if (options.effort) this.state.effort = options.effort;
       if (options.autonomy) this.state.autonomy = options.autonomy;
+      if (options.phaseBudgetUsd !== undefined) this.state.phaseBudgetUsd = options.phaseBudgetUsd;
+      if (options.runBudgetUsd !== undefined) this.state.runBudgetUsd = options.runBudgetUsd;
+      // Continuing with a phase list replaces the old one; continuing without
+      // one clears it, so "Continue" never silently inherits a single-phase run.
+      if (options.onlyPhases?.length) this.state.onlyPhases = [...options.onlyPhases];
+      else delete this.state.onlyPhases;
     }
 
     this.journal = new Journal(this.state.root, this.state.slug, this.state.id);
@@ -194,6 +218,7 @@ export class Runner {
     this.record('run.start', {
       runId: this.state.id, slug: this.state.slug, model: this.state.model,
       autonomy: this.state.autonomy, resumed: Boolean(state),
+      ...(this.state.onlyPhases?.length ? { onlyPhases: this.state.onlyPhases } : {}),
     });
     this.persist();
 
@@ -273,12 +298,40 @@ export class Runner {
    * Control
    * ---------------------------------------------------------------- */
 
-  /** Finish the current phase, then stop. */
-  pause(): void {
-    if (!this.state || !this.driving) return;
+  /**
+   * Finish the current phase, then stop.
+   *
+   * Returns whether it took effect here. It does not when nothing is driving
+   * this run — after a console restart there is no loop to tell — and the
+   * caller then edits the checkpoint instead. Answering `false` rather than
+   * returning silently is the whole point: a Pause that quietly does nothing
+   * is indistinguishable from one that worked.
+   */
+  pause(by = 'console'): boolean {
+    if (!this.state || !this.driving) return false;
+    if (this.state.status === 'pausing') return true;
     this.state.status = 'pausing';
-    this.record('run.pause-requested');
+    this.state.pause = {
+      requestedAt: new Date().toISOString(),
+      afterPhase: this.state.activePhase,
+      by,
+    };
+    this.record('run.pause-requested', { afterPhase: this.state.pause.afterPhase, by });
     this.persist();
+    this.emit('run', { state: this.state });
+    return true;
+  }
+
+  /** Take back a pause that has not been reached yet. */
+  resumePause(): boolean {
+    if (!this.state || !this.driving) return false;
+    if (this.state.status !== 'pausing') return false;
+    this.state.status = 'running';
+    this.state.pause = null;
+    this.record('run.pause-cancelled');
+    this.persist();
+    this.emit('run', { state: this.state });
+    return true;
   }
 
   /** Stop now: the child gets SIGTERM so its own SessionEnd hooks still run. */
@@ -290,10 +343,15 @@ export class Runner {
     // told them a lie about its own state.
     if (!this.driving) {
       if (IN_FLIGHT.includes(this.state.status)) {
+        // Read the status BEFORE overwriting it. This line exists to record
+        // what was interrupted, and taking it afterwards made it record the
+        // word "interrupted" every single time — the one fact it was for.
+        const was = this.state.status;
         this.state.status = 'interrupted';
         this.state.child = null;
+        this.state.pause = null;
         this.state.halt ??= { at: new Date().toISOString(), reason: 'stopped by the operator', phase: this.state.activePhase ?? undefined };
-        this.record('run.stopped-while-idle', { was: this.state.status });
+        this.record('run.stopped-while-idle', { was });
         this.persist();
         this.emit('run', { state: this.state });
       }
@@ -326,6 +384,23 @@ export class Runner {
     this.persist();
   }
 
+  /**
+   * Change how the rest of the run behaves, without stopping it.
+   *
+   * Everything here applies from the NEXT phase: the running child was started
+   * with a model, an effort and a budget already fixed in its argv, and there
+   * is no honest way to change those underneath it. Saying so is better than
+   * appearing to change something that will not change.
+   */
+  configure(patch: RunSettingsPatch): boolean {
+    if (!this.state) return false;
+    applySettings(this.state, patch);
+    this.record('run.reconfigured', { ...patch });
+    this.persist();
+    this.emit('run', { state: this.state });
+    return true;
+  }
+
   /** Clear a phase's terminal state so the loop will pick it up again. */
   retry(phase: number): void {
     if (!this.state) return;
@@ -346,8 +421,13 @@ export class Runner {
     const state = this.state!;
     try {
       while (true) {
-        if (this.abort?.signal.aborted) { state.status = 'paused'; break; }
-        if (state.status === 'pausing') { state.status = 'paused'; this.record('run.paused'); break; }
+        if (this.abort?.signal.aborted) { state.status = 'paused'; state.pause = null; break; }
+        if (state.status === 'pausing') {
+          state.status = 'paused';
+          this.record('run.paused', { afterPhase: state.pause?.afterPhase ?? null });
+          state.pause = null;
+          break;
+        }
 
         if (state.runBudgetUsd && state.spentUsd >= state.runBudgetUsd) {
           this.halt(`the run budget of $${state.runBudgetUsd} is spent`);
@@ -358,7 +438,22 @@ export class Runner {
         if (board.error) { this.halt(`the engine could not read the plan: ${board.error}`); break; }
 
         const outstanding = [...board.ready, ...board.waiting, ...board.inProgress, ...board.stuck];
-        const candidates = board.ready.filter((p) => !SETTLED.includes(phaseRecord(state, p).status));
+        // A run asked for specific phases is finished when THOSE are settled —
+        // not when the plan is. Restricting the candidate list here rather than
+        // in the caller keeps one definition of "ready" (the engine's).
+        const asked = state.onlyPhases?.length ? new Set(state.onlyPhases) : null;
+        const candidates = board.ready
+          .filter((p) => !asked || asked.has(p))
+          .filter((p) => !SETTLED.includes(phaseRecord(state, p).status));
+
+        if (asked && !candidates.length) {
+          state.status = 'finished';
+          this.record('run.finished', {
+            onlyPhases: [...asked],
+            note: 'the phases this run was asked for are settled',
+          });
+          break;
+        }
 
         if (!candidates.length) {
           state.status = outstanding.length ? 'parked' : 'finished';
@@ -450,8 +545,9 @@ export class Runner {
     record.status = 'running';
     record.startedAt = new Date().toISOString();
     record.model = record.model ?? state.model;
-    this.record('phase.start', { model: record.model, title: board.states[phase] }, phase);
-    this.emit('phase', { phase, status: 'running', model: record.model });
+    record.effort = record.effort ?? state.effort;
+    this.record('phase.start', { model: record.model, effort: record.effort ?? null, title: board.states[phase] }, phase);
+    this.emit('phase', { phase, status: 'running', model: record.model, effort: record.effort });
 
     /* ---- the session, with the error policy driving retries ---- */
     const settled = await this.attempt(phase, prompt, record.model!, owner);
@@ -484,6 +580,15 @@ export class Runner {
         prompt,
         cwd: state.root,
         model: currentModel,
+        effort: record.effort ?? state.effort,
+        // Fail over in-place, keeping the session. The `switch-model`
+        // disposition below can only restart the phase from its boot prompt,
+        // discarding however long it had been working — so it is the second
+        // line of defence, not the first.
+        fallbackModels: fallbackChain(currentModel),
+        // Legible in `/resume` and `claude agents`, which matters when the
+        // question is "what is this hours-old session on my machine?".
+        name: `${state.slug} p${phase}`,
         // Deliberately not `record.sessionId`. That is the id of a session that
         // has already run; handing it back as `--session-id` asks the CLI to
         // create a session that exists, and it refuses — "Session ID … is
@@ -493,6 +598,10 @@ export class Runner {
         budgetUsd: budget,
         maxTurns,
         settings: this.settingsPath ?? undefined,
+        partialMessages: this.deps.stream?.partialMessages ?? true,
+        subagentText: this.deps.stream?.subagentText ?? true,
+        hookEvents: this.deps.stream?.hookEvents ?? true,
+        onHandle: (handle) => { this.handle = handle; },
         // The child must know it IS the lock holder. Without this the runner
         // claims the phase as `autopilot/<runId>`, the session it spawns reads
         // a lock owned by a stranger, and — correctly, per the skill's own
@@ -511,12 +620,17 @@ export class Runner {
       });
 
       this.childPid = null;
+      this.handle = null;
       state.child = null;
       state.spentUsd += outcome.costUsd;
       record.costUsd += outcome.costUsd;
+      record.turns = (record.turns ?? 0) + outcome.turns;
+      record.durationMs = (record.durationMs ?? 0) + outcome.durationMs;
       if (outcome.sessionId) record.sessionId = outcome.sessionId;
       this.record('phase.session', {
-        attempt, model: currentModel, costUsd: outcome.costUsd, turns: outcome.turns,
+        attempt, model: currentModel, effort: record.effort ?? state.effort ?? null,
+        costUsd: outcome.costUsd, turns: outcome.turns,
+        ...(outcome.injected ? { injected: outcome.injected } : {}),
         subtype: outcome.signal.subtype, ms: outcome.durationMs, argv: outcome.argv,
         // The session's own closing words. When a phase exits clean but changes
         // nothing, this is the only place that says why — without it, diagnosing
@@ -815,6 +929,36 @@ export class Runner {
 
   private onStream(phase: number, event: StreamEvent): void {
     if (event.kind === 'retry') this.record('phase.api-retry', { ...event }, phase);
+
+    // What the session says it is running on, which is not always what we
+    // asked for: `--fallback-model` demotes in-place and tells nobody. A
+    // journal that records the request rather than the reality is a journal
+    // that cannot explain why a phase went badly.
+    if (event.kind === 'init' && event.model && this.state) {
+      const record = phaseRecord(this.state, phase);
+      if (record.actualModel !== event.model) {
+        record.actualModel = event.model;
+        if (record.model && !event.model.includes(record.model)) {
+          this.record('phase.model-differs', { asked: record.model, running: event.model }, phase);
+        }
+        this.persist();
+      }
+    }
+
+    if (event.kind === 'limits' && this.state) {
+      this.state.limits = {
+        status: event.status,
+        window: event.window,
+        utilization: event.utilization,
+        resetsAt: event.resetsAt,
+        at: new Date().toISOString(),
+      };
+      // Worth a journal line only when the account is being warned, not on
+      // every routine "you are fine" heartbeat.
+      if (event.status !== 'allowed') this.record('run.usage-window', { ...event });
+      this.persist();
+    }
+
     this.emit('stream', { phase, ...event });
   }
 
@@ -875,6 +1019,47 @@ export class Runner {
     await this.driving;
     this.persist();
   }
+}
+
+/**
+ * The settings an operator may change on a run that has already started.
+ *
+ * Deliberately a closed set: a general "patch the checkpoint" endpoint would
+ * let a browser rewrite `spentUsd`, `phases` or `status`, which are records of
+ * what happened rather than choices anyone gets to make.
+ */
+export type RunSettingsPatch = {
+  model?: string;
+  effort?: string;
+  autonomy?: Autonomy;
+  phaseBudgetUsd?: number | null;
+  runBudgetUsd?: number | null;
+  maxConsecutiveFailures?: number;
+  onlyPhases?: number[] | null;
+};
+
+/**
+ * Apply a settings patch to a run state. Shared by the live runner and the
+ * on-disk path so the two cannot drift — the whole reason Pause was broken is
+ * that one of them existed and the other did not.
+ */
+export function applySettings(state: RunState, patch: RunSettingsPatch): RunState {
+  if (patch.model) state.model = patch.model;
+  if (patch.effort !== undefined) {
+    if (patch.effort) state.effort = patch.effort;
+    else delete state.effort;
+  }
+  if (patch.autonomy) state.autonomy = patch.autonomy;
+  if (patch.phaseBudgetUsd !== undefined) state.phaseBudgetUsd = patch.phaseBudgetUsd;
+  if (patch.runBudgetUsd !== undefined) state.runBudgetUsd = patch.runBudgetUsd;
+  if (patch.maxConsecutiveFailures !== undefined && patch.maxConsecutiveFailures > 0) {
+    state.maxConsecutiveFailures = patch.maxConsecutiveFailures;
+  }
+  if (patch.onlyPhases !== undefined) {
+    if (patch.onlyPhases?.length) state.onlyPhases = [...patch.onlyPhases];
+    else delete state.onlyPhases;
+  }
+  return state;
 }
 
 function reasonOf(disposition: Disposition): string {

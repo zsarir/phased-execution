@@ -17,63 +17,10 @@
 
 import { html, useState, useEffect, useRef, useCallback } from '../html.js';
 
-/** Beyond this the oldest lines are dropped; the journal has the full record. */
-const MAX_LINES = 600;
+import { MAX_LINES, KIND_LABEL, QUIET, toLine, fold } from './console-model.js';
 
-const KIND_LABEL = {
-  init: 'session',
-  text: 'says',
-  tool: 'tool',
-  retry: 'retry',
-  result: 'ended',
-  stderr: 'stderr',
-  verify: 'verify',
-  phase: 'phase',
-  runner: 'runner',
-};
-
-/**
- * Fold a server stream event into a console line, or null to ignore it.
- * Kept out of the component so the mapping is one readable table.
- */
-export function toLine(event, data) {
-  if (event === 'verify') {
-    return { kind: 'verify', text: `[${data.index + 1}/${data.total}] ${data.command}` };
-  }
-  if (event === 'phase') {
-    if (data.status === 'running') return { kind: 'phase', text: `phase ${data.phase} started on ${data.model}` };
-    if (data.status === 'verifying') return { kind: 'phase', text: `phase ${data.phase} finished — verifying independently` };
-    if (data.status === 'done') return { kind: 'phase', text: `phase ${data.phase} confirmed done` };
-    if (data.status === 'awaiting-verification') {
-      return {
-        kind: 'runner',
-        text: `phase ${data.phase} is waiting on you — ${data.notRun ?? 'some'} check(s) the runner cannot make itself`,
-      };
-    }
-    if (data.disposition && data.disposition !== 'ok') {
-      return { kind: 'runner', text: `phase ${data.phase}: ${data.disposition} — ${data.reason ?? ''}` };
-    }
-    return null;
-  }
-  if (event !== 'stream') return null;
-
-  switch (data.kind) {
-    case 'init':
-      return { kind: 'init', text: `${data.model ?? 'session'} started · ${data.tools ?? '?'} tools available` };
-    case 'tool':
-      return { kind: 'tool', text: data.summary ? `${data.name}  ${data.summary}` : data.name };
-    case 'text':
-      return { kind: 'text', text: data.text };
-    case 'retry':
-      return { kind: 'retry', text: `absorbed by the CLI${data.category ? ` — ${data.category}` : ''}${data.detail ? `: ${data.detail}` : ''}` };
-    case 'result':
-      return { kind: 'result', text: `${data.subtype} · ${data.turns ?? 0} turns · $${(data.costUsd ?? 0).toFixed(3)}` };
-    case 'stderr':
-      return { kind: 'stderr', text: String(data.text ?? '').trimEnd() };
-    default:
-      return null;
-  }
-}
+// Re-exported so every existing importer keeps its one import of this module.
+export { toLine, fold };
 
 export function useLiveLines() {
   const [lines, setLines] = useState([]);
@@ -82,10 +29,7 @@ export function useLiveLines() {
 
   const push = useCallback((line) => {
     if (!line || !line.text) return;
-    setLines((current) => {
-      const next = [...current, { ...line, id: ++seq.current, at: Date.now() }];
-      return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next;
-    });
+    setLines((current) => fold(current, line, ++seq.current));
   }, []);
 
   /**
@@ -100,10 +44,14 @@ export function useLiveLines() {
   const hydrate = useCallback((entries) => {
     if (hydrated.current || !entries?.length) return;
     hydrated.current = true;
-    const replayed = [];
+    let replayed = [];
     for (const entry of entries) {
       const line = toLine(entry.event, entry.data ?? {});
-      if (line?.text) replayed.push({ ...line, id: ++seq.current, at: Date.parse(entry.at) || Date.now(), replayed: true });
+      // Folded exactly as the live stream folds it — a replay that expanded
+      // every recorded token fragment would be both unreadable and enormous.
+      if (line?.text) {
+        replayed = fold(replayed, { ...line, replayed: true }, ++seq.current, Date.parse(entry.at) || Date.now());
+      }
     }
     if (!replayed.length) return;
     setLines((current) => [...replayed, ...current].slice(-MAX_LINES));
@@ -113,13 +61,17 @@ export function useLiveLines() {
   return { lines, push, clear, hydrate };
 }
 
-export function LiveConsole({ lines, onClear, title = 'Session console', subtitle, height = 380 }) {
+export function LiveConsole({ lines, onClear, title = 'Session console', subtitle, height = 380, footer }) {
   const box = useRef(null);
   const [follow, setFollow] = useState(true);
+  const [verbose, setVerbose] = useState(false);
+
+  const shown = verbose ? lines : lines.filter((line) => !QUIET.has(line.kind));
+  const hidden = lines.length - shown.length;
 
   useEffect(() => {
     if (follow && box.current) box.current.scrollTop = box.current.scrollHeight;
-  }, [lines, follow]);
+  }, [shown, follow]);
 
   const onScroll = (event) => {
     const el = event.currentTarget;
@@ -135,7 +87,15 @@ export function LiveConsole({ lines, onClear, title = 'Session console', subtitl
           ${subtitle ? html`<span class="live-sub">${subtitle}</span>` : null}
         </div>
         <div class="live-tools">
-          <span class="live-count">${lines.length}${lines.length === MAX_LINES ? '+' : ''} lines</span>
+          <span class="live-count">${shown.length}${lines.length === MAX_LINES ? '+' : ''} lines</span>
+          ${hidden || verbose ? html`
+            <button
+              class="btn small"
+              aria-pressed=${String(verbose)}
+              title="The model's working and every hook call — useful when something is wrong, noise when it is not"
+              onClick=${() => setVerbose(!verbose)}>
+              ${verbose ? 'Hide detail' : `Detail${hidden ? ` (${hidden})` : ''}`}
+            </button>` : null}
           <button
             class="btn small"
             aria-pressed=${String(follow)}
@@ -150,7 +110,7 @@ export function LiveConsole({ lines, onClear, title = 'Session console', subtitl
 
       <div class="live-body" ref=${box} onScroll=${onScroll} style=${`height:${height}px`}
            role="log" aria-live="polite" aria-label=${title}>
-        ${lines.length ? lines.map((line) => html`
+        ${shown.length ? shown.map((line) => html`
           <div key=${line.id} class=${`live-line k-${line.kind}${line.replayed ? ' is-replayed' : ''}`}>
             <span class="k">${KIND_LABEL[line.kind] ?? line.kind}</span>
             <span class="t">${line.text}</span>
@@ -161,5 +121,7 @@ export function LiveConsole({ lines, onClear, title = 'Session console', subtitl
             is kept, so coming back to a finished run replays it rather than showing you this.
           </div>`}
       </div>
+
+      ${footer ?? null}
     </section>`;
 }

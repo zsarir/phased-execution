@@ -91,9 +91,13 @@ export const api = {
   ),
   runStart: (slug, options) => post(`/api/run/${encodeURIComponent(slug)}/start`, options),
   runPause: (slug) => post(`/api/run/${encodeURIComponent(slug)}/pause`),
+  /** Take back a pause that has not been reached yet. */
+  runResume: (slug) => post(`/api/run/${encodeURIComponent(slug)}/resume`),
   runStop: (slug) => post(`/api/run/${encodeURIComponent(slug)}/stop`),
   runSkip: (slug, phase) => post(`/api/run/${encodeURIComponent(slug)}/skip`, { phase }),
   runRetry: (slug, phase) => post(`/api/run/${encodeURIComponent(slug)}/retry`, { phase }),
+  /** Change model, autonomy or budgets on a run in flight; applies next phase. */
+  runSettings: (slug, patch) => post(`/api/run/${encodeURIComponent(slug)}/settings`, patch),
   /** Replay of what the session printed, so a reload is not a blank window. */
   runTranscript: (slug, id, limit) => request(
     `/api/run/${encodeURIComponent(slug)}/transcript${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`,
@@ -180,7 +184,11 @@ export function subscribe(onChange) {
  */
 export function subscribeRun(handlers = {}) {
   const offs = [];
-  for (const name of ['run', 'phase', 'stream', 'journal', 'verify']) {
+  // `state` is emitted by the service rather than the runner — it is how a
+  // stop, skip, retry or pause applied to a run NO loop is driving announces
+  // itself. It was relayed here and listened to by nobody, so a second tab (or
+  // a phone) never noticed those actions at all.
+  for (const name of ['run', 'phase', 'stream', 'journal', 'verify', 'state']) {
     if (handlers[name]) offs.push(on(`run:${name}`, handlers[name]));
   }
   if (handlers.approval) offs.push(on('approval', handlers.approval));

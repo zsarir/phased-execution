@@ -371,12 +371,38 @@ export function childEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
   };
 }
 
-/** Models to fall back through, in order, when one is limited or at capacity. */
-export const MODEL_FALLBACK = ['opus', 'sonnet', 'haiku'];
+/**
+ * Models to fall back through, in order, when one is limited or at capacity.
+ *
+ * Strongest first, because falling back is a demotion: a phase that cannot run
+ * on Fable should try Opus before it tries Haiku. Every entry is an alias, so a
+ * caller passing a full id (`claude-opus-5`) still matches by substring.
+ */
+export const MODEL_FALLBACK = ['fable', 'opus', 'sonnet', 'haiku'];
+
+/** Where a model sits in the chain, by alias or by full id. -1 when unknown. */
+function rankOf(model?: string): number {
+  if (!model) return -1;
+  const short = MODEL_FALLBACK.find((m) => model.includes(m));
+  return short ? MODEL_FALLBACK.indexOf(short) : -1;
+}
 
 export function nextModel(current?: string): string | null {
   if (!current) return MODEL_FALLBACK[1] ?? null;
-  const short = MODEL_FALLBACK.find((m) => current.includes(m));
-  const index = short ? MODEL_FALLBACK.indexOf(short) : -1;
+  const index = rankOf(current);
   return index >= 0 && index + 1 < MODEL_FALLBACK.length ? MODEL_FALLBACK[index + 1] : null;
+}
+
+/**
+ * Everything below `current`, for `--fallback-model`.
+ *
+ * The CLI fails over **inside** the process and keeps the session, where our own
+ * `switch-model` disposition can only kill the phase and start it again from
+ * the boot prompt — throwing away however long it had been working. So the
+ * chain is handed over up front and the disposition becomes the second line of
+ * defence rather than the first.
+ */
+export function fallbackChain(current?: string): string[] {
+  const index = rankOf(current);
+  return index >= 0 ? MODEL_FALLBACK.slice(index + 1) : [];
 }

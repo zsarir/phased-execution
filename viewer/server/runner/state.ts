@@ -77,7 +77,14 @@ export type PhaseRecord = {
   status: PhaseStatus;
   attempts: number;
   costUsd: number;
+  /** Turns and wall-clock across every attempt, so a phase can be read at a glance. */
+  turns?: number;
+  durationMs?: number;
   model?: string;
+  /** The reasoning effort this phase ran at. */
+  effort?: string;
+  /** What the session's own `init` message said it was running on. */
+  actualModel?: string;
   sessionId?: string;
   startedAt?: string;
   endedAt?: string;
@@ -97,6 +104,14 @@ export type RunState = {
   autonomy: Autonomy;
   /** The model each phase starts on; a limited model falls back from here. */
   model: string;
+  /** The reasoning effort each phase starts at, unless the phase overrides it. */
+  effort?: string;
+  /**
+   * The account's usage window as the CLI last reported it mid-session. Not a
+   * decision the runner makes — a fact worth showing before someone starts a
+   * twelve-phase run against a window that is nearly spent.
+   */
+  limits?: { status: string; window?: string; utilization?: number; resetsAt?: number; at: string };
   phaseBudgetUsd: number | null;
   runBudgetUsd: number | null;
   spentUsd: number;
@@ -109,6 +124,22 @@ export type RunState = {
   child: { pid: number; phase: number; sessionId: string; startedAt: string } | null;
   waitUntil: string | null;
   halt: { at: string; reason: string; phase?: number } | null;
+  /**
+   * A pause that has been asked for but not yet reached.
+   *
+   * `status: "pausing"` on its own tells an operator almost nothing — not when
+   * they asked, not what it is waiting for, and not whether the request even
+   * landed. It landed silently for so long that pressing Pause looked like a
+   * no-op. This records the request the moment it is made, names the phase that
+   * has to finish first, and is cleared either by the pause taking effect or by
+   * the operator cancelling it.
+   */
+  pause: { requestedAt: string; afterPhase: number | null; by: string } | null;
+  /**
+   * Run only these phases, in the usual ready order, then stop. Empty or absent
+   * means "every phase that becomes ready", which is the normal run.
+   */
+  onlyPhases?: number[];
   phases: Record<string, PhaseRecord>;
 };
 
@@ -142,10 +173,12 @@ export type NewRunOptions = {
   slug: string;
   root: string;
   model?: string;
+  effort?: string;
   autonomy?: Autonomy;
   phaseBudgetUsd?: number | null;
   runBudgetUsd?: number | null;
   maxConsecutiveFailures?: number;
+  onlyPhases?: number[];
 };
 
 export function newRun(opts: NewRunOptions): RunState {
@@ -159,6 +192,7 @@ export function newRun(opts: NewRunOptions): RunState {
     // unattended system should stop and show their work, not press on.
     autonomy: opts.autonomy ?? 'halt-on-everything',
     model: opts.model ?? 'sonnet',
+    ...(opts.effort ? { effort: opts.effort } : {}),
     phaseBudgetUsd: opts.phaseBudgetUsd ?? null,
     runBudgetUsd: opts.runBudgetUsd ?? null,
     spentUsd: 0,
@@ -170,6 +204,8 @@ export function newRun(opts: NewRunOptions): RunState {
     child: null,
     waitUntil: null,
     halt: null,
+    pause: null,
+    ...(opts.onlyPhases?.length ? { onlyPhases: [...opts.onlyPhases] } : {}),
     phases: {},
   };
 }
@@ -246,6 +282,8 @@ export function reconcileRun(state: RunState, liveRunId?: string | null): boolea
   };
   state.status = 'interrupted';
   state.child = null;
+  // A pause waiting for a phase that is no longer running will never arrive.
+  state.pause = null;
 
   // A phase left mid-flight may have half-finished something, so it is marked
   // interrupted rather than failed: continuing asks about it instead of

@@ -30,7 +30,7 @@ import {
 } from './analysis/graph.ts';
 import { planStats, portfolio, type PlanStats, type Portfolio, type PlanContext } from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
-import { Runner, type StartOptions } from './runner/runner.ts';
+import { Runner, applySettings, type RunSettingsPatch, type StartOptions } from './runner/runner.ts';
 import { Journal } from './runner/journal.ts';
 import { latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT, type RunState } from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
@@ -655,8 +655,48 @@ export class Service {
       if (!IN_FLIGHT.includes(state.status)) return;
       state.status = 'interrupted';
       state.child = null;
+      state.pause = null;
       state.halt ??= { at: new Date().toISOString(), reason: 'stopped by the operator', phase: state.activePhase ?? undefined };
     });
+  }
+
+  /**
+   * Pause after the current phase.
+   *
+   * This used to call `runner.pause()` straight from the route, and that method
+   * begins `if (!this.driving) return` — true of every run after a console
+   * restart, and of any run this process is not the one driving. The button
+   * stayed on screen, the API answered 200, and nothing happened at all: the
+   * worst of the three possible behaviours, because it is indistinguishable
+   * from working. Stop, Retry and Skip were fixed for exactly this; Pause was
+   * left behind. It goes through the same door they do now.
+   */
+  pauseRun(slug: string, by = 'console'): RunState | null {
+    const live = this.runner.current();
+    if (live?.slug === slug && this.runner.pause(by)) return this.runner.current();
+    return this.editStoredRun(slug, (state) => {
+      if (!IN_FLIGHT.includes(state.status)) return;
+      state.status = 'pausing';
+      state.pause = { requestedAt: new Date().toISOString(), afterPhase: state.activePhase, by };
+    });
+  }
+
+  /** Take back a pause that has not been reached yet. */
+  resumePause(slug: string): RunState | null {
+    const live = this.runner.current();
+    if (live?.slug === slug && this.runner.resumePause()) return this.runner.current();
+    return this.editStoredRun(slug, (state) => {
+      if (state.status !== 'pausing') return;
+      state.status = 'running';
+      state.pause = null;
+    });
+  }
+
+  /** Change model, autonomy or budgets on a run in flight; applies next phase. */
+  configureRun(slug: string, patch: RunSettingsPatch): RunState | null {
+    const live = this.runner.current();
+    if (live?.slug === slug && this.runner.configure(patch)) return this.runner.current();
+    return this.editStoredRun(slug, (state) => { applySettings(state, patch); });
   }
 
   retryPhase(slug: string, phase: number): RunState | null {

@@ -919,7 +919,34 @@
 .live-line.k-result { border-top: 1px solid var(--rule); margin-top: var(--s2); padding-top: var(--s2); }
 .live-line.k-result .t { color: var(--ink); }
 .live-line.k-init .t { color: var(--ink-faint); }
+
+/* A subagent is a different voice inside the same session, so it is set apart
+   rather than run together with the phase's own words. */
+.live-line.k-subagent { border-left: 2px solid var(--rule); padding-left: var(--s2); margin-left: 2px; }
+.live-line.k-subagent .k, .live-line.k-subagent .t { color: var(--line-progress); }
+
+/* The model's working, not its answer: present, and clearly secondary. */
+.live-line.k-thinking .k, .live-line.k-thinking .t { color: var(--ink-faint); font-style: italic; }
+.live-line.k-hook .k, .live-line.k-hook .t { color: var(--ink-faint); }
+.live-line.k-limits .k, .live-line.k-limits .t { color: var(--line-ready); }
+
+/* An operator's own words in the transcript. The one line here that a person
+   wrote, so it reads like one. */
+.live-line.k-injected .k { color: var(--line-ready); }
+.live-line.k-injected .t { color: var(--ink); font-style: italic; }
+
 .live-idle { color: var(--ink-faint); max-width: 62ch; line-height: 1.7; }
+
+/* The ask box under the console. */
+.live-ask {
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+  border-top: 1px solid var(--rule);
+  padding: var(--s3);
+}
+.live-ask input { flex: 1; font-family: var(--font-mono); font-size: var(--text-xs); }
+.live-ask .hint { color: var(--ink-faint); font-size: var(--text-2xs); }
 
 /* ---------------- dashboard ---------------- */
 

@@ -25,7 +25,10 @@ const PHASE_TONE = {
 
 const RUN_TONE = {
   running: 'busy', finished: 'ok', halted: 'bad', parked: 'warn',
-  waiting: 'warn', paused: '', pausing: '', stopping: '', interrupted: 'warn',
+  // `pausing` is a state the operator asked for and is waiting on, so it reads
+  // as one. Neutral grey made an armed pause look identical to an idle run,
+  // which is half the reason pressing Pause felt like nothing had happened.
+  waiting: 'warn', paused: '', pausing: 'warn', stopping: 'warn', interrupted: 'warn',
 };
 
 /** Statuses that mean a loop is genuinely behind this run right now. */
@@ -77,6 +80,9 @@ export function RunView({ slug, state }) {
 
   useEffect(() => stale ? undefined : subscribeRun({
     run: () => void refresh(),
+    // Actions taken against a run no loop is driving — a pause or a stop from
+    // another tab, or from a phone — arrive on this channel and nowhere else.
+    state: () => void refresh(),
     approval: () => void refresh(),
     phase: (data) => { push(toLine('phase', data)); void refresh(); },
     verify: (data) => push(toLine('verify', data)),
@@ -147,6 +153,28 @@ export function RunView({ slug, state }) {
           Nothing is wrong — the run resumes by itself.
         </${Banner}>` : null}
 
+      ${run?.status === 'pausing' ? html`
+        <${Banner} kind="warn">
+          <strong>Pause armed.</strong>
+          ${run.pause?.afterPhase != null
+            ? html` Phase ${run.pause.afterPhase} will finish and be verified, then the run stops.`
+            : html` The run stops at the next phase boundary.`}
+          ${run.pause?.requestedAt
+            ? html` <span class="muted">(asked for ${relativeTime(Date.parse(run.pause.requestedAt))})</span>`
+            : null}
+          <p style="margin-top:8px" class="muted">
+            Nothing is cut off — a pause always waits for a phase to reach a boundary, so the work
+            in flight is finished and checked rather than abandoned. Use <strong>Stop now</strong> if
+            you need it to end sooner than that.
+          </p>
+        </${Banner}>` : null}
+
+      ${run?.status === 'paused' ? html`
+        <${Banner} kind="info">
+          <strong>Paused between phases.</strong> Continue picks up from the board, so nothing has to
+          be remembered about where it stopped.
+        </${Banner}>` : null}
+
       <${Controls}
         slug=${slug} run=${run} live=${live} busy=${busy}
         allowRun=${state.allowRun}
@@ -158,11 +186,28 @@ export function RunView({ slug, state }) {
                    note=${run.runBudgetUsd ? `of $${run.runBudgetUsd}` : 'no run budget set'} />
           <${Tile} label="Phases done" figure=${phases.filter((p) => p.status === 'done').length}
                    unit=${`/ ${phases.length || '—'}`} />
-          <${Tile} label="Model" figure=${run.model} note=${run.autonomy} />
-          <${Tile} label="Updated" figure=${relativeTime(Date.parse(run.updatedAt))} />
+          <${Tile} label="Model" figure=${run.model} note=${`${run.effort ?? 'default'} effort · ${run.autonomy}`} />
+          ${run.limits?.utilization != null ? html`
+            <${Tile}
+              label=${`${(run.limits.window ?? 'usage').replace(/_/g, ' ')} window`}
+              figure=${`${Math.round(run.limits.utilization * 100)}%`}
+              note=${run.limits.resetsAt
+                ? `used · resets ${new Date(run.limits.resetsAt * 1000).toLocaleString()}`
+                : 'used'} />`
+            : html`<${Tile} label="Updated" figure=${relativeTime(Date.parse(run.updatedAt))} />`}
         </div>` : null}
 
-      ${run ? html`<${PhaseTable} slug=${slug} run=${run} phases=${phases} allowRun=${state.allowRun} onAct=${act} />` : html`
+      ${run?.limits && run.limits.status !== 'allowed' && (run.limits.utilization ?? 0) >= 0.75 ? html`
+        <${Banner} kind="warn">
+          <strong>${Math.round((run.limits.utilization ?? 0) * 100)}% of your
+          ${(run.limits.window ?? 'usage').replace(/_/g, ' ')} window is used.</strong>
+          ${run.limits.resetsAt
+            ? html` It resets ${new Date(run.limits.resetsAt * 1000).toLocaleString()}.` : null}
+          A long run started now may stop partway and wait — the session reports this itself, so it
+          is the account's own figure rather than an estimate.
+        </${Banner}>` : null}
+
+      ${run ? html`<${PhaseTable} slug=${slug} run=${run} phases=${phases} live=${live} allowRun=${state.allowRun} onAct=${act} />` : html`
         <${Empty}
           title="No run yet"
           hint=${`Nothing has been run for ${slug}. Starting one works the same whether the plan is fresh or half finished — the board decides where to begin.`} />`}
@@ -194,15 +239,63 @@ export function RunView({ slug, state }) {
  * Controls
  * ------------------------------------------------------------------ */
 
+/** Every model the autopilot may start a phase on, strongest first. */
+const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
+
+/**
+ * The five the CLI accepts. Blank means "whatever this machine's settings
+ * default to", which is what every run did before there was a control for it.
+ */
+const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+const EFFORT_NOTE = {
+  '': "this machine's default",
+  low: 'fastest and cheapest — mechanical phases',
+  medium: 'balanced',
+  high: 'most implementation phases',
+  xhigh: 'hard reasoning',
+  max: 'the hardest phases, and the slowest',
+};
+
 function Controls({ slug, run, live, busy, allowRun, onAct }) {
   const [model, setModel] = useState(run?.model ?? 'sonnet');
+  const [effort, setEffort] = useState(run?.effort ?? '');
   const [autonomy, setAutonomy] = useState(run?.autonomy ?? 'halt-on-everything');
   const [phaseBudget, setPhaseBudget] = useState(run?.phaseBudgetUsd ?? '');
   const [runBudget, setRunBudget] = useState(run?.runBudgetUsd ?? '');
   const [confirmStop, setConfirmStop] = useState(false);
 
+  // Follow the run when it changes underneath us — a different run id, or the
+  // server applying settings we did not send. Without this the form keeps
+  // showing whatever it was first mounted with, which is a quiet way to start a
+  // run on a model the operator can see on screen and did not choose.
+  useEffect(() => {
+    setModel(run?.model ?? 'sonnet');
+    setEffort(run?.effort ?? '');
+    setAutonomy(run?.autonomy ?? 'halt-on-everything');
+    setPhaseBudget(run?.phaseBudgetUsd ?? '');
+    setRunBudget(run?.runBudgetUsd ?? '');
+  }, [run?.id, run?.model, run?.effort, run?.autonomy, run?.phaseBudgetUsd, run?.runBudgetUsd]);
+
   const resumable = run && !live && run.status !== 'finished';
   const disabled = !allowRun || Boolean(busy);
+  const pausing = run?.status === 'pausing';
+  const stopping = run?.status === 'stopping';
+
+  const settings = {
+    model,
+    effort,
+    autonomy,
+    phaseBudgetUsd: Number(phaseBudget) || null,
+    runBudgetUsd: Number(runBudget) || null,
+  };
+  const changed = live && (
+    model !== run?.model
+    || effort !== (run?.effort ?? '')
+    || autonomy !== run?.autonomy
+    || (Number(phaseBudget) || null) !== (run?.phaseBudgetUsd ?? null)
+    || (Number(runBudget) || null) !== (run?.runBudgetUsd ?? null)
+  );
 
   return html`
     <section class="card">
@@ -220,44 +313,84 @@ function Controls({ slug, run, live, busy, allowRun, onAct }) {
       <div class="row wrap" style="gap:10px;margin:10px 0">
         <label class="field">
           <span>Model</span>
-          <select value=${model} disabled=${live || disabled} onChange=${(e) => setModel(e.target.value)}>
-            ${['opus', 'sonnet', 'haiku'].map((m) => html`<option key=${m} value=${m}>${m}</option>`)}
+          <select value=${model} disabled=${disabled} onChange=${(e) => setModel(e.target.value)}>
+            ${MODELS.map((m) => html`<option key=${m} value=${m}>${m}</option>`)}
           </select>
         </label>
         <label class="field">
+          <span>Effort</span>
+          <select value=${effort} disabled=${disabled} onChange=${(e) => setEffort(e.target.value)}>
+            ${EFFORTS.map((e) => html`
+              <option key=${e} value=${e}>${e || 'default'}${e ? '' : ''}</option>`)}
+          </select>
+          <span class="muted small">${EFFORT_NOTE[effort]}</span>
+        </label>
+        <label class="field">
           <span>If something is unclear</span>
-          <select value=${autonomy} disabled=${live || disabled} onChange=${(e) => setAutonomy(e.target.value)}>
+          <select value=${autonomy} disabled=${disabled} onChange=${(e) => setAutonomy(e.target.value)}>
             <option value="halt-on-everything">Stop and ask me</option>
             <option value="keep-going">Keep going where it safely can</option>
           </select>
         </label>
         <label class="field">
           <span>Budget per phase ($)</span>
-          <input type="number" min="0" step="0.5" value=${phaseBudget} disabled=${live || disabled}
+          <input type="number" min="0" step="0.5" value=${phaseBudget} disabled=${disabled}
                  onInput=${(e) => setPhaseBudget(e.target.value)} placeholder="none" />
         </label>
         <label class="field">
           <span>Budget for the run ($)</span>
-          <input type="number" min="0" step="1" value=${runBudget} disabled=${live || disabled}
+          <input type="number" min="0" step="1" value=${runBudget} disabled=${disabled}
                  onInput=${(e) => setRunBudget(e.target.value)} placeholder="none" />
         </label>
       </div>
+
+      ${changed ? html`
+        <p class="muted small" style="margin:0 0 8px">
+          These apply from the <strong>next</strong> phase. The session already running was started
+          with its model and budget fixed in its own command line, and there is no honest way to
+          change those underneath it.
+        </p>` : null}
 
       <div class="row wrap" style="gap:8px">
         ${!live ? html`
           <button class="btn primary" disabled=${disabled}
                   onClick=${() => onAct('start', () => api.runStart(slug, {
-                    model, autonomy,
-                    phaseBudgetUsd: Number(phaseBudget) || null,
-                    runBudgetUsd: Number(runBudget) || null,
+                    ...settings,
                     resumeRunId: resumable ? run.id : undefined,
                   }))}>
             ${busy === 'start' ? 'Starting…' : resumable ? 'Continue' : 'Start'}
           </button>` : html`
-          <button class="btn" disabled=${disabled}
-                  onClick=${() => onAct('pause', () => api.runPause(slug))}>
-            ${busy === 'pause' ? 'Pausing…' : 'Pause after this phase'}
-          </button>
+          ${pausing ? html`
+            <button class="btn primary" disabled=${disabled}
+                    onClick=${() => onAct('resume', async () => {
+                      const { run: after } = await api.runResume(slug);
+                      toast(after?.status === 'pausing'
+                        ? 'The pause could not be cancelled — reload and look at the status'
+                        : 'Pause cancelled — the run carries on', after?.status === 'pausing' ? 'warn' : 'ok');
+                    })}>
+              ${busy === 'resume' ? 'Cancelling…' : 'Cancel pause — keep going'}
+            </button>` : html`
+            <button class="btn" disabled=${disabled || stopping}
+                    onClick=${() => onAct('pause', async () => {
+                      // Report what the SERVER did, not what the click intended.
+                      // A pause that lands on nothing used to answer 200 and
+                      // say nothing at all, which read as "it worked".
+                      const { run: after } = await api.runPause(slug);
+                      if (after?.status === 'pausing') {
+                        toast(after.pause?.afterPhase != null
+                          ? `Pause armed — phase ${after.pause.afterPhase} finishes first`
+                          : 'Pause armed — stopping at the next phase boundary', 'ok');
+                      } else {
+                        toast('Nothing to pause: no phase is running on this run.', 'warn');
+                      }
+                    })}>
+              ${busy === 'pause' ? 'Arming…' : 'Pause after this phase'}
+            </button>`}
+          ${changed ? html`
+            <button class="btn" disabled=${disabled}
+                    onClick=${() => onAct('settings', () => api.runSettings(slug, settings))}>
+              ${busy === 'settings' ? 'Applying…' : 'Apply from next phase'}
+            </button>` : null}
           <button class="btn danger" disabled=${disabled} onClick=${() => setConfirmStop(true)}>
             ${busy === 'stop' ? 'Stopping…' : 'Stop now'}
           </button>`}
@@ -290,13 +423,20 @@ function Controls({ slug, run, live, busy, allowRun, onAct }) {
  * Phases
  * ------------------------------------------------------------------ */
 
-function PhaseTable({ slug, run, phases, allowRun, onAct }) {
+function PhaseTable({ slug, run, phases, live, allowRun, onAct }) {
   if (!phases.length) {
     return html`<${Empty} title="No phases attempted yet" hint="The first one appears here as soon as it starts." />`;
   }
   return html`
     <section class="card">
-      <h2 class="card-title">Phases in this run</h2>
+      <div class="row spread">
+        <h2 class="card-title">Phases in this run</h2>
+        ${run.onlyPhases?.length ? html`
+          <span class="muted small">
+            this run was asked for phase${run.onlyPhases.length === 1 ? '' : 's'}
+            ${' '}${run.onlyPhases.join(', ')} only
+          </span>` : null}
+      </div>
       <table class="table">
         <thead>
           <tr><th>Phase</th><th>Status</th><th>Tries</th><th class="num">Cost</th><th>Notes</th><th></th></tr>
@@ -324,6 +464,17 @@ function PhaseTable({ slug, run, phases, allowRun, onAct }) {
                   <button class="btn small" onClick=${() => onAct('retry', () => api.runRetry(slug, p.phase))}>Retry</button>` : null}
                 ${allowRun && p.status !== 'done' && p.status !== 'skipped' ? html`
                   <button class="btn small" onClick=${() => onAct('skip', () => api.runSkip(slug, p.phase))}>Skip</button>` : null}
+                ${allowRun && !live && p.status !== 'done' ? html`
+                  <button class="btn small"
+                          title="Run this phase on its own, then stop — the loop does not carry on into the rest of the plan"
+                          onClick=${() => onAct('only', () => api.runStart(slug, {
+                            model: run.model,
+                            autonomy: run.autonomy,
+                            phaseBudgetUsd: run.phaseBudgetUsd,
+                            runBudgetUsd: run.runBudgetUsd,
+                            resumeRunId: run.status === 'finished' ? undefined : run.id,
+                            onlyPhases: [p.phase],
+                          }))}>Run only this</button>` : null}
               </td>
             </tr>`)}
         </tbody>
@@ -497,6 +648,7 @@ export function RunsView({ state }) {
   useEffect(() => { if (!state || state.autopilot) void checkAuth(false); }, [state?.autopilot, checkAuth]);
   useEffect(() => (state && !state.autopilot) ? undefined : subscribeRun({
     run: refresh,
+    state: refresh,
     approval: refresh,
     phase: (data) => { push(toLine('phase', data)); void refresh(); },
     verify: (data) => push(toLine('verify', data)),

@@ -25,7 +25,8 @@ process.env.PHASE_CONSOLE_LOG = '';
 
 const { Runner } = await import('../server/runner/runner.ts');
 const { extractCommands, verifyPhase } = await import('../server/runner/verify.ts');
-const { buildArgv, sanitize, lineReader } = await import('../server/runner/spawn.ts');
+const { buildArgv, sanitize, lineReader, userMessage } = await import('../server/runner/spawn.ts');
+const { nextModel, fallbackChain } = await import('../server/runner/errors.ts');
 const { listRuns, loadRun, newRun, saveRun } = await import('../server/runner/state.ts');
 const { Journal } = await import('../server/runner/journal.ts');
 import type { SpawnFn, SpawnOutcome, SpawnRequest } from '../server/runner/spawn.ts';
@@ -228,18 +229,79 @@ test('verification with only unrunnable fragments is not success', async () => {
 test('the argv never carries a flag that removes the guard rails', () => {
   const argv = buildArgv({ prompt: 'hi', cwd: '/tmp', model: 'sonnet', budgetUsd: 2 });
   assert.ok(!argv.includes('--bare'), '--bare skips settings, and with them the repo hooks');
+  assert.ok(!argv.includes('--safe-mode'), '--safe-mode disables hooks, skills and plugins wholesale');
   assert.ok(!argv.includes('--dangerously-skip-permissions'));
   assert.deepEqual(sanitize(['--bare', '-p', 'x', '--dangerously-skip-permissions']), ['-p', 'x']);
+  assert.deepEqual(sanitize(['--allow-dangerously-skip-permissions', '--verbose']), ['--verbose']);
+});
+
+test('a forbidden flag takes its value with it', () => {
+  // Dropping the flag alone left `user` loose in argv, where the CLI reads a
+  // bare word as a positional prompt — so a stripped flag became a new task.
+  assert.deepEqual(
+    sanitize(['--setting-sources', 'user', '--verbose']),
+    ['--verbose'],
+  );
+});
+
+test('a forbidden permission mode is corrected, not removed', () => {
+  // Removing `--permission-mode` entirely falls back to the interactive
+  // default, which headless is a silent refusal of every edit: a fix that
+  // quietly breaks every run is not a fix.
+  assert.deepEqual(
+    sanitize(['--permission-mode', 'bypassPermissions', '--verbose']),
+    ['--permission-mode', 'acceptEdits', '--verbose'],
+  );
+  assert.deepEqual(sanitize(['--permission-mode', 'plan']), ['--permission-mode', 'plan']);
 });
 
 test('the argv asks for a streamed, budgeted, single-session run', () => {
   const argv = buildArgv({ prompt: 'hi', cwd: '/tmp', model: 'opus', budgetUsd: 3, sessionId: 'abc' });
-  assert.deepEqual(argv.slice(0, 2), ['-p', 'hi']);
+  // The prompt is NOT in argv: in streaming-input mode a positional prompt is
+  // silently ignored, so passing it there would look right and run nothing.
+  assert.ok(!argv.includes('hi'), 'the prompt goes down stdin, not argv');
+  assert.ok(argv.includes('--print'));
   assert.ok(argv.includes('--verbose'), 'stream-json in print mode requires it');
   assert.equal(argv[argv.indexOf('--output-format') + 1], 'stream-json');
+  assert.equal(argv[argv.indexOf('--input-format') + 1], 'stream-json');
+  assert.ok(argv.includes('--replay-user-messages'), 'the only confirmation a message landed');
   assert.equal(argv[argv.indexOf('--session-id') + 1], 'abc');
   assert.equal(argv[argv.indexOf('--max-budget-usd') + 1], '3');
   assert.equal(argv[argv.indexOf('--permission-mode') + 1], 'acceptEdits');
+});
+
+test('effort reaches the argv, and a bad one never does', () => {
+  const good = buildArgv({ prompt: 'hi', cwd: '/tmp', effort: 'xhigh' });
+  assert.equal(good[good.indexOf('--effort') + 1], 'xhigh');
+
+  // The CLI only warns on an unknown value and carries on at its default, so
+  // an unchecked typo runs a whole plan at the wrong effort and says nothing.
+  const bad = buildArgv({ prompt: 'hi', cwd: '/tmp', effort: 'maximum' });
+  assert.ok(!bad.includes('--effort'), 'a value the CLI would ignore is not sent at all');
+});
+
+test('the fallback chain is handed over so a limited model fails over in place', () => {
+  const argv = buildArgv({ prompt: 'hi', cwd: '/tmp', model: 'opus', fallbackModels: ['sonnet', 'haiku'] });
+  assert.equal(argv[argv.indexOf('--fallback-model') + 1], 'sonnet,haiku');
+});
+
+test('the model chain demotes strongest-first and knows fable', () => {
+  assert.equal(nextModel('fable'), 'opus');
+  assert.equal(nextModel('opus'), 'sonnet');
+  assert.equal(nextModel('haiku'), null, 'nothing below the cheapest');
+  // A full model id must resolve too — that is what the CLI reports back.
+  assert.equal(nextModel('claude-fable-5'), 'opus');
+  assert.deepEqual(fallbackChain('opus'), ['sonnet', 'haiku']);
+  assert.deepEqual(fallbackChain('haiku'), []);
+  assert.deepEqual(fallbackChain('something-else'), [], 'an unknown model gets no guesses');
+});
+
+test('a user message is the NDJSON shape the CLI reads', () => {
+  const parsed = JSON.parse(userMessage('hello'));
+  assert.equal(parsed.type, 'user');
+  assert.equal(parsed.message.role, 'user');
+  assert.deepEqual(parsed.message.content, [{ type: 'text', text: 'hello' }]);
+  assert.ok(userMessage('hello').endsWith('\n'), 'NDJSON needs the newline to be read at all');
 });
 
 test('resuming replaces the new-session id rather than sending both', () => {
@@ -580,6 +642,124 @@ test('a second run on the same plan is refused while one is in flight', async ()
   r.cleanup();
 });
 
+/* ------------------------------------------------------------------ *
+ * Pausing
+ * ------------------------------------------------------------------ */
+
+/**
+ * A session that blocks on its first phase until it is released, so a test can
+ * act on a run while a phase is genuinely in flight.
+ */
+function heldSession(r: Repo, seen: number[] = []) {
+  let release: () => void = () => {};
+  let entered: () => void = () => {};
+  const inSession = new Promise<void>((resolve) => { entered = resolve; });
+  let held = false;
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    seen.push(phase);
+    if (!held) {
+      held = true;
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+    }
+    r.markDone(phase);
+    return ok();
+  };
+  return { spawn, inSession, release: () => release(), seen };
+}
+
+test('an armed pause names the phase it is waiting for, and stops at the boundary', async () => {
+  const r = repo();
+  const held = heldSession(r);
+  const { instance } = runner(r, held.spawn);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+
+  assert.equal(instance.pause('tester'), true, 'a live run can be paused');
+  const armed = instance.current()!;
+  assert.equal(armed.status, 'pausing');
+  assert.equal(armed.pause?.afterPhase, 1, 'the operator is told which phase has to finish first');
+  assert.equal(armed.pause?.by, 'tester');
+
+  held.release();
+  await instance.wait();
+
+  const after = instance.current()!;
+  assert.equal(after.status, 'paused');
+  assert.equal(after.pause, null, 'a pause that has arrived is no longer pending');
+  assert.equal(after.phases['1'].status, 'done', 'the phase in flight was finished, not cut off');
+  assert.deepEqual(held.seen, [1], 'and phase 2 was never started');
+  r.cleanup();
+});
+
+test('a cancelled pause lets the run carry on', async () => {
+  const r = repo();
+  const held = heldSession(r);
+  const { instance } = runner(r, held.spawn);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+
+  instance.pause();
+  assert.equal(instance.resumePause(), true);
+  assert.equal(instance.current()!.status, 'running');
+  assert.equal(instance.current()!.pause, null);
+
+  held.release();
+  await instance.wait();
+  assert.equal(instance.current()!.status, 'finished', 'the cancelled pause did not stop it');
+  assert.deepEqual(held.seen, [1, 2, 3]);
+  r.cleanup();
+});
+
+test('pausing a run nothing is driving reports that it did nothing', async () => {
+  const r = repo();
+  const { instance } = runner(r, workingSession(r));
+  // The exact condition that made the Pause button answer 200 and do nothing:
+  // no loop behind the run. The runner now says so instead of returning
+  // silently, which is what lets the service fall through to the checkpoint.
+  assert.equal(instance.pause(), false, 'no loop is driving anything to pause');
+  assert.equal(instance.resumePause(), false);
+
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+  assert.equal(instance.pause(), false, 'and a finished run has nothing to pause either');
+  r.cleanup();
+});
+
+test('a run asked for one phase runs that phase and stops', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  const { instance } = runner(r, workingSession(r, seen));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1] });
+  await instance.wait();
+
+  assert.deepEqual(seen, [1], 'the loop did not carry on into the rest of the plan');
+  assert.equal(instance.current()!.status, 'finished');
+  r.cleanup();
+});
+
+test('settings changed mid-run apply from the next phase', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  const held = heldSession(r, seen);
+  const { instance } = runner(r, held.spawn);
+  await instance.start({ slug: 'demo', root: r.root, model: 'opus', autonomy: 'keep-going' });
+  await held.inSession;
+
+  assert.equal(instance.configure({ model: 'haiku', runBudgetUsd: 12 }), true);
+  assert.equal(instance.current()!.model, 'haiku');
+  assert.equal(instance.current()!.runBudgetUsd, 12);
+  // The phase already running keeps the model it was started with — its argv
+  // was fixed before the change, and claiming otherwise would be a lie.
+  assert.equal(instance.current()!.phases['1'].model, 'opus');
+
+  held.release();
+  await instance.wait();
+  assert.equal(instance.current()!.phases['2'].model, 'haiku', 'the next phase took the new one');
+  r.cleanup();
+});
+
 test('nothing was written inside the repo — run state lives outside it', async () => {
   const r = repo();
   const { instance } = runner(r, workingSession(r));
@@ -603,11 +783,32 @@ function call(
   let status = 0;
   let payload: unknown;
   const started: unknown[] = [];
+  /** Which service methods a route reached, in order — see the pause test. */
+  const calls: { method: string; args: unknown[] }[] = [];
+  const record = (method: string) => (...args: unknown[]) => {
+    calls.push({ method, args });
+    return { id: 'r1', status: 'pausing' };
+  };
   const service = {
     flags: { allowWrites: false, allowRun: opts.allowRun ?? false, scriptsDir: '/x' },
     store: { get: () => ({}), list: () => [] },
-    runner: { current: () => null, pause() {}, stop: async () => {}, skip() {}, retry() {} },
+    // If a route reaches for the runner directly it gets a method that fails
+    // the test rather than one that quietly does nothing — which is precisely
+    // how Pause came to answer 200 and change nothing for so long.
+    runner: {
+      current: () => null,
+      pause() { throw new Error('routes must go through the service, not the runner'); },
+      resumePause() { throw new Error('routes must go through the service, not the runner'); },
+      configure() { throw new Error('routes must go through the service, not the runner'); },
+      stop: async () => {}, skip() {}, retry() {},
+    },
     startRun: async (slug: string, options: unknown) => { started.push({ slug, options }); return { id: 'r1' }; },
+    pauseRun: record('pauseRun'),
+    resumePause: record('resumePause'),
+    configureRun: record('configureRun'),
+    stopRun: record('stopRun'),
+    skipPhase: record('skipPhase'),
+    retryPhase: record('retryPhase'),
     runFor: () => ({ id: 'r1', status: 'finished' }),
     runsFor: () => [{ id: 'r1' }],
     allRuns: () => [{ id: 'r1' }],
@@ -627,7 +828,7 @@ function call(
     [Symbol.asyncIterator]: async function* () { yield* chunks; },
   };
   return handleApi({ service } as never, req as never, res as never, new URL(`http://127.0.0.1:4123${path}`))
-    .then(() => ({ status, payload, started }));
+    .then(() => ({ status, payload, started, calls }));
 }
 
 test('starting a run is refused unless the console was started with --allow-run', async () => {
@@ -658,13 +859,34 @@ test('a proper start request reaches the service with its options', async () => 
   const { status, started } = await call('/api/run/demo/start', {
     method: 'POST', allowRun: true,
     headers: { 'x-phase-console': '1', origin: 'http://127.0.0.1:4123' },
-    body: { model: 'sonnet', autonomy: 'keep-going', phaseBudgetUsd: 4 },
+    body: { model: 'sonnet', effort: 'high', autonomy: 'keep-going', phaseBudgetUsd: 4 },
   });
   assert.equal(status, 200);
   assert.deepEqual(started, [{
     slug: 'demo',
-    options: { model: 'sonnet', autonomy: 'keep-going', phaseBudgetUsd: 4, runBudgetUsd: null, resumeRunId: undefined },
+    options: {
+      model: 'sonnet', effort: 'high', autonomy: 'keep-going', phaseBudgetUsd: 4, runBudgetUsd: null,
+      resumeRunId: undefined, onlyPhases: undefined,
+    },
   }]);
+});
+
+test('an effort the CLI would silently ignore is dropped at the door', async () => {
+  const { started } = await call('/api/run/demo/start', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+    body: { effort: 'ludicrous' },
+  });
+  assert.equal((started[0] as { options: { effort?: string } }).options.effort, undefined);
+});
+
+test('a start request may name the only phases it wants, and they are sanitised', async () => {
+  const { started } = await call('/api/run/demo/start', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+    // Junk a browser could send: duplicates, a fraction, zero, a negative, a
+    // numeric string, a word. Only whole positive phases survive.
+    body: { onlyPhases: [3, 3, 2.5, 0, -1, '4', 'x'] },
+  });
+  assert.deepEqual((started[0] as { options: { onlyPhases: number[] } }).options.onlyPhases, [3, 4]);
 });
 
 test('an unknown autonomy value falls back to the cautious one', async () => {
@@ -673,6 +895,44 @@ test('an unknown autonomy value falls back to the cautious one', async () => {
     body: { autonomy: 'yolo' },
   });
   assert.equal((started[0] as { options: { autonomy: string } }).options.autonomy, 'halt-on-everything');
+});
+
+test('every control verb goes through the service, so it works after a restart', async () => {
+  // The regression this exists for: `pause` called `runner.pause()` from the
+  // route, and that method returns silently when no loop is driving the run —
+  // which is true of EVERY run after a console restart. The button stayed on
+  // screen, the API answered 200, and nothing happened. Stop, Skip and Retry
+  // were fixed for exactly this; Pause was left behind.
+  for (const [verb, method] of [
+    ['pause', 'pauseRun'], ['resume', 'resumePause'], ['stop', 'stopRun'],
+    ['skip', 'skipPhase'], ['retry', 'retryPhase'], ['settings', 'configureRun'],
+  ]) {
+    const { status, calls } = await call(`/api/run/demo/${verb}`, {
+      method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' }, body: { phase: 2 },
+    });
+    assert.equal(status, 200, verb);
+    assert.deepEqual(calls.map((c) => c.method), [method], `${verb} must reach service.${method}`);
+  }
+});
+
+test('pause is refused without --allow-run, like every other control', async () => {
+  for (const verb of ['pause', 'resume', 'settings']) {
+    const { status, calls } = await call(`/api/run/demo/${verb}`, {
+      method: 'POST', headers: { 'x-phase-console': '1' }, body: {},
+    });
+    assert.equal(status, 403, verb);
+    assert.equal(calls.length, 0, `${verb} must not touch the run behind a refusal`);
+  }
+});
+
+test('a settings patch carries only the keys that were sent', async () => {
+  const { calls } = await call('/api/run/demo/settings', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+    // `status` and `spentUsd` are records of what happened, not choices — a
+    // patch endpoint that accepted them would let a browser rewrite history.
+    body: { model: 'fable', status: 'finished', spentUsd: 0, runBudgetUsd: 9 },
+  });
+  assert.deepEqual(calls[0].args[1], { model: 'fable', runBudgetUsd: 9 });
 });
 
 test('reading a run needs no flag — only changing one does', async () => {
