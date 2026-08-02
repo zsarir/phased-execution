@@ -23,6 +23,7 @@ const available = Boolean(ROOT) && existsSync(join(ROOT, 'docs', 'plans'));
 const flags = {
   port: 0, host: '127.0.0.1', open: false, allowWrites: false,
   scriptsDir: join(SKILL_DIR, 'scripts'),
+  logFile: null,
 };
 
 function board(states: Record<number, string>): Board {

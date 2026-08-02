@@ -11,6 +11,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { Service } from '../service.ts';
 import { checkRoot, listDirs } from '../config.ts';
+import { isClientDisconnect, log } from '../log.ts';
 import { planWrite, runWrite, openInEditor, WriteError, type WriteRequest } from '../writes.ts';
 
 export type ApiContext = { service: Service };
@@ -76,12 +77,57 @@ export async function handleApi(
       connection: 'keep-alive',
       'x-accel-buffering': 'no',
     });
-    res.write(`event: hello\ndata: ${JSON.stringify({ generation: service.generation })}\n\n`);
-    const off = service.onEvent((event, data) => {
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    let closed = false;
+    const stop = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(ping);
+      off();
+    };
+
+    /**
+     * A browser that navigated away, slept, or crashed leaves a socket that
+     * fails under the next write. Unhandled, that is an uncaught exception per
+     * dead client — so a write failure just retires this listener.
+     */
+    const send = (chunk: string): void => {
+      if (closed || res.writableEnded || res.destroyed) { stop(); return; }
+      try {
+        res.write(chunk);
+      } catch (error) {
+        if (!isClientDisconnect(error)) log.warn('sse.write', { error });
+        stop();
+      }
+    };
+
+    // Replay anything the client missed while reconnecting. Browsers resend the
+    // last id automatically, so a dropped connection costs no events — which
+    // matters once a run is streaming phase progress through here.
+    const lastSeen = Number(req.headers['last-event-id']);
+    const missed = Number.isFinite(lastSeen) ? service.eventsSince(lastSeen) : [];
+
+    send(`event: hello\ndata: ${JSON.stringify({
+      generation: service.generation,
+      cursor: service.eventCursor,
+      replayed: missed.length,
+    })}\n\n`);
+    for (const item of missed) {
+      send(`id: ${item.id}\nevent: ${item.event}\ndata: ${JSON.stringify(item.data)}\n\n`);
+    }
+
+    const off = service.onEvent((event, data, id) => {
+      send(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     });
-    const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
-    req.on('close', () => { clearInterval(ping); off(); });
+    const ping = setInterval(() => send(': ping\n\n'), 25_000);
+
+    res.on('error', (error) => {
+      if (!isClientDisconnect(error)) log.warn('sse.socket', { error });
+      stop();
+    });
+    res.on('close', stop);
+    req.on('close', stop);
+    req.on('error', stop);
     return true;
   }
 

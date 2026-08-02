@@ -23,6 +23,28 @@ the ones you pick, and you can switch at any time from the **Source** panel in t
 ./start --port 8080 --no-open # different port, don't open a browser
 ```
 
+## Keep it running
+
+A foreground console dies with its terminal, with a logout, and with any crash.
+Install it as a launchd agent instead and it starts at login and comes back on its own:
+
+```bash
+./start --install-agent --root ~/code/your-repo
+./start --agent-status      # is it up, and as which pid
+./start --agent-log -f      # follow the structured log
+./start --agent-restart
+./start --uninstall-agent
+```
+
+It also tries not to fall over in the first place. An unhandled fault, a file watch that
+errors, a browser that vanishes mid-stream — each is recorded as **degraded** state and
+served through `/api/state` rather than ending the process. The file watch checks itself
+every minute and rebuilds if it has gone deaf, because a frozen board looks exactly like a
+working one. Every exit writes down its reason to
+`~/.local/state/phase-console/console.log`, and a run that wrote none is reported as a
+crash the next time the console starts — so "it just stopped" is a question the log can
+answer.
+
 ## What it shows
 
 | Screen | Contents |
@@ -90,7 +112,9 @@ npm i -D typescript@5 @types/node@22 && npx tsc --noEmit
 server/   index.ts (http) · service.ts (the model) · engine.ts (script wrapper) · store.ts (files)
           parse/ (front matter, plan, handoff, folder artefacts) · analysis/ (graph, stats)
           search.ts · git.ts · memory.ts · watch.ts · writes.ts · api/routes.ts
+          log.ts (structured log + exit record) · lifecycle.ts (degraded state, ordered shutdown)
 web/      app.js · router.js · store.js · api.js · views/ · components/ · styles/ · vendor/ · fonts/
+deploy/   agent.sh (launchd install/uninstall/status/restart/log)
 ```
 
 Fonts are Archivo Narrow, Public Sans and JetBrains Mono (SIL Open Font License), vendored as WOFF2.

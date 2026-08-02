@@ -21,7 +21,24 @@ export type Flags = {
   open: boolean;
   allowWrites: boolean;
   scriptsDir: string;
+  /** Where the structured log goes. `null` disables file logging entirely. */
+  logFile: string | null;
 };
+
+/**
+ * Machine-local state that is neither preference nor repo content: the log,
+ * and (once the runner lands) run journals and checkpoints. XDG puts this under
+ * `~/.local/state`, which is exactly the "survives a reboot, means nothing on
+ * another machine" category these files belong to.
+ */
+export const STATE_DIR = join(
+  process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'),
+  'phase-console',
+);
+
+export function defaultLogFile(): string {
+  return join(STATE_DIR, 'console.log');
+}
 
 export function parseFlags(argv: string[]): Flags {
   const flags: Flags = {
@@ -32,6 +49,7 @@ export function parseFlags(argv: string[]): Flags {
     open: process.env.PHASE_CONSOLE_NO_OPEN !== '1',
     allowWrites: false,
     scriptsDir: join(SKILL_DIR, 'scripts'),
+    logFile: process.env.PHASE_CONSOLE_LOG === '' ? null : (process.env.PHASE_CONSOLE_LOG ?? defaultLogFile()),
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -43,6 +61,8 @@ export function parseFlags(argv: string[]): Flags {
     else if (arg === '--no-open') flags.open = false;
     else if (arg === '--allow-writes') flags.allowWrites = true;
     else if (arg === '--scripts') flags.scriptsDir = resolve(expandHome(next() ?? ''));
+    else if (arg === '--log-file') flags.logFile = resolve(expandHome(next() ?? ''));
+    else if (arg === '--no-log-file') flags.logFile = null;
     else if (arg === '--help' || arg === '-h') { printHelp(); process.exit(0); }
   }
   return flags;
@@ -59,6 +79,8 @@ function printHelp(): void {
   --no-open         do not open the browser (it opens by default)
   --allow-writes    enable the guarded write verbs (scaffold, QA record, locks)
   --scripts <dir>   phased-execution scripts dir (default: the skill this lives in)
+  --log-file <p>    structured log (default ${defaultLogFile()})
+  --no-log-file     log to stderr only
 `);
 }
 

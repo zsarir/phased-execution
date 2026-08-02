@@ -4,6 +4,11 @@
  * Serves the single-page client from `web/` and the API from `server/api`.
  * Binds to localhost only; there is no build step and no dependency to
  * install, so a fresh clone of the skill runs it straight away.
+ *
+ * It is also expected to stay up for hours while it supervises agent sessions,
+ * so nothing here is allowed to end the process by accident: faults are
+ * recorded as degraded state (`lifecycle.ts`), every exit writes down its
+ * reason (`log.ts`), and shutdown waits for registered work to checkpoint.
  */
 
 import { createServer } from 'node:http';
@@ -12,12 +17,45 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 
 import { parseFlags, VIEWER_DIR } from './config.ts';
+import {
+  configureLog, installExitLogging, isClientDisconnect, log, noteExit, previousRunEndedCleanly,
+} from './log.ts';
+import { markDegraded, runShutdownHandlers } from './lifecycle.ts';
 import { Service } from './service.ts';
 import { handleApi } from './api/routes.ts';
 
 const flags = parseFlags(process.argv.slice(2));
+
+// Logging comes up before anything else can fail, so the first fault is on record.
+configureLog(flags.logFile);
+const cleanLastTime = previousRunEndedCleanly();
+installExitLogging();
+log.info('start', {
+  pid: process.pid,
+  node: process.version,
+  port: flags.port,
+  allowWrites: flags.allowWrites,
+  // false here means the last run was killed or died hard — the single most
+  // useful fact when someone reports "it just stopped".
+  ...(cleanLastTime === false ? { previousRunCrashed: true } : {}),
+});
+if (cleanLastTime === false) {
+  log.warn('previous-run-crashed', {
+    note: 'the last run wrote no exit record — SIGKILL, OOM or a hard stop',
+  });
+}
+
 const service = new Service(flags);
 const WEB_DIR = join(VIEWER_DIR, 'web');
+
+/**
+ * The console outliving its faults is the whole point: a watcher that throws,
+ * a socket that resets under a write, a rejected promise in a background
+ * refresh — none of those are worth taking the server down for, and a
+ * supervisor that dies mid-run is worse than no supervisor. Record and carry on.
+ */
+process.on('uncaughtException', (error) => { markDegraded('uncaughtException', error); });
+process.on('unhandledRejection', (reason) => { markDegraded('unhandledRejection', reason); });
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -37,12 +75,23 @@ if (startRoot) {
 }
 
 const server = createServer(async (req, res) => {
+  // A client that disappears mid-response surfaces as an 'error' on the
+  // request or response stream; unhandled, that is an uncaught exception per
+  // request. Handling is mandatory, logging the routine ones is not.
+  const noteStreamError = (where: string) => (error: unknown) => {
+    if (isClientDisconnect(error)) return;
+    log.warn(where, { url: req.url, error });
+  };
+  res.on('error', noteStreamError('response.error'));
+  req.on('error', noteStreamError('request.error'));
+
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
   try {
     if (await handleApi({ service }, req, res, url)) return;
   } catch (error) {
-    res.writeHead(500, { 'content-type': 'text/plain' });
+    log.error('api.unhandled', { url: req.url, error });
+    if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain' });
     res.end(String((error as Error)?.message ?? error));
     return;
   }
@@ -68,21 +117,77 @@ function sendFile(res: import('node:http').ServerResponse, path: string): void {
     'content-type': type,
     'cache-control': immutable ? 'public, max-age=86400' : 'no-store',
   });
-  createReadStream(path).pipe(res);
+  const stream = createReadStream(path);
+  // A file deleted between the stat above and this read, or a client that
+  // navigates away mid-transfer, both arrive here rather than as a crash.
+  stream.on('error', (error) => {
+    if (!isClientDisconnect(error)) log.warn('static.error', { path, error });
+    res.destroy();
+  });
+  stream.pipe(res);
 }
+
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    noteExit('port-in-use', { port: flags.port });
+    process.stderr.write(
+      `\n  phase-console: port ${flags.port} is already in use.\n` +
+      `  A console may already be running — open http://${flags.host}:${flags.port}\n` +
+      `  or start this one elsewhere with --port <n>.\n\n`,
+    );
+    process.exit(1);
+  }
+  markDegraded('server', error);
+});
 
 server.listen(flags.port, flags.host, () => {
   const address = `http://${flags.host}:${flags.port}`;
   process.stdout.write(`\n  Phase Console  ${address}\n`);
   process.stdout.write(`  source        ${service.root?.path ?? 'not chosen yet — pick one in the browser'}\n`);
   process.stdout.write(`  scripts       ${flags.scriptsDir}\n`);
-  process.stdout.write(`  writes        ${flags.allowWrites ? 'enabled (--allow-writes)' : 'read-only'}\n\n`);
+  process.stdout.write(`  writes        ${flags.allowWrites ? 'enabled (--allow-writes)' : 'read-only'}\n`);
+  process.stdout.write(`  log           ${flags.logFile ?? 'stderr only'}\n\n`);
   if (flags.open) {
     const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
     execFile(opener, [address], () => { /* opening is a convenience */ });
   }
 });
 
-const shutdown = () => { service.close(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 500); };
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+/* ------------------------------------------------------------------ *
+ * Shutdown
+ * ------------------------------------------------------------------ */
+
+/**
+ * Long enough for a runner to checkpoint and let a child settle. Idle shutdown
+ * is still instant: with nothing registered there is nothing to await.
+ */
+const SHUTDOWN_BUDGET_MS = 120_000;
+
+let shuttingDown = false;
+
+async function shutdown(reason: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  noteExit(reason);
+  log.info('shutdown.begin', { reason });
+
+  // Stop taking new work first, so nothing starts while handlers are draining.
+  server.close();
+  service.close();
+
+  await runShutdownHandlers(SHUTDOWN_BUDGET_MS);
+
+  log.info('shutdown.end', { reason });
+  process.exit(0);
+}
+
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
+// Closing the terminal must not kill a run in progress. Under launchd the
+// process is detached and never sees this; in the foreground it now survives,
+// and Ctrl-C or `launchctl` remains the way to stop it deliberately.
+process.on('SIGHUP', () => log.warn('sighup.ignored', { note: 'terminal closed; still running' }));
+
+// A hard second interrupt is an explicit "I mean it" — skip the drain.
+process.on('SIGQUIT', () => { noteExit('SIGQUIT'); process.exit(131); });

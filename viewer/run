@@ -5,11 +5,27 @@
 #   ./run --root ~/code/your-repo        open a directory straight away
 #   ./run --allow-writes           enable the guarded write verbs
 #
+# Run it as a background agent instead, so it survives a closed terminal, a
+# logout and a crash (see deploy/agent.sh):
+#
+#   ./run --install-agent --root ~/code/your-repo
+#   ./run --agent-status | --agent-restart | --agent-log [-f] | --uninstall-agent
+#
 # No install step: the server is plain Node (>= 22.6, which runs TypeScript
 # directly) and the client is native ES modules.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Agent management is a system operation, not a server one — hand it straight
+# to the script that owns launchd and never start a second console here.
+case "${1:-}" in
+  --install-agent)   shift; exec bash "$here/deploy/agent.sh" install "$@" ;;
+  --uninstall-agent) exec bash "$here/deploy/agent.sh" uninstall ;;
+  --agent-status)    exec bash "$here/deploy/agent.sh" status ;;
+  --agent-restart)   exec bash "$here/deploy/agent.sh" restart ;;
+  --agent-log)       shift; exec bash "$here/deploy/agent.sh" log "$@" ;;
+esac
 
 if ! command -v node >/dev/null 2>&1; then
   echo "phase-console: node is required (>= 22.6)" >&2

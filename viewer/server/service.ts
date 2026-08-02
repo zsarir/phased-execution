@@ -19,6 +19,7 @@ import {
 } from './engine.ts';
 import { SearchIndex, type SearchResult } from './search.ts';
 import { DocsWatcher } from './watch.ts';
+import { degradedState, onDegraded } from './lifecycle.ts';
 import { repoInfo, lastCommit, type GitRepoInfo, type GitFileInfo } from './git.ts';
 import { findMemory, memoryIndexLines } from './memory.ts';
 import {
@@ -27,6 +28,13 @@ import {
 } from './analysis/graph.ts';
 import { planStats, portfolio, type PlanStats, type Portfolio, type PlanContext } from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
+
+/** One live update, with the id a reconnecting client replays from. */
+export type LiveEvent = { id: number; event: string; data: unknown };
+export type LiveListener = (event: string, data: unknown, id: number) => void;
+
+/** Enough backlog to cover a browser reconnect, not a history. */
+const EVENT_BUFFER = 200;
 
 export type PlanSummary = PlanStats & {
   engineError?: string;
@@ -110,14 +118,21 @@ export class Service {
   private lints = new Map<string, Cached<LintResult>>();
   private sessionPlans = new Map<string, Cached<SessionPlan>>();
   private portfolioCache: { generation: number; value: Portfolio } | null = null;
-  private listeners = new Set<(event: string, data: unknown) => void>();
+  private listeners = new Set<LiveListener>();
   private repo: GitRepoInfo = { available: false, dirty: [] };
+
+  /** Monotonic id per emitted event, so a client can say what it already saw. */
+  eventCursor = 0;
+  private eventLog: LiveEvent[] = [];
 
   constructor(flags: Flags) {
     this.flags = flags;
     this.prefs = loadPrefs();
     this.sizing = loadSizing(flags.scriptsDir);
     this.watcher = new DocsWatcher((paths) => this.onChange(paths));
+    // A fault anywhere in the process reaches the browser as a health event,
+    // so a degraded console announces itself instead of looking healthy.
+    onDegraded((state) => this.emit('health', { ...state, watcher: this.watcher.status() }));
   }
 
   /* ---------------------------------------------------------------- *
@@ -165,14 +180,27 @@ export class Service {
    * Live updates
    * ---------------------------------------------------------------- */
 
-  onEvent(listener: (event: string, data: unknown) => void): () => void {
+  onEvent(listener: LiveListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  private emit(event: string, data: unknown): void {
+  /**
+   * Events a reconnecting client missed. Browsers resend `Last-Event-ID`
+   * automatically, so a dropped SSE connection no longer loses updates — which
+   * stops mattering only as long as nothing important flows through here, and
+   * run progress will.
+   */
+  eventsSince(id: number): LiveEvent[] {
+    return this.eventLog.filter((entry) => entry.id > id);
+  }
+
+  emit(event: string, data: unknown): void {
+    const id = ++this.eventCursor;
+    this.eventLog.push({ id, event, data });
+    if (this.eventLog.length > EVENT_BUFFER) this.eventLog.shift();
     for (const listener of this.listeners) {
-      try { listener(event, data); } catch { /* a dead client must not stop the others */ }
+      try { listener(event, data, id); } catch { /* a dead client must not stop the others */ }
     }
   }
 
@@ -482,6 +510,10 @@ export class Service {
       repo: this.repo,
       recentRoots: this.prefs.recentRoots.map((path) => ({ path, label: basename(path) })),
       searchDocs: this.search.size,
+      // Health, so the UI can say "stale" instead of quietly showing an old
+      // board: a deaf watcher and a crashed subsystem both look fine otherwise.
+      watcher: this.watcher.status(),
+      health: degradedState(),
     };
   }
 
