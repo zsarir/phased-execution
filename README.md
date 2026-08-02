@@ -726,16 +726,21 @@ have the service listen on localhost."*
 
 You need a [Tailscale](https://tailscale.com) account. The free tier covers this comfortably.
 
-### Step 1 · Turn on MagicDNS and HTTPS certificates
+### Step 1 · Turn on three things for your tailnet
 
-Both are off by default and both are needed. Open the [DNS page of the admin
-console](https://login.tailscale.com/admin/dns):
+All three are off by default and all three are needed. The first two are on the [DNS page of the
+admin console](https://login.tailscale.com/admin/dns):
 
 1. **Enable MagicDNS.** This is what makes `your-machine.your-tailnet.ts.net` resolve for your own
    devices. Without it you would be typing an IP address, and an IP address cannot have a
    certificate.
 2. **Enable HTTPS Certificates.** Tailscale then provisions a real, publicly-trusted certificate for
    that name. HTTPS *requires* MagicDNS, so do them in this order.
+3. **Enable Serve.** This one has no switch to find in advance: the first time you run
+   `tailscale serve` on a tailnet that has never used it, the command prints an approval link
+   containing that machine's node ID and then **waits** rather than exiting. Open the link, approve
+   it, and the command you already ran continues on its own. If you would rather do it up front, run
+   the Step 4 command now and click what it gives you.
 
 > **Know what you are agreeing to.** Every certificate on the web is recorded in the public
 > Certificate Transparency log, so enabling this publishes your machine's name — e.g.
@@ -791,6 +796,11 @@ passed straight through:
 tailscale serve --bg --https=443 http://127.0.0.1:4123
 tailscale serve status          # confirm what is being served
 ```
+
+**The first run on a tailnet that has never used Serve will not return.** It prints
+*"Serve is not enabled on your tailnet"* with an approval link, and waits for you to open it. That is
+the Step 1 item you cannot do in advance — approve it and the command finishes by itself. Every run
+after that returns immediately.
 
 **`--bg` is not optional if you want this to last.** With it, Serve is persistent: it comes back
 after a reboot and after `tailscale down` / `tailscale up`. Without it, Serve lives only as long as
@@ -914,6 +924,7 @@ console at all.
 | Symptom | Cause |
 |---|---|
 | The name does not resolve on the phone | MagicDNS off in the admin console, or **"Use Tailscale DNS"** off in the phone's Tailscale app. |
+| `tailscale serve` prints *"Serve is not enabled on your tailnet"* and never returns | Serve is a tailnet capability that is off until someone approves it. Open the link the command printed — it is specific to that machine — and approve it. The command is waiting for exactly that and will continue on its own; do not kill it. |
 | `tailscale serve` errors about certificates | HTTPS Certificates not enabled. Step 1. |
 | **403** — *"No caller identity"* | You reached the console directly rather than through Serve, or Serve is not running. Check `tailscale serve status`. |
 | **403** — *"… is not allowed to use this console"* | The login is real but not in `--remote-user`. |
