@@ -31,8 +31,28 @@ export function onDegraded(listener: (state: Degradation) => void): void {
   notify = listener;
 }
 
+/** The same fault, over and over, is one fault. */
+let last: { key: string; at: number; count: number } | null = null;
+const REPEAT_WINDOW_MS = 2_000;
+
 export function markDegraded(kind: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
+
+  // A fault whose own reporting can re-trigger it — a write to a stderr that no
+  // longer exists is the real example — otherwise recurses until something
+  // gives. Collapsing repeats is what stops that being fatal rather than merely
+  // noisy, so it is a guard and not a tidiness measure.
+  const key = `${kind}:${message}`;
+  const now = Date.now();
+  if (last && last.key === key && now - last.at < REPEAT_WINDOW_MS) {
+    last.count++;
+    last.at = now;
+    return;
+  }
+  const repeated = last?.key === key ? last.count : 0;
+  last = { key, at: now, count: 1 };
+  if (repeated > 1) log.warn('degraded.repeated', { kind, message, times: repeated });
+
   const entry: Degradation = { at: new Date().toISOString(), kind, message };
   degradations.push(entry);
   if (degradations.length > MAX_KEPT) degradations.shift();

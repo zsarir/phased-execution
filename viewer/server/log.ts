@@ -35,6 +35,37 @@ let file: string | null = null;
 let ready = false;
 const ring: Entry[] = [];
 
+/**
+ * Set once the terminal that owned this process has gone.
+ *
+ * The console deliberately survives its terminal closing, so a run in progress
+ * is not killed by someone tidying up windows. What it did not survive was the
+ * consequence: macOS revokes the tty, every write to stderr then fails
+ * *asynchronously* — past any try/catch around the call — and that surfaces as
+ * an uncaughtException, which the crash handler dutifully reports by writing to
+ * stderr. A process that logs its own logging failure forever.
+ *
+ * Seen in the wild: six identical `write EIO` degradations in the same second,
+ * a server still answering /api/state but hanging on every static file, and a
+ * blank page with no explanation anywhere.
+ */
+let consoleGone = false;
+
+// The throw arrives on the stream, not from the write call, so it has to be
+// caught here rather than at the call site.
+for (const stream of [process.stderr, process.stdout]) {
+  try {
+    stream.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EIO' || error.code === 'EPIPE' || error.code === 'EBADF') consoleGone = true;
+    });
+  } catch { /* a stream that cannot even take a listener is already gone */ }
+}
+
+/** Has the owning terminal gone away? Exposed so `/api/state` can say so. */
+export function consoleDetached(): boolean {
+  return consoleGone;
+}
+
 /** Point the log at a file. Called once at startup; `null` disables file output. */
 export function configureLog(target?: string | null): string | null {
   file = target === null ? null : (target ?? defaultLogFile());
@@ -87,10 +118,10 @@ function write(level: Level, event: string, data?: Record<string, unknown>): voi
   if (ring.length > RING_SIZE) ring.shift();
 
   // launchd captures stderr, so a problem is visible even without the file.
-  if (level !== 'info') {
+  if (level !== 'info' && !consoleGone) {
     try {
       process.stderr.write(`[phase-console] ${level} ${event}${entry.data ? ` ${JSON.stringify(entry.data)}` : ''}\n`);
-    } catch { /* a closed stderr is not worth dying for */ }
+    } catch { consoleGone = true; }
   }
 
   if (!file) return;

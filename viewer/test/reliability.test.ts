@@ -19,8 +19,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const { DocsWatcher } = await import('../server/watch.ts');
-const { configureLog, log, recent } = await import('../server/log.ts');
-const { degradedState, clearDegraded, onShutdown, runShutdownHandlers } = await import('../server/lifecycle.ts');
+const { configureLog, log, recent, consoleDetached } = await import('../server/log.ts');
+const { degradedState, clearDegraded, markDegraded, onShutdown, runShutdownHandlers } = await import('../server/lifecycle.ts');
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -226,4 +226,40 @@ test('an SSE client that dies before the first write does not throw', async () =
 
   assert.equal(handled, true, 'the route still owns the request');
   assert.equal(unsubscribed, true, 'the listener must be released, not leaked');
+});
+
+/* ------------------------------------------------------------------ *
+ * The terminal that went away
+ * ------------------------------------------------------------------ */
+
+test('a fault that repeats is recorded once, not forever', async () => {
+  // The shape that took a live console down: the terminal owning the process
+  // was closed, macOS revoked the tty, every stderr write then failed
+  // asynchronously — past the try/catch around it — and the crash handler
+  // reported that by writing to stderr. Six identical degradations in one
+  // second, a server still answering /api/state but hanging on every static
+  // file, and a blank page with nothing anywhere to explain it.
+  clearDegraded('storm');
+  const boom = new Error('write EIO');
+  for (let i = 0; i < 50; i++) markDegraded('storm', boom);
+
+  const recorded = degradedState().recent.filter((d) => d.kind === 'storm');
+  assert.equal(recorded.length, 1, `50 identical faults must collapse to one, got ${recorded.length}`);
+
+  // A genuinely new fault still gets through.
+  markDegraded('storm', new Error('something else'));
+  assert.equal(degradedState().recent.filter((d) => d.kind === 'storm').length, 2);
+  clearDegraded('storm');
+});
+
+test('logging survives a stderr that has stopped accepting writes', () => {
+  // Not a hypothetical: this is what a revoked tty does. The write throws on
+  // the stream rather than from the call, so a try/catch at the call site never
+  // sees it and the process dies of its own logging.
+  assert.equal(typeof consoleDetached(), 'boolean');
+  assert.doesNotThrow(() => {
+    process.stderr.emit('error', Object.assign(new Error('write EIO'), { code: 'EIO' }));
+  });
+  assert.equal(consoleDetached(), true, 'the stream error must be noticed, not just survived');
+  assert.doesNotThrow(() => log.error('after-detach', { note: 'must not throw' }));
 });
