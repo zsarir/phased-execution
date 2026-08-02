@@ -83,7 +83,7 @@ test('a path with a quote in it cannot break out of the command', () => {
 });
 
 test('the command it offers is the one a person can also type', () => {
-  assert.match(loginCommand('/Users/x/work/hub'), /^cd '\/Users\/x\/work\/hub' && claude auth login$/);
+  assert.match(loginCommand('/home/x/code/example'), /^cd '\/home\/x\/code\/example' && claude auth login$/);
 });
 
 /* ------------------------------------------------------------------ *

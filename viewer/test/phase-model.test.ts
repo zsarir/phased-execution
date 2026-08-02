@@ -20,10 +20,10 @@ const { mergePhases, boardCounts, phaseActions, fellOverToAnotherModel } =
 
 /** The real shape of the disagreement, taken from the plan that reported it. */
 const PLAN = [
-  { phase: 9, title: 'aws admin relay namespace', state: 'done' },
-  { phase: 10, title: 'front-admin: guide framework', state: 'done' },
-  { phase: 12, title: 'trade-FE: market browse', state: 'ready' },
-  { phase: 13, title: 'trade-FE: sell wizard', state: 'waiting' },
+  { phase: 9, title: 'cart-api-endpoint: relay namespace', state: 'done' },
+  { phase: 10, title: 'design-system: guide framework', state: 'done' },
+  { phase: 12, title: 'storefront: market browse', state: 'ready' },
+  { phase: 13, title: 'storefront: sell wizard', state: 'waiting' },
 ];
 
 const RUN = {
