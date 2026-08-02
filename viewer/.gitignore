@@ -1,0 +1,6 @@
+# Phase Console has no dependencies and no build step. Nothing here should ever
+# be installed or generated — these entries exist only to catch accidents.
+node_modules/
+dist/
+*.local.json
+.DS_Store

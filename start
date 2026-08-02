@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Start Phase Console — the local web app for this skill's plans and handoffs.
+#
+#   ./start                        pick the plan directory in the browser
+#   ./start ~/code/your-repo       open that directory straight away
+#   ./start --allow-writes         also enable the guarded write verbs
+#
+# It opens your browser at http://127.0.0.1:4123. Press Ctrl-C to stop.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# A bare first argument is the directory to open — `./start ~/code/repo` reads
+# better than `./start --root ~/code/repo` for the common case.
+args=()
+if [ "$#" -gt 0 ] && [ "${1#-}" = "$1" ]; then
+  args+=(--root "$1")
+  shift
+fi
+args+=("$@")
+
+exec "$here/viewer/run" ${args+"${args[@]}"}

@@ -1,0 +1,5 @@
+# Local-only regression baselines (may embed real plan structure) and tool caches.
+.local/
+.bats-cache/
+tmp/
+*.tmp

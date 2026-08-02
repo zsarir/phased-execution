@@ -1,0 +1,155 @@
+/* Base typography, layout frame and the quality floor: visible focus,
+   readable scrollbars, reduced motion honoured. */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #app { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  margin: 0;
+  line-height: 1.15;
+}
+
+h1 { font-size: var(--text-2xl); }
+h2 { font-size: var(--text-xl); }
+h3 { font-size: var(--text-lg); }
+
+p { margin: 0 0 var(--s3); }
+
+a { color: inherit; text-decoration-color: var(--rule-strong); text-underline-offset: 3px; }
+a:hover { text-decoration-color: currentcolor; }
+
+code, kbd, pre, .mono, .num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  /* Flags and paths must read literally: without this, the mono face ligates
+     `--allow-writes` into an em dash and `->` into an arrow. */
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--line-ready);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+::selection { background: color-mix(in oklab, var(--line-ready) 35%, transparent); }
+
+/* Scrollbars stay in the page's world rather than the OS's. */
+* { scrollbar-color: var(--rule-strong) transparent; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--rule-strong);
+  border: 3px solid var(--ground);
+  border-radius: 6px;
+}
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ------------------------------------------------------------------ *
+ * App frame
+ * ------------------------------------------------------------------ */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  height: 100%;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  padding: var(--s4) var(--s3);
+  background: var(--ground-deep);
+  border-right: 1px solid var(--rule);
+  overflow-y: auto;
+}
+
+.main {
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.page {
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--s5) var(--s6) var(--s8);
+  flex: 1;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  margin-bottom: var(--s5);
+}
+
+.page-head .eyebrow {
+  font-family: var(--font-display);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: var(--s1);
+}
+
+.stack { display: flex; flex-direction: column; gap: var(--s4); }
+.row { display: flex; align-items: center; gap: var(--s2); }
+.row-wrap { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.spread { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
+.grow { flex: 1; min-width: 0; }
+.muted { color: var(--ink-muted); }
+.faint { color: var(--ink-faint); }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hidden { display: none !important; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .rail {
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  .rail .rail-section-title, .rail .rail-footer { display: none; }
+  .page { padding: var(--s4) var(--s4) var(--s7); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "phase-console",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local web console for the phased-execution system: plans, phases, handoffs, status, prompts and statistics.",
+  "engines": { "node": ">=22.6" },
+  "scripts": {
+    "start": "node server/index.ts",
+    "test": "node --test \"test/*.test.ts\"",
+    "typecheck": "echo 'tsc needs @types/node — see README.md (Development)' && exit 1"
+  }
+}

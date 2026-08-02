@@ -1,0 +1,308 @@
+---
+name: phased-execution
+description: "Plan and run large multi-phase software work as a sequence of right-sized Claude sessions to control token cost and protect output quality. Use when creating a phased plan for big work, starting or continuing a phase of an existing plan in a fresh session, finishing a phase and handing off, batching or splitting phases to a session budget, resuming a plan mid-DAG, or QA-verifying a phase on request — and whenever the user mentions phased execution, a phase handoff, a plan under docs/plans/, a session budget, or booting the next phase."
+argument-hint: "[plan|start|finish] [slug]"
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Agent
+  - TaskCreate
+  - TaskUpdate
+metadata:
+  version: 3.0.0
+---
+
+# Phased Execution
+
+Run large work as a sequence of **right-sized sessions** — several adjacent phases usually **share** one
+session (batching), and a phase too big for one session is **split**, sized to the model you're running.
+The point is twofold: **bound cost** and **protect output quality**. A session only delivers if it can be
+**fully bootstrapped from disk** — that's what lets the next one start cold. This skill defines how.
+
+**Sizing is the core idea — `references/sizing.md` is the source of truth; read it.** A warm session's
+cost is roughly *linear* (Claude Code caches the prefix), so the levers that actually matter are **context
+rot**, **cache-busting events** (model/effort switch, `/compact`, a >5-min idle gap), and **bootstrap
+overhead** — not raw turn count. The rule:
+
+> **One coherent, right-sized chunk of work per session** — big enough to amortize bootstrap and keep
+> the cache warm, small enough to stay clear of context rot and the harness auto-compaction threshold.
+
+Right size depends on the running model's window, so the plan records a **session budget** (~0.2 × the
+window in phase weight — ~200K for 1M-class models) and the engine proposes which phases share a session.
+A session boundary is a *cost*, not a virtue: it's earned by a spent budget, an external gate, or a model
+switch — never by tidiness.
+
+## Three artifacts + one optional — each has ONE job (never duplicate)
+
+- **Plan** → `docs/plans/<slug>.md` — the durable blueprint: every phase, the dependency graph, the
+  session budget, per-phase self-contained detail, end-to-end verification. The roadmap source of truth.
+- **Handoff** → `docs/handoffs/<slug>/phase-NN-<title>.md` (+ `INDEX.md`) — the per-phase *baton* for the
+  NEXT session: state now, files changed, decisions, exact next commands, skills used. Links back to plan +
+  memory. Written at the END of each phase.
+- **Memory** → `project_<slug>` in the memory index (the replacement for the removed `remember` plugin) —
+  durable cross-session facts: cumulative phase status, commits, deploy/commit gates, gotchas.
+- **QA status (OPTIONAL — only when QA is enabled)** → `docs/handoffs/<slug>/test-status.md` (+ reports
+  under `docs/handoffs/<slug>/reports/`) — per-phase QA results. **QA is opt-in and off by default**: the
+  artifact exists only when the user asked for QA (plan directive `**QA gate:** on`, `new-handoff.sh --qa`,
+  or a legacy plan that already has the file). Its existence turns on **QA gating**: a dependent phase is
+  `ready` only once every dependency is *verified* (handoff `complete` **and** QA result `pass`/`waived`),
+  so a broken phase can't silently propagate. `scripts/phase-graph.sh <slug> --qa-mode` says which regime
+  a plan is in (`off` · `on <reason>` · `waived <reason>`).
+
+All artifacts live in the **project repo** under `docs/` (versioned + pushed, so any account/machine
+can pull and continue); the skill itself lives in the synced `claude-skills` repo. The plan holds the
+roadmap; handoffs **link** to it and never re-list all phases. The handoff holds
+operational next-session state. Memory holds durable facts. Full schemas/templates:
+`references/plan-format.md`, `references/handoff-format.md`, `references/conventions.md`,
+`references/sizing.md`.
+
+## Phases are a DAG, not a line
+
+A plan is a **dependency graph**: each phase declares the phases that must finish before it can start.
+That makes two things possible that a linear "phase N → N+1" model can't express:
+
+- **Fan-out, run serially** — when one phase completes it may unblock *several* phases at once. They run
+  **one at a time** (in any order) — never two sessions on the same repo at once
+  (`references/conventions.md` §Multi-session discipline). Ready phases — sequential *or* independent
+  siblings — may **share one session** while the budget lasts (execution inside a session is serial, so
+  disjoint-file siblings are safe); what fan-out never permits is a *second concurrent session*.
+- **Out-of-order progress** — you can complete a deep chain (e.g. 1→4→5) before its siblings (2, 3). The
+  system must still know 2 and 3 aren't done. "Finished" means **every** phase is `done`, never "reached
+  the highest number".
+
+The engine that makes this real is **`scripts/phase-graph.sh <slug>`**. It reads dependencies from the
+plan's `## Phase graph` table and the **live** per-phase status from each handoff's frontmatter, then
+classifies every phase as `done | in-progress | ready | waiting` — where **ready = not started and every
+dependency done**. Readiness is computed from the done-*set*, so it is always correct under serial and
+out-of-order execution. Never hand-maintain a "current phase" cursor; ask the engine. Run it any time to
+see the board (and the suggested batches); the other scripts call it to pick next phases and fill handoff
+frontmatter.
+
+## Modes
+
+Pick the mode that matches the situation and announce it ("Using phased-execution: <mode>").
+
+### Mode 1 — `plan` (no plan exists yet)
+1. **Set the session budget, then minimize phase count.** Identify the model that will *run* these phases —
+   you know your own from your system context; if a different model will execute them, ask
+   (`AskUserQuestion`; the common split is Fable plans, Opus executes — default `claude-opus-4-8`). Look up
+   its budget in `references/sizing.md` and **author the fewest phases that fit it**: target
+   `phase count ≈ ceil(total weight / budget)`, then add a boundary only where one is *earned* — an
+   external gate, a deliberate model switch, or a checkpoint the user asked for. Never split for subsystem
+   tidiness or to mirror DAG fan-out (execution is serial, so extra phases buy no parallelism — only
+   repeated bootstrap + handoff ceremony). Don't author three trivial phases that should be one, or one
+   giant phase that should be three (a phase whose weight exceeds the budget is two phases). Record the
+   target model + budget in a `## Session budget` note in the plan, and tag each phase's rough
+   `- **Size:** S|M|L` (drives the batch engine; default is `M`). **QA is off by default** — only if the
+   user asked for QA on this work, record `**QA gate:** on` in that note (see Mode 3 step on QA).
+   **If the user named skills to use for this work** (e.g. `frontend-design`,
+   a TDD skill), record them on a `**Skills (every session):**` line in that note — backtick each — so the
+   engine re-injects them into every phase's boot prompt (and the QA brief) and each fresh session re-invokes
+   them. Also record the **branch** in that note: by default the branch already
+   checked out — **don't create a new branch**; only if the user explicitly asked, create ONE feature
+   branch for the whole plan (every phase, including concurrent ones, commits to it) and record its name.
+   See `references/conventions.md` §Branches.
+2. Draft the plan in the `references/plan-format.md` shape. **Every phase must be self-contained** — written
+   so a session with zero prior context can execute it from the plan + its handoff alone. **Required and
+   load-bearing: the `## Phase graph` table.** Its `Depends on` column is the machine-readable dependency
+   source the engine parses — every phase must list **every** phase that must finish first (comma-separated
+   numbers, ranges like `1–7`, or `—` for none). Also fill `Parallel-safe with`, repos, exit criteria, and
+   the explicit **"Blocking vs simultaneous"** callout. Mark externally-gated phases `*(GATED)*` in their
+   `### Phase N` heading with a `- **Gates (must clear first):** …` line.
+3. Scaffold it: `bash ~/.claude/skills/phased-execution/scripts/new-plan.sh <slug>` then fill it in.
+4. **Sanity-check the graph + preview batches:** run `scripts/phase-graph.sh <slug>` — it should list every
+   phase, show the correct roots as `ready`, and (with `Size:` tags) print `SUGGESTED BATCHES:`. Run
+   `scripts/phase-graph.sh <slug> --session-plan <model>` to see the proposed session grouping for your
+   budget. If the count is wrong or a phase is missing, the table has a row the parser skipped (odd
+   phase-number formatting) — fix it before proceeding.
+5. **Commit** the plan (`docs/plans/<slug>.md`).
+6. **Immediately implement the root phase(s) in this same session** → switch to Mode 2. (Keep going into
+   further ready phases while the budget lasts — see Mode 3 batching; whatever doesn't fit runs in later
+   sessions, one at a time, via the pasted prompts from Mode 3.)
+
+### Mode 2 — `phase-start` (begin or continue a phase in a fresh session)
+1. **Bootstrap from disk only:** run `scripts/handoff-status.sh <slug>` — it prints the INDEX, per-file
+   status, **and** the live DAG board, so you see at a glance what is done, what this phase depends on, and
+   whether it is genuinely `ready`. Read this phase's **dependency** handoffs (the phase's `depends_on`, not
+   merely the previous number), `docs/plans/<slug>.md` §Phase N + §Session budget, and memory
+   `project_<slug>`. **Invoke any skills named on §Session budget's `Skills (every session):` line** before
+   implementing (the boot prompt lists them too). That must be enough — if it isn't, the previous handoff was
+   deficient; note the gap so it gets fixed.
+2. **Confirm readiness, then the budget.** If the board shows this phase as `waiting`, a dependency isn't
+   actually done — stop and surface that rather than building on an unfinished base (earlier-numbered phases
+   may legitimately be incomplete; rely on the board, not phase numbers). Then check the plan's
+   `## Session budget` target model against the model you're *actually* running — if they differ, recompute
+   the budget from `references/sizing.md` and re-batch accordingly. **Then claim the phase (concurrency
+   guard):** `git pull`, then `bash ~/.claude/skills/phased-execution/scripts/phase-lock.sh <slug> claim <N>
+   --owner "<account>/<session>" --git`. If it reports the phase is held by another live session, **stop and
+   ask the user** whether to stop that session, take over (`--force`), or pick a different ready phase —
+   never let two sessions build the same phase. The lock auto-expires (lease) and is released at
+   phase-finish. See `references/conventions.md` §Locking.
+3. **Reset the task list** (delete prior-phase tasks) and create THIS phase's tasks with subjects prefixed
+   **`pN.taskM`** (e.g. `p2.task1 — wire endpoint`). Keep the roadmap in the plan, not the task list.
+   (See `references/conventions.md` and memory `feedback_phase_task_list_reset`.)
+4. Implement the phase to its exit criteria. Offload high-token exploration/verification to `Agent`
+   subagents (they return summaries; the tokens never enter your session) — see Guardrails.
+
+### Mode 3 — `phase-finish` (phase is done)
+
+**Before anything else, create this checklist as tasks (`TaskCreate`) and work it top to bottom.** Step 1
+(verify) is the step a hurried finish silently drops, because committing *feels* like the end — the
+checklist is what makes it unmissable: **never hand off a phase whose verification is red.**
+
+```
+1. VERIFY — run plan §Phase N's Verification commands; ALL green (never hand off red)
+2. Commit changed files — explicit paths; verify the sha with: git log -1
+3. Write the handoff — new-handoff.sh, then fill frontmatter + body
+4. Update memory project_<slug> + its MEMORY.md index line
+5. Stop & hand off, or batch — continue while the budget lasts
+```
+
+1. **Verify.** Run the phase's own `Verification` commands from plan §Phase N (tests, build, lint —
+   whatever the plan names) and confirm **every exit criterion** against them. All green is the bar for
+   `status: complete`. If something is red and you can't fix it now, hand off **blocked**
+   (`new-handoff.sh <slug> <N> <title> blocked`) with the failure recorded — never a `complete` handoff
+   on red verification.
+2. **Commit** changed files — explicit paths, never `git add -A`; commit inside the relevant submodule(s);
+   end the message with the repo's `Co-Authored-By:` trailer. Commit to the plan's recorded branch — **the
+   current branch by default; never `git checkout -b`** unless the user asked and the plan names a branch
+   (then that single branch carries *all* phases, sequential and concurrent). **Verify with `git log -1` —
+   never copy a sha from memory; the environment may have auto-committed.**
+3. **Handoff:** `bash ~/.claude/skills/phased-execution/scripts/new-handoff.sh <slug> <N> <title>`, then
+   fill the frontmatter and body (see `references/handoff-format.md`). The script auto-fills `depends_on` +
+   `blocks` from the graph and **auto-generates the `## ▶ Start next phase(s)` section with one boot prompt
+   per phase this phase unblocks** — review it, don't rewrite it. (It reads the just-finished phase as done,
+   so the prompts are correct even before you commit the handoff.) Writing the handoff every phase keeps it
+   resumable from a fresh session **even when you batch** the next one.
+4. **Memory:** update `project_<slug>` (phase status, commits, gates) + its one-line `MEMORY.md` index
+   entry. Record status as a **set** — "done: 1,4,5 / ready: 2,3" — never a single "current phase", so the
+   record stays truthful under out-of-order progress. The live board is always recomputable with
+   `scripts/phase-graph.sh <slug>`; memory holds the durable narrative, not the cursor.
+
+   **QA gate — only when this plan runs QA.** QA subagents are **opt-in, off by default**; check
+   `scripts/phase-graph.sh <slug> --qa-mode`:
+   - `off` → skip this entirely (the default — step 1's verification is the phase's quality bar).
+   - `waived <reason>` → the plan waived QA: `new-handoff.sh` records the row as `waived` automatically;
+     **never dispatch a QA subagent**.
+   - `on <reason>` → insert the QA gate here, before step 5: the building session shares the author's
+     blind spots, so dispatch an **independent `Agent` subagent with a clean context** using the brief from
+     `scripts/phase-graph.sh <slug> --qa-prompt <N>` (discipline: `references/qa-method.md`). It reads the
+     real diff cold, runs/extends tests, records `pass|fail|waived` via `qa-record.sh`. Always commit +
+     push the report + `test-status.md` (a `fail` must propagate to gate dependents in every clone). On
+     `fail`: the finishing session owns the fix — fix now and re-dispatch a **fresh** QA subagent (never
+     re-run inside the failed one's context), or hand off blocked
+     (`new-handoff.sh <slug> <N> <title> blocked --force`) with the follow-ups listed. Don't start any
+     dependent until the verdict is `pass`/`waived`. Batched phases QA one subagent per phase, at each
+     phase's own boundary.
+   - The user asks for QA on a plan that didn't record it? Pass `--qa` to `new-handoff.sh` (it creates
+     `test-status.md`, backfilling earlier completed phases as `waived`), then follow the `on` path.
+5. **Stop & hand off, or batch.** Run the end-of-phase script (it prints the live board, batching advice,
+   and a START COPY / END COPY boot prompt for **every** phase now ready):
+   ```bash
+   DOCS_ROOT=<hub-root> bash ~/.claude/skills/phased-execution/scripts/next-phase-prompt.sh <slug> <N>
+   ```
+   Then decide, and **release the phase lock when you stop** (`phase-lock.sh <slug> release <N> --owner … --git`):
+   - **Batch (continue in THIS session) — the efficient default.** If a ready phase fits the **remaining
+     session budget** (your live context meter, `references/sizing.md`) — sequential on this one *or* an
+     independent sibling — just continue into it (Mode 2 in place, lock and all). You save a full
+     bootstrap + closeout and keep the cache warm. (`--session-plan` shows which phases belong together.)
+   - **Stop & hand off (fresh session)** — when the budget is spent, the next phase is **GATED** (never
+     batch past an external gate), it wants a **different model**, or — with QA `on` — it depends on this
+     phase's still-unrecorded verdict. Print the script's output verbatim as the **last message of this
+     session**, then **STOP**.
+   - **Several phases ready:** run them **one at a time, in any order** — never two sessions at once on
+     the same repo. Continue into ONE of them here if the budget allows; the output lists a boot prompt
+     for each of the rest.
+   - **No phase ready but work remains:** the just-finished phase unblocked nothing yet (downstream still
+     waits on other deps). The script says so; pick up any *other* phase the board shows as `ready`.
+   - **Final / all done:** when the board shows every phase `done`, the script prints the closeout — run
+     the plan's §End-to-end verification yourself (always), dispatch the fresh **`qa-full` subagent only
+     if the closeout prints its brief** (QA-on plans), then mark the plan `status: complete` and check
+     memory for user gates. You can also pass `none` to force the closeout.
+
+## Helper scripts (deterministic, output-only — code never enters context)
+Run from the repo root that owns `docs/` (in this monorepo, the **superproject root**), or set `DOCS_ROOT`.
+Scripts resolve the superproject root automatically when run from inside a submodule directory.
+- `scripts/new-plan.sh <slug>` — scaffold `docs/plans/<slug>.md`.
+- `scripts/phase-graph.sh <slug>` — **the engine.** Default: the live DAG board (done / ready / waiting,
+  with unmet deps, gated flags, and `SUGGESTED BATCHES:` when sizes are present). Machine modes used by the
+  other scripts (and handy directly): `--ready`, `--ready-after N`, `--deps N`, `--dependents N`,
+  `--gated N`, `--boot-prompt N`, `--size N`, **`--session-plan [model|budget]`** (live-aware session
+  grouping for a model's budget — done phases excluded, GATED/over-budget/unmet-dep groups flagged),
+  **`--lint`** (structural validation: exit non-zero on a malformed row, an undefined
+  dependency, or a cycle — naming each), **`--qa-mode`** (this plan's QA regime: `off` · `on <reason>` ·
+  `waived <reason>`), **`--qa-result N`** / **`--qa-prompt N`** (recorded QA result /
+  the fresh QA-subagent brief), **`--gate-status N`** (evaluate a machine-checkable gate: date / phase / manual),
+  and **`--memory-block`** (the canonical done/ready/waiting block for memory). The board is model-aware
+  (batches size to the plan's `## Session budget`) and shows QA markers when gating is on. Parses the
+  `## Phase graph` table (deps, ranges, markdown-bold cells) + `### Phase N` `Size:`/`Gate-check:` bullets +
+  handoff statuses + `test-status.md`; warns on drift. Sizing/budget constants live in `scripts/sizing.env`.
+- `scripts/new-handoff.sh <slug> <N> <title> [status] [--qa]` — scaffold the phase handoff + create/update
+  `INDEX.md`. Auto-fills `depends_on` + `blocks` from the graph and the `## ▶ Start next phase(s)` section
+  (a boot prompt per unblocked phase). `status` defaults to `complete`; pass `in-progress`/`blocked`
+  mid-phase. Touches `test-status.md` only when the plan's qa-mode is not `off`; `--qa` forces QA on for
+  this finish (creates the file, backfilling earlier completed phases as `waived`).
+- `scripts/handoff-status.sh <slug>` — INDEX + per-file status + the live DAG board (calls the engine).
+- `scripts/next-phase-prompt.sh <slug> <completed-phase|none>` — end-of-phase stop banner, live board,
+  batching advice, and a START COPY / END COPY boot prompt for **every** phase the completed phase unblocks
+  (on a QA-`on` plan, run it only *after* the verdict is recorded). Pass the phase you just finished (not
+  the next number); `none` forces the final-phase closeout (which prints the `qa-full` brief only for
+  QA-`on` plans).
+- `scripts/validate.sh <slug>` — deterministic validator: structural lint of the plan (F1/F2/F3) **plus**
+  handoff body/consistency checks (valid status, required sections, `depends_on` agreeing with the graph).
+  Run before trusting a board or finishing a phase.
+- `scripts/phase-lock.sh <slug> <claim|release|status|list> <N> [--owner ID] [--lease S] [--git] [--force]`
+  — cooperative phase locks (concurrency guard). Lock files at `docs/handoffs/<slug>/.locks/phase-NN.lock`;
+  `--git` pulls before checking and commits+pushes the claim so other clones see it. See conventions §Locking.
+- `scripts/qa-record.sh <slug> <N> <pass|fail|waived|pending> --report <rel-path>` — the deterministic,
+  idempotent writer for `test-status.md` (the QA gate). The QA subagent calls it when QA is enabled; never
+  hand-edit the table. (Recording a row also *activates* gating — it's a QA-on trigger.) See
+  `references/qa-method.md`.
+- Tests: `tests/run-tests.sh` runs the bats unit + integration suite (under bash 3.2). **QA is opt-in** —
+  when a plan enables it (`**QA gate:** on`, `--qa`, or an existing `test-status.md`), a fresh-context QA
+  subagent reviews each phase-finish (brief via `--qa-prompt`) and a `qa-full` pass runs at closeout; the
+  discipline lives in `references/qa-method.md`. By default none of that runs — step 1's verification is
+  the quality bar.
+- **`start`** (→ `viewer/run`) — **Phase Console**, a local web app for reading the whole system: every plan's live
+  board, the graph drawn as a route map, phase/handoff detail, copyable boot prompts, portfolio
+  statistics and full-text search (`viewer/README.md`). Point a human at it — it is for browsing, not
+  for executing a phase; it delegates every status claim to these same scripts and is read-only unless
+  started with `--allow-writes` (and never commits or pushes).
+
+## Guardrails
+The load-bearing rules a session must not get wrong; full rationale in `references/conventions.md` +
+`references/sizing.md`.
+- **Right-size; don't reflexively split.** One coherent chunk per session, sized to the running model's
+  budget (~0.2 × window in weight); batch any ready phases — sequential or siblings — that fit it, split
+  any phase that won't fit alone. A session boundary is earned by budget, gate, or model switch — never
+  tidiness. (sizing.md; conventions §Session sizing)
+- **Keep the cache warm; offload to `Agent` subagents.** No model/effort switch or `/compact` mid-phase
+  (open a fresh session instead). Push broad search, multi-file reads, and independent verification to
+  `Agent` subagents — they return only a summary, so the tokens stay out of your session (the biggest
+  in-session lever for cost *and* rot); don't over-delegate a lone read or edit. (conventions §Session sizing)
+- **`git log -1` is the truth for shas.** Never carry a sha from memory into a handoff; stale "uncommitted"
+  claims are the #1 handoff defect. (conventions §Commits)
+- **Branches off by default** — commit to the current branch; only on explicit request, one branch for the
+  whole plan, every phase on it. (conventions §Branches)
+- **The handoff is the contract.** If a fresh session can't start cold from it, fix the handoff; link to the
+  plan, never re-list the roadmap. (conventions §Memory, §Docs layout)
+- **`phase-graph.sh` is the truth for done/ready/next** — never infer from phase numbers or a remembered
+  cursor; "finished" means the board shows **every** phase `done`. (conventions §Status source of truth)
+- **One session per phase — claim the lock** before building; if another session holds it, ask the user how
+  to proceed. (conventions §Locking)
+- **Serial — one working tree at a time.** Never two sessions on one repo at once; **never `git stash`** to
+  hand work across sessions — commit (a WIP commit if needed) instead. (conventions §Multi-session discipline)
+- **QA is opt-in; existing gates still bind.** No QA subagent runs unless the plan enables it
+  (`--qa-mode` says which regime applies). But once `test-status.md` exists — on ANY plan, old or new — a
+  dependent is `ready` only when its deps are `done` **and** QA `pass`/`waived`, and a recorded `fail`
+  holds every dependent until re-QA'd: turning QA "off by default" never clears an existing `fail` row.
+  (conventions §QA gating)
+- **Validate before you trust the board** — `scripts/validate.sh <slug>` catches malformed rows, undefined
+  deps, cycles, and inconsistent handoffs; a silently-wrong board is the worst failure.
+- **Skill vs work-state split.** The skill lives in the synced `claude-skills` repo (edit one clone, then
+  `commit → push → pull`); plans/handoffs/reports/test-status/locks are work-state in the project repo's
+  `docs/`. (conventions §Docs layout & repo split)

@@ -1,0 +1,153 @@
+/* ------------------------------------------------------------------ *
+ * Phase Console — design tokens
+ *
+ * A plan is a network: phases are stations, dependencies are track, and a
+ * session batch is one train carrying several stations. The palette gives
+ * every phase state its own line colour, and amber — the "boarding" colour of
+ * a departures board — is reserved for the one thing that is actionable now: a
+ * ready phase. Nothing else in the interface is allowed to be amber.
+ * ------------------------------------------------------------------ */
+
+@font-face {
+  font-family: 'Archivo Narrow';
+  src: url('../fonts/archivo-narrow.woff2') format('woff2-variations');
+  font-weight: 400 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Public Sans';
+  src: url('../fonts/public-sans.woff2') format('woff2-variations');
+  font-weight: 300 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('../fonts/jetbrains-mono.woff2') format('woff2-variations');
+  font-weight: 400 600;
+  font-display: swap;
+}
+
+:root {
+  /* Type */
+  --font-display: 'Archivo Narrow', 'Helvetica Neue', system-ui, sans-serif;
+  --font-body: 'Public Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --text-3xl: 2.25rem;
+  --text-2xl: 1.6rem;
+  --text-xl: 1.25rem;
+  --text-lg: 1.05rem;
+  --text-md: 0.925rem;
+  --text-sm: 0.825rem;
+  --text-xs: 0.75rem;
+  --text-2xs: 0.68rem;
+
+  /* Space — a 4px rhythm */
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
+
+  --radius-sm: 3px;
+  --radius: 6px;
+  --radius-lg: 10px;
+
+  --rail-width: 236px;
+  --content-max: 1560px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --fast: 120ms;
+  --medium: 260ms;
+  --draw: 620ms;
+
+  /* Line colours — one per phase state, identical in both themes so the
+     route map reads the same way whatever the ground is. */
+  --line-done: #3fb68b;
+  --line-ready: #ffb627;
+  --line-progress: #4fa8ff;
+  --line-waiting: #7a8b92;
+  --line-blocked: #ff5d5d;
+  --line-gated: #c77dff;
+
+  color-scheme: dark;
+}
+
+/* ---- Night board (default) ---- */
+:root,
+:root[data-theme='dark'] {
+  --ground: #0e1b22;
+  --ground-deep: #0a151b;
+  --surface: #152730;
+  --surface-raised: #1a2f39;
+  --rule: #1f3a44;
+  --rule-strong: #2b4d59;
+
+  --ink: #e8f1f2;
+  --ink-muted: #9db1b8;
+  --ink-faint: #6f868f;
+
+  --shadow-card: 0 1px 0 rgb(255 255 255 / 4%) inset, 0 8px 24px -16px rgb(0 0 0 / 80%);
+  --glow-ready: 0 0 0 3px rgb(255 182 39 / 14%);
+  --track: #24424d;
+  --hatch: rgb(199 125 255 / 22%);
+  color-scheme: dark;
+}
+
+/* ---- Paper map ---- */
+:root[data-theme='light'] {
+  --ground: #e4eae8;
+  --ground-deep: #d8e0de;
+  --surface: #ffffff;
+  --surface-raised: #f4f8f7;
+  --rule: #c3d0ce;
+  --rule-strong: #9db0af;
+
+  --ink: #0e1b22;
+  --ink-muted: #4b5f68;
+  --ink-faint: #6b7f87;
+
+  --line-done: #128a5e;
+  --line-ready: #b06f00;
+  --line-progress: #1f6fd0;
+  --line-waiting: #7a8b92;
+  --line-blocked: #c53030;
+  --line-gated: #7c3aed;
+
+  --shadow-card: 0 1px 2px rgb(14 27 34 / 6%), 0 8px 20px -18px rgb(14 27 34 / 40%);
+  --glow-ready: 0 0 0 3px rgb(176 111 0 / 12%);
+  --track: #b9c9c9;
+  --hatch: rgb(124 58 237 / 18%);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --ground: #e4eae8;
+    --ground-deep: #d8e0de;
+    --surface: #ffffff;
+    --surface-raised: #f4f8f7;
+    --rule: #c3d0ce;
+    --rule-strong: #9db0af;
+    --ink: #0e1b22;
+    --ink-muted: #4b5f68;
+    --ink-faint: #6b7f87;
+    --line-done: #128a5e;
+    --line-ready: #b06f00;
+    --line-progress: #1f6fd0;
+    --line-blocked: #c53030;
+    --line-gated: #7c3aed;
+    --shadow-card: 0 1px 2px rgb(14 27 34 / 6%), 0 8px 20px -18px rgb(14 27 34 / 40%);
+    --glow-ready: 0 0 0 3px rgb(176 111 0 / 12%);
+    --track: #b9c9c9;
+    --hatch: rgb(124 58 237 / 18%);
+    color-scheme: light;
+  }
+}
+
+/* State → colour, used by chips, dots, rows and the route map alike. */
+.state-done { --state: var(--line-done); }
+.state-ready { --state: var(--line-ready); }
+.state-in-progress { --state: var(--line-progress); }
+.state-waiting { --state: var(--line-waiting); }
+.state-stuck,
+.state-blocked { --state: var(--line-blocked); }
+.state-gated { --state: var(--line-gated); }

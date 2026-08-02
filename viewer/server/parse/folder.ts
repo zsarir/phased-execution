@@ -1,0 +1,87 @@
+/**
+ * The other three artefacts in a handoff folder: `INDEX.md`, `test-status.md`
+ * and `.locks/phase-NN.lock`.
+ */
+
+import { tableAfter, plainCell } from './markdown.ts';
+
+export type IndexRow = { phase: number; title: string; status: string; link?: string };
+
+/** Rows of the INDEX table; `TBD` links (planned phases) come back without one. */
+export function parseIndex(text: string): IndexRow[] {
+  const rows = tableAfter(text, () => true);
+  const out: IndexRow[] = [];
+  for (const row of rows) {
+    const phase = plainCell(row.cells[0] ?? '');
+    if (!/^\d+$/.test(phase)) continue;
+    const linkCell = row.cells[3] ?? '';
+    const link = /\]\(([^)]+)\)/.exec(linkCell)?.[1];
+    out.push({
+      phase: Number(phase),
+      title: plainCell(row.cells[1] ?? ''),
+      status: plainCell(row.cells[2] ?? '').toLowerCase(),
+      link,
+    });
+  }
+  return out;
+}
+
+export type QaResult = 'pass' | 'fail' | 'pending' | 'waived' | 'unknown';
+export type QaRow = { phase: number; result: QaResult; report?: string };
+
+const QA_VALUES: QaResult[] = ['pass', 'fail', 'pending', 'waived'];
+
+/** Rows of `## QA status` in `test-status.md` — written by `qa-record.sh`. */
+export function parseTestStatus(text: string): QaRow[] {
+  const rows = tableAfter(text, (t) => /qa status/i.test(t));
+  const out: QaRow[] = [];
+  for (const row of rows) {
+    const phase = plainCell(row.cells[0] ?? '');
+    if (!/^\d+$/.test(phase)) continue;
+    const value = plainCell(row.cells[1] ?? '').toLowerCase();
+    const report = plainCell(row.cells[2] ?? '');
+    out.push({
+      phase: Number(phase),
+      result: (QA_VALUES as string[]).includes(value) ? (value as QaResult) : 'unknown',
+      report: report && report !== '-' ? (/\]\(([^)]+)\)/.exec(row.cells[2] ?? '')?.[1] ?? report) : undefined,
+    });
+  }
+  return out;
+}
+
+export type Lock = {
+  slug: string;
+  phase: number;
+  owner: string;
+  host?: string;
+  claimedAt?: number;
+  leaseUntil?: number;
+  /** Lease elapsed — `phase-lock.sh` lets another session take it over. */
+  expired: boolean;
+  file: string;
+};
+
+/** `key=value` lock file written by `phase-lock.sh claim`. */
+export function parseLock(text: string, file: string, now = Date.now()): Lock | null {
+  const values: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    const m = /^([a-z_]+)=(.*)$/.exec(line.trim());
+    if (m) values[m[1]] = m[2].trim();
+  }
+  const phase = Number.parseInt(values.phase ?? '', 10);
+  if (!Number.isFinite(phase)) return null;
+
+  const leaseUntil = Number.parseInt(values.lease_until ?? '', 10);
+  const claimedAt = Number.parseInt(values.claimed_at ?? '', 10);
+
+  return {
+    slug: values.slug ?? '',
+    phase,
+    owner: values.owner ?? 'unknown',
+    host: values.host,
+    claimedAt: Number.isFinite(claimedAt) ? claimedAt * 1000 : undefined,
+    leaseUntil: Number.isFinite(leaseUntil) ? leaseUntil * 1000 : undefined,
+    expired: Number.isFinite(leaseUntil) ? leaseUntil * 1000 < now : false,
+    file,
+  };
+}
