@@ -128,8 +128,84 @@ rest of this console, there is nothing to install — `node:crypto` has every pr
 **What it will not do.** `permissions.deny` is handed to every session at CLI scope and is the layer
 that holds with this console dead — measured, not assumed. The `ask` list goes through an HTTP hook
 that **fails open**, so it carries workflow and never safety. Settings shows both, and says which is
-which. Rules can be added from there to `deny` and `ask` only: widening what an agent may do at 3am
-is a deliberate edit of `~/.config/phase-console/autopilot.json`.
+which.
+
+### Permissions: how much a run may do
+
+Three profiles, chosen when a run starts and changeable while it is running:
+
+| Profile | Ask list | Child argv | Use it when |
+|---|---|---|---|
+| **Guarded** (default) | in force — commits, installs, merges raise a card | `--permission-mode acceptEdits` | you are around to answer |
+| **Trusted** | emptied | `--permission-mode acceptEdits` | an overnight run on work you trust |
+| **Bypass** | emptied | `--permission-mode bypassPermissions` | the CLI's own prompting is in the way too |
+
+**`deny` is identical in all three.** A profile only moves the ask list; the wall is not a preference,
+which is the whole reason it can be trusted. That holds under Bypass too — the CLI's own description
+of `bypassPermissions` is that it "auto-approves every tool call *except explicit deny rules*".
+
+**Bypass needs a disclaimer you can only accept interactively.** Read out of the CLI: given
+`--permission-mode bypassPermissions` without it, Claude Code does not error and does not honour the
+flag — it silently downgrades to `default`, and `default` in `-p` mode means prompting a terminal
+that is not there, i.e. refusing every edit. So on a machine where nobody ever accepted it, Bypass
+produces a run that can do **less** than Guarded, for no visible reason. Accept it once in a normal
+`claude` session, or use Trusted. The console watches for the CLI's own downgrade line and surfaces
+it rather than letting the phase quietly fail.
+
+Switching mid-run is journaled as `run.permission-profile`
+with who did it, takes effect at the hook on the *next tool call*, and reaches the child's argv at the
+next phase — the running child cannot reload its own settings, and the console says so rather than
+implying otherwise. A run on anything but Guarded carries a banner for as long as it is in force.
+
+### Writing a rule from the card that interrupted you
+
+An approval offers **Always for this plan** and **Always everywhere**, each showing the exact rule
+before it writes it. That rule is derived from the ask rule that actually stopped the call, so
+accepting it cancels precisely what interrupted — and it is written *before* the card is settled, so
+the session's next call is already classified under it.
+
+- Plan-scoped rules live in `~/.config/phase-console/plans/<slug>.json`; global ones in
+  `~/.config/phase-console/autopilot.json`. Both are additive over the shipped defaults.
+- Evaluation is **deny → an allow you wrote → ask → allow**, first match winning, specificity
+  irrelevant. The one deviation from Claude Code's own order is deliberate: a plain allow rule can
+  never cancel an ask rule, so "Always allow this" would otherwise write a rule and change nothing.
+- Every write is journaled as `policy.edited` against the live run, with the author and the scope,
+  and is removable from **Settings → Permissions** with the × on its chip. Shipped defaults have no
+  line to delete and are not removable from there.
+- **This widens as well as tightens**, which reverses the console's earlier rule that a browser could
+  only ever make a run more careful. What that produced in practice was ten `git commit` cards in one
+  run and a person tapping Allow without reading — the failure the strict version existed to prevent,
+  by a different road.
+
+### Which rules this console can actually enforce
+
+The PreToolUse hook only fires for `Bash`, `Write`, `Edit`, `NotebookEdit`, `WebFetch` and
+`WebSearch`. Rules about anything else — `Read`, `Agent`, `Cd`, `mcp__*` — are real and the CLI
+enforces them, but nothing here will show you one being hit, and Settings labels them `cli-only`
+rather than implying otherwise. The supported forms are the documented taxonomy: bare tool,
+command prefix (`Bash(git commit:*)`), command glob (`Bash(npm run test *)`), one parameter
+(`Agent(model:opus)`), paths (`Read(~/.ssh/**)`), domains (`WebFetch(domain:*.example.com)`), MCP,
+agent types and `Cd`.
+
+The edges are surfaced in the UI because each has cost someone an afternoon:
+
+- `Bash(ls:*)` is `Bash(ls *)` — it does **not** match `lsof`. `ls *` and `ls*` are different rules.
+- Wrappers are seen through — `timeout time nice nohup stdbuf command builtin noglob` and bare
+  `xargs` — but **not** `npx`, `docker exec` or `devbox run`.
+- `watch`, `setsid`, `flock` and `find -exec` never auto-approve: what they run cannot be seen from
+  outside, so they get a card.
+- Only `Read(…)` and `Edit(…)` path rules are consulted; `Write(…)`, `NotebookEdit(…)` and `Glob(…)`
+  paths are ignored. `Bash(command:rm *)` parses and does nothing. Settings lists any such rule you
+  have written under **These parse and do nothing**.
+
+### When nobody answers
+
+A tool card waits **an hour**, not ten minutes. At ten, a real overnight run had a commit refused
+because everyone was asleep — the worst outcome available, since the work was done and the session
+was told "no" for a reason that was really "you were away". The hook is still answered before its own
+timeout (silence fails open), but a timeout now **parks the run** instead of letting the session treat
+the refusal as a verdict about the work: `run.parked`, failure counter untouched, phase retryable the
+moment the card is answered.
 
 The runner will also not execute a verification command that reaches outside the working tree unless
 it can be shown read-only — `curl -X POST`, `ssh box 'systemctl restart …'` and `psql -c 'DELETE …'`

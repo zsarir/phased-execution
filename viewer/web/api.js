@@ -71,8 +71,13 @@ export const api = {
   /** Every skill a spawned session could invoke, from its own Claude home. */
   skills: () => get('/api/skills'),
   /** The rules an unattended session runs under, and which layer enforces each. */
-  policy: () => request('/api/policy'),
+  policy: (slug) => request(`/api/policy${slug ? `?slug=${encodeURIComponent(slug)}` : ''}`),
   addPolicy: (rules) => post('/api/policy', rules),
+  /**
+   * Add or remove rules at one scope. Unlike `addPolicy` this can widen — which
+   * is why it always carries a scope and an author.
+   */
+  editPolicy: (edit) => post('/api/policy', { by: 'console', ...edit }),
   search: (query) => request(`/api/search?q=${encodeURIComponent(query)}`),
 
   plan: (slug, model) => get(`/api/plans/${encodeURIComponent(slug)}${model ? `?model=${encodeURIComponent(model)}` : ''}`),
@@ -128,7 +133,14 @@ export const api = {
   authLogin: () => post('/api/auth/login'),
 
   approvals: () => request('/api/approvals'),
-  decide: (id, decision, reason) => post(`/api/approvals/${encodeURIComponent(id)}`, { decision, reason, by: 'console' }),
+  /**
+   * Answer a card. `remember` ('plan' | 'global') also writes `rule`, so the
+   * same call that unblocks the session stops it asking again.
+   */
+  decide: (id, decision, reason, remember, rule) => post(
+    `/api/approvals/${encodeURIComponent(id)}`,
+    { decision, reason, by: 'console', ...(remember ? { remember, rule } : {}) },
+  ),
 };
 
 /* ------------------------------------------------------------------ *

@@ -61,9 +61,65 @@ const FORBIDDEN_WITH_VALUE = ['--setting-sources'];
  * rather than dropped: removing `--permission-mode` entirely would fall back to
  * the interactive default, which in headless mode is a silent refusal of every
  * edit — a fix that quietly breaks every run is not a fix.
+ *
+ * `bypassPermissions` is the one entry that a caller may now unlock, and only
+ * by choosing the `bypass` profile for the run — see `SanitizeOptions`. It is
+ * still listed here rather than special-cased at the call site, so `sanitize()`
+ * remains the one place to audit.
  */
-const FORBIDDEN_VALUES: Record<string, { values: string[]; safe: string }> = {
-  '--permission-mode': { values: ['bypassPermissions'], safe: 'acceptEdits' },
+const FORBIDDEN_VALUES: Record<string, { values: string[]; safe: string; unlockedBy?: keyof SanitizeOptions }> = {
+  '--permission-mode': { values: ['bypassPermissions'], safe: 'acceptEdits', unlockedBy: 'allowBypass' },
+};
+
+/**
+ * The CLI's own words when it refuses the bypass mode it was handed.
+ *
+ * Measured, and it matters more than it looks: `bypassPermissions` requires a
+ * disclaimer that can only be accepted **interactively**, once, on this
+ * machine. Without it the CLI does not error and does not fall back to what we
+ * asked for — it silently downgrades to `default`, and `default` in `-p` mode
+ * means prompting a terminal that is not there, which is a refusal of every
+ * edit. So the Bypass profile, on a machine where nobody ever accepted the
+ * disclaimer, produces a run that can do **less** than Guarded and gives no
+ * obvious reason why. Detecting the CLI's own line is the only honest signal
+ * available: the flag is accepted, the argv looks right, and the run just
+ * quietly cannot work.
+ */
+const BYPASS_DOWNGRADED = /Permission mode downgraded to default/i;
+
+/** Did the CLI just tell us it refused the bypass mode we asked for? */
+export function isBypassDowngrade(text: string): boolean {
+  return BYPASS_DOWNGRADED.test(text);
+}
+
+function noteBypassDowngrade(emit: (event: StreamEvent) => void): void {
+  log.warn('spawn.bypass-downgraded', {
+    note: 'the CLI refused bypassPermissions and fell back to `default`, which in -p mode refuses '
+      + 'every edit. The bypass disclaimer has to be accepted once, interactively, in a normal '
+      + '`claude` session on this machine. Until then, use the Trusted profile.',
+  });
+  emit({
+    kind: 'idle',
+    afterMs: 0,
+    reason: 'the CLI refused bypassPermissions (its disclaimer has never been accepted on this '
+      + 'machine) and downgraded to `default`, which refuses every edit in headless mode — '
+      + 'switch this run to Trusted',
+  });
+}
+
+/**
+ * The deliberate exceptions, named rather than implied.
+ *
+ * This reverses a safety choice — the whole reason the rewrite existed was that
+ * nothing should be able to ask for `bypassPermissions`. It is unlocked only by
+ * an operator picking the `bypass` profile, it is journaled where it happens,
+ * and the run's own header says so for as long as it is in force. Everything
+ * else in `FORBIDDEN` and `FORBIDDEN_WITH_VALUE` stays unconditional: those
+ * flags disable the repository's hooks, which is not a preference anyone gets.
+ */
+export type SanitizeOptions = {
+  /** Let `--permission-mode bypassPermissions` through. `bypass` profile only. */
+  allowBypass?: boolean;
 };
 
 /** What the CLI accepts; anything else is only a warning there, so check here. */
@@ -169,6 +225,11 @@ export type SpawnRequest = {
   /** JSON passed to `--settings`: the per-run hook and its ask-rules (W3). */
   settings?: string;
   permissionMode?: PermissionMode;
+  /**
+   * How much this run may do unasked. Only `bypass` changes argv — the other
+   * two differ in the ask list inside `--settings`, not out here.
+   */
+  permissionProfile?: 'guarded' | 'trusted' | 'bypass';
   /** Stream assistant text as it is written rather than per finished block. */
   partialMessages?: boolean;
   /** Forward subagent text, so a phase that delegates is not a silent gap. */
@@ -232,6 +293,9 @@ const PARTIAL_FLUSH_MS = 120;
 const IDLE_CLOSE_MS = 10 * 60 * 1_000;
 
 export function buildArgv(request: SpawnRequest): string[] {
+  // Only the `bypass` profile reaches for it, and `sanitize()` is still what
+  // decides — passing the string alone gets it rewritten, as it always has.
+  const bypass = request.permissionProfile === 'bypass';
   const argv = [
     // No positional prompt: in streaming-input mode it is ignored, and a prompt
     // that looks passed but is not is the worst of both.
@@ -244,7 +308,7 @@ export function buildArgv(request: SpawnRequest): string[] {
     // stream-json in print mode requires it; it is also what makes tool calls
     // visible to the console instead of only the final answer.
     '--verbose',
-    '--permission-mode', request.permissionMode ?? 'acceptEdits',
+    '--permission-mode', bypass ? 'bypassPermissions' : (request.permissionMode ?? 'acceptEdits'),
   ];
   if (request.resume) argv.push('--resume', request.resume);
   else argv.push('--session-id', request.sessionId ?? randomUUID());
@@ -266,11 +330,11 @@ export function buildArgv(request: SpawnRequest): string[] {
   if (request.subagentText) argv.push('--forward-subagent-text');
   if (request.hookEvents) argv.push('--include-hook-events');
   if (request.settings) argv.push('--settings', request.settings);
-  return sanitize(argv);
+  return sanitize(argv, { allowBypass: bypass });
 }
 
 /** The one place a forbidden flag can be removed, so it is the only place to audit. */
-export function sanitize(argv: string[]): string[] {
+export function sanitize(argv: string[], opts: SanitizeOptions = {}): string[] {
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -289,6 +353,15 @@ export function sanitize(argv: string[]): string[] {
 
     const rule = FORBIDDEN_VALUES[arg];
     if (rule && rule.values.includes(argv[i + 1])) {
+      if (rule.unlockedBy && opts[rule.unlockedBy]) {
+        // Loud on purpose: this is the line that hands a session the keys.
+        log.warn('spawn.bypass-permitted', {
+          flag: arg, value: argv[i + 1], note: 'the operator chose the bypass profile for this run',
+        });
+        out.push(arg, argv[i + 1]);
+        i++;
+        continue;
+      }
       log.warn('spawn.refused-value', { flag: arg, value: argv[i + 1], replacedWith: rule.safe });
       out.push(arg, rule.safe);
       i++;
@@ -674,6 +747,7 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string) => {
     stderr = (stderr + chunk).slice(-KEEP_STDERR);
+    if (BYPASS_DOWNGRADED.test(chunk)) noteBypassDowngrade(emit);
     emit({ kind: 'stderr', text: chunk });
   });
   child.stderr?.on('error', (error) => log.warn('spawn.stderr', { error }));

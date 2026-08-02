@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFile
 import { basename, join } from 'node:path';
 
 import { STATE_DIR } from '../config.ts';
+import type { PermissionProfile } from './approvals.ts';
 
 export type RunStatus =
   /** The loop is driving phases. */
@@ -203,6 +204,16 @@ export type RunState = {
   phaseOptions?: Record<string, PhaseOptions>;
   /** Skills every phase of this run invokes, on top of the plan's own. */
   skills?: string[];
+  /**
+   * How much this run may do without stopping to ask — `guarded` (the default
+   * and what every run did before profiles existed), `trusted`, or `bypass`.
+   *
+   * On the state rather than only in the settings file because it is the thing
+   * an operator most needs to see in the header: a run quietly on `bypass` and
+   * a run on `guarded` look identical otherwise, and only one of them is
+   * committing without asking.
+   */
+  permissionProfile?: PermissionProfile;
   phases: Record<string, PhaseRecord>;
 };
 
@@ -244,6 +255,7 @@ export type NewRunOptions = {
   onlyPhases?: number[];
   phaseOptions?: Record<string, PhaseOptions>;
   skills?: string[];
+  permissionProfile?: PermissionProfile;
 };
 
 export function newRun(opts: NewRunOptions): RunState {
@@ -274,6 +286,10 @@ export function newRun(opts: NewRunOptions): RunState {
     ...(opts.onlyPhases?.length ? { onlyPhases: [...opts.onlyPhases] } : {}),
     ...(opts.phaseOptions ? { phaseOptions: { ...opts.phaseOptions } } : {}),
     ...(opts.skills?.length ? { skills: [...opts.skills] } : {}),
+    // Absent means `guarded`. Written only when it is something else, so an
+    // older run file cannot read as anything but the careful default.
+    ...(opts.permissionProfile && opts.permissionProfile !== 'guarded'
+      ? { permissionProfile: opts.permissionProfile } : {}),
     phases: {},
   };
 }

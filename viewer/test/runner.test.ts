@@ -292,6 +292,30 @@ test('the argv never carries a flag that removes the guard rails', () => {
   assert.deepEqual(sanitize(['--allow-dangerously-skip-permissions', '--verbose']), ['--verbose']);
 });
 
+test('the CLI silently refusing bypass is detected, not left to look like a broken phase', async () => {
+  // Measured against the CLI: `bypassPermissions` needs a disclaimer that can
+  // only be accepted interactively, once, per machine. Without it Claude Code
+  // does not error and does not honour the flag — it downgrades to `default`,
+  // which in `-p` mode prompts a terminal that is not there and so refuses
+  // every edit. A Bypass run on such a machine does LESS than a Guarded one,
+  // and this line on stderr is the only signal that says why.
+  const { isBypassDowngrade } = await import('../server/runner/spawn.ts');
+
+  assert.equal(isBypassDowngrade(
+    'Permission mode downgraded to default — bypass requires accepting the disclaimer interactively first',
+  ), true);
+  assert.equal(isBypassDowngrade('permission mode downgraded to default'), true, 'case is not a contract');
+  assert.equal(isBypassDowngrade('everything is fine'), false);
+  assert.equal(isBypassDowngrade(''), false);
+
+  // The flag really is handed over — being refused downstream is exactly why
+  // it has to be watched for rather than assumed to have taken effect.
+  assert.deepEqual(
+    sanitize(['--permission-mode', 'bypassPermissions'], { allowBypass: true }),
+    ['--permission-mode', 'bypassPermissions'],
+  );
+});
+
 test('a forbidden flag takes its value with it', () => {
   // Dropping the flag alone left `user` loose in argv, where the CLI reads a
   // bare word as a positional prompt — so a stripped flag became a new task.
@@ -392,6 +416,103 @@ test('a fresh plan runs every phase, each in its own process', async () => {
   assert.equal(state.status, 'finished');
   assert.deepEqual(Object.values(state.phases).map((p) => p.status), ['done', 'done', 'done']);
   assert.ok(state.spentUsd > 0, 'cost is accumulated across phases');
+  r.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
+ * Permission profiles
+ * ------------------------------------------------------------------ */
+
+test('the profile a run starts under reaches every one of its children', async () => {
+  const r = repo();
+  const profiles: (string | undefined)[] = [];
+  const spy: SpawnFn = async (request) => {
+    profiles.push(request.permissionProfile);
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  };
+  const { instance } = runner(r, spy);
+  await instance.start({
+    slug: 'demo', root: r.root, autonomy: 'keep-going', permissionProfile: 'trusted',
+  });
+  await instance.wait();
+
+  assert.deepEqual(profiles, ['trusted', 'trusted', 'trusted']);
+  assert.equal(instance.current()!.permissionProfile, 'trusted');
+  r.cleanup();
+});
+
+test('a run with no profile is guarded, and says so by saying nothing', async () => {
+  const r = repo();
+  const profiles: (string | undefined)[] = [];
+  const spy: SpawnFn = async (request) => {
+    profiles.push(request.permissionProfile);
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  };
+  const { instance } = runner(r, spy);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  assert.deepEqual(profiles, ['guarded', 'guarded', 'guarded']);
+  // Absent on the record, so a run file written before profiles existed reads
+  // as the careful default rather than as an unset field someone must guess at.
+  assert.equal(instance.current()!.permissionProfile, undefined);
+  r.cleanup();
+});
+
+test('switching profile mid-run is journaled, and the next phase runs under it', async () => {
+  const r = repo();
+  const profiles: (string | undefined)[] = [];
+  const spy: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    profiles.push(request.permissionProfile);
+    // Widen it from underneath the run, the way an operator does when the
+    // third `git commit` card of the night arrives.
+    if (phase === 1) instance.configure({ permissionProfile: 'trusted' }, 'someone@desk');
+    r.markDone(phase);
+    return ok();
+  };
+  const { instance } = runner(r, spy);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  assert.deepEqual(profiles, ['guarded', 'trusted', 'trusted'], 'it applies from the next phase');
+
+  // "Who widened this run, and when" has to be answerable later without
+  // reading a diff of the whole settings patch.
+  const journal = new Journal(r.root, 'demo', instance.current()!.id).read(200);
+  const switched = journal.find((line) => line.event === 'run.permission-profile');
+  assert.ok(switched, 'the switch has its own journal line');
+  assert.equal(switched!.data.from, 'guarded');
+  assert.equal(switched!.data.to, 'trusted');
+  assert.equal(switched!.data.by, 'someone@desk');
+  r.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
+ * Parking
+ * ------------------------------------------------------------------ */
+
+test('an unanswered approval parks the run rather than failing it', async () => {
+  const r = repo();
+  const { instance } = runner(r, workingSession(r));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  // What the timeout path does: the hook was told no — silence would fail open
+  // — and the run is parked so the phase is not treated as having gone wrong.
+  const parked = instance.park('an approval went unanswered: Bash — git commit -m x', 2);
+  assert.equal(parked, true);
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'parked');
+  assert.match(state.halt!.reason, /unanswered/);
+  assert.equal(state.halt!.phase, 2);
+  assert.equal(state.consecutiveFailures, 0, 'nobody being awake is not the work failing');
+
+  const journal = new Journal(r.root, 'demo', state.id).read(200);
+  assert.ok(journal.some((line) => line.event === 'run.parked'));
   r.cleanup();
 });
 

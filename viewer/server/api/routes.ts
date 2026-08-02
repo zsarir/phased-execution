@@ -13,6 +13,7 @@ import type { Service } from '../service.ts';
 import { checkRoot, listDirs } from '../config.ts';
 import { isClientDisconnect, log } from '../log.ts';
 import { isEffort, PERMISSION_MODES } from '../runner/spawn.ts';
+import { isPermissionProfile, type PolicyScope } from '../runner/approvals.ts';
 import { MODEL_FALLBACK as MODELS } from '../runner/errors.ts';
 import { planWrite, runWrite, openInEditor, WriteError, type WriteRequest } from '../writes.ts';
 import type { PhaseOptions } from '../runner/state.ts';
@@ -338,17 +339,45 @@ export async function handleApi(
     if (head === 'skills' && req.method === 'GET') { json(res, 200, service.skills()); return true; }
 
     if (head === 'policy') {
-      if (req.method === 'GET') { json(res, 200, service.policy()); return true; }
+      if (req.method === 'GET') {
+        json(res, 200, service.policy(url.searchParams.get('slug')));
+        return true;
+      }
       if (req.method === 'POST') {
         const refusal = guardWrite(req, service);
         if (refusal) { json(res, 403, { error: refusal }); return true; }
         const body = await readBody(req);
-        // Only the tightening direction. Widening what an agent may do at 3am
-        // is a file edit, which is the right amount of friction for it.
+
+        // `add`/`remove` is the editor's shape and may widen — deliberately,
+        // named, scoped and journaled (see `editPolicy`). A bare `{deny, ask}`
+        // body is the old tightening-only contract and still means what it did.
+        if ('add' in body || 'remove' in body) {
+          const rules = (value: unknown) => (Array.isArray(value)
+            ? value.filter((v): v is string => typeof v === 'string') : []);
+          const lists = (value: unknown) => {
+            const part = (value ?? {}) as Record<string, unknown>;
+            return { deny: rules(part.deny), ask: rules(part.ask), allow: rules(part.allow) };
+          };
+          const slug = typeof body.slug === 'string' ? body.slug : null;
+          const scope: PolicyScope = body.scope === 'plan' ? 'plan' : 'global';
+          if (scope === 'plan' && !slug) {
+            json(res, 400, { error: 'a plan-scoped rule needs a plan' });
+            return true;
+          }
+          json(res, 200, service.editPolicy({
+            scope,
+            slug,
+            add: lists(body.add),
+            remove: lists(body.remove),
+            by: typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
+          }));
+          return true;
+        }
+
         if ('allow' in body) {
           json(res, 400, {
-            error: 'the allow list is not editable from here — widening what an unattended run may '
-              + 'do is a deliberate file edit, not a click',
+            error: 'to widen, post {add:{allow:[…]}, scope:"plan"|"global"} — a bare allow list is '
+              + 'the old tightening-only shape and cannot say who asked or at what scope',
           });
           return true;
         }
@@ -428,12 +457,18 @@ export async function handleApi(
         if (refusal) { json(res, 403, { error: refusal }); return true; }
         const body = await readBody(req);
         const decision = body.decision === 'allow' ? 'allow' : 'deny';
-        const settled = service.approvals.settle(
+        // `remember: "plan" | "global"` turns this one answer into a rule. Any
+        // other value is just an answer — a typo must not widen anything.
+        const scope = body.remember === 'plan' ? 'plan'
+          : body.remember === 'global' ? 'global' : null;
+        const answered = service.decideApproval(
           rest[0], decision,
           typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
           typeof body.reason === 'string' ? body.reason.slice(0, 500) : undefined,
+          scope && typeof body.rule === 'string' && body.rule
+            ? { scope, rule: body.rule.slice(0, 200) } : undefined,
         );
-        json(res, settled ? 200 : 404, settled ? { ok: true, decision } : { error: 'no such pending approval' });
+        json(res, answered.ok ? 200 : 404, answered);
         return true;
       }
     }
@@ -476,6 +511,10 @@ export async function handleApi(
               onlyPhases: phaseList(body.onlyPhases),
               phaseOptions: phaseOptions(body.phaseOptions),
               skills: skillList(body.skills),
+              // Anything unrecognised is `guarded`. A typo must not be the
+              // reason a run takes the guard rails off.
+              permissionProfile: isPermissionProfile(body.permissionProfile)
+                ? body.permissionProfile : 'guarded',
             });
             json(res, 200, { run: state });
             return true;
@@ -528,7 +567,9 @@ export async function handleApi(
               ...('onlyPhases' in body ? { onlyPhases: phaseList(body.onlyPhases) ?? null } : {}),
               ...('phaseOptions' in body ? { phaseOptions: phaseOptions(body.phaseOptions) ?? null } : {}),
               ...('skills' in body ? { skills: skillList(body.skills) ?? null } : {}),
-            });
+              ...(isPermissionProfile(body.permissionProfile)
+                ? { permissionProfile: body.permissionProfile } : {}),
+            }, typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console');
             json(res, 200, { run });
             return true;
           }

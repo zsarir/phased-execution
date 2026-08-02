@@ -109,11 +109,54 @@ export const DEFAULT_ALLOW = [
   'Bash(echo:*)', 'Bash(which:*)', 'Bash(node --version:*)', 'Bash(python3 --version:*)',
 ];
 
-export type AutopilotPolicy = { deny: string[]; ask: string[]; allow: string[] };
+export type AutopilotPolicy = {
+  deny: string[];
+  ask: string[];
+  allow: string[];
+  /**
+   * Rules the operator explicitly allowed — from a card's "Always…" button or
+   * the Settings editor — which outrank `ask`.
+   *
+   * Evaluation is otherwise deny → ask → allow with first match winning and
+   * specificity irrelevant, so a plain `allow` rule can never cancel an `ask`
+   * rule: `Bash(git commit:*)` is on both lists and `ask` is reached first.
+   * That would make "Always allow this" a button that writes a rule and
+   * changes nothing, which is worse than not offering it. These are checked
+   * immediately after `deny`, so the operator's own decision wins over the
+   * built-in ask list and still loses to the wall.
+   */
+  always?: string[];
+};
 
 /* ------------------------------------------------------------------ *
- * Which calls are worth asking about
+ * The rule taxonomy
  * ------------------------------------------------------------------ */
+
+/**
+ * The tools whose calls actually reach the PreToolUse hook — the `matcher` in
+ * `buildSettings` below. A rule about anything else is real, but it is enforced
+ * by the CLI's own permission engine and this console never sees it, which is
+ * a distinction the editor has to be able to show.
+ */
+export const HOOK_TOOLS = ['Bash', 'Write', 'Edit', 'NotebookEdit', 'WebFetch', 'WebSearch'];
+
+/** Tools whose *path* rules Claude Code does not consult at all. */
+const PATH_RULES_IGNORED = ['Write', 'NotebookEdit', 'Glob'];
+
+export type RuleForm =
+  | 'bare' | 'prefix' | 'glob' | 'literal' | 'param'
+  | 'path' | 'domain' | 'mcp' | 'agent' | 'cd';
+
+export type ParsedRule = {
+  raw: string;
+  tool: string;
+  spec?: string;
+  form: RuleForm;
+  /** `hook` = this console classifies it. `cli-only` = real, but enforced by the
+   *  CLI. `ignored` = accepted by the syntax and silently does nothing. */
+  support: 'hook' | 'cli-only' | 'ignored';
+  note?: string;
+};
 
 /** The part of a tool call a rule is written against. */
 function subjectOf(toolName: string, input: unknown): string {
@@ -121,31 +164,202 @@ function subjectOf(toolName: string, input: unknown): string {
   const record = input as Record<string, unknown>;
   const key = toolName === 'Bash' ? 'command'
     : toolName === 'WebFetch' || toolName === 'WebSearch' ? 'url'
-      : 'file_path';
-  const value = record[key] ?? record.command ?? record.file_path ?? record.path ?? record.url;
+      : toolName === 'Agent' ? 'subagent_type'
+        : toolName === 'Cd' ? 'path'
+          : 'file_path';
+  const value = record[key]
+    ?? record.command ?? record.file_path ?? record.path ?? record.url ?? record.pattern;
   return typeof value === 'string' ? value : '';
+}
+
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** `*` spans anything. Used for command globs, where there are no segments. */
+function globPattern(glob: string): string {
+  return glob.split('*').map(escape).join('.*');
+}
+
+/**
+ * Path globs, where `**` crosses separators and `*` does not — `Cd(~/code/*)`
+ * is one segment deep and `Cd(~/code/**)` is any depth, and conflating them
+ * would silently widen every path rule anyone writes.
+ */
+function pathPattern(glob: string): string {
+  return glob
+    .split('**').map((part) => part.split('*').map(escape).join('[^/]*'))
+    .join('.*');
+}
+
+/**
+ * Normalise the documented path prefixes to something matchable.
+ *
+ * `//abs` is an absolute path, `~/x` is under home, `./x` is relative to the
+ * working directory, and a bare name with no separator means the file anywhere
+ * — `Read(.env)` is `Read(**​/.env)`, which is the form that actually protects
+ * a secret. A single leading slash is "relative to the settings file", whose
+ * location this console does not know, so it is matched as a suffix and
+ * labelled approximate rather than silently treated as absolute.
+ */
+function normalisePath(spec: string, home: string): string {
+  const path = spec.trim();
+  if (path.startsWith('//')) return path.slice(1);
+  if (path.startsWith('~/')) return `${home}/${path.slice(2)}`;
+  if (path.startsWith('./')) return `**/${path.slice(2)}`;
+  if (!path.includes('/')) return `**/${path}`;
+  if (path.startsWith('/')) return `**${path}`;
+  return `**/${path}`;
+}
+
+function pathMatches(spec: string, subject: string, home: string): boolean {
+  if (!subject) return false;
+  const pattern = normalisePath(spec, home);
+  return new RegExp(`^${pathPattern(pattern)}$`).test(subject);
+}
+
+/** A tool-name pattern, which may be a glob or an MCP server prefix. */
+function toolNameMatches(pattern: string, toolName: string): boolean {
+  if (pattern === toolName || pattern === '*') return true;
+  if (pattern.includes('*')) return new RegExp(`^${globPattern(pattern)}$`).test(toolName);
+  // `mcp__server` covers every tool that server exposes.
+  if (pattern.startsWith('mcp__') && !pattern.slice(5).includes('__')) {
+    return toolName.startsWith(`${pattern}__`);
+  }
+  return false;
+}
+
+/** `key:value`, where the key is a real identifier — not a command prefix. */
+const PARAM = /^([A-Za-z_][\w]*):(.*)$/s;
+
+/**
+ * Read one rule, or return null if it is not a rule at all.
+ *
+ * The form matters as much as the match: the editor has to be able to say "this
+ * one is enforced here", "this one is the CLI's job", and "this one parses and
+ * does nothing" — and the last category is the one that silently costs people
+ * an afternoon.
+ */
+export function parseRule(raw: string): ParsedRule | null {
+  const rule = raw.trim();
+  if (!rule || rule.length > 200) return null;
+
+  let tool = rule;
+  let spec: string | undefined;
+  const open = rule.indexOf('(');
+  if (open !== -1) {
+    if (!rule.endsWith(')')) return null;
+    tool = rule.slice(0, open).trim();
+    spec = rule.slice(open + 1, -1);
+  }
+  if (!/^[A-Za-z_*][\w*]*$/.test(tool)) return null;
+
+  const isMcp = tool.startsWith('mcp__');
+  const hooked = HOOK_TOOLS.includes(tool);
+  const at = (form: RuleForm, support: ParsedRule['support'], note?: string): ParsedRule =>
+    ({ raw: rule, tool, spec, form, support, note });
+
+  if (spec === undefined || spec === '*') {
+    if (isMcp) return at('mcp', 'cli-only', 'MCP calls do not reach this console’s hook');
+    return at('bare', hooked ? 'hook' : 'cli-only',
+      hooked ? undefined : `${tool} calls do not reach this console’s hook`);
+  }
+
+  // The documented trap: it looks like a parameter rule and is simply dropped.
+  if (tool === 'Bash' && /^command:/.test(spec)) {
+    return at('param', 'ignored', 'Bash(command:…) is not a rule Claude Code honours — write Bash(<prefix>:*)');
+  }
+  if (PATH_RULES_IGNORED.includes(tool) && !PARAM.test(spec)) {
+    return at('path', 'ignored', `${tool}(…) path rules are never consulted — only Read(…) and Edit(…) are`);
+  }
+
+  // Before the `:*` prefix form, which `domain:*` would otherwise satisfy —
+  // and a domain rule read as a command prefix matches nothing at all.
+  if ((tool === 'WebFetch' || tool === 'WebSearch') && spec.startsWith('domain:')) {
+    return at('domain', 'hook');
+  }
+  // `:*` is a command prefix and is only meaningful at the end.
+  if (spec.endsWith(':*') && !isMcp) {
+    return at('prefix', hooked ? 'hook' : 'cli-only',
+      hooked ? undefined : `${tool} calls do not reach this console’s hook`);
+  }
+  if (tool === 'Read' || tool === 'Edit') {
+    return at('path', tool === 'Edit' ? 'hook' : 'cli-only',
+      tool === 'Read' ? 'Read calls do not reach this console’s hook' : undefined);
+  }
+  if (tool === 'Cd') return at('cd', 'cli-only', 'Cd is enforced by the CLI, not by this hook');
+  if (tool === 'Agent' && !PARAM.test(spec)) {
+    return at('agent', 'cli-only', 'Agent calls do not reach this console’s hook');
+  }
+  if (PARAM.test(spec)) {
+    return at('param', hooked ? 'hook' : 'cli-only',
+      hooked ? undefined : `${tool} calls do not reach this console’s hook`);
+  }
+  if (isMcp) return at('mcp', 'cli-only', 'MCP calls do not reach this console’s hook');
+  return at(spec.includes('*') ? 'glob' : 'literal', hooked ? 'hook' : 'cli-only',
+    hooked ? undefined : `${tool} calls do not reach this console’s hook`);
 }
 
 /**
  * Does a permission rule cover this call?
  *
- * `Tool` matches every use of that tool; `Tool(prefix:*)` matches when the
- * subject starts with the prefix, which is how Claude Code's own rules read.
+ * `Tool` matches every use of that tool; `Tool(prefix:*)` matches on a command
+ * prefix — at a word boundary, because `Bash(ls:*)` is `Bash(ls *)` and `lsof`
+ * is not `ls`. Getting that wrong silently widens the built-in allow list,
+ * which is the direction that matters.
  */
-export function ruleMatches(rule: string, toolName: string, input: unknown): boolean {
-  const parsed = /^([A-Za-z_][\w]*)(?:\((.*)\))?$/.exec(rule.trim());
-  if (!parsed || parsed[1] !== toolName) return false;
-  const spec = parsed[2];
-  if (spec === undefined || spec === '*') return true;
+export function ruleMatches(
+  rule: string, toolName: string, input: unknown, home = homedir(),
+): boolean {
+  const parsed = parseRule(rule);
+  if (!parsed || parsed.support === 'ignored') return false;
+  if (!toolNameMatches(parsed.tool, toolName)) return false;
+  if (parsed.form === 'bare' || parsed.form === 'mcp') return true;
+
+  const spec = parsed.spec as string;
+
+  if (parsed.form === 'param') {
+    const found = PARAM.exec(spec);
+    if (!found) return false;
+    const value = (input as Record<string, unknown> | null)?.[found[1]];
+    if (value === undefined || value === null) return false;
+    return new RegExp(`^${globPattern(found[2])}$`).test(String(value));
+  }
+
+  if (parsed.form === 'domain') {
+    const subject = subjectOf(toolName, input);
+    if (!subject) return false;
+    let host: string;
+    try { host = new URL(subject).hostname; } catch { return false; }
+    const want = spec.slice('domain:'.length).trim();
+    if (want === '*') return true;
+    if (want.startsWith('*.')) return host.endsWith(want.slice(1));
+    return host === want;
+  }
 
   const subject = subjectOf(toolName, input);
   if (!subject) return false;
-  if (spec.endsWith(':*')) return subject.startsWith(spec.slice(0, -2));
-  if (spec.includes('*')) {
-    const pattern = spec.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
-    return new RegExp(`^${pattern}$`).test(subject);
+
+  if (parsed.form === 'path' || parsed.form === 'cd') return pathMatches(spec, subject, home);
+  if (parsed.form === 'agent') return subject === spec;
+  if (parsed.form === 'prefix') {
+    const prefix = spec.slice(0, -2);
+    return subject === prefix || subject.startsWith(`${prefix} `);
   }
+  if (parsed.form === 'glob') return new RegExp(`^${globPattern(spec)}$`).test(subject);
   return subject === spec || subject.startsWith(`${spec} `);
+}
+
+/** Rules that parse but do nothing, so startup can say so once. */
+export function inertRules(policy: AutopilotPolicy): ParsedRule[] {
+  const seen = new Set<string>();
+  const out: ParsedRule[] = [];
+  for (const rule of [...policy.deny, ...policy.ask, ...policy.allow, ...(policy.always ?? [])]) {
+    if (seen.has(rule)) continue;
+    seen.add(rule);
+    const parsed = parseRule(rule);
+    if (!parsed) out.push({ raw: rule, tool: '', form: 'literal', support: 'ignored', note: 'not a rule this syntax accepts' });
+    else if (parsed.support === 'ignored') out.push(parsed);
+  }
+  return out;
 }
 
 /**
@@ -162,10 +376,89 @@ export function ruleMatches(rule: string, toolName: string, input: unknown): boo
  * it was given rather than exactly as leaky.
  */
 export function commandSegments(command: string): string[] {
-  return command
+  const segments = command
     .split(/&&|\|\||[;\n|]/)
-    .map((part) => part.trim().replace(/^\(\s*/, ''))
+    .map((part) => unwrapSubshell(part.trim()))
     .filter(Boolean);
+  // A wrapped command is still that command: `nohup git push` must hit the
+  // same deny rule `git push` does.
+  const out = new Set(segments);
+  for (const segment of segments) {
+    const inner = stripWrappers(segment);
+    if (inner) out.add(inner);
+  }
+  return [...out];
+}
+
+/**
+ * Strip the parentheses a subshell leaves on a segment.
+ *
+ * `(cd sub && npm publish)` splits into `(cd sub` and `npm publish)`, and the
+ * trailing bracket is not cosmetic: a prefix rule matched at a word boundary
+ * sees `npm publish)`, which is not `npm publish`, and the deny rule misses.
+ * Only *unbalanced* brackets are dropped, so `echo $(date)` keeps its own.
+ */
+function unwrapSubshell(segment: string): string {
+  let text = segment.replace(/^\(\s*/, '');
+  while (text.endsWith(')')) {
+    const opens = (text.match(/\(/g) ?? []).length;
+    const closes = (text.match(/\)/g) ?? []).length;
+    if (closes <= opens) break;
+    text = text.slice(0, -1).trimEnd();
+  }
+  return text;
+}
+
+/**
+ * Wrappers Claude Code looks through when it matches a rule.
+ *
+ * The list is exactly the one it documents, and its edges are the point:
+ * `npx`, `docker exec` and `devbox run` are NOT on it, so `npx some-publisher`
+ * is matched as `npx` and a rule about the thing it runs never fires. Nothing
+ * here can fix that — but the console can at least be honest about it, which is
+ * what `WRAPPERS_NOT_STRIPPED` is for.
+ */
+const WRAPPERS = ['timeout', 'time', 'nice', 'nohup', 'stdbuf', 'command', 'builtin', 'noglob', 'xargs'];
+export const WRAPPERS_NOT_STRIPPED = ['npx', 'docker exec', 'devbox run'];
+
+/**
+ * Peel the wrappers off a command, or return null if there were none.
+ *
+ * `xargs` only when bare: `xargs rm` runs `rm`, but `xargs -I{} sh -c …` is a
+ * different animal and pretending to see through it would be a guess.
+ */
+export function stripWrappers(command: string): string | null {
+  let rest = command.trim();
+  let peeled = false;
+  for (;;) {
+    const found = /^([A-Za-z_][\w-]*)\s+(.*)$/s.exec(rest);
+    if (!found) break;
+    const [, head, tail] = found;
+    if (!WRAPPERS.includes(head)) break;
+    // `timeout 30s cmd` / `nice -n 5 cmd`: drop the wrapper's own arguments.
+    if (head === 'xargs' && /^-/.test(tail)) break;
+    let next = tail;
+    while (/^-\S*\s+/.test(next) || /^\d+[smhd]?\s+/.test(next)) next = next.replace(/^\S+\s+/, '');
+    if (!next) break;
+    rest = next;
+    peeled = true;
+  }
+  return peeled ? rest : null;
+}
+
+/**
+ * Shapes that must never resolve to a silent yes.
+ *
+ * Each one runs a command this console cannot see: `watch` re-runs it forever,
+ * `setsid` detaches it from the session, `flock` hands it a lock and a shell,
+ * and `find -exec` runs it once per matched file. Matching the outer command
+ * tells you nothing about what actually executes, so they get a card rather
+ * than the benefit of the doubt.
+ */
+const NEVER_AUTO = /^(watch|setsid|flock)\b|(^|\s)find\s+.*\s-exec\b/;
+
+export function neverAutoApproves(command: string): boolean {
+  return commandSegments(command).some((segment) => NEVER_AUTO.test(segment));
 }
 
 /**
@@ -181,23 +474,83 @@ export function classifyTool(
   toolName: string, input: unknown, policy: AutopilotPolicy,
 ): 'deny' | 'ask' | 'allow' {
   const subjects: unknown[] = [input];
-  if (toolName === 'Bash') {
-    const command = (input as { command?: unknown } | null)?.command;
-    if (typeof command === 'string') {
-      for (const segment of commandSegments(command)) subjects.push({ command: segment });
-    }
+  const command = toolName === 'Bash' ? (input as { command?: unknown } | null)?.command : null;
+  if (typeof command === 'string') {
+    for (const segment of commandSegments(command)) subjects.push({ command: segment });
   }
   const hits = (rules: string[]) =>
     rules.some((rule) => subjects.some((subject) => ruleMatches(rule, toolName, subject)));
 
+  // The wall first, and nothing gets past it — not an operator's own rule, not
+  // a profile, not a tap on a phone.
   if (hits(policy.deny)) return 'deny';
+  // Then what this operator deliberately allowed, which is the only thing that
+  // can outrank the built-in ask list. See `AutopilotPolicy.always`.
+  if (hits(policy.always ?? [])) return 'allow';
   if (hits(policy.ask)) return 'ask';
+  // A command whose real payload is hidden inside a wrapper gets a person,
+  // never a default yes.
+  if (typeof command === 'string' && neverAutoApproves(command)) return 'ask';
   return 'allow';
 }
 
-const POLICY_FILE = join(
-  process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'phase-console', 'autopilot.json',
+/* ------------------------------------------------------------------ *
+ * Profiles: how much this run may do without being asked
+ * ------------------------------------------------------------------ */
+
+export const PERMISSION_PROFILES = ['guarded', 'trusted', 'bypass'] as const;
+export type PermissionProfile = (typeof PERMISSION_PROFILES)[number];
+
+export function isPermissionProfile(value: unknown): value is PermissionProfile {
+  return typeof value === 'string' && (PERMISSION_PROFILES as readonly string[]).includes(value);
+}
+
+export const PROFILE_LABELS: Record<PermissionProfile, string> = {
+  guarded: 'Guarded — ask about the irreversible',
+  trusted: 'Trusted — only the deny list stops it',
+  bypass: 'Bypass — the CLI stops asking too',
+};
+
+/**
+ * The policy one profile actually runs under.
+ *
+ * Only the ask list moves. `deny` is the wall and is identical in all three —
+ * a profile that could widen it would make the wall a preference, and the whole
+ * reason `deny` is trustworthy is that it is enforced by the CLI with this
+ * console unreachable.
+ */
+export function profilePolicy(policy: AutopilotPolicy, profile: PermissionProfile): AutopilotPolicy {
+  if (profile === 'guarded') return policy;
+  return { ...policy, ask: [] };
+}
+
+const POLICY_DIR = join(
+  process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'phase-console',
 );
+const POLICY_FILE = join(POLICY_DIR, 'autopilot.json');
+
+/**
+ * One plan's own rules, beside the global ones.
+ *
+ * "Always allow this" almost always means "in this plan" — a repository's
+ * deploy verb is safe to commit through in the plan that owns it and is not
+ * safe everywhere. A per-plan file makes that the cheap answer instead of
+ * making the global list the only place to say anything.
+ */
+export function planPolicyPath(slug: string, dir = POLICY_DIR): string {
+  // The slug reaches this from a URL, so it decides a filename and nothing
+  // else. Separators are gone before any dot handling, so nothing can climb
+  // out of the directory; the dots are then collapsed as well, because a name
+  // containing `..` invites the next reader to wonder whether it can.
+  const safe = slug
+    .replace(/[^\w.-]/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[.-]+/, '')
+    .slice(0, 80);
+  return join(dir, 'plans', `${safe || 'unnamed'}.json`);
+}
+
+export type PolicyScope = 'plan' | 'global';
 
 /**
  * The operator's own rules, merged on top of the defaults. A repository with
@@ -218,44 +571,143 @@ export function policyExtras(file = POLICY_FILE): AutopilotPolicy {
 }
 
 export function loadPolicy(file = POLICY_FILE): AutopilotPolicy {
-  const extra = policyExtras(file);
+  return mergePolicy([policyExtras(file)]);
+}
+
+/**
+ * The rules one plan runs under: the defaults, the operator's global file, then
+ * the plan's own — the later ones only ever adding.
+ */
+export function loadPolicyFor(
+  slug: string | null, globalFile = POLICY_FILE, dir = POLICY_DIR,
+): AutopilotPolicy {
+  const extras = [policyExtras(globalFile)];
+  if (slug) extras.push(policyExtras(planPolicyPath(slug, dir)));
+  return mergePolicy(extras);
+}
+
+function mergePolicy(extras: AutopilotPolicy[]): AutopilotPolicy {
+  const flat = (pick: (e: AutopilotPolicy) => string[]) => extras.flatMap(pick);
+  const written = flat((e) => e.allow);
   return {
-    deny: [...new Set([...DEFAULT_DENY, ...extra.deny])],
-    ask: [...new Set([...DEFAULT_ASK, ...extra.ask])],
-    allow: [...new Set([...DEFAULT_ALLOW, ...extra.allow])],
+    deny: [...new Set([...DEFAULT_DENY, ...flat((e) => e.deny)])],
+    ask: [...new Set([...DEFAULT_ASK, ...flat((e) => e.ask)])],
+    allow: [...new Set([...DEFAULT_ALLOW, ...written])],
+    // Only what a person actually wrote outranks the ask list — never the
+    // built-in allow list, which exists so a phase can look around and would
+    // cancel half the ask rules if it were given that power.
+    always: [...new Set(written)],
   };
 }
 
 export const POLICY_PATH = POLICY_FILE;
+export const POLICY_DIRECTORY = POLICY_DIR;
+
+/** A rule the syntax accepts. Anything else never reaches a file. */
+const validRules = (list: string[]) => list
+  .map((rule) => rule.trim())
+  .filter((rule) => parseRule(rule) !== null);
 
 /**
- * Add rules to the operator's policy file.
+ * Edit one policy file: add rules, remove rules, at one scope.
  *
- * Deliberately **additive and tightening only**: `deny` and `ask` may be added
- * to, `allow` may not be touched from here. Rules from a browser can make an
- * unattended run more careful and cannot make it less, so the worst case of a
- * stray click is a run that stops to ask about something it need not have.
+ * **This widens as well as tightens, which reverses an earlier choice.** The
+ * old rule was that a browser could only ever make a run more careful, and the
+ * reasoning was sound: the worst case of a stray click should be a run that
+ * stops to ask about something it needn't have. What that produced in practice
+ * was ten `git commit` cards in one run and a person tapping Allow without
+ * reading — which is the failure the strict version was supposed to prevent,
+ * arriving by a different road. A queue nobody reads trains the answer "yes".
  *
- * Removing a rule means editing the file, which is the right amount of friction
- * for the one direction that widens what an agent may do at 3am.
+ * So widening is allowed, and every widening is: named (the exact rule string
+ * is shown before it is written), attributed (`by`), scoped (this plan by
+ * default, everywhere only if asked), journaled, and reversible from the same
+ * screen. What it still cannot do is touch `deny` — that list is the wall, and
+ * removing from it here would make the wall a preference.
+ */
+export function editPolicy(
+  edit: {
+    add?: { deny?: string[]; ask?: string[]; allow?: string[] };
+    remove?: { deny?: string[]; ask?: string[]; allow?: string[] };
+    by?: string;
+  },
+  file = POLICY_FILE,
+): AutopilotPolicy {
+  const current = policyExtras(file);
+  const drop = (list: string[], removals: string[]) => {
+    const gone = new Set(removals.map((rule) => rule.trim()));
+    return list.filter((rule) => !gone.has(rule.trim()));
+  };
+
+  const next: AutopilotPolicy = {
+    deny: [...new Set([
+      ...drop(current.deny, strings(edit.remove?.deny)),
+      ...validRules(strings(edit.add?.deny)),
+    ])],
+    ask: [...new Set([
+      ...drop(current.ask, strings(edit.remove?.ask)),
+      ...validRules(strings(edit.add?.ask)),
+    ])],
+    allow: [...new Set([
+      ...drop(current.allow, strings(edit.remove?.allow)),
+      ...validRules(strings(edit.add?.allow)),
+    ])],
+  };
+
+  mkdirSync(join(file, '..'), { recursive: true });
+  writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  log.info('policy.updated', {
+    file,
+    by: edit.by ?? 'unknown',
+    added: {
+      deny: strings(edit.add?.deny).length,
+      ask: strings(edit.add?.ask).length,
+      allow: strings(edit.add?.allow).length,
+    },
+    removed: {
+      deny: strings(edit.remove?.deny).length,
+      ask: strings(edit.remove?.ask).length,
+      allow: strings(edit.remove?.allow).length,
+    },
+    now: { deny: next.deny.length, ask: next.ask.length, allow: next.allow.length },
+  });
+  return next;
+}
+
+/**
+ * Add rules to the operator's policy file — the tightening-only path, kept
+ * because it is what the existing `POST /api/policy` contract promises.
  */
 export function addPolicyRules(
   rules: { deny?: string[]; ask?: string[] }, file = POLICY_FILE,
 ): AutopilotPolicy {
-  const current = policyExtras(file);
-  const clean = (list: string[]) => list
-    .map((rule) => rule.trim())
-    .filter((rule) => rule && rule.length <= 200 && /^[A-Za-z_][\w]*(\(.*\))?$/.test(rule));
+  return editPolicy({ add: { deny: strings(rules.deny), ask: strings(rules.ask) } }, file);
+}
 
-  const next: AutopilotPolicy = {
-    deny: [...new Set([...current.deny, ...clean(strings(rules.deny))])],
-    ask: [...new Set([...current.ask, ...clean(strings(rules.ask))])],
-    allow: current.allow,
-  };
-  mkdirSync(join(POLICY_FILE, '..'), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-  log.info('policy.updated', { deny: next.deny.length, ask: next.ask.length });
-  return next;
+/**
+ * The rule a card should offer to write.
+ *
+ * Derived from the ask rule that actually stopped the call, so accepting it
+ * cancels exactly the thing that just interrupted — no more, and nothing that
+ * merely resembles it. Only when nothing matched (a profile switch, a rule
+ * edited underneath a live card) does it fall back to naming the tool and the
+ * first two words of the command, which is the narrowest honest guess.
+ */
+export function suggestedRule(toolName: string, input: unknown, policy: AutopilotPolicy): string {
+  const subjects: unknown[] = [input];
+  const command = toolName === 'Bash' ? (input as { command?: unknown } | null)?.command : null;
+  if (typeof command === 'string') {
+    for (const segment of commandSegments(command)) subjects.push({ command: segment });
+  }
+  for (const rule of policy.ask) {
+    if (subjects.some((subject) => ruleMatches(rule, toolName, subject))) return rule;
+  }
+  if (typeof command === 'string') {
+    const head = commandSegments(command)[0] ?? command;
+    const words = head.trim().split(/\s+/).slice(0, 2).join(' ');
+    return words ? `Bash(${words}:*)` : 'Bash';
+  }
+  return toolName;
 }
 
 /* ------------------------------------------------------------------ *
@@ -288,6 +740,12 @@ export type Approval = {
   detail: string;
   evidence: Evidence[];
   tool?: { name: string; input: unknown; cwd?: string };
+  /**
+   * The rule the card offers to write, shown before anything is written.
+   * "Always allow this" without saying what "this" turns into is how a policy
+   * file grows rules nobody can account for.
+   */
+  suggestedRule?: string;
   createdAt: string;
   expiresAt: string;
   status: 'pending' | Decision | 'expired';
@@ -302,9 +760,26 @@ type Waiting = { approval: Approval; settle: (decision: Decision, by: string, re
  * The hook's own timeout governs how long the session waits. Answer a little
  * before it, so the decision is ours and reads as a decision — not as the
  * silence that fails open.
+ *
+ * **An hour, not ten minutes.** At ten, a real overnight run put up ten `git
+ * commit` cards and one of them was refused because nobody was awake — and a
+ * denied commit at minute ten is the worst outcome available: the work is done,
+ * the tree is dirty, and the session is told "no" for a reason that is really
+ * "you were asleep". The limit is checked, not guessed: the CLI validates a
+ * hook's `timeout` as `number().positive().optional()` **seconds with no upper
+ * bound** (read out of the 2.1.220 binary), so an hour is honoured rather than
+ * silently clamped back to a value we would then answer after.
+ *
+ * The socket has to survive it too, which is why `server/index.ts` sets its own
+ * `requestTimeout`: Node would otherwise destroy a request this old, and a
+ * destroyed hook request is silence, and silence fails open.
  */
-export const HOOK_TIMEOUT_SECONDS = 600;
+export const HOOK_TIMEOUT_SECONDS = 3600;
 const ANSWER_BY_MS = (HOOK_TIMEOUT_SECONDS - 20) * 1000;
+
+/** Said to the session, and to the person, when a card ran out of time. */
+export const TIMEOUT_REASON = 'nobody answered in time — the phase is parked, not failed; '
+  + 'answer the card and retry the phase';
 
 /* ------------------------------------------------------------------ *
  * Telling someone, when nobody is looking at the tab
@@ -379,6 +854,7 @@ export class Approvals {
   private waiting = new Map<string, Waiting>();
   private history: Approval[] = [];
   private token: Buffer | null = null;
+  private tokenText: string | null = null;
   private runId: string | null = null;
   private counter = 0;
   private notify: (approval: Approval) => void;
@@ -417,12 +893,28 @@ export class Approvals {
   arm(runId: string): string {
     const token = randomBytes(32).toString('base64url');
     this.token = Buffer.from(token);
+    this.tokenText = token;
     this.runId = runId;
     return token;
   }
 
+  /**
+   * The token this run is already using.
+   *
+   * Rewriting the settings file mid-run — which is how a profile change reaches
+   * the next phase — must NOT mint a new one. The running child loaded its
+   * `Authorization` header at startup and cannot reload it; a fresh token would
+   * make its next hook call unauthorised, and an unauthorised hook call is a
+   * failed hook call, and this hook fails open. The profile switch would
+   * silently turn the supervisor off.
+   */
+  liveToken(): string | null {
+    return this.tokenText;
+  }
+
   disarm(): void {
     this.token = null;
+    this.tokenText = null;
     this.runId = null;
     // Anything still waiting is answered rather than left hanging: a session
     // blocked on a dead broker would sit there until the hook timed out.
@@ -475,8 +967,14 @@ export class Approvals {
       };
       // Unreferenced: the listening socket is what keeps this process alive, and
       // a pending approval must never be the reason it cannot exit.
+      //
+      // It still answers `deny`, and it has to: the hook fails open, so saying
+      // nothing is saying yes, unsupervised, to the one call nobody watched.
+      // What changes is what happens next — `by: 'timeout'` parks the run
+      // instead of letting the session treat a refusal as a verdict and work
+      // around it. See `Service.decideToolUse`.
       const timer = setTimeout(
-        () => settle('deny', 'timeout', `nobody answered within ${Math.round(answerByMs / 60000)} minutes`),
+        () => settle('deny', 'timeout', TIMEOUT_REASON),
         answerByMs,
       ).unref();
       this.waiting.set(id, { approval, settle, timer });
@@ -516,10 +1014,12 @@ export type SettingsOptions = {
   /** Where this console is listening — the child posts its hook calls here. */
   origin: string;
   policy?: AutopilotPolicy;
+  /** How much this run may do unasked. Only `bypass` changes the child's argv. */
+  profile?: PermissionProfile;
 };
 
 export function buildSettings(opts: SettingsOptions): Record<string, unknown> {
-  const policy = opts.policy ?? loadPolicy();
+  const policy = profilePolicy(opts.policy ?? loadPolicy(), opts.profile ?? 'guarded');
   return {
     permissions: {
       // `allow` rides along because permission rules merge across scopes: it

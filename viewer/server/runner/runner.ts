@@ -42,7 +42,10 @@ import {
 import { Journal } from './journal.ts';
 import { Transcript } from './transcript.ts';
 import { checkAuth } from './auth.ts';
-import { buildSettings, writeSettingsFile, type Approvals } from './approvals.ts';
+import {
+  buildSettings, writeSettingsFile, loadPolicyFor,
+  type Approvals, type PermissionProfile,
+} from './approvals.ts';
 
 export type RunnerEvent = (event: string, data: Record<string, unknown>) => void;
 
@@ -94,6 +97,8 @@ export type StartOptions = {
   phaseOptions?: Record<string, PhaseOptions>;
   /** Skills every phase invokes, on top of the plan's own. */
   skills?: string[];
+  /** How much this run may do unasked. Defaults to `guarded`. */
+  permissionProfile?: PermissionProfile;
 };
 
 /** Per phase: one first try, plus room for a model switch, a resume and a retry. */
@@ -226,6 +231,7 @@ export class Runner {
       onlyPhases: options.onlyPhases,
       phaseOptions: options.phaseOptions,
       skills: options.skills,
+      permissionProfile: options.permissionProfile,
     });
 
     if (state) {
@@ -312,12 +318,49 @@ export class Runner {
     }
     try {
       const token = approvals.arm(runId);
-      const path = writeSettingsFile(runId, buildSettings({ runId, token, origin }));
-      this.record('run.settings', { path });
+      const path = this.writeSettings(runId, token, origin);
+      this.record('run.settings', { path, profile: this.profile() });
       return path;
     } catch (error) {
       log.error('runner.settings', { error });
       return null;
+    }
+  }
+
+  /** This run's profile. Absent on every run written before profiles existed. */
+  private profile(): PermissionProfile {
+    return this.state?.permissionProfile ?? 'guarded';
+  }
+
+  private writeSettings(runId: string, token: string, origin: string): string {
+    return writeSettingsFile(runId, buildSettings({
+      runId,
+      token,
+      origin,
+      policy: loadPolicyFor(this.state?.slug ?? null),
+      profile: this.profile(),
+    }));
+  }
+
+  /**
+   * Rewrite this run's settings after a profile change, keeping the token.
+   *
+   * The file is read by the *next* phase's child — the one already running
+   * loaded it at startup and cannot reload it, which is why this is honest
+   * about applying from the next phase. What does change immediately is the
+   * hook classifier: it reads the profile off the live state on every call, so
+   * the running phase stops being asked from its very next tool use.
+   */
+  private rearmSettings(): void {
+    const { approvals, origin } = this.deps;
+    if (!approvals || !origin || !this.state) return;
+    const token = approvals.liveToken();
+    if (!token) return;
+    try {
+      this.settingsPath = this.writeSettings(this.state.id, token, origin);
+      this.record('run.settings', { path: this.settingsPath, profile: this.profile() });
+    } catch (error) {
+      log.error('runner.settings', { error });
     }
   }
 
@@ -659,6 +702,33 @@ export class Runner {
     }
   }
 
+  /**
+   * Stop the run and say a person is needed — without calling it a failure.
+   *
+   * The case this exists for is an approval nobody answered. That used to
+   * resolve as a plain `deny`, and a denial is a *verdict*: the session reads
+   * "no" as a decision about the work and adapts around it, so a `git commit`
+   * refused because everyone was asleep became a phase that carried on with an
+   * uncommitted tree and its `consecutiveFailures` climbing. Parking says the
+   * true thing instead — the question is still open, nothing is wrong with the
+   * work, and the phase can be retried the moment someone answers.
+   */
+  park(reason: string, phase: number | null = null): boolean {
+    if (!this.state) return false;
+    if (this.state.halt) return false;
+    const at = phase ?? this.state.activePhase;
+    this.state.halt = { at: new Date().toISOString(), reason, ...(at !== null ? { phase: at } : {}) };
+    this.state.status = 'parked';
+    // Not counted against the failure budget: nobody being awake is not the
+    // phase going wrong twice.
+    this.state.consecutiveFailures = 0;
+    this.record('run.parked', { reason }, at ?? undefined);
+    log.warn('runner.parked', { runId: this.state.id, slug: this.state.slug, reason, phase: at });
+    this.persist();
+    this.emit('run', { state: this.state });
+    return true;
+  }
+
   /** Take a phase off this run's list without running it. */
   skip(phase: number): void {
     if (!this.state) return;
@@ -677,13 +747,39 @@ export class Runner {
    * is no honest way to change those underneath it. Saying so is better than
    * appearing to change something that will not change.
    */
-  configure(patch: RunSettingsPatch): boolean {
+  configure(patch: RunSettingsPatch, by = 'console'): boolean {
     if (!this.state) return false;
+    const before = this.profile();
     applySettings(this.state, patch);
+    const after = this.profile();
+
+    if (after !== before) {
+      // Its own journal line, separate from the generic reconfigure: this is
+      // the one setting that changes what a session is *permitted* to do, and
+      // "who widened this run, and when" has to be answerable later without
+      // reading a diff of the whole patch.
+      this.record('run.permission-profile', { from: before, to: after, by });
+      log.warn('runner.permission-profile', { runId: this.state.id, from: before, to: after, by });
+      this.rearmSettings();
+    }
+
     this.record('run.reconfigured', { ...patch });
     this.persist();
     this.emit('run', { state: this.state });
     return true;
+  }
+
+  /**
+   * Put a line in the live run's journal from outside the runner.
+   *
+   * Used for things that are *about* a run without being decisions it made — a
+   * rule an operator wrote while watching it. Silently does nothing when no run
+   * is live, because the alternative is a caller that has to check first and
+   * will eventually forget to.
+   */
+  note(event: string, data: Record<string, unknown> = {}): void {
+    if (!this.state) return;
+    this.record(event, data);
   }
 
   /** Clear a phase's terminal state so the loop will pick it up again. */
@@ -965,6 +1061,9 @@ export class Runner {
         // less blast radius, and a smaller system prompt to pay for every turn.
         tools: chosen.tools?.length ? chosen.tools : undefined,
         permissionMode: chosen.permissionMode as never,
+        // Read fresh each attempt, so a profile changed mid-run is in force for
+        // the next phase rather than for the next run.
+        permissionProfile: this.profile(),
         partialMessages: this.deps.stream?.partialMessages ?? true,
         subagentText: this.deps.stream?.subagentText ?? true,
         hookEvents: this.deps.stream?.hookEvents ?? true,
@@ -1438,6 +1537,7 @@ export type RunSettingsPatch = {
   onlyPhases?: number[] | null;
   phaseOptions?: Record<string, PhaseOptions> | null;
   skills?: string[] | null;
+  permissionProfile?: PermissionProfile;
 };
 
 /**
@@ -1468,6 +1568,10 @@ export function applySettings(state: RunState, patch: RunSettingsPatch): RunStat
   if (patch.skills !== undefined) {
     if (patch.skills?.length) state.skills = [...patch.skills];
     else delete state.skills;
+  }
+  if (patch.permissionProfile) {
+    if (patch.permissionProfile === 'guarded') delete state.permissionProfile;
+    else state.permissionProfile = patch.permissionProfile;
   }
   return state;
 }

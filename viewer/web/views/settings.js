@@ -20,54 +20,224 @@ const MODELS = ['', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claud
  * them as one list would be the most dangerous thing this page could do, so the
  * difference is the first thing said about each.
  */
+/**
+ * The rule forms, and what each one builds.
+ *
+ * A free-text box alone is what the card used to be, and it assumes the writer
+ * remembers that `:*` only works at the end, that `ls *` and `ls*` are
+ * different rules, and that `Write(…)` paths are silently ignored. Almost
+ * nobody does. The builder makes the common forms unmissable and keeps the
+ * escape hatch for everything else.
+ */
+const FORMS = [
+  {
+    id: 'prefix',
+    label: 'Command prefix',
+    tool: 'Bash',
+    placeholder: 'git commit',
+    build: (tool, value) => `${tool}(${value}:*)`,
+    hint: 'Matches the command and anything after it, at a word boundary. Bash(ls:*) is Bash(ls *) — it does not match lsof.',
+  },
+  {
+    id: 'glob',
+    label: 'Command glob',
+    tool: 'Bash',
+    placeholder: 'npm run test *',
+    build: (tool, value) => `${tool}(${value})`,
+    hint: '* spans anything. Mind the space: `ls *` is not `ls*`.',
+  },
+  {
+    id: 'tool',
+    label: 'A whole tool',
+    tool: 'WebFetch',
+    placeholder: '',
+    build: (tool) => tool,
+    hint: 'Every use of that tool. As a deny rule, this removes the tool from the session entirely.',
+  },
+  {
+    id: 'param',
+    label: 'One parameter',
+    tool: 'Agent',
+    placeholder: 'model:opus',
+    build: (tool, value) => `${tool}(${value})`,
+    hint: 'One parameter per rule; * is allowed in the value. Bash(command:…) is NOT one of these — it is ignored.',
+  },
+  {
+    id: 'path',
+    label: 'A path',
+    tool: 'Read',
+    placeholder: '~/.ssh/**',
+    build: (tool, value) => `${tool}(${value})`,
+    hint: '//abs · ~/home · ./cwd · a bare name means anywhere, so Read(.env) is Read(**/.env). Only Read(…) and Edit(…) are consulted.',
+  },
+  {
+    id: 'domain',
+    label: 'A web domain',
+    tool: 'WebFetch',
+    placeholder: '*.example.com',
+    build: (tool, value) => `${tool}(domain:${value})`,
+    hint: '*.example.com covers subdomains of it, not the bare domain.',
+  },
+  {
+    id: 'mcp',
+    label: 'An MCP server or tool',
+    tool: 'mcp__server',
+    placeholder: '',
+    build: (tool) => tool,
+    hint: 'mcp__server covers everything it exposes; mcp__server__tool is one of them.',
+  },
+  {
+    id: 'agent',
+    label: 'A subagent type',
+    tool: 'Agent',
+    placeholder: 'Explore',
+    build: (tool, value) => `${tool}(${value})`,
+    hint: 'The agent type as it is dispatched.',
+  },
+  {
+    id: 'cd',
+    label: 'A directory',
+    tool: 'Cd',
+    placeholder: '~/code/**',
+    build: (tool, value) => `${tool}(${value})`,
+    hint: '~/code/* is one segment deep; ~/code/** is any depth.',
+  },
+  {
+    id: 'free',
+    label: 'Write it myself',
+    tool: '',
+    placeholder: 'Bash(task deploy:*)',
+    build: (tool, value) => value,
+    hint: 'Anything the syntax accepts. Checked before it is written.',
+  },
+];
+
+const LIST_NOTE = {
+  deny: 'the wall — enforced by the CLI, holds with this console dead',
+  ask: 'raises a card and waits — via the hook, which fails open',
+  allow: 'runs unasked, and outranks the ask list when you wrote it',
+};
+
+/**
+ * What an unattended session is allowed to do, and — the part that matters —
+ * which layer actually stops it.
+ *
+ * These lists look alike and are nothing alike. `deny` is evaluated inside the
+ * CLI with no network involved, and was measured holding with this console
+ * unreachable: it is the wall. `ask` goes through the HTTP hook, and that hook
+ * **fails open** — with nothing listening the tool call simply proceeds.
+ * Showing them as one list would be the most dangerous thing this page could
+ * do, so the difference is the first thing said about each.
+ */
 function PolicyCard({ allowWrites }) {
   const [policy, setPolicy] = useState(null);
-  const [rule, setRule] = useState('');
-  const [kind, setKind] = useState('deny');
+  const [plans, setPlans] = useState([]);
+  const [scope, setScope] = useState('global');
+  const [slug, setSlug] = useState('');
+  const [form, setForm] = useState(FORMS[0]);
+  const [tool, setTool] = useState(FORMS[0].tool);
+  const [value, setValue] = useState('');
+  const [list, setList] = useState('ask');
   const [busy, setBusy] = useState(false);
+  const [showTraps, setShowTraps] = useState(false);
 
-  const load = useCallback(async () => {
-    try { setPolicy(await api.policy()); } catch { /* the card stays hidden */ }
+  const load = useCallback(async (forSlug) => {
+    try { setPolicy(await api.policy(forSlug || undefined)); } catch { /* the card stays hidden */ }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(slug); }, [load, slug]);
+  useEffect(() => {
+    api.plans().then((all) => setPlans(all.map((p) => p.slug))).catch(() => {});
+  }, []);
 
   if (!policy) return null;
 
-  const add = async () => {
-    const text = rule.trim();
-    if (!text) return;
+  const rule = form.build(tool.trim(), value.trim()).trim();
+  const planScope = scope === 'plan';
+  const targetKnown = !planScope || Boolean(slug);
+  // Only rules that are actually in a file can be taken out of one. A shipped
+  // default has no line to delete, and offering a Remove that silently does
+  // nothing is worse than not offering it.
+  const mine = (name) => (planScope
+    ? policy.plan?.extra?.[name] ?? []
+    : policy.extra[name] ?? []);
+
+  const write = async (edit, said) => {
     setBusy(true);
     try {
-      setPolicy(await api.addPolicy({ [kind]: [text] }));
-      setRule('');
-      toast(`Added to the ${kind} list`, 'ok');
+      setPolicy(await api.editPolicy({ scope, slug: slug || null, ...edit }));
+      toast(said, 'ok');
     } catch (error) { toast(error.message, 'error'); }
     finally { setBusy(false); }
   };
 
-  const list = (rules, extra) => html`
-    <div class="row wrap" style="gap:4px;margin-top:var(--s2)">
-      ${rules.map((r) => html`
-        <span key=${r} class=${`chip${extra.includes(r) ? ' is-picked' : ''}`}
-              title=${extra.includes(r) ? 'yours' : 'shipped default'}>${r}</span>`)}
-    </div>`;
+  const add = () => {
+    if (!rule || !targetKnown) return;
+    void write({ add: { [list]: [rule] } }, `Added ${rule} to ${list}${planScope ? ` for ${slug}` : ''}`)
+      .then(() => setValue(''));
+  };
+
+  const chips = (name) => {
+    const own = mine(name);
+    return html`
+      <div class="row wrap" style="gap:4px;margin-top:var(--s2)">
+        ${policy.effective[name].map((r) => {
+          const removable = own.includes(r) && allowWrites;
+          return html`
+            <span key=${r} class=${`chip${own.includes(r) ? ' is-picked' : ''}`}
+                  title=${own.includes(r)
+                    ? `yours, at ${planScope ? `the ${slug} scope` : 'the global scope'}`
+                    : 'shipped default — not removable from here'}>
+              ${r}
+              ${removable ? html`
+                <button class="chip-x" aria-label=${`Remove ${r}`} disabled=${busy}
+                        onClick=${() => write({ remove: { [name]: [r] } }, `Removed ${r}`)}>×</button>` : null}
+            </span>`;
+        })}
+        ${policy.effective[name].length ? null : html`<span class="faint">none</span>`}
+      </div>`;
+  };
 
   return html`
     <div class="card" style="grid-column:1/-1">
       <div class="card-head">
         <h3>What an unattended session may do</h3>
         <span class="faint" style="font-size:var(--text-xs)">
-          yours are highlighted · <code>${policy.file}</code>
+          yours are highlighted · <code>${planScope && policy.plan ? policy.plan.path : policy.file}</code>
         </span>
       </div>
       <div class="card-body stack">
+        <div class="row wrap" style="gap:8px;align-items:flex-end">
+          <label class="field">
+            <span>These rules apply</span>
+            <select value=${scope} disabled=${busy}
+                    onChange=${(e) => { setScope(e.target.value); if (e.target.value === 'global') setSlug(''); }}>
+              <option value="global">everywhere</option>
+              <option value="plan">to one plan only</option>
+            </select>
+          </label>
+          ${planScope ? html`
+            <label class="field">
+              <span>Plan</span>
+              <select value=${slug} disabled=${busy} onChange=${(e) => setSlug(e.target.value)}>
+                <option value="">choose a plan…</option>
+                ${plans.map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
+              </select>
+            </label>` : null}
+        </div>
+
+        ${planScope && slug ? html`
+          <p class="faint" style="font-size:var(--text-xs)">
+            Showing the global rules plus <code>${slug}</code>'s own. Highlighted chips are the
+            plan's; global ones are edited by switching the scope above.
+          </p>` : null}
+
         <div>
           <strong>Denied — the wall.</strong>
           <span class="faint" style="font-size:var(--text-xs)">
             Evaluated inside the CLI, with no network involved. Verified to hold with this console
             stopped. Nothing can approve past it; you run these yourself, deliberately.
           </span>
-          ${list(policy.effective.deny, policy.extra.deny)}
+          ${chips('deny')}
         </div>
 
         <div>
@@ -77,44 +247,127 @@ function PolicyCard({ allowWrites }) {
             <b>fails open</b>: if this console is not running, the call proceeds unasked. Useful,
             and never the thing to rely on for anything that must not happen.
           </span>
-          ${list(policy.effective.ask, policy.extra.ask)}
+          ${chips('ask')}
         </div>
 
         <div>
-          <strong>Pre-approved reads.</strong>
+          <strong>Allowed.</strong>
           <span class="faint" style="font-size:var(--text-xs)">
-            Never round-trip to the hook. A queue that fills with <code>find docs -type f</code> is
-            a queue nobody reads, and one nobody reads trains the answer “yes”.
+            Never round-trip to the hook. The shipped ones are read-only work a phase does
+            constantly; the ones <b>you</b> add also outrank the ask list, which is what makes
+            “Always allow this” on a card actually stop the asking.
           </span>
-          ${list(policy.effective.allow, policy.extra.allow)}
+          ${chips('allow')}
         </div>
 
+        ${policy.inert?.length ? html`
+          <${Banner} kind="warn">
+            <strong>These parse and do nothing.</strong>
+            <ul style="margin:6px 0 0;padding-left:18px">
+              ${policy.inert.map((r) => html`
+                <li key=${r.raw}><code>${r.raw}</code> — ${r.note}</li>`)}
+            </ul>
+          </${Banner}>` : null}
+
         ${allowWrites ? html`
-          <div class="row wrap" style="gap:8px;align-items:flex-end">
-            <label class="field">
-              <span>Add a rule</span>
-              <input value=${rule} placeholder="Bash(task deploy:*)" disabled=${busy}
-                     onInput=${(e) => setRule(e.target.value)}
-                     onKeyDown=${(e) => { if (e.key === 'Enter') void add(); }} />
-            </label>
-            <label class="field">
-              <span>to</span>
-              <select value=${kind} onChange=${(e) => setKind(e.target.value)} disabled=${busy}>
-                <option value="deny">deny — never, whatever I click</option>
-                <option value="ask">ask — stop and show me</option>
-              </select>
-            </label>
-            <button class="btn" disabled=${busy || !rule.trim()} onClick=${add}>
-              ${busy ? 'Adding…' : 'Add'}
+          <div class="stack" style="gap:var(--s2)">
+            <strong>Add a rule</strong>
+            <div class="row wrap" style="gap:8px;align-items:flex-end">
+              <label class="field">
+                <span>Form</span>
+                <select value=${form.id} disabled=${busy}
+                        onChange=${(e) => {
+                          const next = FORMS.find((f) => f.id === e.target.value);
+                          setForm(next); setTool(next.tool); setValue('');
+                        }}>
+                  ${FORMS.map((f) => html`<option key=${f.id} value=${f.id}>${f.label}</option>`)}
+                </select>
+              </label>
+              ${form.id !== 'free' ? html`
+                <label class="field">
+                  <span>Tool</span>
+                  <input class="mono" value=${tool} disabled=${busy} spellcheck="false"
+                         list="policy-tools" onInput=${(e) => setTool(e.target.value)} />
+                </label>` : null}
+              ${form.placeholder ? html`
+                <label class="field grow">
+                  <span>${form.id === 'free' ? 'Rule' : 'Value'}</span>
+                  <input class="mono" value=${value} placeholder=${form.placeholder}
+                         disabled=${busy} spellcheck="false"
+                         onInput=${(e) => setValue(e.target.value)}
+                         onKeyDown=${(e) => { if (e.key === 'Enter') add(); }} />
+                </label>` : null}
+              <label class="field">
+                <span>to</span>
+                <select value=${list} disabled=${busy} onChange=${(e) => setList(e.target.value)}>
+                  <option value="deny">deny — never, whatever I click</option>
+                  <option value="ask">ask — stop and show me</option>
+                  <option value="allow">allow — stop asking about it</option>
+                </select>
+              </label>
+            </div>
+
+            <datalist id="policy-tools">
+              ${[...new Set([...(policy.hookTools ?? []), ...(policy.seen ?? []),
+                'Read', 'Edit', 'Write', 'Agent', 'Cd', 'Glob', 'Grep', 'NotebookEdit',
+                'WebFetch', 'WebSearch', 'TodoWrite'])]
+                .map((t) => html`<option key=${t} value=${t}></option>`)}
+            </datalist>
+
+            <p class="faint" style="font-size:var(--text-xs)">${form.hint}</p>
+
+            ${policy.seen?.length ? html`
+              <div class="row wrap" style="gap:4px;align-items:center">
+                <span class="faint" style="font-size:var(--text-xs)">Tools this console has been asked about:</span>
+                ${policy.seen.map((t) => html`
+                  <button key=${t} class="chip is-clickable" disabled=${busy}
+                          onClick=${() => setTool(t)}>${t}</button>`)}
+              </div>` : null}
+
+            <div class="row wrap" style="gap:8px;align-items:center">
+              <code class="rule-preview">${rule || '—'}</code>
+              <button class="btn" disabled=${busy || !rule || !targetKnown} onClick=${add}>
+                ${busy ? 'Writing…' : planScope ? `Add for ${slug || 'a plan'}` : 'Add everywhere'}
+              </button>
+            </div>
+            ${!targetKnown ? html`
+              <p class="faint" style="font-size:var(--text-xs)">Choose a plan first.</p>` : null}
+
+            <${Banner} kind=${list === 'allow' ? 'warn' : 'info'}>
+              ${list === 'allow'
+                ? html`<span><strong>This widens what an unattended run may do.</strong> It is written
+                  with your name on it, recorded in the live run's journal, and removable with the ×
+                  on its chip. <code>deny</code> still refuses it whatever this says.</span>`
+                : html`<span>Adding to <code>deny</code> or <code>ask</code> makes a run more careful.
+                  Shipped defaults cannot be removed from here — only rules you added.</span>`}
+            </${Banner}>
+
+            <button class="linkish small" onClick=${() => setShowTraps(!showTraps)}
+                    aria-expanded=${showTraps}>
+              ${showTraps ? '▾' : '▸'} How these are evaluated (the parts that surprise people)
             </button>
-          </div>
-          <${Banner} kind="info">
-            Only these two lists can be added to from here, and rules can only be added — both
-            directions that make a run <em>more</em> careful. Widening what an agent may do at 3am,
-            or removing a rule, means editing <code>${policy.file}</code> yourself.
-          </${Banner}>` : html`
+            ${showTraps ? html`
+              <ul class="faint" style="font-size:var(--text-xs);padding-left:18px;margin:0">
+                <li><b>deny → allow-you-wrote → ask → allow.</b> First match wins and specificity is
+                  irrelevant — a more specific rule does not beat an earlier one.</li>
+                <li>Wrappers are seen through: <code>timeout time nice nohup stdbuf command builtin
+                  noglob</code> and bare <code>xargs</code>. <b>Not</b>
+                  ${(policy.wrappersNotStripped ?? []).map((w) => html` <code>${w}</code>`)} — a rule
+                  about what those run will not fire.</li>
+                <li><code>watch</code>, <code>setsid</code>, <code>flock</code> and
+                  <code>find -exec</code> never auto-approve: what they actually run cannot be seen
+                  from the outside, so they get a card.</li>
+                <li>Only <code>Read(…)</code> and <code>Edit(…)</code> path rules are consulted.
+                  <code>Write(…)</code>, <code>NotebookEdit(…)</code> and <code>Glob(…)</code> paths
+                  are ignored.</li>
+                <li><code>Bash(command:rm *)</code> looks like a parameter rule and is dropped.</li>
+                <li>Only ${(policy.hookTools ?? []).map((t) => html`<code>${t}</code> `)} reach this
+                  console's hook. Rules about anything else are real, but the CLI enforces them and
+                  nothing here can show you them being hit.</li>
+              </ul>` : null}
+          </div>` : html`
           <p class="faint" style="font-size:var(--text-xs)">
-            Restart with <code>--allow-writes</code> to add rules here, or edit
+            Restart with <code>--allow-writes</code> to edit rules here, or edit
             <code>${policy.file}</code> directly.
           </p>`}
       </div>

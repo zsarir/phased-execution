@@ -39,8 +39,12 @@ import { latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT, type RunState } f
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
 import { checkAuth, forgetAuth, openLoginTerminal, type AuthStatus } from './runner/auth.ts';
 import {
-  Approvals, classifyTool, loadPolicy, policyExtras, addPolicyRules, notifyOutOfBand,
-  DEFAULT_DENY, DEFAULT_ASK, DEFAULT_ALLOW, POLICY_PATH, type Evidence,
+  Approvals, classifyTool, loadPolicy, loadPolicyFor, policyExtras, addPolicyRules,
+  editPolicy, planPolicyPath, notifyOutOfBand, profilePolicy, suggestedRule,
+  parseRule, inertRules, HOOK_TOOLS, WRAPPERS_NOT_STRIPPED,
+  PERMISSION_PROFILES, PROFILE_LABELS,
+  DEFAULT_DENY, DEFAULT_ASK, DEFAULT_ALLOW, POLICY_PATH,
+  type Evidence, type PolicyScope, type PermissionProfile,
 } from './runner/approvals.ts';
 
 /** One live update, with the id a reconnecting client replays from. */
@@ -184,6 +188,15 @@ export class Service {
   private notifiedPhase = new Map<string, string>();
   /** Which phases were ready last time, so "became ready" means became. */
   private readySnapshot: Set<string> | null = null;
+  /**
+   * Every tool this console has been asked about, this process.
+   *
+   * The rule editor's most useful list is not the taxonomy — it is "the things
+   * that actually interrupted you", because those are the rules a person came
+   * to write. In memory on purpose: it is a convenience, and a file that
+   * accumulated every tool name ever seen would outlive its usefulness.
+   */
+  private toolsSeen = new Set<string>();
 
   readonly runner: Runner;
   readonly approvals: Approvals;
@@ -753,18 +766,142 @@ export class Service {
    * OPEN: with nothing listening the tool call simply proceeds. Presenting the
    * two as one list would be the most dangerous thing this page could do.
    */
-  policy() {
+  policy(slug?: string | null) {
+    const rules = [
+      ...DEFAULT_DENY, ...DEFAULT_ASK, ...DEFAULT_ALLOW,
+      ...policyExtras().deny, ...policyExtras().ask, ...policyExtras().allow,
+    ];
     return {
       defaults: { deny: DEFAULT_DENY, ask: DEFAULT_ASK, allow: DEFAULT_ALLOW },
       extra: policyExtras(),
-      effective: loadPolicy(),
+      // The plan's own file, so the editor can show which scope a rule is at
+      // rather than presenting one merged list nobody can edit confidently.
+      plan: slug ? { slug, path: planPolicyPath(slug), extra: policyExtras(planPolicyPath(slug)) } : null,
+      effective: loadPolicyFor(slug ?? null),
       file: POLICY_PATH,
+      profiles: PERMISSION_PROFILES.map((id) => ({ id, label: PROFILE_LABELS[id] })),
+      // What the syntax accepts but nothing honours, named rather than left to
+      // be discovered at 3am.
+      inert: inertRules(loadPolicyFor(slug ?? null)),
+      // Which of these this console can enforce itself, and which are the CLI's
+      // job — the distinction that decides whether a rule you just wrote will
+      // hold at the hook.
+      support: [...new Set(rules)]
+        .map((rule) => parseRule(rule))
+        .filter((parsed): parsed is NonNullable<typeof parsed> => parsed !== null)
+        .map(({ raw, tool, form, support, note }) => ({ raw, tool, form, support, note })),
+      hookTools: HOOK_TOOLS,
+      wrappersNotStripped: WRAPPERS_NOT_STRIPPED,
+      /** Every tool this console has actually seen a call for. */
+      seen: [...this.toolsSeen].sort(),
     };
   }
 
   addPolicy(rules: { deny?: string[]; ask?: string[] }) {
     addPolicyRules(rules);
     return this.policy();
+  }
+
+  /**
+   * Add or remove rules at one scope. The widening direction is deliberate —
+   * see `editPolicy` — and every call says who asked.
+   */
+  editPolicy(edit: {
+    scope?: PolicyScope;
+    slug?: string | null;
+    add?: { deny?: string[]; ask?: string[]; allow?: string[] };
+    remove?: { deny?: string[]; ask?: string[]; allow?: string[] };
+    by?: string;
+  }) {
+    const scope: PolicyScope = edit.scope === 'plan' ? 'plan' : 'global';
+    if (scope === 'plan' && !edit.slug) throw new Error('a plan-scoped rule needs a plan');
+    const file = scope === 'plan' ? planPolicyPath(edit.slug as string) : POLICY_PATH;
+    editPolicy({ add: edit.add, remove: edit.remove, by: edit.by ?? 'console' }, file);
+    this.journalPolicy(scope, edit);
+    return this.policy(edit.slug ?? null);
+  }
+
+  /**
+   * Answer one card, optionally writing the rule that stops it coming back.
+   *
+   * The rule is written *before* the decision is settled, so the session's very
+   * next call is already classified under it. The other order has a real gap:
+   * the session resumes the instant it is answered, and a fast phase can reach
+   * the same command before the file lands — which looks exactly like "Always
+   * allow didn't work".
+   *
+   * A rule that will not parse is refused and nothing is written, but the card
+   * is still answered: the operator's decision about *this* call stands on its
+   * own, and swallowing it because the remembering failed would be the worse
+   * half to lose.
+   */
+  decideApproval(
+    id: string,
+    decision: 'allow' | 'deny',
+    by: string,
+    reason: string | undefined,
+    remember?: { scope: PolicyScope; rule: string },
+  ): { ok: boolean; decision?: string; wrote?: string; scope?: PolicyScope; error?: string } {
+    const approval = this.approvals.all().find((entry) => entry.id === id);
+    let wrote: string | undefined;
+    let failed: string | undefined;
+
+    if (remember?.rule) {
+      const rule = remember.rule.trim();
+      if (!parseRule(rule)) {
+        failed = `"${rule}" is not a rule this syntax accepts — nothing was written`;
+      } else if (remember.scope === 'plan' && !approval?.slug) {
+        failed = 'this card is not attached to a plan, so it cannot write a plan-scoped rule';
+      } else {
+        // An allow decision writes an allow rule; a deny writes an ask rule
+        // rather than a deny one. Widening from a card is deliberate and
+        // reversible; *narrowing* to the wall from a card is not offered at
+        // all — `deny` is what holds when this console is dead, and it should
+        // take more than a tap to put something there.
+        const list = decision === 'allow' ? 'allow' : 'ask';
+        this.editPolicy({
+          scope: remember.scope,
+          slug: approval?.slug ?? null,
+          add: { [list]: [rule] },
+          by,
+        });
+        wrote = rule;
+      }
+    }
+
+    const settled = this.approvals.settle(id, decision, by, reason);
+    if (!settled) return { ok: false, error: 'no such pending approval' };
+    return {
+      ok: true,
+      decision,
+      ...(wrote ? { wrote, scope: remember?.scope } : {}),
+      ...(failed ? { error: failed } : {}),
+    };
+  }
+
+  /**
+   * Write the rule change into the live run's journal.
+   *
+   * A policy file records what the rules ARE. It cannot record that the run
+   * which was interrupted at 02:14 is the reason one of them exists — and that
+   * is the question anyone reviewing an unattended run actually asks.
+   */
+  private journalPolicy(scope: PolicyScope, edit: {
+    add?: { deny?: string[]; ask?: string[]; allow?: string[] };
+    remove?: { deny?: string[]; ask?: string[]; allow?: string[] };
+    by?: string;
+  }): void {
+    const flatten = (part?: { deny?: string[]; ask?: string[]; allow?: string[] }) => [
+      ...(part?.deny ?? []).map((rule) => `deny ${rule}`),
+      ...(part?.ask ?? []).map((rule) => `ask ${rule}`),
+      ...(part?.allow ?? []).map((rule) => `allow ${rule}`),
+    ];
+    const added = flatten(edit.add);
+    const removed = flatten(edit.remove);
+    if (!added.length && !removed.length) return;
+    this.runner.note('policy.edited', {
+      scope, by: edit.by ?? 'console', ...(added.length ? { added } : {}), ...(removed.length ? { removed } : {}),
+    });
   }
 
   state() {
@@ -966,9 +1103,9 @@ export class Service {
   }
 
   /** Change model, autonomy or budgets on a run in flight; applies next phase. */
-  configureRun(slug: string, patch: RunSettingsPatch): RunState | null {
+  configureRun(slug: string, patch: RunSettingsPatch, by = 'console'): RunState | null {
     const live = this.runner.current();
-    if (live?.slug === slug && this.runner.configure(patch)) return this.runner.current();
+    if (live?.slug === slug && this.runner.configure(patch, by)) return this.runner.current();
     return this.editStoredRun(slug, (state) => { applySettings(state, patch); });
   }
 
@@ -1039,18 +1176,30 @@ export class Service {
     const input = body.tool_input;
     const phase = run?.activePhase ?? null;
 
+    // What this console has ever been asked about, which is what makes the
+    // editor's "learn from the queue" list real rather than a guess.
+    this.toolsSeen.add(toolName);
+
+    // Read per call, not per run: a profile switched mid-run has to change the
+    // very next classification, and the settings file the child already loaded
+    // cannot be reloaded. This is the path that makes the switch immediate.
+    const profile: PermissionProfile = run?.permissionProfile ?? 'guarded';
+    const policy = profilePolicy(loadPolicyFor(run?.slug ?? null), profile);
+
     // The hook fires on every matching tool, so most calls have to be answered
     // here without troubling anyone. Only what the policy marks `ask` becomes a
     // card — a queue that fills up with `find docs -type f` is a queue nobody
     // reads, and one nobody reads trains the answer "yes".
-    const verdict = classifyTool(toolName, input, loadPolicy());
+    const verdict = classifyTool(toolName, input, policy);
     if (verdict !== 'ask') {
       return {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
           permissionDecision: verdict,
           permissionDecisionReason: verdict === 'allow'
-            ? 'not on the autopilot ask list'
+            ? (profile === 'guarded'
+              ? 'not on the autopilot ask list'
+              : `this run is on the ${profile} profile — only the deny list stops it`)
             : 'on the autopilot deny list — a person must run this themselves',
         },
       };
@@ -1065,9 +1214,21 @@ export class Service {
       detail: `Phase ${phase ?? '?'} of ${run?.slug ?? 'a run'} wants to use ${toolName}.`,
       evidence: await this.evidenceFor(phase),
       tool: { name: toolName, input, cwd: typeof body.cwd === 'string' ? body.cwd : undefined },
+      suggestedRule: suggestedRule(toolName, input, policy),
     });
 
     const { decision, by, reason } = await decided;
+
+    // Nobody answered. The hook still has to be told something — silence fails
+    // open — so it is told no, and the run is parked rather than left to treat
+    // that no as a judgement about the work. See `Runner.park`.
+    if (by === 'timeout') {
+      this.runner.park(
+        `an approval went unanswered: ${toolName} — ${describeToolInput(input)}`,
+        phase,
+      );
+    }
+
     return {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',

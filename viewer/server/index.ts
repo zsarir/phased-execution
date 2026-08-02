@@ -24,6 +24,7 @@ import { markDegraded, runShutdownHandlers } from './lifecycle.ts';
 import { Service } from './service.ts';
 import { handleApi } from './api/routes.ts';
 import { classify } from './api/access.ts';
+import { HOOK_TIMEOUT_SECONDS } from './runner/approvals.ts';
 
 const flags = parseFlags(process.argv.slice(2));
 
@@ -166,6 +167,23 @@ function sendFile(res: import('node:http').ServerResponse, path: string): void {
   });
   stream.pipe(res);
 }
+
+/**
+ * A parked approval holds its hook request open for the whole answer window,
+ * and that window is now an hour.
+ *
+ * Node's defaults would kill it long before: `requestTimeout` is five minutes
+ * and destroys the socket when it fires. A destroyed hook request is not a
+ * denial — it is silence, and **this hook fails open**, so the tool call the
+ * console was holding for a person would simply proceed unsupervised. That is
+ * the exact failure the approval queue exists to prevent, arriving through the
+ * back door.
+ *
+ * Bounded rather than disabled (`0`), so a stuck client still cannot hold a
+ * socket forever: the window, plus a minute for the answer to be written.
+ */
+server.requestTimeout = (HOOK_TIMEOUT_SECONDS + 60) * 1000;
+server.headersTimeout = 60_000;
 
 server.on('error', (error: NodeJS.ErrnoException) => {
   if (error.code === 'EADDRINUSE') {

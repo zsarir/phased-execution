@@ -165,9 +165,17 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
       <${ApprovalQueue}
         approvals=${approvals}
         allowRun=${state.allowRun}
-        onDecide=${(id, decision, reason) => act('decide', async () => {
-          await api.decide(id, decision, reason);
-          toast(decision === 'allow' ? 'Approved' : 'Denied', decision === 'allow' ? 'ok' : 'warn');
+        onDecide=${(id, decision, reason, remember, rule) => act('decide', async () => {
+          const result = await api.decide(id, decision, reason, remember, rule);
+          // The rule is reported back rather than assumed: a card can be
+          // answered and the remembering still refused (an unparseable rule),
+          // and saying "Approved" to both would hide the half that failed.
+          if (result?.error) toast(result.error, 'warn');
+          else if (result?.wrote) {
+            toast(`${decision === 'allow' ? 'Approved' : 'Denied'} · wrote ${result.wrote} (${result.scope})`, 'ok');
+          } else {
+            toast(decision === 'allow' ? 'Approved' : 'Denied', decision === 'allow' ? 'ok' : 'warn');
+          }
         })} />
 
       ${run?.halt ? html`
@@ -244,6 +252,29 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
                         toast('Scope cleared — this run continues through the whole plan', 'ok');
                       })}>
                 ${busy === 'scope' ? 'Clearing…' : 'Run the whole plan from here'}
+              </button>
+            </p>` : null}
+        </${Banner}>` : null}
+
+      ${/* A run with the guard rails down must never look like an ordinary one.
+            The selector is inside Controls, which is collapsible and scrolls
+            away; this is at the top and stays. */
+        run?.permissionProfile && run.permissionProfile !== 'guarded' ? html`
+        <${Banner} kind="warn">
+          <strong>${run.permissionProfile === 'bypass' ? 'Bypass permissions.' : 'Trusted run.'}</strong>
+          ${run.permissionProfile === 'bypass'
+            ? ' Nothing raises an approval card and the CLI is not asking either — this run is'
+              + ' held only by the deny list.'
+            : ' Nothing raises an approval card. The deny list still refuses pushes, destructive git,'
+              + ' deploys and publishes, and does so even if this console dies.'}
+          ${live && state.allowRun ? html`
+            <p style="margin-top:8px">
+              <button class="btn small" disabled=${Boolean(busy)}
+                      onClick=${() => act('profile', async () => {
+                        await api.runSettings(slug, { permissionProfile: 'guarded' });
+                        toast('Back to Guarded — the next call that matters raises a card', 'ok');
+                      })}>
+                ${busy === 'profile' ? 'Switching…' : 'Go back to Guarded'}
               </button>
             </p>` : null}
         </${Banner}>` : null}
@@ -464,6 +495,7 @@ function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills
   const [runBudget, setRunBudget] = useState(run?.runBudgetUsd ?? '');
   const [overrides, setOverrides] = useState(run?.phaseOptions ?? {});
   const [runSkills, setRunSkills] = useState(run?.skills ?? []);
+  const [profile, setProfile] = useState(run?.permissionProfile ?? 'guarded');
   const [confirmStop, setConfirmStop] = useState(false);
 
   // Follow the run when it changes underneath us — a different run id, or the
@@ -478,7 +510,9 @@ function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills
     setRunBudget(run?.runBudgetUsd ?? '');
     setOverrides(run?.phaseOptions ?? {});
     setRunSkills(run?.skills ?? []);
-  }, [run?.id, run?.model, run?.effort, run?.autonomy, run?.phaseBudgetUsd, run?.runBudgetUsd]);
+    setProfile(run?.permissionProfile ?? 'guarded');
+  }, [run?.id, run?.model, run?.effort, run?.autonomy, run?.phaseBudgetUsd, run?.runBudgetUsd,
+    run?.permissionProfile]);
 
   const resumable = run && !live && run.status !== 'finished';
   const disabled = !allowRun || Boolean(busy);
@@ -496,11 +530,13 @@ function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills
     runBudgetUsd: Number(runBudget) || null,
     phaseOptions: overrides,
     skills: runSkills,
+    permissionProfile: profile,
   };
   const changed = live && (
     model !== run?.model
     || effort !== (run?.effort ?? '')
     || autonomy !== run?.autonomy
+    || profile !== (run?.permissionProfile ?? 'guarded')
     || (Number(phaseBudget) || null) !== (run?.phaseBudgetUsd ?? null)
     || (Number(runBudget) || null) !== (run?.runBudgetUsd ?? null)
     || JSON.stringify(overrides) !== JSON.stringify(run?.phaseOptions ?? {})
@@ -557,7 +593,36 @@ function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills
           <input type="number" min="0" step="1" value=${runBudget} disabled=${disabled}
                  onInput=${(e) => setRunBudget(e.target.value)} placeholder="none" />
         </label>
+        <label class="field">
+          <span>Permissions</span>
+          <select value=${profile} disabled=${disabled}
+                  onChange=${(e) => setProfile(e.target.value)}>
+            <option value="guarded">Guarded — ask me about the irreversible</option>
+            <option value="trusted">Trusted — only the deny list stops it</option>
+            <option value="bypass">Bypass — the CLI stops asking too</option>
+          </select>
+        </label>
       </div>
+
+      <p class=${`muted small profile-note ${profile !== 'guarded' ? 'hot' : ''}`}>
+        ${profile === 'guarded' ? html`
+          Commits, installs, merges and fetches raise a card. The deny list — pushes, destructive
+          git, deploys, publishes — is refused outright and no card can approve it.`
+    : profile === 'trusted' ? html`
+          <strong>Nothing raises a card.</strong> The deny list still holds, and still holds with
+          this console dead — it is enforced by the CLI, not by the hook. Everything else runs
+          unattended, including every commit.`
+    : html`
+          <strong>Nothing raises a card, and the CLI stops asking too</strong>
+          (<code>--permission-mode bypassPermissions</code>). The deny list is the only thing left
+          between this run and your repository — it does still hold, because bypass auto-approves
+          everything <em>except</em> explicit deny rules. Journaled for as long as it is in force.
+          <br />Requires the bypass disclaimer to have been accepted once, interactively, in a
+          normal <code>claude</code> session on this machine. Without it the CLI silently downgrades
+          to <code>default</code>, which refuses every edit in headless mode — the run would do
+          <em>less</em> than Guarded. The console reports that if it happens; if you have not
+          accepted it, use Trusted.`}
+      </p>
 
       ${skills.length ? html`
         <${SkillPicker}
@@ -1026,6 +1091,12 @@ function NotifyToggle() {
 
 function ApprovalCard({ approval, allowRun, onDecide }) {
   const [reason, setReason] = useState('');
+  // The rule is editable before it is written. "Always allow this" that writes
+  // something you never saw is how a policy file fills up with rules nobody can
+  // account for — and the derived one is a suggestion, not always the rule you
+  // meant.
+  const [rule, setRule] = useState(approval.suggestedRule ?? '');
+  const [showRule, setShowRule] = useState(false);
   const left = Math.max(0, Date.parse(approval.expiresAt) - Date.now());
 
   // A permission question and a "did you check this?" question deserve
@@ -1076,6 +1147,37 @@ function ApprovalCard({ approval, allowRun, onDecide }) {
         <button class="btn danger" disabled=${!allowRun}
                 onClick=${() => onDecide(approval.id, 'deny', reason)}>${no}</button>
       </div>
+
+      ${!asking && approval.suggestedRule ? html`
+        <div class="rule-actions">
+          <button class="linkish small" onClick=${() => setShowRule(!showRule)}
+                  aria-expanded=${showRule}>
+            ${showRule ? '▾' : '▸'} Stop asking about this
+          </button>
+          ${showRule ? html`
+            <div class="rule-builder">
+              <label class="small muted" for=${`rule-${approval.id}`}>
+                The rule that gets written — check it before it goes in:
+              </label>
+              <input id=${`rule-${approval.id}`} class="mono" value=${rule}
+                     onInput=${(e) => setRule(e.target.value)} spellcheck="false" />
+              <div class="row wrap" style="gap:8px">
+                <button class="btn small" disabled=${!allowRun || !rule.trim()}
+                        onClick=${() => onDecide(approval.id, 'allow', reason, 'plan', rule.trim())}>
+                  Always for ${approval.slug}
+                </button>
+                <button class="btn small" disabled=${!allowRun || !rule.trim()}
+                        onClick=${() => onDecide(approval.id, 'allow', reason, 'global', rule.trim())}>
+                  Always everywhere
+                </button>
+              </div>
+              <p class="muted small">
+                Allows and answers this call in one step. Written with your name on it and recorded
+                in the run's journal; removable from Settings → Permissions.
+              </p>
+            </div>` : null}
+        </div>` : null}
+
       ${!allowRun ? html`
         <p class="muted small">This console cannot answer — it was started without <code>--allow-run</code>.</p>` : null}
     </article>`;
@@ -1156,10 +1258,12 @@ export function RunsView({ state }) {
       <${ApprovalQueue}
         approvals=${approvals}
         allowRun=${state?.allowRun}
-        onDecide=${async (id, decision, reason) => {
+        onDecide=${async (id, decision, reason, remember, rule) => {
           try {
-            await api.decide(id, decision, reason);
-            toast(decision === 'allow' ? 'Approved' : 'Denied', decision === 'allow' ? 'ok' : 'warn');
+            const result = await api.decide(id, decision, reason, remember, rule);
+            if (result?.error) toast(result.error, 'warn');
+            else if (result?.wrote) toast(`Answered · wrote ${result.wrote} (${result.scope})`, 'ok');
+            else toast(decision === 'allow' ? 'Approved' : 'Denied', decision === 'allow' ? 'ok' : 'warn');
             await refresh();
           } catch (error) { toast(error.message, 'error'); }
         }} />

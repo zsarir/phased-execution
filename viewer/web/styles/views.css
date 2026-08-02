@@ -1321,6 +1321,57 @@
  * until you are back at the desk.
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Permissions: profiles and the rule editor
+ * ------------------------------------------------------------------ */
+
+/* The consequence of the chosen profile, next to the control that chose it.
+   Warm only when it is not the careful default, so "this run can do anything"
+   never renders as ordinary body text. */
+.profile-note { margin: 0 0 var(--s2); max-width: 68ch; }
+.profile-note.hot { color: var(--line-blocked); }
+
+/* The derived rule, before it is written. Deliberately the largest thing in
+   the row: it is the object of the sentence "always allow THIS". */
+.rule-preview {
+  padding: 4px 8px;
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.rule-actions { margin-top: var(--s2); }
+.rule-builder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s2);
+  padding: var(--s2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+.rule-builder input { width: 100%; }
+
+/* Removing a rule you added, from the chip that shows it — so the widening
+   direction and the undo live in the same place. */
+.chip-x {
+  background: none;
+  border: 0;
+  padding: 0 0 0 4px;
+  margin-left: 2px;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 1.1em;
+  line-height: 1;
+}
+.chip-x:hover { opacity: 1; color: var(--line-blocked); }
+.chip-x:disabled { cursor: not-allowed; opacity: 0.3; }
+.chip.is-clickable { cursor: pointer; border: 1px solid var(--rule); background: transparent; }
+.chip.is-clickable:disabled { cursor: not-allowed; opacity: 0.5; }
+
 @media (max-width: 640px) {
   /* Half the screen is too much to give a log when the controls underneath it
      are what you came for. The component sets its height inline, and a cap is

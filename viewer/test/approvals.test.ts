@@ -17,6 +17,10 @@ import { join } from 'node:path';
 
 const STATE_HOME = mkdtempSync(join(tmpdir(), 'pc-approvals-'));
 process.env.XDG_STATE_HOME = STATE_HOME;
+// Both, before anything is imported: the policy defaults resolve from
+// XDG_CONFIG_HOME at module load, and a test that writes rules must never be
+// able to reach the operator's own `~/.config/phase-console/autopilot.json`.
+process.env.XDG_CONFIG_HOME = join(STATE_HOME, 'config');
 process.env.PHASE_CONSOLE_LOG = '';
 
 const {
@@ -341,6 +345,377 @@ test('WebSearch is asked about, like the sibling it was always shown beside', ()
   assert.match(matcher, /WebSearch/);
   assert.ok(DEFAULT_ASK.includes('WebSearch'));
   assert.equal(classifyTool('WebSearch', { query: 'anything' }, loadPolicy('/nowhere')), 'ask');
+});
+
+/* ------------------------------------------------------------------ *
+ * The rule taxonomy
+ *
+ * One example of every documented form, because a rule that parses and does
+ * not match is indistinguishable from a rule that was never written — and the
+ * whole point of the editor is that people can trust what they typed.
+ * ------------------------------------------------------------------ */
+
+test('every documented rule form returns the documented verdict', async () => {
+  const { ruleMatches: matches } = await import('../server/runner/approvals.ts');
+  const home = '/home/tester';
+  const hit = (rule: string, tool: string, input: unknown) =>
+    assert.equal(matches(rule, tool, input, home), true, `${rule} should match`);
+  const miss = (rule: string, tool: string, input: unknown) =>
+    assert.equal(matches(rule, tool, input, home), false, `${rule} should NOT match`);
+
+  // Bare tool / Tool(*)
+  hit('Bash', 'Bash', { command: 'anything at all' });
+  hit('WebFetch(*)', 'WebFetch', { url: 'https://example.com' });
+  miss('Bash', 'Write', { file_path: '/tmp/x' });
+
+  // Bash globs. The space is load-bearing: `ls *` is not `ls*`.
+  hit('Bash(npm run build)', 'Bash', { command: 'npm run build' });
+  hit('Bash(npm run test *)', 'Bash', { command: 'npm run test --watch' });
+  hit('Bash(* install)', 'Bash', { command: 'npm install' });
+  hit('Bash(git * main)', 'Bash', { command: 'git rebase main' });
+  hit('Bash(ls:*)', 'Bash', { command: 'ls -la' });
+  hit('Bash(ls *)', 'Bash', { command: 'ls -la' });
+  miss('Bash(ls:*)', 'Bash', { command: 'lsof -i' });
+  miss('Bash(ls *)', 'Bash', { command: 'lsof -i' });
+  hit('Bash(ls*)', 'Bash', { command: 'lsof -i' });
+
+  // Parameter match — one parameter, `*` allowed in the value.
+  hit('Agent(model:opus)', 'Agent', { model: 'opus', subagent_type: 'Explore' });
+  hit('Agent(isolation:worktree)', 'Agent', { isolation: 'worktree' });
+  hit('Bash(run_in_background:true)', 'Bash', { command: 'sleep 1', run_in_background: true });
+  miss('Bash(run_in_background:true)', 'Bash', { command: 'sleep 1' });
+
+  // Tool-name globs.
+  hit('*', 'Bash', { command: 'anything' });
+  hit('mcp__*', 'mcp__github__create_issue', {});
+
+  // Read/Edit paths. A bare name means anywhere, which is what protects .env.
+  hit('Read(.env)', 'Read', { file_path: '/srv/app/.env' });
+  hit('Read(//etc/passwd)', 'Read', { file_path: '/etc/passwd' });
+  hit('Read(~/notes/today.md)', 'Read', { file_path: `${home}/notes/today.md` });
+  hit('Edit(./src/index.ts)', 'Edit', { file_path: '/repo/src/index.ts' });
+  miss('Read(~/notes/*)', 'Read', { file_path: `${home}/notes/deep/one.md` });
+  hit('Read(~/notes/**)', 'Read', { file_path: `${home}/notes/deep/one.md` });
+
+  // WebFetch domains.
+  hit('WebFetch(domain:example.com)', 'WebFetch', { url: 'https://example.com/a' });
+  hit('WebFetch(domain:*.example.com)', 'WebFetch', { url: 'https://api.example.com/a' });
+  hit('WebFetch(domain:*)', 'WebFetch', { url: 'https://anywhere.test/a' });
+  miss('WebFetch(domain:example.com)', 'WebFetch', { url: 'https://evil.test/a' });
+
+  // MCP.
+  hit('mcp__server', 'mcp__server__tool', {});
+  hit('mcp__server__*', 'mcp__server__tool', {});
+  hit('mcp__server__tool', 'mcp__server__tool', {});
+  miss('mcp__server', 'mcp__other__tool', {});
+
+  // Agent types and Cd.
+  hit('Agent(Explore)', 'Agent', { subagent_type: 'Explore' });
+  hit('Agent(my-custom-agent)', 'Agent', { subagent_type: 'my-custom-agent' });
+  miss('Agent(Explore)', 'Agent', { subagent_type: 'Plan' });
+  hit('Cd(~/code/*)', 'Cd', { path: `${home}/code/app` });
+  miss('Cd(~/code/*)', 'Cd', { path: `${home}/code/app/src` });
+  hit('Cd(~/code/**)', 'Cd', { path: `${home}/code/app/src` });
+  hit('Cd(**/node_modules)', 'Cd', { path: '/repo/a/node_modules' });
+});
+
+test('the rules that parse and do nothing are named, not silently dropped', async () => {
+  const { parseRule, inertRules, ruleMatches: matches } = await import('../server/runner/approvals.ts');
+
+  // The documented trap: it reads like a parameter rule and Claude Code drops it.
+  assert.equal(parseRule('Bash(command:rm *)')?.support, 'ignored');
+  assert.equal(matches('Bash(command:rm *)', 'Bash', { command: 'rm -rf /' }), false);
+
+  // Only Read(…) and Edit(…) path rules are consulted.
+  for (const rule of ['Write(/etc/*)', 'NotebookEdit(~/nb.ipynb)', 'Glob(src/**)']) {
+    assert.equal(parseRule(rule)?.support, 'ignored', `${rule} is not consulted`);
+  }
+  assert.equal(parseRule('Edit(src/**)')?.support, 'hook');
+
+  const inert = inertRules({ deny: ['Bash(command:rm *)'], ask: ['Write(/etc/*)'], allow: ['Bash(ok:*)'] });
+  assert.deepEqual(inert.map((r) => r.raw), ['Bash(command:rm *)', 'Write(/etc/*)']);
+  for (const rule of inert) assert.ok(rule.note, 'each says why it does nothing');
+});
+
+test('a rule about a tool the hook never sees is labelled, not pretended about', async () => {
+  const { parseRule, HOOK_TOOLS } = await import('../server/runner/approvals.ts');
+  // The PreToolUse matcher covers these, so a rule about them is enforced here.
+  for (const tool of HOOK_TOOLS) assert.equal(parseRule(tool)?.support, 'hook', tool);
+  // These are real rules the CLI enforces — this console just never sees them,
+  // and claiming otherwise would be the lie that costs someone an afternoon.
+  for (const rule of ['Read', 'Agent(Explore)', 'Cd(~/code/**)', 'mcp__server']) {
+    assert.equal(parseRule(rule)?.support, 'cli-only', rule);
+  }
+});
+
+test('a wrapped command is still the command it wraps', async () => {
+  const { commandSegments, stripWrappers } = await import('../server/runner/approvals.ts');
+  const policyNow = { deny: DEFAULT_DENY, ask: DEFAULT_ASK, allow: [] };
+  const bashNow = (command: string) => classifyTool('Bash', { command }, policyNow);
+
+  // `nohup git push` reaches a remote exactly as `git push` does.
+  assert.equal(bashNow('nohup git push origin main'), 'deny');
+  assert.equal(bashNow('timeout 30s git push origin main'), 'deny');
+  assert.equal(bashNow('nice -n 5 npm publish'), 'deny');
+  assert.equal(bashNow('xargs rm'), 'allow', 'bare xargs is seen through, and rm is on no list here');
+  assert.ok(commandSegments('nohup git push').includes('git push'));
+  assert.equal(stripWrappers('git push'), null, 'nothing to peel is not an empty command');
+
+  // And the documented edges, which nothing here can see through: a rule about
+  // what these run will not fire, so the console says so rather than implying
+  // a protection it does not have.
+  assert.equal(stripWrappers('npx some-publisher'), null);
+  assert.equal(stripWrappers('docker exec box git push'), null);
+});
+
+test('what a wrapper hides never auto-approves', async () => {
+  const { neverAutoApproves } = await import('../server/runner/approvals.ts');
+  const policyNow = { deny: DEFAULT_DENY, ask: DEFAULT_ASK, allow: [] };
+  const bashNow = (command: string) => classifyTool('Bash', { command }, policyNow);
+
+  for (const command of [
+    'watch -n5 ./collect.sh',
+    'setsid ./daemon.sh',
+    'flock /tmp/l ./job.sh',
+    'find . -name "*.tmp" -exec ./clean.sh {} ;',
+  ]) {
+    assert.ok(neverAutoApproves(command), command);
+    assert.equal(bashNow(command), 'ask', `${command} gets a person, not a default yes`);
+  }
+  assert.equal(neverAutoApproves('git status'), false);
+});
+
+/* ------------------------------------------------------------------ *
+ * Profiles
+ * ------------------------------------------------------------------ */
+
+test('only the bypass profile keeps bypassPermissions in the child argv', async () => {
+  const { buildArgv, sanitize } = await import('../server/runner/spawn.ts');
+  const mode = (argv: string[]) => argv[argv.indexOf('--permission-mode') + 1];
+
+  assert.equal(mode(buildArgv({ prompt: 'p', cwd: '/tmp' })), 'acceptEdits', 'the default is unchanged');
+  assert.equal(mode(buildArgv({ prompt: 'p', cwd: '/tmp', permissionProfile: 'guarded' })), 'acceptEdits');
+  assert.equal(mode(buildArgv({ prompt: 'p', cwd: '/tmp', permissionProfile: 'trusted' })), 'acceptEdits',
+    'trusted empties the ask list — it does not take the CLI’s own guard off');
+  assert.equal(mode(buildArgv({ prompt: 'p', cwd: '/tmp', permissionProfile: 'bypass' })), 'bypassPermissions');
+
+  // The rewrite still fires for anyone who simply asks for it. Choosing the
+  // profile is the only way through, which is what makes it auditable.
+  assert.deepEqual(
+    sanitize(['--permission-mode', 'bypassPermissions']),
+    ['--permission-mode', 'acceptEdits'],
+  );
+  assert.deepEqual(
+    sanitize(['--permission-mode', 'bypassPermissions'], { allowBypass: true }),
+    ['--permission-mode', 'bypassPermissions'],
+  );
+  // And the flags that disable the repository's own hooks are not unlockable
+  // by any profile — those are not a preference anyone gets.
+  assert.deepEqual(sanitize(['--bare', '--safe-mode', '--model', 'x'], { allowBypass: true }), ['--model', 'x']);
+});
+
+test('trusted skips the ask list and keeps the wall', async () => {
+  const { profilePolicy } = await import('../server/runner/approvals.ts');
+  const base = loadPolicy('/nowhere');
+
+  for (const profile of ['trusted', 'bypass'] as const) {
+    const policyNow = profilePolicy(base, profile);
+    assert.equal(classifyTool('Bash', { command: 'git commit -m x' }, policyNow), 'allow',
+      `${profile} commits without a card — the interrogation this phase exists to end`);
+    assert.equal(classifyTool('Bash', { command: 'npm install left-pad' }, policyNow), 'allow');
+    assert.equal(classifyTool('Bash', { command: 'git push origin main' }, policyNow), 'deny',
+      `${profile} must not be able to reach a remote`);
+    assert.equal(classifyTool('Bash', { command: 'sudo rm -rf /x' }, policyNow), 'deny');
+    assert.deepEqual(policyNow.deny, base.deny, 'the wall is identical in every profile');
+  }
+
+  // Guarded is exactly what it always was.
+  assert.equal(classifyTool('Bash', { command: 'git commit -m x' }, profilePolicy(base, 'guarded')), 'ask');
+});
+
+test('the settings a trusted run is given still carry the whole deny list', async () => {
+  const settings = buildSettings({
+    runId: 'r', token: 't', origin: 'http://127.0.0.1:4123', profile: 'trusted',
+  });
+  const permissions = settings.permissions as { deny: string[]; ask?: string[] };
+  assert.equal(permissions.ask, undefined);
+  for (const rule of DEFAULT_DENY) assert.ok(permissions.deny.includes(rule), rule);
+});
+
+/* ------------------------------------------------------------------ *
+ * Scopes: one plan, or everywhere
+ * ------------------------------------------------------------------ */
+
+test('a plan-scoped rule applies to that plan and to nothing else', async () => {
+  const { editPolicy, loadPolicyFor, planPolicyPath } = await import('../server/runner/approvals.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-scope-'));
+  const globalFile = join(dir, 'autopilot.json');
+
+  editPolicy({ add: { allow: ['Bash(task deploy:*)'] }, by: 'tester' }, planPolicyPath('alpha', dir));
+
+  const alpha = loadPolicyFor('alpha', globalFile, dir);
+  const beta = loadPolicyFor('beta', globalFile, dir);
+  assert.ok(alpha.allow.includes('Bash(task deploy:*)'));
+  assert.ok(!beta.allow.includes('Bash(task deploy:*)'), 'another plan is untouched');
+  assert.ok(!loadPolicyFor(null, globalFile, dir).allow.includes('Bash(task deploy:*)'));
+
+  // And it survives a reload, because it is a file and not a session's memory.
+  assert.ok(loadPolicyFor('alpha', globalFile, dir).allow.includes('Bash(task deploy:*)'));
+
+  // A slug decides a filename and nothing else.
+  assert.ok(!planPolicyPath('../../etc/passwd', dir).includes('..'));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('a rule you wrote outranks the ask list; a shipped allow does not', async () => {
+  const { editPolicy, loadPolicyFor } = await import('../server/runner/approvals.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-always-'));
+  const globalFile = join(dir, 'autopilot.json');
+
+  // Before: `git commit` is on the ask list and stops the run.
+  assert.equal(
+    classifyTool('Bash', { command: 'git commit -m x' }, loadPolicyFor(null, globalFile, dir)),
+    'ask',
+  );
+
+  // "Always allow this" writes the rule the card derived from the ask rule that
+  // stopped it. Evaluation is deny → ask → allow with first match winning, so
+  // an ordinary allow rule could never cancel it — which would make the button
+  // write a rule and change nothing.
+  editPolicy({ add: { allow: ['Bash(git commit:*)'] }, by: 'tester' }, globalFile);
+  const after = loadPolicyFor(null, globalFile, dir);
+  assert.deepEqual(after.always, ['Bash(git commit:*)']);
+  assert.equal(classifyTool('Bash', { command: 'git commit -m x' }, after), 'allow');
+
+  // The wall is still the wall.
+  editPolicy({ add: { allow: ['Bash(git push:*)'] }, by: 'tester' }, globalFile);
+  assert.equal(
+    classifyTool('Bash', { command: 'git push origin main' }, loadPolicyFor(null, globalFile, dir)),
+    'deny',
+    'no rule anyone can write from a browser gets past deny',
+  );
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('a rule can be removed again, and only the ones you added', async () => {
+  const { editPolicy, policyExtras, loadPolicy: load } = await import('../server/runner/approvals.ts');
+  const file = join(STATE_HOME, 'autopilot-remove.json');
+
+  editPolicy({ add: { ask: ['Bash(make release:*)', 'Bash(task ship:*)'] }, by: 'tester' }, file);
+  assert.deepEqual(policyExtras(file).ask, ['Bash(make release:*)', 'Bash(task ship:*)']);
+
+  editPolicy({ remove: { ask: ['Bash(make release:*)'] }, by: 'tester' }, file);
+  assert.deepEqual(policyExtras(file).ask, ['Bash(task ship:*)'], 'and it survives the reload');
+
+  // A shipped default has no line to delete, so removing it is a no-op rather
+  // than a hole in the wall.
+  editPolicy({ remove: { deny: ['Bash(git push:*)'] }, by: 'tester' }, file);
+  assert.ok(load(file).deny.includes('Bash(git push:*)'));
+});
+
+test('the rule a card offers is the one that stopped the call', async () => {
+  const { suggestedRule } = await import('../server/runner/approvals.ts');
+  const policyNow = loadPolicy('/nowhere');
+
+  // Derived from the matched ask rule, so accepting it cancels exactly the
+  // thing that interrupted — not a guess that happens to look similar.
+  assert.equal(suggestedRule('Bash', { command: 'git commit -m "wip"' }, policyNow), 'Bash(git commit:*)');
+  assert.equal(suggestedRule('Bash', { command: 'git add x && git commit -m y' }, policyNow), 'Bash(git commit:*)');
+  assert.equal(suggestedRule('WebFetch', { url: 'https://example.com' }, policyNow), 'WebFetch');
+  // Nothing matched: the narrowest honest guess, never a bare `Bash`.
+  assert.equal(suggestedRule('Bash', { command: 'task deploy --now' }, { deny: [], ask: [], allow: [] }),
+    'Bash(task deploy:*)');
+});
+
+/* ------------------------------------------------------------------ *
+ * Answering a card, and remembering the answer
+ * ------------------------------------------------------------------ */
+
+/** A Service with nowhere to write but the redirected config home. */
+async function service() {
+  const { Service } = await import('../server/service.ts');
+  const { SKILL_DIR } = await import('../server/config.ts');
+  return new Service({
+    port: 0, host: '127.0.0.1', open: false, allowWrites: true,
+    scriptsDir: join(SKILL_DIR, 'scripts'), logFile: null,
+  } as never);
+}
+
+function card(svc: Awaited<ReturnType<typeof service>>, slug: string) {
+  const { approval } = svc.approvals.request({
+    runId: 'r1', slug, phase: 2, kind: 'tool',
+    title: 'Bash: git commit -m x', detail: 'wants to commit', evidence: [],
+    tool: { name: 'Bash', input: { command: 'git commit -m x' } },
+    suggestedRule: 'Bash(git commit:*)',
+  });
+  return approval;
+}
+
+test('"Always for this plan" writes a rule that plan only, and answers the card', async () => {
+  const { loadPolicyFor, policyExtras, planPolicyPath } = await import('../server/runner/approvals.ts');
+  const svc = await service();
+  const approval = card(svc, 'alpha');
+
+  const result = svc.decideApproval(approval.id, 'allow', 'someone@desk', undefined, {
+    scope: 'plan', rule: 'Bash(git commit:*)',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.wrote, 'Bash(git commit:*)', 'the exact rule is reported back, not assumed');
+  assert.equal(result.scope, 'plan');
+  assert.equal(approval.status, 'allow', 'the card is answered, not merely remembered');
+  assert.equal(approval.decidedBy, 'someone@desk');
+
+  assert.deepEqual(policyExtras(planPolicyPath('alpha')).allow, ['Bash(git commit:*)']);
+  assert.equal(classifyTool('Bash', { command: 'git commit -m y' }, loadPolicyFor('alpha')), 'allow');
+  assert.equal(classifyTool('Bash', { command: 'git commit -m y' }, loadPolicyFor('beta')), 'ask',
+    'another plan still asks — that is what "for this plan" has to mean');
+});
+
+test('"Always everywhere" writes to the global policy', async () => {
+  const { loadPolicyFor, policyExtras, POLICY_PATH } = await import('../server/runner/approvals.ts');
+  const svc = await service();
+  const approval = card(svc, 'gamma');
+
+  const result = svc.decideApproval(approval.id, 'allow', 'someone@desk', undefined, {
+    scope: 'global', rule: 'Bash(npm install:*)',
+  });
+
+  assert.equal(result.scope, 'global');
+  assert.ok(policyExtras(POLICY_PATH).allow.includes('Bash(npm install:*)'));
+  // Every plan, including ones that have no file of their own.
+  for (const slug of ['gamma', 'delta', null]) {
+    assert.equal(classifyTool('Bash', { command: 'npm install left-pad' }, loadPolicyFor(slug)), 'allow', String(slug));
+  }
+});
+
+test('a rule that will not parse is refused, and the card is still answered', async () => {
+  const svc = await service();
+  const approval = card(svc, 'alpha');
+
+  // The decision about *this* call stands on its own. Swallowing it because
+  // the remembering failed would lose the half that unblocks the session.
+  const result = svc.decideApproval(approval.id, 'allow', 'someone@desk', undefined, {
+    scope: 'global', rule: 'not a rule at all',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(approval.status, 'allow');
+  assert.equal(result.wrote, undefined, 'nothing was written');
+  assert.match(result.error!, /not a rule/);
+});
+
+test('a card decided without remembering writes no rule at all', async () => {
+  const { policyExtras, POLICY_PATH } = await import('../server/runner/approvals.ts');
+  const svc = await service();
+  const before = policyExtras(POLICY_PATH).allow.length;
+  const approval = card(svc, 'alpha');
+
+  const result = svc.decideApproval(approval.id, 'deny', 'someone@desk', 'not now');
+  assert.equal(result.ok, true);
+  assert.equal(result.wrote, undefined);
+  assert.equal(approval.status, 'deny');
+  assert.equal(policyExtras(POLICY_PATH).allow.length, before);
 });
 
 /* ------------------------------------------------------------------ *
