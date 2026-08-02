@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Phase Console, as a bare command.
+#
+# Claude Code puts a plugin's bin/ on the Bash tool's PATH while the plugin is
+# enabled, so an installed plugin can start the console from any directory:
+#
+#   phase-console                        pick the plan directory in the browser
+#   phase-console ~/code/your-repo       open that directory straight away
+#   phase-console --allow-writes         also enable the guarded write verbs
+#
+# Cloned the repo instead of installing the plugin? Run ./start — this is a
+# wrapper around it, and every argument means the same thing.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+exec "$here/../start" "$@"

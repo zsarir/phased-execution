@@ -15,20 +15,37 @@ dependency graph of right-sized sessions — with a local web console to watch i
 
 ## Quickstart
 
-```bash
-# 1. install the skill (it is just a folder)
-git clone https://github.com/zsarir/phased-execution.git ~/.claude/skills/phased-execution
+Two ways in. Same skill, same console — they differ only in how updates arrive and what you type.
 
-# 2. open the console
+**As a plugin** — one line, updates itself. Run these inside Claude Code:
+
+```
+/plugin marketplace add zsarir/phased-execution
+/plugin install phased-execution@mobin
+```
+
+Then `phase-console` starts the app from any directory. The plugin is versioned by commit, so
+`/plugin update phased-execution` always brings you current.
+
+**As a plain skill** — a folder you own, on a path that never moves:
+
+```bash
+git clone https://github.com/zsarir/phased-execution.git ~/.claude/skills/phased-execution
 ~/.claude/skills/phased-execution/start
 ```
 
-That's it. `start` opens <http://127.0.0.1:4123> in your browser and asks which directory to read —
+Update it with `git pull`.
+
+Either way, `start` opens <http://127.0.0.1:4123> in your browser and asks which directory to read —
 any repository containing `docs/plans`. Nothing to install, nothing to build, no configuration file:
 the server is plain Node (22.6+, which runs TypeScript directly) and the page is native ES modules
 with everything it needs vendored in this repo, so it works offline too.
 
-Restart Claude Code and the skill is available as `/phased-execution`.
+Restart Claude Code and the skill is there. Cloned, it is `/phased-execution`. Installed as a plugin
+it is `/phased-execution:phased-execution` — Claude Code namespaces every plugin skill under its
+plugin to keep names from colliding, so type `/phased` and let autocomplete finish it. Most of the
+time you never type either: the skill announces itself well enough that Claude reaches for it when
+the work is phased.
 
 ---
 
@@ -88,6 +105,8 @@ subagent** that reviews a phase's real diff before its dependents start.
 ./start --allow-writes       # plus the guarded write verbs
 ```
 
+Installed as a plugin, the same command is `phase-console` and works from anywhere.
+
 A plan library outgrows a terminal: dozens of plans, hundreds of phases, hundreds of handoff files —
 and the engine answers for exactly one plan at a time. The console is the portfolio view: what is
 ready **right now** across every plan, which lock is holding what, which plan has stalled, how much
@@ -136,12 +155,19 @@ phased-execution/
 ├── SKILL.md          # frontmatter + the procedure Claude follows
 ├── USAGE.md          # human-facing orientation
 ├── start             # launch the console
+├── bin/              # phase-console — the same launcher, on PATH for plugin installs
 ├── scripts/          # the engine and its helpers (run, don't read)
 ├── references/       # plan/handoff formats, conventions, sizing, QA method
 ├── templates/        # plan, handoff and INDEX scaffolds
 ├── tests/            # bats suite for the scripts
-└── viewer/           # Phase Console — the local web app
+├── viewer/           # Phase Console — the local web app
+└── .claude-plugin/   # marketplace.json — makes this repo installable as a plugin
 ```
+
+The repo is its own one-plugin marketplace: `.claude-plugin/marketplace.json` declares the plugin
+(`strict: false`, so no separate `plugin.json` is needed and the folder stays a plain skill when you
+clone it). No `version` field is set, which puts the plugin on the commit channel — every push to
+`main` is an update.
 
 ## Requirements
 

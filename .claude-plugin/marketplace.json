@@ -1,0 +1,37 @@
+{
+  "name": "mobin",
+  "description": "Claude Code plugins by mobin.",
+  "owner": {
+    "name": "mobin",
+    "url": "https://github.com/zsarir"
+  },
+  "plugins": [
+    {
+      "name": "phased-execution",
+      "source": "./",
+      "strict": false,
+      "description": "Run large work as a dependency graph of right-sized Claude sessions — plans, per-phase handoffs, a computed ready-set, and a zero-dependency local web console for the whole plan library.",
+      "author": {
+        "name": "mobin",
+        "url": "https://github.com/zsarir"
+      },
+      "homepage": "https://github.com/zsarir/phased-execution",
+      "repository": "https://github.com/zsarir/phased-execution",
+      "category": "productivity",
+      "keywords": [
+        "planning",
+        "phases",
+        "handoff",
+        "sessions",
+        "context",
+        "workflow",
+        "dependency-graph"
+      ],
+      "tags": [
+        "planning",
+        "workflow",
+        "productivity"
+      ]
+    }
+  ]
+}
