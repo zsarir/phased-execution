@@ -4,6 +4,7 @@ import { html, render, useState, useEffect, useCallback } from './html.js';
 import { api, subscribe, subscribeRun, clearCache } from './api.js';
 import { useRoute, navigate } from './router.js';
 import { usePrefs, useToasts, applyTheme, getPrefs } from './store.js';
+import { syncSuppression } from './push.js';
 import { Spinner, Banner } from './components/ui.js';
 
 import { SourceView } from './views/source.js';
@@ -127,6 +128,10 @@ function App() {
 
   useEffect(() => { applyTheme(getPrefs().theme); }, []);
   useEffect(() => { void reload(); }, [reload, tick]);
+
+  // If a service worker is already covering this browser, the page must not
+  // also raise its own copy of every notification. Asked once, on boot.
+  useEffect(() => { void syncSuppression(); }, []);
 
   // Live: the server tells us which plans changed; drop their cache and redraw.
   useEffect(() => subscribe(() => setTick((n) => n + 1)), []);

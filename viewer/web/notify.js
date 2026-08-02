@@ -24,6 +24,18 @@
 
 const SUPPORTED = typeof Notification !== 'undefined';
 
+/**
+ * A browser subscribed to push already gets these from its service worker. If
+ * the page raised one as well, every event would arrive twice on exactly the
+ * device that took the trouble to set push up — so the page stands down and
+ * lets the worker have it.
+ */
+let pushHandlesIt = false;
+
+export function standDownForPush(active) {
+  pushHandlesIt = Boolean(active);
+}
+
 /** Not asked, asked-and-granted, asked-and-refused, or unavailable here. */
 export function notifyState() {
   if (!SUPPORTED) return 'unsupported';
@@ -45,6 +57,7 @@ export async function askToNotify() {
  */
 export function notify(title, body, tag) {
   if (!SUPPORTED || Notification.permission !== 'granted') return false;
+  if (pushHandlesIt) return false;
   if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
     // The window is in front of you. Telling you what you are looking at is
     // noise, and noise is how a notification channel gets muted.

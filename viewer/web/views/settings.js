@@ -5,6 +5,7 @@ import { navigate } from '../router.js';
 import { api } from '../api.js';
 import { usePrefs, toast } from '../store.js';
 import { KeyValue, Banner, weight } from '../components/ui.js';
+import { NotificationsCard } from './notifications.js';
 
 const MODELS = ['', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-haiku-4-5'];
 
@@ -133,6 +134,8 @@ export function SettingsView({ state }) {
       </div>
 
       <div class="grid cols-2">
+        <${NotificationsCard} />
+
         <div class="card">
           <div class="card-head">
             <h3>Source</h3>

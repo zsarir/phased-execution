@@ -273,6 +273,44 @@ export async function handleApi(
       return true;
     }
 
+    /* ---------------- push notifications ---------------- */
+    if (head === 'push') {
+      // Reading the catalogue and the public key is harmless. Everything that
+      // changes who gets woken is a mutation, and gets the cross-site check —
+      // but not `--allow-writes`: subscribing a device writes nothing in a
+      // repository, and a read-only console is exactly where you would want
+      // to be told a run needs you.
+      if (req.method === 'GET' && rest.length === 0) { json(res, 200, service.push.state()); return true; }
+
+      if (req.method === 'POST') {
+        const refusal = guardCsrf(req);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const action = rest[0] ?? '';
+
+        if (action === 'subscribe') {
+          const result = service.push.subscribe(body.subscription, body.categories, body.label);
+          if ('error' in result) { json(res, 400, result); return true; }
+          json(res, 200, { device: result, state: service.push.state() });
+          return true;
+        }
+        if (action === 'unsubscribe') {
+          json(res, 200, { removed: service.push.unsubscribe(body.id ?? body.endpoint), state: service.push.state() });
+          return true;
+        }
+        if (action === 'categories') {
+          const device = service.push.setCategories(body.id, body.categories);
+          if (!device) { json(res, 404, { error: 'no such device' }); return true; }
+          json(res, 200, { device, state: service.push.state() });
+          return true;
+        }
+        if (action === 'test') {
+          json(res, 200, await service.push.test(String(body.id ?? '')));
+          return true;
+        }
+      }
+    }
+
     if (!service.store) { json(res, 409, { error: 'No source directory is open.' }); return true; }
 
     /* ---------------- portfolio ---------------- */

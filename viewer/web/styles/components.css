@@ -523,6 +523,32 @@
 }
 @keyframes shimmer { to { background-position: -200% 0; } }
 
+/* ---------------- notifications ---------------- */
+
+.notify-lane {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--ground-deep);
+}
+
+.notify-category {
+  display: flex;
+  align-items: start;
+  gap: var(--s2);
+  cursor: pointer;
+  padding: var(--s2);
+  border-radius: var(--radius);
+}
+.notify-category:hover { background: var(--surface-raised); }
+/* The label is the target, so the box only has to be where the eye expects it. */
+.notify-category input { margin-top: 3px; flex: none; accent-color: var(--line-ready); }
+.notify-category p { max-width: 68ch; }
+
 /* ---------------- phones ----------------
    A pointer is precise and a thumb is not, so the controls grow; a phone is
    narrow, so the two-column pairs stop being two columns. Nothing here changes
@@ -554,4 +580,10 @@
     bottom: calc(var(--s3) + env(safe-area-inset-bottom));
   }
   .toast { width: 100%; }
+
+  /* The control belongs under the sentence that explains it. Side by side, the
+     status alone is wide enough to squeeze the explanation into a four-word
+     column beside it. */
+  .notify-lane { flex-direction: column; align-items: stretch; gap: var(--s2); }
+  .notify-lane .btn { flex: 1 1 auto; justify-content: center; }
 }

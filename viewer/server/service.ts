@@ -23,6 +23,8 @@ import { SearchIndex, type SearchResult } from './search.ts';
 import { listSkills, type SkillInfo } from './skills.ts';
 import { DocsWatcher } from './watch.ts';
 import { degradedState, onDegraded } from './lifecycle.ts';
+import { log } from './log.ts';
+import { Push, tagFor } from './push/index.ts';
 import { repoInfo, lastCommit, type GitRepoInfo, type GitFileInfo } from './git.ts';
 import { findMemory, memoryIndexLines } from './memory.ts';
 import {
@@ -178,24 +180,34 @@ export class Service {
   private eventLog: LiveEvent[] = [];
   /** The last run+status announced, so a halt is not announced on every poll. */
   private notifiedRun: { id: string; status: string } | null = null;
+  /** Per phase, the last status pushed — a re-render is not a second event. */
+  private notifiedPhase = new Map<string, string>();
+  /** Which phases were ready last time, so "became ready" means became. */
+  private readySnapshot: Set<string> | null = null;
 
   readonly runner: Runner;
   readonly approvals: Approvals;
+  readonly push: Push;
 
   constructor(flags: Flags) {
     this.flags = flags;
     this.prefs = loadPrefs();
     this.sizing = loadSizing(flags.scriptsDir);
+    this.push = new Push(flags.remoteUsers);
     this.watcher = new DocsWatcher((paths) => this.onChange(paths));
     this.approvals = new Approvals((approval) => {
       this.emit('approval', approval);
-      // The browser can only be told if a browser is open. This is the path
-      // that reaches an operator who is asleep, which is the case the whole
+      const where = `${approval.slug}${approval.phase != null ? ` phase ${approval.phase}` : ''}`;
+      // The browser can only be told if a browser is open. These are the paths
+      // that reach an operator who is asleep, which is the case the whole
       // unattended design exists for.
-      notifyOutOfBand(
-        `Phase Console: ${approval.title}`,
-        `${approval.slug}${approval.phase != null ? ` phase ${approval.phase}` : ''} — ${approval.detail}`,
-      );
+      notifyOutOfBand(`Phase Console: ${approval.title}`, `${where} — ${approval.detail}`);
+      this.push.announce('approval', {
+        title: approval.kind === 'verify' ? 'A check only you can make' : 'Permission needed',
+        body: `${where} — ${approval.title}`,
+        tag: tagFor('approval', approval.id),
+        url: `/#/plan/${approval.slug}/autopilot`,
+      });
     });
     this.runner = new Runner({
       scriptsDir: flags.scriptsDir,
@@ -215,7 +227,17 @@ export class Service {
     });
     // A fault anywhere in the process reaches the browser as a health event,
     // so a degraded console announces itself instead of looking healthy.
-    onDegraded((state) => this.emit('health', { ...state, watcher: this.watcher.status() }));
+    onDegraded((state) => {
+      this.emit('health', { ...state, watcher: this.watcher.status() });
+      // The supervisor failing quietly is the worst case here: every other
+      // surface still looks exactly like a console that is working.
+      this.push.announce('health', {
+        title: 'Phase Console is degraded',
+        body: `${state.kind}: ${state.message}`,
+        tag: tagFor('health', state.kind, state.message),
+        url: '/#/settings',
+      });
+    });
   }
 
   /* ---------------------------------------------------------------- *
@@ -297,24 +319,68 @@ export class Service {
    */
   private onRunnerEvent(event: string, data: unknown): void {
     this.emit(event, data);
+    if (event === 'run:phase') { this.announcePhase(data); return; }
     if (event !== 'run:run') return;
-    const state = (data as { state?: RunState } | undefined)?.state;
-    if (!state || state.id === this.notifiedRun?.id) return;
 
-    if (state.status === 'halted' || state.status === 'parked') {
+    const state = (data as { state?: RunState } | undefined)?.state;
+    if (!state) return;
+    // Dedupe on the run *and* its status. Keying on the run alone — which this
+    // did — meant a run announced once as parked could later halt, or finish,
+    // in silence.
+    if (this.notifiedRun?.id === state.id && this.notifiedRun.status === state.status) return;
+
+    const push = (category: 'halted' | 'parked' | 'finished', title: string, body: string) => {
       this.notifiedRun = { id: state.id, status: state.status };
-      notifyOutOfBand(
-        `Phase Console: ${state.slug} ${state.status}`,
-        state.halt?.reason ?? 'the run stopped and needs a person',
-      );
-    } else if (state.status === 'finished') {
-      this.notifiedRun = { id: state.id, status: state.status };
-      const done = Object.values(state.phases).filter((p) => p.status === 'done').length;
-      notifyOutOfBand(
-        `Phase Console: ${state.slug} finished`,
-        `${done} phase(s) done · $${state.spentUsd.toFixed(2)} spent`,
-      );
+      notifyOutOfBand(`Phase Console: ${title}`, body);
+      this.push.announce(category, {
+        title, body, tag: tagFor('run', state.id, state.status), url: `/#/plan/${state.slug}/autopilot`,
+      });
+    };
+
+    switch (state.status) {
+      case 'halted':
+        push('halted', `${state.slug} halted`, state.halt?.reason ?? 'the run stopped and needs a person');
+        break;
+      case 'interrupted':
+        // Nothing is driving it and nothing said why — the failure mode that
+        // otherwise looks exactly like a run still working.
+        push('halted', `${state.slug} interrupted`, 'nothing is driving this run any more');
+        break;
+      case 'parked':
+        push('parked', `${state.slug} parked`, state.halt?.reason ?? 'every remaining phase needs a person');
+        break;
+      case 'waiting':
+        push('parked', `${state.slug} is waiting`, 'asleep until a usage window reopens');
+        break;
+      case 'finished': {
+        const done = Object.values(state.phases).filter((p) => p.status === 'done').length;
+        push('finished', `${state.slug} finished`,
+          `${done} phase(s) done · $${state.spentUsd.toFixed(2)} spent`);
+        break;
+      }
+      default:
+        break;
     }
+  }
+
+  /** Each phase as it lands. The steady pulse of a run nobody is watching. */
+  private announcePhase(data: unknown): void {
+    const event = data as { slug?: string; phase?: number; status?: string } | undefined;
+    const { slug, phase, status } = event ?? {};
+    if (!slug || typeof phase !== 'number') return;
+    if (status !== 'done' && status !== 'failed') return;
+
+    const key = `${slug}:${phase}`;
+    if (this.notifiedPhase.get(key) === status) return;
+    this.notifiedPhase.set(key, status);
+
+    const title = this.store?.get(slug)?.plan?.phases[phase]?.title;
+    this.push.announce('phase', {
+      title: `${slug} · phase ${phase} ${status}`,
+      body: title ?? (status === 'done' ? 'the phase landed' : 'the phase did not land'),
+      tag: tagFor('phase', slug, phase, status),
+      url: `/#/plan/${slug}/phase/${phase}`,
+    });
   }
 
   private onChange(paths: string[]): void {
@@ -333,6 +399,62 @@ export class Service {
     this.generation++;
     void this.refreshRepoInfo();
     this.emit('changed', { slugs, generation: this.generation });
+
+    if (!slugs.length) return;
+    this.push.announce('changed', {
+      title: 'Plans changed',
+      body: slugs.length === 1 ? `${slugs[0]} was written` : `${slugs.length} plans were written`,
+      tag: tagFor('changed', ...slugs),
+      url: '/#/plans',
+    });
+    void this.announceReady(slugs);
+  }
+
+  /**
+   * A phase that became startable because what it was waiting on finished.
+   *
+   * Worth its own category because it is the one notification that is not about
+   * a run: it fires just as readily for work you finished yourself in a
+   * terminal, which is exactly when nothing else would tell you the graph moved.
+   *
+   * The first pass after a restart only takes a snapshot. Everything looks new
+   * to a console that has just started, and announcing all of it would be a
+   * notification per ready phase in the library.
+   */
+  private async announceReady(slugs: string[]): Promise<void> {
+    if (!this.store) return;
+    try {
+      const boards = await Promise.all(
+        this.store.list().map(async (r) => [r.slug, await this.board(r.slug).catch(() => null)] as const),
+      );
+      const now = new Set<string>();
+      for (const [slug, board] of boards) {
+        for (const phase of board?.ready ?? []) now.add(`${slug}:${phase}`);
+      }
+
+      const before = this.readySnapshot;
+      this.readySnapshot = now;
+      if (!before) return;
+
+      // Only phases in plans that actually changed — a board recomputed for an
+      // unrelated reason is not news.
+      const touched = new Set(slugs);
+      const fresh = [...now].filter((key) => !before.has(key) && touched.has(key.split(':')[0]));
+      if (!fresh.length) return;
+
+      const [first] = fresh;
+      const [slug, phase] = first.split(':');
+      this.push.announce('ready', {
+        title: fresh.length === 1 ? `${slug} · phase ${phase} is ready` : `${fresh.length} phases became ready`,
+        body: fresh.length === 1
+          ? (this.store.get(slug)?.plan?.phases[Number(phase)]?.title ?? 'nothing is blocking it now')
+          : fresh.join(', '),
+        tag: tagFor('ready', ...fresh),
+        url: '/#/ready',
+      });
+    } catch (error) {
+      log.warn('push.ready-failed', { error });
+    }
   }
 
   /** Invalidate everything after a write the console itself performed. */

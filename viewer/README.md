@@ -95,10 +95,22 @@ btw "why did you skip the cache?"     # or the box under the session console
 
 It is framed as out-of-band before it is sent, so an answer does not become a change of direction.
 
-**Being told.** Browser notifications fire when a run halts, parks or finishes — never per phase.
-`PHASE_CONSOLE_NOTIFY=<command>` covers the case a browser cannot: it is run with the title and body,
-so an unattended run can reach an operator who is asleep. It is an environment variable rather than a
-setting because it runs a command on this machine.
+**Being told.** Three paths, in increasing order of how far they reach.
+
+*In this tab* is the Notification API: free, instant, and gone with the tab. *On this device* is a
+push subscription — a service worker and a VAPID keypair, so the notification arrives with the
+console closed and the phone locked. Both are in **Settings → Notifications**, per device, across
+eight categories: permission needed, halted, parked, phase finished, plan finished, work became
+ready, plans changed, console problems. Only the first two are sent urgent. A **Send a test** button
+goes out through the real push service and back, so it proves the chain rather than the last hop.
+
+`PHASE_CONSOLE_NOTIFY=<command>` covers what neither can: a machine with no browser in the picture at
+all. It is run as `cmd "<title>" "<body>"`, and is an environment variable rather than a setting
+because it runs a command on this machine.
+
+Payloads are encrypted to the subscribing browser ([RFC 8291](https://datatracker.ietf.org/doc/html/rfc8291)),
+so a push service relays a notification about your plans without being able to read one. As with the
+rest of this console, there is nothing to install — `node:crypto` has every primitive it needs.
 
 **What it will not do.** `permissions.deny` is handed to every session at CLI scope and is the layer
 that holds with this console dead — measured, not assumed. The `ask` list goes through an HTTP hook

@@ -845,11 +845,47 @@ constantly is a channel you learn to ignore.
 Android needs none of this — notifications work in a normal HTTPS tab — but installing it still gives
 you a cleaner window.
 
-### Step 6 · Alerts when the console is closed *(optional)*
+### Step 6 · Turn on push, and choose what it sends
 
-Browser notifications only fire while the page is open somewhere. For a genuine lock-screen alert at
-2am, point `PHASE_CONSOLE_NOTIFY` at a script. It is run as `your-script "<title>" "<body>"` whenever
-a run needs a person:
+**Settings → Notifications** has two switches, and the difference between them is the whole point:
+
+| | What it is | When it fires |
+|---|---|---|
+| **In this tab** | The Notification API, raised by the page. | Only while a tab is open somewhere. |
+| **On this device** | A push subscription, delivered by Apple, Google or Mozilla to a service worker. | With the console closed, the phone locked, the laptop asleep. |
+
+Press **Turn on** under *On this device*, then **Send a test** — it goes out through the real push
+service and back, so a notification appearing proves the whole chain rather than the last hop of it.
+
+Do it on the laptop too. `http://127.0.0.1` counts as a secure context, so the same button works
+there with no HTTPS involved, and every browser gets its own subscription and its own choices.
+
+**Eight categories, per device**, because a phone and a laptop rarely want the same ones:
+
+| Category | Default | Fires when |
+|---|---|---|
+| **Permission needed** | on | A session is blocked on a decision only you can make. Nothing proceeds until you answer. |
+| **Run halted** | on | A run stopped on something that must not be automated past — or was interrupted with nothing driving it. |
+| **Run parked or waiting** | on | Every remaining phase needs a person, or the run is asleep until a usage window reopens. |
+| **Phase finished or failed** | on | Each phase as it lands. The pulse of a run nobody is watching. |
+| **Plan finished** | on | A run reached the end of its plan. |
+| **Work became ready** | off | A phase became startable — including because of work you finished yourself, elsewhere. |
+| **Plans changed on disk** | off | Any plan or handoff was written. A firehose: an agent editing a handoff mid-phase fires it. |
+| **Console problems** | on | The console degraded or its file watch went deaf — the failure that otherwise looks exactly like everything working. |
+
+Only *Permission needed* and *Run halted* are sent urgent, because they are the two that mean nothing
+moves until you act. The rest arrive quietly. A channel that always buzzes is a channel you turn off,
+and the notification it gets turned off for is the one that mattered.
+
+Payloads are encrypted to a key only your browser holds ([RFC 8291][rfc8291]), so the push service
+relays a notification about your plans without being able to read one. Nothing is installed to make
+that work — the implementation is `node:crypto` and about four hundred lines.
+
+### Step 7 · Alerts with no browser involved at all *(optional)*
+
+Push still needs a browser somewhere, even a closed one. For a machine where that is not true — a
+headless box, a pager, a chat channel — point `PHASE_CONSOLE_NOTIFY` at a script. It is run as
+`your-script "<title>" "<body>"` whenever a run needs a person:
 
 ```bash
 #!/bin/sh
@@ -959,12 +995,16 @@ console at all.
 | **421** — *"arrived through a proxy but asks for a local hostname"* | Something rewrote the `Host` header to `localhost`. Serve does not; a proxy in between might. |
 | The console will not start | `--remote` with no `--remote-user`. The error says so. |
 | The notification button does nothing on iOS | Not installed to the Home Screen, or you are on plain HTTP. Both are required. |
+| **Turn on** is missing and a banner explains why | Permission was refused for this site once. A page cannot ask twice — it has to be changed in browser settings. |
+| **Send a test** says *gone* | The subscription was revoked at the browser end. Turn it off and on again; the register drops dead subscriptions by itself. |
+| Push worked, then stopped after reinstalling the app | A reinstall makes a new subscription. The old row is dropped on its next failure; subscribe again from the new install. |
 | Worked yesterday, dead after a reboot | `tailscale serve` was run without `--bg`. |
 | Worked for weeks, then stopped | The machine's node key expired. Disable key expiry (Step 1). |
 | Works on wifi, not on cellular | Tailscale toggled off on the phone, or iOS disabled its VPN profile. |
 
 [ts-serve]: https://tailscale.com/docs/features/tailscale-serve
 [secure context]: https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts
+[rfc8291]: https://datatracker.ietf.org/doc/html/rfc8291
 
 ---
 
