@@ -11,10 +11,11 @@
  * disagree eventually, and the one on screen is the one that gets believed.
  */
 
-import { html, useState, useEffect, useRef, useCallback } from '../html.js';
+import { html, useState, useEffect, useCallback } from '../html.js';
 import { api, subscribeRun } from '../api.js';
 import { toast } from '../store.js';
 import { Banner, Chip, Empty, Modal, Spinner, Tile, relativeTime } from '../components/ui.js';
+import { LiveConsole, useLiveLines, toLine } from '../components/live-console.js';
 
 const PHASE_TONE = {
   done: 'ok', running: 'busy', verifying: 'busy', failed: 'bad',
@@ -26,18 +27,13 @@ const RUN_TONE = {
   waiting: 'warn', paused: '', pausing: '', stopping: '',
 };
 
-/** How much transcript to keep on screen — a long phase would otherwise grow without end. */
-const MAX_STREAM = 400;
-
 export function RunView({ slug, state }) {
   const [run, setRun] = useState(null);
   const [history, setHistory] = useState([]);
   const [approvals, setApprovals] = useState([]);
-  const [stream, setStream] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
-  const streamRef = useRef(null);
-  const pinned = useRef(true);
+  const { lines, push, clear } = useLiveLines();
 
   // The client is served fresh from disk; the server is whatever Node loaded at
   // startup. Upgrading the skill under a running console leaves this page
@@ -63,22 +59,11 @@ export function RunView({ slug, state }) {
 
   useEffect(() => stale ? undefined : subscribeRun({
     run: () => void refresh(),
-    phase: () => void refresh(),
     approval: () => void refresh(),
-    verify: (data) => push(setStream, { kind: 'verify', text: `verifying (${data.index + 1}/${data.total}): ${data.command}` }),
-    stream: (data) => {
-      if (data.kind === 'tool') push(setStream, { kind: 'tool', text: `${data.name} ${data.summary}` });
-      else if (data.kind === 'text') push(setStream, { kind: 'text', text: data.text });
-      else if (data.kind === 'retry') push(setStream, { kind: 'retry', text: `API retry${data.category ? ` (${data.category})` : ''}` });
-      else if (data.kind === 'result') push(setStream, { kind: 'result', text: `session ended: ${data.subtype} · $${(data.costUsd ?? 0).toFixed(3)}` });
-    },
-  }), [refresh, stale]);
-
-  // Follow the transcript, but stop fighting someone who scrolled up to read.
-  useEffect(() => {
-    const box = streamRef.current;
-    if (box && pinned.current) box.scrollTop = box.scrollHeight;
-  }, [stream]);
+    phase: (data) => { push(toLine('phase', data)); void refresh(); },
+    verify: (data) => push(toLine('verify', data)),
+    stream: (data) => push(toLine('stream', data)),
+  }), [refresh, push, stale]);
 
   const act = async (label, fn) => {
     setBusy(label);
@@ -160,18 +145,10 @@ export function RunView({ slug, state }) {
           title="No run yet"
           hint=${`Nothing has been run for ${slug}. Starting one works the same whether the plan is fresh or half finished — the board decides where to begin.`} />`}
 
-      <section class="card">
-        <h2 class="card-title">Live transcript</h2>
-        <div class="stream" ref=${streamRef}
-             onScroll=${(e) => {
-               const el = e.currentTarget;
-               pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-             }}>
-          ${stream.length ? stream.map((line, i) => html`
-            <div key=${i} class=${`stream-line ${line.kind}`}>${line.text}</div>`)
-            : html`<div class="muted">Nothing streaming. Tool calls and retries appear here while a phase runs.</div>`}
-        </div>
-      </section>
+      <${LiveConsole}
+        lines=${lines}
+        onClear=${clear}
+        subtitle=${run?.activePhase ? `phase ${run.activePhase} · ${run.model}` : run?.status ?? 'idle'} />
 
       ${history.length > 1 ? html`
         <section class="card">
@@ -189,13 +166,6 @@ export function RunView({ slug, state }) {
           </table>
         </section>` : null}
     </div>`;
-}
-
-function push(setStream, line) {
-  setStream((current) => {
-    const next = [...current, { ...line, at: Date.now() }];
-    return next.length > MAX_STREAM ? next.slice(-MAX_STREAM) : next;
-  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -399,45 +369,95 @@ function ApprovalCard({ approval, allowRun, onDecide }) {
  * Every run, across every plan
  * ------------------------------------------------------------------ */
 
-export function RunsView() {
+/**
+ * Operations across every plan: what is running, what is waiting on a person,
+ * and the live session console for whichever run is active. This is the page to
+ * leave open on a second monitor.
+ */
+export function RunsView({ state }) {
   const [runs, setRuns] = useState(null);
   const [approvals, setApprovals] = useState([]);
+  const { lines, push, clear } = useLiveLines();
 
   const refresh = useCallback(async () => {
+    if (state && !state.autopilot) { setRuns([]); return; }
     try {
       const [all, queue] = await Promise.all([api.runs(), api.approvals()]);
       setRuns(all);
       setApprovals(queue.filter((a) => a.status === 'pending'));
     } catch (error) { toast(error.message, 'error'); setRuns([]); }
-  }, []);
+  }, [state?.autopilot]);
 
   useEffect(() => { void refresh(); }, [refresh]);
-  useEffect(() => subscribeRun({ run: refresh, approval: refresh }), [refresh]);
+  useEffect(() => (state && !state.autopilot) ? undefined : subscribeRun({
+    run: refresh,
+    approval: refresh,
+    phase: (data) => { push(toLine('phase', data)); void refresh(); },
+    verify: (data) => push(toLine('verify', data)),
+    stream: (data) => push(toLine('stream', data)),
+  }), [refresh, push, state?.autopilot]);
 
+  if (state && !state.autopilot) {
+    return html`
+      <div class="page">
+        <${Banner} kind="warn">
+          <strong>This console is running an older build.</strong> Restart it to pick up the run
+          endpoints — the page you are looking at was loaded from disk, but the server behind it
+          started before the autopilot existed.
+        </${Banner}>
+      </div>`;
+  }
   if (!runs) return html`<div class="page"><${Spinner} label="Reading runs" /></div>`;
+
+  const active = runs.find((r) => ['running', 'waiting', 'pausing', 'stopping'].includes(r.status));
 
   return html`
     <div class="page">
       <header class="page-head">
-        <div><h1>Runs</h1><p class="sub">Every autopilot run this console knows about</p></div>
+        <div>
+          <h1>Runs</h1>
+          <p class="sub">
+            ${active ? html`<strong>${active.slug}</strong> is running — phase ${active.activePhase ?? '?'}`
+              : 'Nothing running right now'}
+          </p>
+        </div>
         ${approvals.length ? html`<${Chip} kind="warn">${approvals.length} waiting on you</${Chip}>` : null}
       </header>
 
+      <${ApprovalQueue}
+        approvals=${approvals}
+        allowRun=${state?.allowRun}
+        onDecide=${async (id, decision, reason) => {
+          try {
+            await api.decide(id, decision, reason);
+            toast(decision === 'allow' ? 'Approved' : 'Denied', decision === 'allow' ? 'ok' : 'warn');
+            await refresh();
+          } catch (error) { toast(error.message, 'error'); }
+        }} />
+
+      <${LiveConsole}
+        lines=${lines}
+        onClear=${clear}
+        title="Session console"
+        subtitle=${active ? `${active.slug} · phase ${active.activePhase ?? '?'} · ${active.model}` : 'idle'} />
+
       ${runs.length ? html`
-        <table class="table">
-          <thead><tr><th>Plan</th><th>Run</th><th>Status</th><th>Phase</th><th class="num">Spent</th><th>Updated</th></tr></thead>
-          <tbody>
-            ${runs.map((r) => html`
-              <tr key=${`${r.slug}-${r.id}`}>
-                <td><a href=${`#/plan/${encodeURIComponent(r.slug)}/run`}>${r.slug}</a></td>
-                <td><code>${r.id}</code></td>
-                <td><${Chip} kind=${RUN_TONE[r.status] ?? ''}>${r.status}</${Chip}></td>
-                <td>${r.activePhase ?? '—'}</td>
-                <td class="num">$${(r.spentUsd ?? 0).toFixed(2)}</td>
-                <td class="muted">${relativeTime(Date.parse(r.updatedAt))}</td>
-              </tr>`)}
-          </tbody>
-        </table>`
+        <section class="card" style="margin-top:var(--s4)">
+          <table class="table">
+            <thead><tr><th>Plan</th><th>Run</th><th>Status</th><th>Phase</th><th class="num">Spent</th><th>Updated</th></tr></thead>
+            <tbody>
+              ${runs.map((r) => html`
+                <tr key=${`${r.slug}-${r.id}`}>
+                  <td><a href=${`#/plan/${encodeURIComponent(r.slug)}/run`}>${r.slug}</a></td>
+                  <td><code>${r.id}</code></td>
+                  <td><${Chip} kind=${RUN_TONE[r.status] ?? ''}>${r.status}</${Chip}></td>
+                  <td>${r.activePhase ?? '—'}</td>
+                  <td class="num">$${(r.spentUsd ?? 0).toFixed(2)}</td>
+                  <td class="muted">${relativeTime(Date.parse(r.updatedAt))}</td>
+                </tr>`)}
+            </tbody>
+          </table>
+        </section>`
         : html`<${Empty}
             title="No runs yet"
             hint="Open a plan and use its Autopilot tab to start one. Runs are recorded outside the repository, so nothing here shows up in git status." />`}

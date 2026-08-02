@@ -246,7 +246,7 @@ const RE = {
   rateLimit: /api error:?\s*429|request rejected \(429\)|rate[_ ]limit_error|rate.?limited|temporarily limiting requests|too many requests/i,
   // `login expired` is anchored to the start of a line or clause: the CLI leads
   // with the condition, prose embeds it ("tests for the login expired path").
-  auth: /please run \/login|not logged in|invalid api key|invalid x-api-key|oauth (token|session) (expired|revoked|invalid)|(^|[·|\n]\s*)login expired|authentication_error|could not resolve authentication|api error:?\s*401|401 unauthorized/i,
+  auth: /please run \/login|not logged in|invalid api key|invalid x-api-key|oauth (token|session) (expired|revoked|invalid)|failed to authenticate|could not be refreshed|(^|[·|\n]\s*)login expired|authentication_error|could not resolve authentication|api error:?\s*401|401 unauthorized/i,
   billing: /credit balance is too low|insufficient credits|usage credits required|billing (error|issue|problem)|spend limit (reached|exceeded)|payment (required|method)/i,
   orgPolicy: /organization has (been )?disabled|oauth_org_not_allowed|disabled api key authentication|disabled claude subscription/i,
   serverError: /api error:?\s*5\d\d|internal server error/i,

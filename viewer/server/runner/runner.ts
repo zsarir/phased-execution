@@ -23,6 +23,10 @@
  * working tree is not parallelism, it is a merge conflict with extra steps.
  */
 
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { log } from '../log.ts';
 import { onShutdown, offShutdown } from '../lifecycle.ts';
 import { run as engineRun, readMemoryBlock, readGateStatus, readLint, readText, type Board } from '../engine.ts';
@@ -68,6 +72,36 @@ export type StartOptions = {
 const MAX_ATTEMPTS = 4;
 /** Give a stopped session time to run its own SessionEnd hooks before SIGKILL. */
 const SIGTERM_GRACE_MS = 15_000;
+
+/**
+ * Things worth knowing before spending a session finding them out.
+ *
+ * An untrusted workspace is the one that matters. Claude Code silently ignores
+ * a repository's own `permissions.allow` entries — and its hooks — until
+ * someone has accepted the trust prompt there interactively. A session spawned
+ * into that state runs with *fewer* of the repo's protections than whoever
+ * started the run believes, which for a repository that ships a
+ * destructive-operation guard is exactly backwards. Refusing costs a second;
+ * finding out costs a session and the trust in what it did.
+ *
+ * Returns a reason to refuse, or null to proceed.
+ */
+export function preflight(root: string, configFile = join(homedir(), '.claude.json')): string | null {
+  let config: { projects?: Record<string, { hasTrustDialogAccepted?: boolean }> };
+  try {
+    config = JSON.parse(readFileSync(configFile, 'utf8')) as typeof config;
+  } catch {
+    return null; // no config to read is not evidence of anything
+  }
+  const project = config.projects?.[root];
+  if (project && project.hasTrustDialogAccepted === false) {
+    return `Claude Code has not been trusted in ${root}. A session spawned there ignores that `
+      + "repository's own permissions and hooks — including any destructive-operation guard it "
+      + 'ships — so the run would be less protected than it looks. Open Claude Code in that '
+      + 'directory once and accept the trust prompt, then start the run again.';
+  }
+  return null;
+}
 
 export class Runner {
   private deps: RunnerDeps;
@@ -122,8 +156,19 @@ export class Runner {
       if (options.autonomy) this.state.autonomy = options.autonomy;
     }
 
-    this.state.status = 'running';
     this.journal = new Journal(this.state.root, this.state.slug, this.state.id);
+
+    const refusal = preflight(this.state.root);
+    if (refusal) {
+      this.state.status = 'parked';
+      this.state.halt = { at: new Date().toISOString(), reason: refusal };
+      this.record('run.preflight-refused', { reason: refusal });
+      this.persist();
+      log.warn('runner.preflight', { root: this.state.root, reason: refusal });
+      return this.state;
+    }
+
+    this.state.status = 'running';
     this.abort = new AbortController();
     this.stopRequested = false;
     this.settingsPath = this.armSettings(this.state.id);

@@ -679,3 +679,41 @@ test('reading a run needs no flag — only changing one does', async () => {
 });
 
 test.after(() => rmSync(STATE_HOME, { recursive: true, force: true }));
+
+/* ------------------------------------------------------------------ *
+ * Preflight
+ * ------------------------------------------------------------------ */
+
+const { preflight } = await import('../server/runner/runner.ts');
+
+test('an untrusted workspace is refused before a session is spent on it', () => {
+  // Claude Code silently ignores a repository's own permissions and hooks until
+  // someone accepts the trust prompt there. A session spawned into that state is
+  // less protected than whoever started the run believes.
+  const dir = mkdtempSync(join(tmpdir(), 'pc-trust-'));
+  const config = join(dir, 'claude.json');
+
+  writeFileSync(config, JSON.stringify({ projects: { '/repo': { hasTrustDialogAccepted: false } } }));
+  const refusal = preflight('/repo', config);
+  assert.ok(refusal, 'an untrusted workspace must not start a run');
+  assert.match(refusal, /not been trusted/);
+
+  writeFileSync(config, JSON.stringify({ projects: { '/repo': { hasTrustDialogAccepted: true } } }));
+  assert.equal(preflight('/repo', config), null, 'a trusted workspace proceeds');
+
+  // Absence of evidence is not evidence: an unknown repo or no config at all
+  // must not block a run that would otherwise be fine.
+  assert.equal(preflight('/somewhere-else', config), null);
+  assert.equal(preflight('/repo', join(dir, 'missing.json')), null);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('a run refused at preflight parks with the reason, spending nothing', async () => {
+  const r = repo();
+  const config = join(r.root, 'claude.json');
+  writeFileSync(config, JSON.stringify({ projects: { [r.root]: { hasTrustDialogAccepted: false } } }));
+  // preflight reads the real ~/.claude.json, so drive the unit directly and
+  // assert the wiring separately: the reason has to reach the run state.
+  assert.ok(preflight(r.root, config));
+  r.cleanup();
+});

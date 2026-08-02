@@ -14,6 +14,8 @@ import { StatsView } from './views/stats.js';
 import { SearchView } from './views/search.js';
 import { SettingsView } from './views/settings.js';
 import { RunsView } from './views/run.js';
+import { GuideView } from './views/guide.js';
+import { DashboardView } from './views/dashboard.js';
 
 function RouteGlyph() {
   return html`
@@ -27,7 +29,7 @@ function RouteGlyph() {
 
 function Rail({ state, counts, route, onPickSource }) {
   const [prefs, setPrefs] = usePrefs();
-  const current = route.segments[0] ?? 'plans';
+  const current = route.segments[0] || 'dashboard';
 
   const item = (id, label, count, hot) => html`
     <button
@@ -49,6 +51,7 @@ function Rail({ state, counts, route, onPickSource }) {
       </div>
 
       <div class="nav">
+        ${item('dashboard', 'Dashboard')}
         ${item('ready', 'Ready now', counts.ready, counts.ready > 0)}
         ${item('plans', 'Plans', counts.plans)}
         ${item('runs', 'Runs', counts.approvals || null, counts.approvals > 0)}
@@ -84,6 +87,7 @@ function Rail({ state, counts, route, onPickSource }) {
                 onClick=${() => setPrefs({ theme: value })}>${label}</button>`)}
           </div>
         </div>
+        <button class="nav-item" onClick=${() => navigate('guide')} aria-current=${current === 'guide' ? 'page' : null}>Guide</button>
         <button class="nav-item" onClick=${() => navigate('settings')} aria-current=${current === 'settings' ? 'page' : null}>Settings</button>
       </div>
     </nav>`;
@@ -153,7 +157,9 @@ function App() {
       if (event.key === '/') { event.preventDefault(); navigate('search'); }
       else if (event.key === 'r') navigate('ready');
       else if (event.key === 'p') navigate('plans');
+      else if (event.key === 'd') navigate('dashboard');
       else if (event.key === 's') navigate('stats');
+      else if (event.key === 'g') navigate('guide');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -163,7 +169,11 @@ function App() {
     return html`<div class="page" style="display:grid;place-items:center;height:100%"><${Spinner} label="Starting" /></div>`;
   }
 
-  const needsSource = !state.root?.ok || route.segments[0] === 'source';
+  // The guide is what you read before you have set anything up, so it is the
+  // one view that does not send you to the directory picker first. It still
+  // renders inside the rail, so there is always a way onwards from it.
+  const needsSource = (!state.root?.ok || route.segments[0] === 'source')
+    && route.segments[0] !== 'guide';
   if (needsSource) {
     return html`
       <${SourceView}
@@ -185,11 +195,13 @@ function App() {
   let view;
   if (head === 'plan') view = html`<${PlanView} slug=${rest[0]} tab=${rest[1]} arg=${rest[2]} state=${state} />`;
   else if (head === 'runs') view = html`<${RunsView} state=${state} />`;
+  else if (head === 'guide') view = html`<${GuideView} state=${state} />`;
   else if (head === 'ready') view = html`<${ReadyView} plans=${plans} state=${state} />`;
   else if (head === 'stats') view = html`<${StatsView} state=${state} />`;
   else if (head === 'search') view = html`<${SearchView} query=${route.query.q ?? ''} />`;
   else if (head === 'settings') view = html`<${SettingsView} state=${state} onChanged=${() => setTick((n) => n + 1)} />`;
-  else view = html`<${PlansView} plans=${plans} state=${state} />`;
+  else if (head === 'plans') view = html`<${PlansView} plans=${plans} state=${state} />`;
+  else view = html`<${DashboardView} plans=${plans} state=${state} />`;
 
   return html`
     <div class="app">
