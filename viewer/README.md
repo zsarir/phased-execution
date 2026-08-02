@@ -157,24 +157,25 @@ login in `Tailscale-User-Login`.
 tailscale serve --bg --https=443 http://127.0.0.1:4123
 ```
 
-Naming a hostname turns on strict `Host` checking, and from then on exactly two kinds of request are
-served: a loopback `Host` with no identity header (you, at this machine) and the named hostname with
-an allowlisted login (you, through the proxy). Everything else is refused — including a proxied
-request asking for a loopback `Host`, which is how someone else on the network would otherwise skip
-the identity check, and any unknown `Host`, which is what a DNS-rebinding page arrives with.
+| Flag | Meaning |
+|---|---|
+| `--remote <host>` | Also answer to this hostname, fronted by an authenticating proxy. Repeatable. Turns on strict `Host` checking. |
+| `--remote-user <login>` | A login allowed to arrive that way. Repeatable, or `PHASE_CONSOLE_REMOTE_USERS`. Required by `--remote`; without one the console refuses to start. |
 
-Three things are worth being clear about:
+Naming a hostname means exactly two kinds of request are served: a loopback `Host` with no identity
+header (you, at this machine) and the named hostname with an allowlisted login (you, through the
+proxy). Everything else is refused — including a proxied request asking for a loopback `Host`, which
+is how someone on the network would otherwise skip the identity check, and any unknown `Host`, which
+is what a DNS-rebinding page arrives with. With no `--remote` at all, nothing here applies and every
+request is treated exactly as it was before.
 
-- **The identity header is only worth anything because the app stays on loopback.** If it listened on
-  a network interface, anyone could send the header themselves. `--remote` deliberately does not
-  widen `--host`; the [Tailscale documentation][serve] makes the same point.
-- **Do not put this on the public internet.** With `--allow-run` the console starts agent sessions
-  that edit a repository. A private network with an access policy is the boundary; a tunnel that
-  publishes it to everyone is not.
-- **HTTPS is not optional if you want notifications.** Browsers only allow them in a secure context,
-  and on iOS only for a site added to the Home Screen — Share → Add to Home Screen, then grant
-  permission from the button in Settings. For alerts when the console is closed, point
-  `PHASE_CONSOLE_NOTIFY` at a script; it is run as `cmd "<title>" "<body>"` whenever a run needs you.
+**The identity header is only worth anything because the app stays on loopback.** If it listened on a
+network interface, anyone could send the header themselves. `--remote` deliberately does not widen
+`--host`; the [Tailscale documentation][serve] makes the same point.
+
+**The full setup** — the two admin-console switches, the phone, the Home Screen install that iOS
+notifications require, out-of-band alerts, access rules and a troubleshooting table — is in
+[the main README](../README.md#-reaching-it-from-your-phone).
 
 [serve]: https://tailscale.com/docs/features/tailscale-serve
 
