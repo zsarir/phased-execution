@@ -876,7 +876,20 @@ whatever they like in a `Host` header — including `127.0.0.1`. If a loopback `
 identity header on everything it forwards, so a loopback `Host` arriving *with* one is a combination
 no honest client produces.
 
-You can check all of it yourself, from the machine, without a phone:
+The other half of the assumption is that a caller cannot simply claim to be you. Serve **overwrites**
+`Tailscale-User-Login` with the authenticated identity rather than passing through whatever the
+client sent — worth knowing rather than assuming, and easy to confirm on your own setup:
+
+```bash
+# sent with a forged identity, through the proxy — served, because the proxy replaced it
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'Tailscale-User-Login: mallory@example.com' https://your-machine.your-tailnet.ts.net/api/state
+```
+
+A `200` means the header you sent never reached the console. A `403` would mean it did, and that the
+only thing standing between you and impersonation is the attacker not knowing which login to claim.
+
+You can check the rest of it from the machine, without a phone:
 
 ```bash
 C=http://127.0.0.1:4123
