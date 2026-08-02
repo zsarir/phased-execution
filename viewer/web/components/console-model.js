@@ -24,6 +24,9 @@ export const KIND_LABEL = {
   hook: 'hook',
   limits: 'usage',
   injected: 'btw',
+  steer: 'steer',
+  answer: 'answers',
+  idle: 'idle',
   retry: 'retry',
   result: 'ended',
   stderr: 'stderr',
@@ -87,8 +90,27 @@ export function toLine(event, data) {
       return { kind: 'subagent', text: data.text, partial: true };
     case 'hook':
       return { kind: 'hook', text: `${data.name}${data.event ? ` (${data.event})` : ''}${data.outcome ? ` — ${data.outcome}` : ''}` };
+    // One operator message, emitted twice on purpose: undelivered by the runner
+    // the instant it is written, delivered again when the CLI echoes it back.
+    // `fold` joins them on the mark, so the console shows the question once and
+    // ticks it rather than printing it a second time.
     case 'injected':
-      return { kind: 'injected', text: data.text };
+      return {
+        kind: data.steer ? 'steer' : 'injected',
+        text: data.text,
+        mark: data.mark,
+        delivered: data.delivered === true,
+      };
+    case 'answer':
+      // Supersedes the fragments for the same reason a finished text block
+      // does: the words already streamed as deltas, and showing them again
+      // under a different label is the stutter twice over.
+      return { kind: 'answer', text: data.text, mark: data.mark, supersedes: 'partial' };
+    case 'idle':
+      return {
+        kind: 'idle',
+        text: `stdin closed after ${Math.round((data.afterMs ?? 0) / 1000)}s of silence — ${data.reason ?? 'the session stopped streaming'}`,
+      };
     case 'limits': {
       if (data.utilization == null) return null;
       const window = String(data.window ?? 'usage').replace(/_/g, ' ');
@@ -117,6 +139,21 @@ export function toLine(event, data) {
  */
 export function fold(lines, line, nextId, at = Date.now()) {
   const last = lines.at(-1);
+
+  // One operator message renders once, however many times it is announced.
+  //
+  // A `/btw` used to appear three times: the client's own optimistic echo, the
+  // server's `injected` event, and the CLI's `--replay-user-messages` replay
+  // carrying the framed text. The optimistic echo is gone and the other two now
+  // share a mark, so the second one updates the first — the delivery tick — and
+  // the operator's own words are kept rather than the frame the session saw.
+  if (line.mark && (line.kind === 'injected' || line.kind === 'steer')) {
+    const index = lines.findIndex((l) => l.mark === line.mark && (l.kind === 'injected' || l.kind === 'steer'));
+    if (index >= 0) {
+      const merged = { ...lines[index], delivered: lines[index].delivered || line.delivered };
+      return [...lines.slice(0, index), merged, ...lines.slice(index + 1)];
+    }
+  }
 
   // Fragments of the same kind, still streaming: one line, growing.
   if (line.partial && last?.partial && last.kind === line.kind) {

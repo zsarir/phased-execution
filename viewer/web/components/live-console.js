@@ -114,6 +114,16 @@ export function LiveConsole({ lines, onClear, title = 'Session console', subtitl
           <div key=${line.id} class=${`live-line k-${line.kind}${line.replayed ? ' is-replayed' : ''}`}>
             <span class="k">${KIND_LABEL[line.kind] ?? line.kind}</span>
             <span class="t">${line.text}</span>
+            ${/* The tick is the CLI's own echo coming back. Until it arrives the
+                  message has been written to a pipe and nothing more, and that
+                  distinction is the whole reason `--replay-user-messages` is on. */
+              line.mark && (line.kind === 'injected' || line.kind === 'steer')
+                ? html`<span class="live-tick" title=${line.delivered
+                    ? 'The session echoed this back — it landed'
+                    : 'Written to the session; waiting for it to echo back'}>
+                    ${line.delivered ? '✓' : '·'}
+                  </span>`
+                : null}
           </div>`) : html`
           <div class="live-idle">
             Nothing to show yet. When a phase runs, everything the session does appears here as it

@@ -23,6 +23,7 @@
  * working tree is not parallelism, it is a merge conflict with extra steps.
  */
 
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -32,7 +33,7 @@ import { onShutdown, offShutdown } from '../lifecycle.ts';
 import { run as engineRun, readMemoryBlock, readGateStatus, readLint, readText, type Board } from '../engine.ts';
 import { skillDirective } from '../skills.ts';
 import { classify, fallbackChain, nextModel, type Disposition } from './errors.ts';
-import { spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
+import { markFor, spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
 import { verifyPhase } from './verify.ts';
 import {
   loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
@@ -108,6 +109,35 @@ const SIGTERM_GRACE_MS = 15_000;
 const VERIFY_ANSWER_MS = 12 * 60 * 60 * 1_000;
 
 /**
+ * How long a frozen phase may stay frozen before it is checkpointed instead.
+ *
+ * `SIGSTOP` is the right answer for the minute you need to look at something —
+ * it is instant, it loses nothing, and `SIGCONT` picks up mid-token. It is the
+ * wrong answer for going to bed: a stopped process holds its memory, its file
+ * handles and — the part that actually bites — a prompt cache that expires
+ * underneath it anyway, so a session thawed hours later pays for the whole
+ * context again and may find the world it was editing has moved.
+ *
+ * So a freeze held past this converts into the durable form: the child is asked
+ * to stop, its `sessionId` is written into the checkpoint, and Continue starts
+ * the phase again with `--resume` against that id.
+ */
+const FREEZE_ESCALATE_MS = 15 * 60 * 1_000;
+
+/** How many idempotency keys are worth remembering. Minutes, not hours. */
+const MAX_INJECT_KEYS = 200;
+
+/** What a write to a live session answers with. */
+export type AskResult = {
+  ok: boolean;
+  reason?: string;
+  /** Correlates the console's line, the CLI's echo and the session's reply. */
+  mark?: string;
+  /** This exact message had already been sent; nothing was written again. */
+  repeated?: boolean;
+};
+
+/**
  * Things worth knowing before spending a session finding them out.
  *
  * ## The check that used to be here, and why it is not
@@ -154,6 +184,12 @@ export class Runner {
   private stopRequested = false;
   /** Path to the 0600 settings file carrying this run's deny rules and hook. */
   private settingsPath: string | null = null;
+  /** Idempotency keys of operator messages already written, newest last. */
+  private injected = new Map<string, AskResult>();
+  /** Armed while a phase is frozen; fires the escalation to a checkpoint. */
+  private freezeTimer: NodeJS.Timeout | null = null;
+  /** Set when a freeze was escalated, so the dead child is not read as a crash. */
+  private checkpointed = false;
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
@@ -200,6 +236,10 @@ export class Runner {
       // A pause recorded by a console that is no longer here would otherwise
       // stop this loop before it ran anything.
       this.state.pause = null;
+      // Same for a freeze, and for the last run's closing words: both describe
+      // the run that stopped, not the one about to start.
+      this.state.freeze = null;
+      delete this.state.finishedReason;
       const blocked = this.adopt(this.state);
       if (blocked) { this.persist(); return this.state; }
       if (options.model) this.state.model = options.model;
@@ -346,6 +386,128 @@ export class Runner {
     return true;
   }
 
+  /* ---- freezing the phase itself, rather than waiting for its boundary ---- */
+
+  /**
+   * Stop the running session where it stands.
+   *
+   * The existing Pause waits for a phase boundary, which is correct and is
+   * often not what is wanted: watching a phase walk into something wrong, the
+   * useful control is the one that stops it *now*, before it writes the next
+   * file — and `SIGSTOP` does that between one syscall and the next, losing
+   * nothing. The session is not killed, not asked to wrap up, not told
+   * anything: it is simply not scheduled until `thaw()`.
+   *
+   * Held too long it converts to a checkpoint instead — see `FREEZE_ESCALATE_MS`.
+   */
+  freeze(by = 'console'): boolean {
+    const state = this.state;
+    if (!state || !this.driving) return false;
+    if (state.status === 'frozen') return true;
+    const pid = this.childPid;
+    if (!pid || !pidAlive(pid)) return false;
+
+    try { process.kill(pid, 'SIGSTOP'); } catch (error) {
+      log.warn('runner.freeze', { pid, error });
+      return false;
+    }
+
+    const phase = state.activePhase;
+    state.status = 'frozen';
+    state.freeze = {
+      at: new Date().toISOString(),
+      phase,
+      pid,
+      by,
+      escalateAt: new Date(this.now().getTime() + FREEZE_ESCALATE_MS).toISOString(),
+    };
+    this.record('run.frozen', { pid, phase, by, escalateAt: state.freeze.escalateAt }, phase ?? undefined);
+    this.persist();
+    this.emit('run', { state });
+
+    this.freezeTimer = setTimeout(() => this.escalateFreeze(), FREEZE_ESCALATE_MS);
+    this.freezeTimer.unref?.();
+    return true;
+  }
+
+  /** Let a frozen session carry on, mid-token, in the same process. */
+  thaw(): boolean {
+    const state = this.state;
+    if (!state || state.status !== 'frozen') return false;
+    const pid = state.freeze?.pid;
+    this.clearFreezeTimer();
+
+    if (pid && pidAlive(pid)) {
+      try { process.kill(pid, 'SIGCONT'); } catch (error) {
+        log.warn('runner.thaw', { pid, error });
+        return false;
+      }
+    }
+
+    // Frozen time is not work time. Left in, an hour on the kitchen table would
+    // show up as an hour the phase spent thinking, and every throughput figure
+    // built on it would be wrong.
+    const frozenMs = state.freeze ? Math.max(0, this.now().getTime() - Date.parse(state.freeze.at)) : 0;
+    if (frozenMs && state.activePhase != null) {
+      const record = phaseRecord(state, state.activePhase);
+      record.frozenMs = (record.frozenMs ?? 0) + frozenMs;
+    }
+    state.status = 'running';
+    state.freeze = null;
+    this.record('run.thawed', { pid, frozenMs }, state.activePhase ?? undefined);
+    this.persist();
+    this.emit('run', { state });
+    return true;
+  }
+
+  /**
+   * A freeze nobody came back to. Convert it into something that survives a
+   * closed laptop: stop the child, keep its session id, and leave the phase
+   * pending so Continue re-runs it with `--resume` rather than from scratch.
+   */
+  private escalateFreeze(): void {
+    const state = this.state;
+    this.freezeTimer = null;
+    if (!state || state.status !== 'frozen') return;
+    const pid = state.freeze?.pid;
+    const phase = state.freeze?.phase ?? state.activePhase;
+    const record = phase != null ? phaseRecord(state, phase) : null;
+    const sessionId = record?.sessionId;
+
+    this.checkpointed = true;
+    if (pid && pidAlive(pid)) {
+      // SIGCONT first, or SIGTERM is queued against a stopped process and its
+      // own SessionEnd hooks never run.
+      try { process.kill(pid, 'SIGCONT'); } catch { /* already gone */ }
+      try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+    }
+
+    if (record) {
+      record.status = 'pending';
+      record.resumeSessionId = sessionId;
+      record.note = sessionId
+        ? `frozen for ${Math.round(FREEZE_ESCALATE_MS / 60_000)} minutes, then checkpointed — `
+          + `Continue resumes session ${sessionId}`
+        : 'frozen too long and checkpointed, but the session reported no id to resume — '
+          + 'Continue starts this phase again from its boot prompt';
+    }
+    state.freeze = null;
+    state.child = null;
+    state.status = 'paused';
+    state.halt = null;
+    this.record('run.freeze-escalated', {
+      pid, phase, sessionId: sessionId ?? null, afterMs: FREEZE_ESCALATE_MS,
+    }, phase ?? undefined);
+    this.persist();
+    this.emit('run', { state });
+  }
+
+  private clearFreezeTimer(): void {
+    if (!this.freezeTimer) return;
+    clearTimeout(this.freezeTimer);
+    this.freezeTimer = null;
+  }
+
   /** Take back a pause that has not been reached yet. */
   resumePause(): boolean {
     if (!this.state || !this.driving) return false;
@@ -382,8 +544,17 @@ export class Runner {
       return;
     }
     this.stopRequested = true;
+    // A stopped process cannot act on SIGTERM: the signal is queued and its own
+    // SessionEnd hooks never run, so a frozen phase stopped from the console
+    // would sit there until SIGKILL. Wake it first, then ask it to stop.
+    this.clearFreezeTimer();
+    const frozenPid = this.state.freeze?.pid;
+    if (frozenPid && pidAlive(frozenPid)) {
+      try { process.kill(frozenPid, 'SIGCONT'); } catch { /* already gone */ }
+    }
+    this.state.freeze = null;
     this.state.status = 'stopping';
-    this.record('run.stop-requested', { pid: this.childPid ?? undefined });
+    this.record('run.stop-requested', { pid: this.childPid ?? undefined, wasFrozen: Boolean(frozenPid) });
     this.persist();
     this.abort?.abort();
     if (this.childPid) {
@@ -411,10 +582,38 @@ export class Runner {
    * cache?" reads as a new instruction and can quietly redirect the phase; the
    * preamble says what it is and what to do after answering.
    */
-  ask(question: string, by = 'console'): { ok: boolean; reason?: string } {
-    const text = question.trim();
-    if (!text) return { ok: false, reason: 'nothing to ask' };
-    if (text.length > 8_000) return { ok: false, reason: 'that is longer than a question' };
+  ask(question: string, by = 'console', key?: string): AskResult {
+    return this.inject('ask', question, by, key);
+  }
+
+  /**
+   * Tell the phase to do something differently. See `frameSteer` for why this
+   * is a separate verb rather than an Ask with different words.
+   */
+  steer(instruction: string, by = 'console', key?: string): AskResult {
+    return this.inject('steer', instruction, by, key);
+  }
+
+  /**
+   * One write to a live session's stdin, whatever it is called on the button.
+   *
+   * `key` is the caller's idempotency key. Two POSTs carrying the same one — a
+   * double click, a retried fetch, a phone that reconnected mid-request — are
+   * one write and one journal line. Without it the second POST is a second turn
+   * for the model to answer and, before the close rule was rewritten, a
+   * permanent leak in the counter that decided when stdin closed.
+   */
+  private inject(kind: 'ask' | 'steer', body: string, by: string, key?: string): AskResult {
+    const text = body.trim();
+    if (!text) return { ok: false, reason: kind === 'ask' ? 'nothing to ask' : 'nothing to say' };
+    if (text.length > 8_000) return { ok: false, reason: 'that is longer than a message' };
+
+    if (key) {
+      const seen = this.injected.get(key);
+      // Answered from the record rather than re-sent. The caller cannot tell the
+      // difference, which is the point of an idempotency key.
+      if (seen) return { ...seen, repeated: true };
+    }
 
     const handle = this.handle;
     if (!handle?.open()) {
@@ -425,17 +624,39 @@ export class Runner {
           : 'nothing is running to ask',
       };
     }
-    if (!handle.send(frameQuestion(text))) {
-      return { ok: false, reason: 'the session stopped accepting input as the question was sent' };
+
+    const id = randomUUID().replace(/-/g, '').slice(0, 8);
+    const mark = markFor(kind, id);
+    const framed = kind === 'ask' ? frameQuestion(text, mark) : frameSteer(text, mark);
+    if (!handle.send(framed)) {
+      return { ok: false, reason: 'the session stopped accepting input as the message was sent' };
     }
 
+    const result: AskResult = { ok: true, mark: `${kind}:${id}` };
+    if (key) this.remember(key, result);
+
     const phase = this.state?.activePhase ?? undefined;
-    this.record('phase.asked', { by, question: text.slice(0, 500) }, phase);
+    // Two event names, on purpose: a journal that records a course correction
+    // as a question cannot later explain why the phase changed direction.
+    this.record(kind === 'ask' ? 'phase.asked' : 'phase.steered', {
+      by, mark: result.mark, [kind === 'ask' ? 'question' : 'instruction']: text.slice(0, 500),
+    }, phase);
     // Shown immediately rather than waiting for the CLI's echo: the operator
-    // pressed a key and is owed the evidence of it, and the echo confirms
-    // delivery a moment later on the same channel.
-    this.emit('stream', { phase, kind: 'injected', text });
-    return { ok: true };
+    // pressed a key and is owed the evidence of it. The echo arrives a moment
+    // later carrying the same mark, and the console folds it into this line as
+    // a delivery tick rather than printing the message a second time.
+    this.emit('stream', { phase, kind: 'injected', text, mark: result.mark, steer: kind === 'steer' });
+    return result;
+  }
+
+  /** Bounded, and oldest-first: an idempotency key is only interesting briefly. */
+  private remember(key: string, result: AskResult): void {
+    this.injected.set(key, result);
+    while (this.injected.size > MAX_INJECT_KEYS) {
+      const oldest = this.injected.keys().next().value;
+      if (oldest === undefined) break;
+      this.injected.delete(oldest);
+    }
   }
 
   /** Take a phase off this run's list without running it. */
@@ -485,14 +706,21 @@ export class Runner {
     const state = this.state!;
     try {
       while (true) {
-        if (this.abort?.signal.aborted) { state.status = 'paused'; state.pause = null; break; }
+        if (this.abort?.signal.aborted) {
+          state.status = 'paused';
+          state.pause = null;
+          state.finishedReason ??= 'stopped by the operator';
+          break;
+        }
         if (state.status === 'pausing') {
           state.status = 'paused';
           this.record('run.paused', { afterPhase: state.pause?.afterPhase ?? null });
+          state.finishedReason = state.pause?.afterPhase != null
+            ? `paused by ${state.pause.by} after phase ${state.pause.afterPhase} finished`
+            : `paused by ${state.pause?.by ?? 'the operator'} at a phase boundary`;
           state.pause = null;
           break;
         }
-
         if (state.runBudgetUsd && state.spentUsd >= state.runBudgetUsd) {
           this.halt(`the run budget of $${state.runBudgetUsd} is spent`);
           break;
@@ -512,6 +740,14 @@ export class Runner {
 
         if (asked && !candidates.length) {
           state.status = 'finished';
+          // The single most-reported "it doesn't go to the next phase". The run
+          // was scoped — usually from a per-row "Run only this" control — did
+          // exactly what it was asked, and then said nothing about why it
+          // stopped one phase in. It says so now, and the console offers the
+          // one-click widening beside it.
+          const list = [...asked].join(', ');
+          state.finishedReason = `this run was scoped to phase ${list}, and ${asked.size === 1 ? 'it is' : 'those are'} `
+            + 'settled. Continue with the scope cleared to carry on through the rest of the plan.';
           this.record('run.finished', {
             onlyPhases: [...asked],
             note: 'the phases this run was asked for are settled',
@@ -521,6 +757,9 @@ export class Runner {
 
         if (!candidates.length) {
           state.status = outstanding.length ? 'parked' : 'finished';
+          state.finishedReason = outstanding.length
+            ? undefined
+            : `every phase of ${state.slug} is done.`;
           if (outstanding.length) {
             // Parking with work left is not self-explanatory: every ready phase
             // is in a state this loop will not pick up again by itself, and the
@@ -534,6 +773,7 @@ export class Runner {
                 ? `nothing left to run on its own — ${held}. Retry or skip them to carry on.`
                 : `nothing is ready to run: ${outstanding.length} phase(s) are still waiting on a gate or an earlier phase.`,
             };
+            state.finishedReason = state.halt.reason;
           }
           this.record(outstanding.length ? 'run.parked' : 'run.finished', {
             outstanding, done: board.done,
@@ -553,6 +793,9 @@ export class Runner {
     } finally {
       state.child = null;
       this.childPid = null;
+      this.clearFreezeTimer();
+      // A freeze cannot outlive the loop that would have thawed it.
+      state.freeze = null;
       // The token dies with the loop. Anything still waiting on a decision is
       // answered rather than left holding a socket nobody is watching.
       this.deps.approvals?.disarm();
@@ -682,7 +925,15 @@ export class Runner {
     const record = phaseRecord(state, phase);
     const spawn = this.deps.spawn ?? spawnClaude;
     let currentModel = model;
-    let resume: string | undefined;
+    // A freeze that was checkpointed left a session behind. Picking it up costs
+    // one flag here and saves however long the phase had already been working;
+    // cleared immediately, because offering the same id to a second attempt is
+    // the "Session ID … is already in use" refusal.
+    let resume: string | undefined = record.resumeSessionId;
+    if (resume) {
+      record.resumeSessionId = undefined;
+      this.record('phase.resume-checkpoint', { sessionId: resume }, phase);
+    }
     let budget = state.phaseBudgetUsd;
     let maxTurns: number | null = null;
 
@@ -741,7 +992,11 @@ export class Runner {
       state.spentUsd += outcome.costUsd;
       record.costUsd += outcome.costUsd;
       record.turns = (record.turns ?? 0) + outcome.turns;
-      record.durationMs = (record.durationMs ?? 0) + outcome.durationMs;
+      // Wall-clock minus whatever the operator held it for. A phase frozen over
+      // lunch did not take an extra hour to think.
+      const frozenNow = state.freeze ? Math.max(0, this.now().getTime() - Date.parse(state.freeze.at)) : 0;
+      if (frozenNow) record.frozenMs = (record.frozenMs ?? 0) + frozenNow;
+      record.durationMs = (record.durationMs ?? 0) + Math.max(0, outcome.durationMs - frozenNow);
       if (outcome.sessionId) record.sessionId = outcome.sessionId;
       this.record('phase.session', {
         attempt, model: currentModel, effort: record.effort ?? state.effort ?? null,
@@ -753,6 +1008,20 @@ export class Runner {
         // the failure means re-running it and watching.
         said: outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200),
       }, phase);
+
+      // A freeze that ran past its threshold ended this child on purpose. The
+      // phase record is already `pending` with a session to resume, and reading
+      // exit 143 as a crash here would overwrite both.
+      if (this.checkpointed) {
+        this.checkpointed = false;
+        state.freeze = null;
+        state.finishedReason = record.resumeSessionId
+          ? `phase ${phase} was frozen past ${Math.round(FREEZE_ESCALATE_MS / 60_000)} minutes and `
+            + 'checkpointed. Continue resumes the same session.'
+          : `phase ${phase} was frozen past ${Math.round(FREEZE_ESCALATE_MS / 60_000)} minutes and `
+            + 'checkpointed. Continue starts it again from its boot prompt.';
+        return { carryOn: false, completed: false };
+      }
 
       // An operator stop is not a failure to diagnose — we caused it.
       if (this.stopRequested || this.abort?.signal.aborted) {
@@ -1050,15 +1319,27 @@ export class Runner {
     // asked for: `--fallback-model` demotes in-place and tells nobody. A
     // journal that records the request rather than the reality is a journal
     // that cannot explain why a phase went badly.
-    if (event.kind === 'init' && event.model && this.state) {
+    if (event.kind === 'init' && this.state) {
       const record = phaseRecord(this.state, phase);
-      if (record.actualModel !== event.model) {
+      let changed = false;
+      // The session id used to be learned only when the spawn resolved, which
+      // is far too late for anything that acts on a session while it is alive:
+      // a freeze checkpointed mid-phase had nothing to hand to `--resume`, and
+      // the checkpoint on disk carried an empty id. The `init` message has it
+      // within the first second, so take it there.
+      if (event.sessionId && record.sessionId !== event.sessionId) {
+        record.sessionId = event.sessionId;
+        if (this.state.child?.phase === phase) this.state.child.sessionId = event.sessionId;
+        changed = true;
+      }
+      if (event.model && record.actualModel !== event.model) {
         record.actualModel = event.model;
         if (record.model && !event.model.includes(record.model)) {
           this.record('phase.model-differs', { asked: record.model, running: event.model }, phase);
         }
-        this.persist();
+        changed = true;
       }
+      if (changed) this.persist();
     }
 
     if (event.kind === 'limits' && this.state) {
@@ -1082,6 +1363,9 @@ export class Runner {
     const state = this.state!;
     state.status = 'halted';
     state.halt = { at: new Date().toISOString(), reason, phase };
+    // One field the console can always read for "why did this stop", whichever
+    // of the several endings it was.
+    state.finishedReason = reason;
     this.record('run.halt', { reason, phase });
     this.emit('run', { state });
     log.warn('runner.halt', { slug: state.slug, runId: state.id, reason, phase });
@@ -1195,12 +1479,44 @@ export function applySettings(state: RunState, patch: RunSettingsPatch): RunStat
  * outranks almost everything in that context, so an unframed "why did you skip
  * the cache?" is read as a change of direction. The frame says what this is,
  * asks for brevity, and — the part that matters — says to carry on afterwards.
+ *
+ * The tag is not decoration either. Going in it is what lets the CLI's own echo
+ * be recognised as *this* message rather than by counting echoes, which is
+ * wrong on every resumed session. Coming back it is what turns the reply into
+ * an answer the console can put beside the question, instead of two sentences
+ * lost in the middle of an hour of build output.
  */
-export function frameQuestion(question: string): string {
-  return 'An out-of-band question from the operator watching this run. It is NOT a change to '
+export function frameQuestion(question: string, mark: string): string {
+  return `${mark} An out-of-band question from the operator watching this run. It is NOT a change to `
     + 'the phase: answer it briefly, in a sentence or two, then continue exactly where you left '
     + 'off. Do not alter your plan, your task list, or what you were about to do — unless the '
-    + `question itself explicitly asks you to.\n\nQuestion: ${question}`;
+    + `question itself explicitly asks you to.\n\nBegin your answer with the tag ${mark} so the `
+    + `console can show it beside the question.\n\nQuestion: ${question}`;
+}
+
+/**
+ * Steer: the other thing an operator wants to say to a running phase, and the
+ * opposite of a question.
+ *
+ * Ask is framed to be inert — "this is NOT a change to the phase" — because a
+ * question that quietly redirects the work is worse than no question at all.
+ * That framing makes it useless for the case it kept being reached for: seeing
+ * a phase head somewhere wrong and wanting to say so. Sending an instruction
+ * through the question frame either got politely ignored or, worse, half
+ * followed.
+ *
+ * So this is the honest version, and it says out loud what it costs: the phase
+ * still has to satisfy the plan's exit criteria and the runner still verifies
+ * it independently afterwards. An instruction that talks a phase out of its
+ * verification does not get it past the gate — it just fails later.
+ */
+export function frameSteer(instruction: string, mark: string): string {
+  return `${mark} A course correction from the operator watching this run. Unlike an out-of-band `
+    + 'question, this IS an instruction: fold it into what you are doing and carry on. It does not '
+    + 'replace the phase — the plan\'s exit criteria and its verification commands still decide '
+    + 'whether this phase passes, and they are checked independently after you finish. If this '
+    + 'instruction conflicts with the plan, say so in one line and follow the plan.'
+    + `\n\nAcknowledge with the tag ${mark} in one sentence, then continue.\n\nInstruction: ${instruction}`;
 }
 
 function reasonOf(disposition: Disposition): string {

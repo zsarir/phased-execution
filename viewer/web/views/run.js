@@ -11,7 +11,7 @@
  * disagree eventually, and the one on screen is the one that gets believed.
  */
 
-import { html, useState, useEffect, useCallback } from '../html.js';
+import { html, useState, useEffect, useCallback, useRef } from '../html.js';
 import { api, subscribeRun } from '../api.js';
 import { toast } from '../store.js';
 import { Banner, Chip, Empty, Modal, Spinner, StateChip, Tile, relativeTime } from '../components/ui.js';
@@ -33,10 +33,18 @@ const RUN_TONE = {
   // as one. Neutral grey made an armed pause look identical to an idle run,
   // which is half the reason pressing Pause felt like nothing had happened.
   waiting: 'warn', paused: '', pausing: 'warn', stopping: 'warn', interrupted: 'warn',
+  frozen: 'warn',
 };
 
-/** Statuses that mean a loop is genuinely behind this run right now. */
-const LIVE_STATUSES = ['running', 'waiting', 'pausing', 'stopping'];
+/**
+ * Statuses that mean a loop is genuinely behind this run right now.
+ *
+ * `frozen` belongs here even though nothing is being scheduled: there is a live
+ * child holding a warm session, so the controls that act on one — Stop, Steer,
+ * Continue — all still apply, and treating it as idle would offer a Start
+ * button that refuses because a run is already in progress.
+ */
+const LIVE_STATUSES = ['running', 'waiting', 'pausing', 'stopping', 'frozen'];
 
 /** Wall-clock, at the precision a person reading a phase table cares about. */
 function duration(ms) {
@@ -190,10 +198,54 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
           </p>
         </${Banner}>` : null}
 
+      ${run?.status === 'frozen' ? html`
+        <${Banner} kind="warn">
+          <strong>Frozen mid-phase.</strong>
+          ${run.freeze?.phase != null ? html` Phase ${run.freeze.phase} is` : html` The session is`}
+          stopped where it stood — the process is alive and holding its session, it is simply not
+          being scheduled. Continue picks up mid-token.
+          ${run.freeze?.escalateAt ? html`
+            <p style="margin-top:8px" class="muted">
+              Left frozen past ${new Date(run.freeze.escalateAt).toLocaleTimeString()} it converts to a
+              checkpoint instead: the session is asked to stop and its id is saved, so Continue resumes
+              it rather than starting the phase over. A stopped process holds memory and a prompt cache
+              that expires anyway, so an overnight freeze is not the cheap option it looks like.
+            </p>` : null}
+        </${Banner}>` : null}
+
       ${run?.status === 'paused' ? html`
         <${Banner} kind="info">
           <strong>Paused between phases.</strong> Continue picks up from the board, so nothing has to
           be remembered about where it stopped.
+        </${Banner}>` : null}
+
+      ${/* Why the loop stopped, in one place, for every ending that is not a halt
+            (halts have their own banner above). A run that stops after one phase
+            because it was scoped to one phase is the most-reported "it doesn't
+            advance", and it was invisible. */
+        !live && !run?.halt && run?.finishedReason ? html`
+        <${Banner} kind=${run.status === 'finished' ? 'ok' : 'info'}>
+          <strong>${run.status === 'finished' ? 'Run finished.' : 'Run stopped.'}</strong>
+          ${' '}${run.finishedReason}
+        </${Banner}>` : null}
+
+      ${run?.onlyPhases?.length ? html`
+        <${Banner} kind="info">
+          <strong>Scoped run.</strong> This run drives
+          ${run.onlyPhases.length === 1
+            ? html` phase ${run.onlyPhases[0]} only`
+            : html` phases ${run.onlyPhases.join(', ')} only`}, then stops — it will not carry on
+          into whatever those unblock. That is set by <em>Run only this</em> on a phase row.
+          ${state.allowRun ? html`
+            <p style="margin-top:8px">
+              <button class="btn small" disabled=${Boolean(busy)}
+                      onClick=${() => act('scope', async () => {
+                        await api.runSettings(slug, { onlyPhases: [] });
+                        toast('Scope cleared — this run continues through the whole plan', 'ok');
+                      })}>
+                ${busy === 'scope' ? 'Clearing…' : 'Run the whole plan from here'}
+              </button>
+            </p>` : null}
         </${Banner}>` : null}
 
       <${Controls}
@@ -245,8 +297,7 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
             slug=${slug}
             enabled=${Boolean(state.allowRun && live && run?.activePhase != null)}
             allowRun=${state.allowRun}
-            phase=${run?.activePhase}
-            onAsked=${(text) => push({ kind: 'injected', text })} />`} />
+            phase=${run?.activePhase} />`} />
 
       ${history.length > 1 ? html`
         <section class="card">
@@ -433,6 +484,9 @@ function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills
   const disabled = !allowRun || Boolean(busy);
   const pausing = run?.status === 'pausing';
   const stopping = run?.status === 'stopping';
+  const frozen = run?.status === 'frozen';
+  /** A freeze that ran past its threshold left a session to resume, not a fresh start. */
+  const checkpointed = Object.values(run?.phases ?? {}).some((p) => p.resumeSessionId);
 
   const settings = {
     model,
@@ -457,12 +511,16 @@ function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills
     <section class="card">
       <div class="row spread">
         <h2 class="card-title">
-          ${live ? 'Running' : resumable ? 'Continue this run' : 'Start a run'}
+          ${frozen ? 'Frozen' : live ? 'Running' : resumable ? 'Continue this run' : 'Start a run'}
         </h2>
         <span class="muted small">
-          ${resumable
-            ? 'Picks up from the board, not from a saved position.'
-            : 'Fresh or half-finished is the same button — the done-set decides where it begins.'}
+          ${frozen
+            ? 'The session is alive and stopped. Nothing has been lost.'
+            : resumable
+              ? checkpointed
+                ? 'Picks up the checkpointed session with --resume, rather than starting the phase over.'
+                : 'Picks up from the board, not from a saved position.'
+              : 'Fresh or half-finished is the same button — the done-set decides where it begins.'}
         </span>
       </div>
 
@@ -560,6 +618,32 @@ function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills
                     })}>
               ${busy === 'pause' ? 'Arming…' : 'Pause after this phase'}
             </button>`}
+          ${/* Two pauses, deliberately named apart. The one above waits for the
+                phase to finish and be verified; this one stops the session where
+                it stands. Labelling both "Pause" is how an operator ends up
+                pressing the wrong one while watching a phase do the wrong thing. */
+            frozen ? html`
+            <button class="btn primary" disabled=${disabled}
+                    onClick=${() => onAct('thaw', async () => {
+                      const { run: after } = await api.runThaw(slug);
+                      toast(after?.status === 'frozen'
+                        ? 'The session could not be continued — reload and look at the status'
+                        : 'Continued — the session picks up mid-token',
+                      after?.status === 'frozen' ? 'warn' : 'ok');
+                    })}>
+              ${busy === 'thaw' ? 'Continuing…' : 'Continue the frozen session'}
+            </button>` : html`
+            <button class="btn" disabled=${disabled || stopping || run?.activePhase == null}
+                    title="Stops the session where it stands, losing nothing. The opposite of waiting for the phase to finish."
+                    onClick=${() => onAct('freeze', async () => {
+                      const { run: after } = await api.runFreeze(slug);
+                      toast(after?.status === 'frozen'
+                        ? `Frozen — phase ${after.freeze?.phase ?? ''} is stopped where it stood`.trim()
+                        : 'Nothing to freeze: no session is running on this run.',
+                      after?.status === 'frozen' ? 'ok' : 'warn');
+                    })}>
+              ${busy === 'freeze' ? 'Freezing…' : 'Freeze now'}
+            </button>`}
           ${changed ? html`
             <button class="btn" disabled=${disabled}
                     onClick=${() => onAct('settings', () => api.runSettings(slug, settings))}>
@@ -598,53 +682,93 @@ function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills
  * ------------------------------------------------------------------ */
 
 /**
- * The `/btw` box.
+ * The `/btw` box, and beside it the thing it kept being misused for.
  *
  * A phase used to be a process you could watch and not speak to: the only way
  * to ask it anything was to stop it, which throws the session away. Its stdin
- * is held open now, so a question is one more turn in the same conversation —
- * the context is intact, the cache is warm, and the phase carries on after
- * answering.
+ * is held open now, so a message is one more turn in the same conversation —
+ * the context is intact, the cache is warm, and the phase carries on after.
+ *
+ * Two modes, because they are genuinely different acts. **Ask** is framed to be
+ * inert: it says out loud that it is not a change to the phase, which is what
+ * stops "why did you skip the cache?" being read as an instruction to go back
+ * and do it. That framing makes it useless for the case people reached for it
+ * anyway — watching a phase head somewhere wrong and wanting to say so — so
+ * **Steer** is the honest version of that, framed as an instruction and
+ * journaled under its own name.
  *
  * The `/btw` prefix is optional and stripped if typed. It is there because it
  * is what people reach for, not because anything needs it.
  */
-function AskBox({ slug, enabled, allowRun, phase, onAsked }) {
+function AskBox({ slug, enabled, allowRun, phase }) {
   const [text, setText] = useState('');
+  const [mode, setMode] = useState('ask');
   const [sending, setSending] = useState(false);
+  // A ref, not the `sending` state, and this is the whole point: an `onClick`
+  // and an `onKeyDown` firing in the same tick both read the state captured at
+  // the last render — which is `false` for both — so the guard passed twice and
+  // the question went to the model twice. A ref is written and read in the same
+  // tick, so the second caller sees the first.
+  const inFlight = useRef(false);
 
   const send = async () => {
-    const question = text.replace(/^\/btw\s*/i, '').trim();
-    if (!question || sending) return;
+    const body = text.replace(/^\/(btw|steer)\s*/i, '').trim();
+    if (!body || inFlight.current) return;
+    inFlight.current = true;
     setSending(true);
+    // Belt to the ref's braces: the key survives a retry the browser makes on
+    // its own, which no amount of client-side guarding can see.
+    const key = `${mode}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     try {
-      await api.runAsk(slug, question);
+      const sent = mode === 'steer'
+        ? await api.runSteer(slug, body, key)
+        : await api.runAsk(slug, body, key);
       setText('');
-      onAsked?.(question);
+      // Nothing is pushed into the console here. The server emits the line the
+      // instant it writes to stdin, and the CLI's echo folds into that same
+      // line as a delivery tick — an optimistic third copy is what made one
+      // `/btw` appear three times.
+      if (sent?.repeated) toast('Already sent — this one was a duplicate', 'ok');
     } catch (error) {
       // The server distinguishes "nothing is listening" from "bad request", so
       // the message is worth showing verbatim rather than flattening to failed.
       toast(error.message, 'warn');
-    } finally { setSending(false); }
+    } finally {
+      inFlight.current = false;
+      setSending(false);
+    }
   };
 
+  const steering = mode === 'steer';
   return html`
-    <div class="live-ask">
+    <div class=${`live-ask${steering ? ' is-steer' : ''}`}>
+      <select value=${mode} disabled=${!enabled || sending}
+              title=${steering
+                ? 'An instruction the phase should act on'
+                : 'A question that must not change what the phase is doing'}
+              onChange=${(e) => setMode(e.target.value)}>
+        <option value="ask">Ask</option>
+        <option value="steer">Steer</option>
+      </select>
       <input
         value=${text}
         disabled=${!enabled || sending}
         placeholder=${enabled
-          ? `/btw ask the session running phase ${phase}…`
+          ? steering
+            ? `tell the session running phase ${phase} to do something differently…`
+            : `/btw ask the session running phase ${phase}…`
           : allowRun ? 'Nothing is running to ask' : 'Asking needs --allow-run'}
         onInput=${(e) => setText(e.target.value)}
         onKeyDown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); void send(); } }} />
       <button class="btn small" disabled=${!enabled || sending || !text.trim()} onClick=${send}>
-        ${sending ? 'Sending…' : 'Ask'}
+        ${sending ? 'Sending…' : steering ? 'Steer' : 'Ask'}
       </button>
       <span class="hint">
-        ${enabled
-          ? 'Answered in the same session, then it carries on'
-          : 'Available while a phase is running'}
+        ${!enabled
+          ? 'Available while a phase is running'
+          : steering
+            ? 'Folded into the work — the plan\'s verification still decides if the phase passes'
+            : 'Answered in the same session, then it carries on'}
       </span>
     </div>`;
 }

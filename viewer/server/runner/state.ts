@@ -26,6 +26,14 @@ export type RunStatus =
   | 'paused'
   /** Sleeping until a usage window reopens (`waitUntil`). */
   | 'waiting'
+  /**
+   * The session is stopped where it stood (`SIGSTOP`), mid-phase.
+   *
+   * Distinct from `paused` in the one way that matters operationally: there is
+   * a live child holding a warm session, so this is reversible at no cost — and
+   * it is also the only status where the run's own clock is not running.
+   */
+  | 'frozen'
   /** Every remaining phase needs a human — a gate, an approval, a decision. */
   | 'parked'
   /** Stopped on a condition that must not be automated past. */
@@ -50,7 +58,7 @@ export const SETTLED: readonly PhaseStatus[] = ['done', 'skipped', 'failed', 'pa
  * Statuses that assert work is in flight — each one a claim made by a process
  * that can be killed between writing it and acting on it.
  */
-export const IN_FLIGHT: readonly RunStatus[] = ['running', 'pausing', 'stopping', 'waiting'];
+export const IN_FLIGHT: readonly RunStatus[] = ['running', 'pausing', 'stopping', 'waiting', 'frozen'];
 
 /** The same, per phase. A phase in one of these had a live loop behind it. */
 const PHASE_IN_FLIGHT: readonly PhaseStatus[] = ['running', 'verifying', 'awaiting-verification'];
@@ -80,6 +88,20 @@ export type PhaseRecord = {
   /** Turns and wall-clock across every attempt, so a phase can be read at a glance. */
   turns?: number;
   durationMs?: number;
+  /**
+   * Wall-clock this phase spent stopped by the operator, already subtracted
+   * from `durationMs`. Kept rather than merely deducted so "it took two hours"
+   * and "it worked for twenty minutes and waited for me for the rest" can be
+   * told apart — the second is not a slow phase.
+   */
+  frozenMs?: number;
+  /**
+   * A session to hand to `--resume` when this phase next runs, left behind by a
+   * freeze that was checkpointed. Cleared as soon as it is used: a session id
+   * offered twice is the "Session ID … is already in use" refusal that killed
+   * two real retries.
+   */
+  resumeSessionId?: string;
   model?: string;
   /** The reasoning effort this phase ran at. */
   effort?: string;
@@ -156,6 +178,23 @@ export type RunState = {
    */
   pause: { requestedAt: string; afterPhase: number | null; by: string } | null;
   /**
+   * A session stopped where it stands, and when that stops being the cheap
+   * option. Null whenever nothing is frozen — including immediately after a
+   * `thaw()` or an escalation, so a stale block can never make a live run look
+   * held.
+   */
+  freeze: { at: string; phase: number | null; pid: number; by: string; escalateAt: string } | null;
+  /**
+   * Why the loop stopped, in the words the operator needs.
+   *
+   * `status` says *that* a run ended and `halt` says why it was halted, but the
+   * ordinary endings — the plan is finished, the phases this run was asked for
+   * are all settled, the budget is spent — went to the journal and nowhere the
+   * console could show them. A run that stops after one phase because it was
+   * scoped to one phase looks broken without this.
+   */
+  finishedReason?: string;
+  /**
    * Run only these phases, in the usual ready order, then stop. Empty or absent
    * means "every phase that becomes ready", which is the normal run.
    */
@@ -231,6 +270,7 @@ export function newRun(opts: NewRunOptions): RunState {
     waitUntil: null,
     halt: null,
     pause: null,
+    freeze: null,
     ...(opts.onlyPhases?.length ? { onlyPhases: [...opts.onlyPhases] } : {}),
     ...(opts.phaseOptions ? { phaseOptions: { ...opts.phaseOptions } } : {}),
     ...(opts.skills?.length ? { skills: [...opts.skills] } : {}),
@@ -290,11 +330,19 @@ export function reconcileRun(state: RunState, liveRunId?: string | null): boolea
   // session is still editing the working tree, unobserved. Say so precisely —
   // with the pid — rather than reclaiming a run something is still writing.
   if (state.child && pidAlive(state.child.pid)) {
+    const frozen = state.freeze?.pid === state.child.pid;
     state.status = 'parked';
     state.halt ??= {
       at,
-      reason: `a session from an earlier console is still running (pid ${state.child.pid}, `
-        + `phase ${state.child.phase}). Let it finish or stop it, then continue this run.`,
+      // A frozen orphan is the one case where "let it finish" is wrong advice:
+      // nothing is scheduling it, so it will sit stopped forever waiting for a
+      // console that is not coming back.
+      reason: frozen
+        ? `phase ${state.child.phase} was frozen by the operator (pid ${state.child.pid}) and the `
+          + 'console that stopped it is gone, so nothing will start it again. Continue it with '
+          + `\`kill -CONT ${state.child.pid}\`, or stop it with \`kill ${state.child.pid}\` and run the phase again.`
+        : `a session from an earlier console is still running (pid ${state.child.pid}, `
+          + `phase ${state.child.phase}). Let it finish or stop it, then continue this run.`,
       phase: state.child.phase,
     };
     return true;
@@ -312,6 +360,9 @@ export function reconcileRun(state: RunState, liveRunId?: string | null): boolea
   state.child = null;
   // A pause waiting for a phase that is no longer running will never arrive.
   state.pause = null;
+  // Same for a freeze whose child is already gone: the block would otherwise
+  // make a dead run look held, and offer a Continue that resumes nothing.
+  state.freeze = null;
 
   // A phase left mid-flight may have half-finished something, so it is marked
   // interrupted rather than failed: continuing asks about it instead of

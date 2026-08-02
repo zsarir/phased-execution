@@ -13,6 +13,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -813,7 +814,12 @@ test('a question reaches the session that is running, framed so it cannot redire
   await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
   await inSession;
 
-  assert.deepEqual(instance.ask('why did you skip the cache?'), { ok: true });
+  const asked = instance.ask('why did you skip the cache?');
+  assert.equal(asked.ok, true);
+  // The tag is what correlates this write with the CLI's echo of it and with
+  // the session's eventual reply. Without one the console can only guess which
+  // sentence in an hour of output was the answer.
+  assert.match(asked.mark!, /^ask:[0-9a-f]{8}$/);
   assert.equal(sent.length, 1);
   // The frame is what keeps a question a question. Dropped in bare, text from
   // the operator outranks almost everything in a phase's context and reads as
@@ -821,9 +827,96 @@ test('a question reaches the session that is running, framed so it cannot redire
   assert.match(sent[0], /out-of-band question/i);
   assert.match(sent[0], /continue exactly where you left off/i);
   assert.match(sent[0], /Question: why did you skip the cache\?$/);
+  assert.ok(sent[0].includes(`[[${asked.mark}]]`), 'the tag travels with the question');
 
   release();
   await instance.wait();
+  r.cleanup();
+});
+
+test('the same idempotency key is one write, however many times it is posted', async () => {
+  const r = repo();
+  const sent: string[] = [];
+  let release: () => void = () => {};
+  let entered: () => void = () => {};
+  const inSession = new Promise<void>((resolve) => { entered = resolve; });
+
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    if (phase === 1) {
+      request.onHandle?.({ pid: 1, open: () => true, send: (t: string) => { sent.push(t); return true; } });
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+    }
+    r.markDone(phase);
+    return ok();
+  };
+
+  const { instance } = runner(r, spawn);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await inSession;
+
+  // A double click, a retried fetch, a phone that reconnected mid-request —
+  // the server cannot tell any of those from two real questions unless told.
+  const first = instance.ask('is the cache warm?', 'console', 'dup-key-0001');
+  const again = instance.ask('is the cache warm?', 'console', 'dup-key-0001');
+  assert.equal(first.ok, true);
+  assert.equal(again.ok, true, 'a repeat is a success — the caller did nothing wrong');
+  assert.equal(again.repeated, true, 'and it says so');
+  assert.equal(again.mark, first.mark, 'the same message, so the same correlation');
+  assert.equal(sent.length, 1, 'exactly one write reached stdin');
+
+  // A different key is a different question and does get through.
+  assert.equal(instance.ask('and the second one?', 'console', 'dup-key-0002').ok, true);
+  assert.equal(sent.length, 2);
+
+  release();
+  await instance.wait();
+  r.cleanup();
+});
+
+test('Steer is an instruction, and the journal records it as one', async () => {
+  const r = repo();
+  const sent: string[] = [];
+  let release: () => void = () => {};
+  let entered: () => void = () => {};
+  const inSession = new Promise<void>((resolve) => { entered = resolve; });
+
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    if (phase === 1) {
+      request.onHandle?.({ pid: 1, open: () => true, send: (t: string) => { sent.push(t); return true; } });
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+    }
+    r.markDone(phase);
+    return ok();
+  };
+
+  const { instance } = runner(r, spawn);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await inSession;
+  const runId = instance.current()!.id;
+
+  const steered = instance.steer('use the existing helper rather than a new one');
+  assert.equal(steered.ok, true);
+  assert.match(steered.mark!, /^steer:[0-9a-f]{8}$/);
+  assert.equal(sent.length, 1);
+  // The opposite framing to Ask, and it has to be: a message that opens "this
+  // is NOT a change to the phase" is useless for telling a phase to change.
+  assert.match(sent[0], /course correction/i);
+  assert.match(sent[0], /this IS an instruction/i);
+  // And the honest part — steering does not talk a phase past its gate.
+  assert.match(sent[0], /verification commands still decide/i);
+  assert.match(sent[0], /Instruction: use the existing helper rather than a new one$/);
+
+  release();
+  await instance.wait();
+
+  // Two event names, so a journal can explain a phase that changed direction.
+  const events = new Journal(r.root, 'demo', runId).read().map((e) => e.event);
+  assert.ok(events.includes('phase.steered'), 'steering has its own event name');
+  assert.ok(!events.includes('phase.asked'), 'and is not recorded as a question');
   r.cleanup();
 });
 
@@ -868,6 +961,140 @@ test('asking when nothing is running says so rather than swallowing it', async (
 
   const after = instance.ask('and now?');
   assert.equal(after.ok, false, 'a finished run has no session to ask');
+  r.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
+ * Freezing the phase itself
+ * ------------------------------------------------------------------ *
+ *
+ * Signals against a real process, because the claim being tested is an
+ * operating-system one: is the child actually stopped? A fake that records
+ * "freeze was called" would pass while the session carried on writing files,
+ * which is the exact failure this control exists to prevent.
+ */
+
+/**
+ * A session whose child is a real, long-lived process we can signal.
+ *
+ * `finishes` is what separates the two scenarios: a thawed session goes on to
+ * write its handoff, and a checkpointed one was stopped before it could — so
+ * the second must NOT mark its phase done, or Continue finds nothing to resume
+ * and quietly runs the next phase instead.
+ */
+function realChildSession(r: Repo, onPid: (pid: number) => void, finishes = true): {
+  spawn: SpawnFn; inSession: Promise<void>; release: () => void; pid: () => number;
+} {
+  let release: () => void = () => {};
+  let entered: () => void = () => {};
+  let child: ReturnType<typeof spawnProcess> | null = null;
+  const inSession = new Promise<void>((resolve) => { entered = resolve; });
+
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    if (phase === 1) {
+      child = spawnProcess(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+      onPid(child.pid!);
+      request.onPid?.(child.pid!);
+      request.onHandle?.({ pid: child.pid!, open: () => true, send: () => true });
+      // A real session announces its id in the first message it sends, which is
+      // the only reason anything can act on a live session at all.
+      request.onEvent?.({ kind: 'init', sessionId: 'session-to-resume-0001', model: 'stub-1', tools: 0 });
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      if (!finishes) return { ...ok(), sessionId: 'session-to-resume-0001' };
+    }
+    r.markDone(phase);
+    return { ...ok(), sessionId: 'session-to-resume-0001' };
+  };
+
+  return { spawn, inSession, release: () => release(), pid: () => child?.pid ?? 0 };
+}
+
+/** What `ps` says about a process: `T` is stopped, `S`/`R` are running. */
+function procState(pid: number): string {
+  try {
+    return execFileSync('ps', ['-o', 'state=', '-p', String(pid)], { encoding: 'utf8' }).trim().slice(0, 1);
+  } catch { return ''; }
+}
+
+test('freezing stops the child where it stands, and thawing lets it carry on', async () => {
+  const r = repo();
+  let pid = 0;
+  const held = realChildSession(r, (p) => { pid = p; });
+  const { instance } = runner(r, held.spawn);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+
+  assert.notEqual(procState(pid), 'T', 'the child is running before anything is asked of it');
+
+  assert.equal(instance.freeze('test'), true);
+  assert.equal(instance.current()!.status, 'frozen');
+  assert.equal(instance.current()!.freeze!.pid, pid);
+  assert.equal(instance.current()!.freeze!.phase, 1);
+  // The claim that matters, made by the kernel rather than by us.
+  assert.equal(procState(pid), 'T', 'the session is stopped, not killed and not asked to wrap up');
+
+  assert.equal(instance.thaw(), true);
+  assert.equal(instance.current()!.status, 'running');
+  assert.equal(instance.current()!.freeze, null);
+  assert.notEqual(procState(pid), 'T', 'and it is scheduled again');
+  // Time spent stopped is not time spent working, and a throughput figure built
+  // on the difference would be wrong.
+  assert.ok((instance.current()!.phases['1'].frozenMs ?? 0) >= 0);
+
+  held.release();
+  await instance.wait();
+  r.cleanup();
+});
+
+test('a freeze held too long checkpoints, and Continue resumes that session', async () => {
+  const r = repo();
+  let pid = 0;
+  const held = realChildSession(r, (p) => { pid = p; }, false);
+  const { instance } = runner(r, held.spawn);
+  const state = await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+
+  assert.equal(instance.freeze('test'), true);
+  // The escalation is a timer in production; driven directly here, because a
+  // test that waits fifteen real minutes is a test nobody runs.
+  (instance as unknown as { escalateFreeze(): void }).escalateFreeze();
+
+  const record = instance.current()!.phases['1'];
+  // Pending rather than interrupted: this phase is meant to be picked up again,
+  // and a settled status is one the loop will not look at.
+  assert.equal(record.status, 'pending');
+  assert.equal(record.resumeSessionId, 'session-to-resume-0001');
+  assert.equal(instance.current()!.freeze, null);
+  assert.equal(instance.current()!.status, 'paused');
+  assert.notEqual(procState(pid), 'T', 'SIGCONT before SIGTERM, or the child never sees it');
+
+  held.release();
+  await instance.wait();
+
+  // Continue: the phase runs again, and the session id goes to `--resume`
+  // rather than to `--session-id`, which would be refused as already in use.
+  const resumed: (string | undefined)[] = [];
+  const second = runner(r, async (request) => {
+    resumed.push(request.resume);
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  });
+  await second.instance.start({ slug: 'demo', root: r.root, resumeRunId: state.id, autonomy: 'keep-going' });
+  await second.instance.wait();
+
+  assert.equal(resumed[0], 'session-to-resume-0001', 'the checkpointed session was picked up');
+  assert.equal(resumed[1], undefined, 'and offered exactly once — a reused id is refused by the CLI');
+  r.cleanup();
+});
+
+test('freezing a run nothing is driving reports that it did nothing', async () => {
+  const r = repo();
+  const { instance } = runner(r, workingSession(r));
+  assert.equal(instance.freeze(), false, 'no loop, no child, nothing to stop');
+  assert.equal(instance.thaw(), false);
   r.cleanup();
 });
 
@@ -935,6 +1162,21 @@ test('a run asked for one phase runs that phase and stops', async () => {
 
   assert.deepEqual(seen, [1], 'the loop did not carry on into the rest of the plan');
   assert.equal(instance.current()!.status, 'finished');
+  // The most-reported "it doesn't advance to the next phase" is this, and it
+  // used to be invisible: the run was scoped from a per-row control, did what
+  // it was asked, and said nothing about why it stopped one phase in.
+  assert.match(instance.current()!.finishedReason!, /scoped to phase 1/);
+  assert.match(instance.current()!.finishedReason!, /scope cleared/i);
+  r.cleanup();
+});
+
+test('a run that finishes a whole plan says that is why it stopped', async () => {
+  const r = repo();
+  const { instance } = runner(r, workingSession(r));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+  assert.equal(instance.current()!.status, 'finished');
+  assert.match(instance.current()!.finishedReason!, /every phase of demo is done/);
   r.cleanup();
 });
 

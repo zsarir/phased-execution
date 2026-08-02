@@ -86,14 +86,27 @@ which source answered each one.
 every installed plugin's — and appends the ones you pick to the boot prompt, per run or per phase.
 The plan's own `Skills (every session)` line still comes from the engine and is shown as fixed.
 
-**Talking to a running phase.** The session's stdin stays open, so a question is one more turn in the
+**Talking to a running phase.** The session's stdin stays open, so a message is one more turn in the
 same conversation rather than a reason to stop it:
 
 ```bash
 btw "why did you skip the cache?"     # or the box under the session console
 ```
 
-It is framed as out-of-band before it is sent, so an answer does not become a change of direction.
+Two modes, because they are different acts. **Ask** is framed as out-of-band before it is sent, so an
+answer does not become a change of direction. **Steer** is the opposite and says so: an instruction to
+fold into the work — with the caveat that the plan's exit criteria and its verification commands still
+decide whether the phase passes, so steering a phase past its gate is not a thing that can happen.
+Each message carries a tag; the console shows it once, ticks it when the CLI echoes it back, and puts
+the session's reply beside the question rather than losing it in an hour of build output.
+
+**Stopping a phase.** Two pauses, deliberately named apart. *Pause after this phase* waits for the
+work in flight to finish and be verified. *Freeze now* stops the session where it stands (`SIGSTOP`)
+— instant, reversible, and it loses nothing, because the process is still there holding its session.
+A freeze left longer than fifteen minutes converts itself into a checkpoint instead: the child is
+asked to stop, its session id is written into the run, and Continue picks it up with `--resume`. A
+stopped process holds its memory and a prompt cache that expires anyway, so an overnight freeze is
+not the cheap option it looks like.
 
 **Being told.** Three paths, in increasing order of how far they reach.
 

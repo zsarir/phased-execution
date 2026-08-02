@@ -932,8 +932,27 @@
 
 /* An operator's own words in the transcript. The one line here that a person
    wrote, so it reads like one. */
-.live-line.k-injected .k { color: var(--line-ready); }
-.live-line.k-injected .t { color: var(--ink); font-style: italic; }
+.live-line.k-injected .k, .live-line.k-steer .k { color: var(--line-ready); }
+.live-line.k-injected .t, .live-line.k-steer .t { color: var(--ink); font-style: italic; }
+/* A course correction is not a question, and the transcript should not need a
+   label read to tell them apart. */
+.live-line.k-steer { border-left: 2px solid var(--line-ready); padding-left: var(--s2); margin-left: 2px; }
+
+/* The reply to one of those. Attributed rather than lost in the phase's output,
+   which is the whole reason the tag is carried through. */
+.live-line.k-answer .k { color: var(--line-ready); }
+.live-line.k-answer .t { color: var(--ink); }
+.live-line.k-answer { border-left: 2px solid var(--line-ready); padding-left: var(--s2); margin-left: 2px; }
+
+/* stdin closed by the watchdog rather than by the conversation ending. Rare,
+   and worth noticing when it happens. */
+.live-line.k-idle .k, .live-line.k-idle .t { color: var(--line-blocked); }
+
+/* Written to the session · echoed back by it. The distinction is the only proof
+   a message arrived, so it gets a glyph rather than a paragraph. */
+.live-line { grid-template-columns: 62px 1fr auto; }
+.live-tick { color: var(--ink-faint); user-select: none; font-size: var(--text-2xs); padding-top: 2px; }
+.live-line.k-injected .live-tick, .live-line.k-steer .live-tick { color: var(--line-done); }
 
 .live-idle { color: var(--ink-faint); max-width: 62ch; line-height: 1.7; }
 
@@ -1108,6 +1127,11 @@
 }
 .live-ask input { flex: 1; font-family: var(--font-mono); font-size: var(--text-xs); }
 .live-ask .hint { color: var(--ink-faint); font-size: var(--text-2xs); }
+.live-ask select { font-size: var(--text-2xs); }
+/* Steer changes what the phase does; Ask promises not to. The box says which
+   mode it is in without needing the dropdown read. */
+.live-ask.is-steer { border-top-color: var(--line-ready); }
+.live-ask.is-steer input { border-color: var(--line-ready); }
 
 /* ---------------- dashboard ---------------- */
 

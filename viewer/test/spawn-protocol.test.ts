@@ -22,7 +22,7 @@ import { join } from 'node:path';
 
 process.env.PHASE_CONSOLE_LOG = '';
 
-const { spawnClaude } = await import('../server/runner/spawn.ts');
+const { spawnClaude, markFor } = await import('../server/runner/spawn.ts');
 import type { SpawnHandle, StreamEvent } from '../server/runner/spawn.ts';
 
 /* ------------------------------------------------------------------ *
@@ -37,7 +37,27 @@ if (process.env.PC_STUB_ARGV) fs.writeFileSync(process.env.PC_STUB_ARGV, JSON.st
 
 const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 const sid = '11111111-2222-3333-4444-555555555555';
+
+// Turns whose result is withheld, so the NEXT turn's result covers both — this
+// is the CLI folding two injected messages into one turn, which is what the old
+// counter could not survive.
+const noResult = new Set((process.env.PC_STUB_NO_RESULT || '').split(',').filter(Boolean).map(Number));
+// A history replayed on --resume: user echoes for turns that are not ours.
+const replayHistory = Number(process.env.PC_STUB_REPLAY_HISTORY || 0);
+// A duplicate result for a turn already reported, which the CLI has been seen
+// to emit and which used to decrement the counter a second time.
+const extraResult = new Set((process.env.PC_STUB_EXTRA_RESULT || '').split(',').filter(Boolean).map(Number));
+// Answer an operator message by repeating its tag, as the frame asks.
+const answering = process.env.PC_STUB_ANSWER === '1';
+// Say nothing at all after the boot turn: never echo, never result.
+const goSilent = process.env.PC_STUB_SILENT === '1';
+const tag = (text) => (/\\[\\[(ask|steer):[0-9a-z]{4,16}\\]\\]/i.exec(text) || [])[0];
+
 say({ type: 'system', subtype: 'init', session_id: sid, model: process.env.PC_STUB_MODEL || 'stub-1', tools: [] });
+for (let i = 0; i < replayHistory; i++) {
+  say({ type: 'user', session_id: sid,
+        message: { role: 'user', content: [{ type: 'text', text: 'replayed history ' + i }] } });
+}
 
 let buffer = '';
 let turn = 0;
@@ -54,6 +74,7 @@ process.stdin.on('data', (chunk) => {
     const text = (message.message && message.message.content || []).map((b) => b.text).join('');
     turn += 1;
     if (process.env.PC_STUB_HEARD) fs.appendFileSync(process.env.PC_STUB_HEARD, text + '\\n');
+    if (goSilent && turn > 1) continue;
 
     if (argv.includes('--replay-user-messages')) {
       say({ type: 'user', session_id: sid, message: { role: 'user', content: [{ type: 'text', text }] } });
@@ -66,11 +87,19 @@ process.stdin.on('data', (chunk) => {
       say({ type: 'stream_event', session_id: sid, parent_tool_use_id: 'toolu_sub',
             event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'from a subagent' } } });
     }
+    const mark = answering ? tag(text) : undefined;
     say({ type: 'assistant', session_id: sid,
-          message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'turn ' + turn }] } });
+          message: { role: 'assistant', stop_reason: 'end_turn',
+                     content: [{ type: 'text', text: mark ? mark + ' yes, because the cache was cold' : 'turn ' + turn }] } });
+    if (noResult.has(turn)) continue;
     // total_cost_usd is the SESSION total, not this turn's share.
     say({ type: 'result', subtype: 'success', session_id: sid, num_turns: turn,
           total_cost_usd: turn, is_error: false, result: 'done ' + turn });
+    if (extraResult.has(turn)) {
+      // Same num_turns: a duplicate, not a new turn.
+      say({ type: 'result', subtype: 'success', session_id: sid, num_turns: turn,
+            total_cost_usd: turn, is_error: false, result: 'done ' + turn + ' (again)' });
+    }
   }
 });
 process.stdin.on('end', () => process.exit(0));
@@ -184,6 +213,11 @@ test('a caller cannot smuggle the guard rails off through the tool list', async 
  * Talking to a session that is already running
  * ------------------------------------------------------------------ */
 
+/** A tagged operator message, exactly as the runner frames one. */
+function tagged(id: string, body: string): string {
+  return `${markFor('ask', id)} An out-of-band question from the operator. Question: ${body}`;
+}
+
 test('an injected message becomes a second turn in the same session', async () => {
   const b = bench();
   const events: StreamEvent[] = [];
@@ -202,20 +236,21 @@ test('an injected message becomes a second turn in the same session', async () =
       // before the close decision is taken — load-bearing ordering.
       if (event.kind === 'result' && !asked) {
         asked = true;
-        assert.equal(handle!.send('by the way, why?'), true);
+        assert.equal(handle!.send(tagged('aaaa1111', 'by the way, why?')), true);
       }
     },
   });
 
-  assert.deepEqual(b.heard(), ['BOOT phase 2', 'by the way, why?']);
+  assert.equal(b.heard().length, 2);
   assert.equal(outcome.injected, 1);
   assert.equal(outcome.turns, 2, 'the question was a turn of its own');
   // Cumulative, not summed: the stub reports 1 then 2, and the session cost 2.
   assert.equal(outcome.costUsd, 2, 'per-turn totals must not be added together');
 
-  const injected = events.filter((e) => e.kind === 'injected');
+  const injected = events.filter((e) => e.kind === 'injected') as { mark?: string; delivered?: boolean }[];
   assert.equal(injected.length, 1, 'the echo is the only proof it landed');
-  assert.equal((injected[0] as { text: string }).text, 'by the way, why?');
+  assert.equal(injected[0].mark, 'ask:aaaa1111', 'and it is attributable to the message that caused it');
+  assert.equal(injected[0].delivered, true);
   b.cleanup();
 });
 
@@ -224,6 +259,138 @@ test('the boot prompt is not echoed back as if the operator had said it', async 
   const events: StreamEvent[] = [];
   await spawnClaude({ prompt: 'BOOT phase 1', cwd: b.dir, env: b.env, onEvent: (e) => events.push(e) });
   assert.equal(events.filter((e) => e.kind === 'injected').length, 0);
+  b.cleanup();
+});
+
+test('a replayed history is not mistaken for messages the operator just sent', async () => {
+  const b = bench();
+  const events: StreamEvent[] = [];
+  // A session started with `--resume` replays its history as `user` messages.
+  // The old rule was positional — "the first echo is the boot prompt" — so
+  // every replayed turn after it was shown as something the operator had
+  // supposedly just typed, and the count was wrong from then on.
+  await spawnClaude({
+    prompt: 'BOOT phase 1',
+    cwd: b.dir,
+    env: { ...b.env, PC_STUB_REPLAY_HISTORY: '3' },
+    onEvent: (e) => events.push(e),
+  });
+  assert.equal(events.filter((e) => e.kind === 'injected').length, 0);
+  b.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
+ * When stdin closes — the wedge, and the two ways of causing it
+ * ------------------------------------------------------------------ */
+
+test('two messages folded into one turn still let the session end', async () => {
+  const b = bench();
+  let handle: SpawnHandle | null = null;
+  let asked = false;
+
+  // The measured wedge. `outstanding` went up twice and down once — the CLI
+  // answered both messages in a single turn — so it never reached zero, stdin
+  // never closed, and the child sat blocked on it at 0.1% CPU with the phase
+  // still reading `running` 80 minutes later. If this regresses, this test does
+  // not fail: it hangs, which is the honest shape of the bug.
+  const outcome = await spawnClaude({
+    prompt: 'BOOT phase 2',
+    cwd: b.dir,
+    env: { ...b.env, PC_STUB_NO_RESULT: '2' },
+    onHandle: (h) => { handle = h; },
+    onEvent: (event) => {
+      if (event.kind !== 'result' || asked) return;
+      asked = true;
+      assert.equal(handle!.send(tagged('bbbb2222', 'first question')), true);
+      assert.equal(handle!.send(tagged('cccc3333', 'second question')), true);
+    },
+  });
+
+  assert.equal(outcome.injected, 2, 'both were written');
+  assert.equal(b.heard().length, 3, 'and both reached the session, after the boot prompt');
+  // Two questions, three turns, two results. The session ended anyway.
+  assert.equal(outcome.turns, 3);
+  b.cleanup();
+});
+
+test('an extra result for a turn already counted does not close stdin early', async () => {
+  const b = bench();
+  let handle: SpawnHandle | null = null;
+  let asked = false;
+  const outcome = await spawnClaude({
+    prompt: 'BOOT phase 2',
+    cwd: b.dir,
+    // A duplicate result for turn 1, reporting the same `num_turns`. The
+    // counter treated it as an answer and decremented to zero, closing stdin
+    // with a question still in flight.
+    env: { ...b.env, PC_STUB_EXTRA_RESULT: '1' },
+    onHandle: (h) => { handle = h; },
+    onEvent: (event) => {
+      if (event.kind !== 'result' || asked) return;
+      asked = true;
+      assert.equal(handle!.send(tagged('dddd4444', 'still there?')), true);
+    },
+  });
+
+  assert.equal(b.heard().length, 2, 'the question was written');
+  assert.equal(outcome.turns, 2, 'and got a turn of its own rather than a closed pipe');
+  b.cleanup();
+});
+
+test('a session that goes silent with stdin open is closed by the watchdog', async () => {
+  const b = bench();
+  const events: StreamEvent[] = [];
+  let handle: SpawnHandle | null = null;
+  let asked = false;
+
+  const outcome = await spawnClaude({
+    prompt: 'BOOT phase 1',
+    cwd: b.dir,
+    // Never echoes and never results after the boot turn, so nothing the close
+    // rule waits for will ever arrive. Without the watchdog this hangs.
+    env: { ...b.env, PC_STUB_SILENT: '1' },
+    idleCloseMs: 250,
+    onHandle: (h) => { handle = h; },
+    onEvent: (event) => {
+      events.push(event);
+      if (event.kind !== 'result' || asked) return;
+      asked = true;
+      handle!.send(tagged('eeee5555', 'anyone home?'));
+    },
+  });
+
+  const idle = events.filter((e) => e.kind === 'idle') as { reason: string; afterMs: number }[];
+  assert.equal(idle.length, 1, 'the close is announced, not silent');
+  assert.match(idle[0].reason, /never echoed back/, 'and says which evidence never came');
+  assert.ok(idle[0].afterMs >= 200);
+  assert.ok(outcome.durationMs >= 200);
+  b.cleanup();
+});
+
+test('the session answers a tagged question, and the answer is attributed', async () => {
+  const b = bench();
+  const events: StreamEvent[] = [];
+  let handle: SpawnHandle | null = null;
+  let asked = false;
+
+  await spawnClaude({
+    prompt: 'BOOT phase 1',
+    cwd: b.dir,
+    env: { ...b.env, PC_STUB_ANSWER: '1' },
+    onHandle: (h) => { handle = h; },
+    onEvent: (event) => {
+      events.push(event);
+      if (event.kind !== 'result' || asked) return;
+      asked = true;
+      handle!.send(tagged('ffff6666', 'why was it cold?'));
+    },
+  });
+
+  const answers = events.filter((e) => e.kind === 'answer') as { text: string; mark: string }[];
+  assert.equal(answers.length, 1, 'the reply is not lost in the phase\'s own output');
+  assert.equal(answers[0].mark, 'ask:ffff6666');
+  // The tag is plumbing. It belongs in the correlation, not on the screen.
+  assert.equal(answers[0].text, 'yes, because the cache was cold');
   b.cleanup();
 });
 

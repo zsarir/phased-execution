@@ -103,8 +103,21 @@ export const api = {
   runRetry: (slug, phase) => post(`/api/run/${encodeURIComponent(slug)}/retry`, { phase }),
   /** Change model, autonomy or budgets on a run in flight; applies next phase. */
   runSettings: (slug, patch) => post(`/api/run/${encodeURIComponent(slug)}/settings`, patch),
-  /** Put a question to the session running right now — the `/btw` box. */
-  runAsk: (slug, question) => post(`/api/run/${encodeURIComponent(slug)}/ask`, { question }),
+  /** Stop the running session where it stands, without losing it. */
+  runFreeze: (slug) => post(`/api/run/${encodeURIComponent(slug)}/freeze`),
+  /** Let a frozen session carry on, mid-token. */
+  runThaw: (slug) => post(`/api/run/${encodeURIComponent(slug)}/thaw`),
+  /**
+   * Put a question to the session running right now — the `/btw` box.
+   *
+   * `key` is an idempotency key. A double click, a retried fetch or a phone
+   * that reconnected mid-request must not become two turns for the model to
+   * answer, and the server cannot tell those apart from two real questions
+   * without being told.
+   */
+  runAsk: (slug, question, key) => post(`/api/run/${encodeURIComponent(slug)}/ask`, { question, key }),
+  /** The same channel, said as an instruction the phase should act on. */
+  runSteer: (slug, instruction, key) => post(`/api/run/${encodeURIComponent(slug)}/steer`, { instruction, key }),
   /** Replay of what the session printed, so a reload is not a blank window. */
   runTranscript: (slug, id, limit) => request(
     `/api/run/${encodeURIComponent(slug)}/transcript${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`,

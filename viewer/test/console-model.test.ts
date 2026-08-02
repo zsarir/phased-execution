@@ -92,6 +92,56 @@ test('an operator question reads as one, and every kind has a label', () => {
   }
 });
 
+test('one `/btw` renders once, and gains a tick when the session echoes it', () => {
+  // Three renders of one write is what this stops. The client's own optimistic
+  // echo is gone; the server's `injected` event and the CLI's replay of the
+  // framed text both carry the same mark, so the second updates the first.
+  const lines = play([
+    { kind: 'injected', text: 'why did you skip the cache?', mark: 'ask:aaaa1111' },
+    { kind: 'tool', name: 'Read', summary: 'src/index.ts' },
+    // The echo carries the FRAMED text — the preamble the session actually saw.
+    { kind: 'injected', text: 'An out-of-band question… why did you skip the cache?', mark: 'ask:aaaa1111', delivered: true },
+  ]) as { kind: string; text: string; delivered?: boolean }[];
+
+  const asked = lines.filter((l) => l.kind === 'injected');
+  assert.equal(asked.length, 1, 'the question appears exactly once');
+  assert.equal(asked[0].text, 'why did you skip the cache?', 'and in the operator\'s own words, not the frame');
+  assert.equal(asked[0].delivered, true, 'with the delivery confirmed');
+  assert.equal(lines.length, 2, 'the tool call between them was not disturbed');
+});
+
+test('a steer is not folded into a question that happens to be nearby', () => {
+  const lines = play([
+    { kind: 'injected', text: 'why?', mark: 'ask:aaaa1111' },
+    { kind: 'injected', text: 'use the existing helper', mark: 'steer:bbbb2222', steer: true },
+  ]);
+  assert.equal(lines.length, 2, 'different marks, different lines');
+  assert.deepEqual(lines.map((l) => l.kind), ['injected', 'steer']);
+  assert.equal(KIND_LABEL.steer, 'steer');
+});
+
+test('the session\'s answer is attributed rather than lost in the phase text', () => {
+  const lines = play([
+    { kind: 'partial', text: 'yes, because ' },
+    { kind: 'partial', text: 'the cache was cold' },
+    { kind: 'answer', text: 'yes, because the cache was cold', mark: 'ask:aaaa1111' },
+  ]) as { kind: string; text: string; mark?: string }[];
+  // It supersedes its own fragments for the same reason a finished text block
+  // does: those words already streamed, and repeating them under a new label is
+  // the stutter twice over.
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].kind, 'answer');
+  assert.equal(lines[0].mark, 'ask:aaaa1111');
+  assert.equal(KIND_LABEL.answer, 'answers');
+});
+
+test('a watchdog close says how long the silence was and what was missing', () => {
+  const line = stream({ kind: 'idle', afterMs: 600_000, reason: '1 operator message(s) were never echoed back' })!;
+  assert.match(line.text, /stdin closed after 600s of silence/);
+  assert.match(line.text, /never echoed back/);
+  assert.equal(KIND_LABEL.idle, 'idle');
+});
+
 test('the usage window is reported as a percentage a person can act on', () => {
   const line = stream({ kind: 'limits', status: 'allowed_warning', window: 'seven_day', utilization: 0.81 })!;
   assert.match(line.text, /81% of the seven day window used/);

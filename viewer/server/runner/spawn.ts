@@ -77,6 +77,33 @@ export function isEffort(value: unknown): value is Effort {
 export const PERMISSION_MODES = ['acceptEdits', 'auto', 'dontAsk', 'plan', 'manual'] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
+/**
+ * The tag every operator message carries into the session, and carries back out.
+ *
+ * Two problems it solves at once. Going in, the CLI's `--replay-user-messages`
+ * echo is the only proof a message landed — but the echo used to be recognised
+ * by *position* ("the first one is the boot prompt"), which is wrong the moment
+ * a session is resumed or restarted on another model and the CLI replays a
+ * history rather than one message. A tag is positional-independent: an echo is
+ * ours if and only if it carries a tag we are still waiting on.
+ *
+ * Coming back, the session is asked to repeat the tag at the head of its reply,
+ * which is what turns "some text somewhere in the phase's output" into an
+ * answer the console can attribute to the question that caused it.
+ */
+export const OPERATOR_MARK = /\[\[(ask|steer):([0-9a-z]{4,16})\]\]/i;
+
+/** The tag in a piece of text, normalised, or null. */
+export function operatorMark(text: string): string | null {
+  const found = OPERATOR_MARK.exec(text);
+  return found ? `${found[1].toLowerCase()}:${found[2].toLowerCase()}` : null;
+}
+
+/** Build the tag for one operator message. */
+export function markFor(kind: 'ask' | 'steer', id: string): string {
+  return `[[${kind}:${id}]]`;
+}
+
 export type StreamEvent =
   | { kind: 'init'; sessionId: string; model?: string; tools?: number }
   | { kind: 'text'; text: string }
@@ -88,8 +115,17 @@ export type StreamEvent =
   | { kind: 'subagent'; text: string; parent: string }
   | { kind: 'tool'; name: string; summary: string }
   | { kind: 'hook'; name: string; event: string; outcome?: string }
-  /** A message the operator sent into a running session, echoed back by the CLI. */
-  | { kind: 'injected'; text: string }
+  /**
+   * A message the operator sent into a running session. Emitted twice for one
+   * message and rendered once: the runner emits it undelivered the instant it
+   * is written, and this emits it again — same `mark` — when the CLI echoes it
+   * back, which is the only evidence it arrived.
+   */
+  | { kind: 'injected'; text: string; mark?: string; delivered?: boolean }
+  /** The session's reply to one of those, recognised by the tag it repeats. */
+  | { kind: 'answer'; text: string; mark: string }
+  /** stdin was closed by the watchdog rather than by the conversation ending. */
+  | { kind: 'idle'; afterMs: number; reason: string }
   /** The account's usage window, as the CLI reports it mid-session. */
   | { kind: 'limits'; status: string; window?: string; utilization?: number; resetsAt?: number }
   | { kind: 'retry'; category?: string; attempt?: number; detail?: string }
@@ -139,6 +175,8 @@ export type SpawnRequest = {
   subagentText?: boolean;
   /** Put hook lifecycle in the stream, so approvals are visible as they fire. */
   hookEvents?: boolean;
+  /** Silence after the phase's turn that means wedged rather than working. */
+  idleCloseMs?: number;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   onEvent?: (event: StreamEvent) => void;
@@ -175,6 +213,23 @@ const MAX_LINE = 8 * 1024 * 1024;
  * gathered and released on a fixed beat instead.
  */
 const PARTIAL_FLUSH_MS = 120;
+/**
+ * How long a session may say nothing at all, after its phase turn has produced
+ * a result and with stdin still open, before stdin is closed for it.
+ *
+ * This is the backstop under the close rule below, and it exists because the
+ * close rule depends on evidence the CLI provides — an echo, a result — and a
+ * rule that waits for evidence waits forever when the evidence never comes. The
+ * failure it catches was real: a phase that had emitted its result and printed
+ * its completion report sat blocked on stdin for eighty minutes at 0.1% CPU,
+ * with the run showing `running` the whole time.
+ *
+ * Generous on purpose. After the phase's own turn the only legitimate reason
+ * for silence is a long tool call inside a turn the operator started, so this
+ * has to outlast a test suite; ten minutes of *total* stream silence is not a
+ * session that is working.
+ */
+const IDLE_CLOSE_MS = 10 * 60 * 1_000;
 
 export function buildArgv(request: SpawnRequest): string[] {
   const argv = [
@@ -281,15 +336,45 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
   const retryCategories: string[] = [];
   let settled = false;
 
-  /* ---- the conversation's own state ---- */
+  /* ---- the conversation's own state ---- *
+   *
+   * ## Why none of this is a counter any more
+   *
+   * It used to be: `outstanding` went up on every operator message and down on
+   * every `result`, and stdin closed at zero. That is a subtraction across two
+   * streams nobody correlates — the CLI is free to fold two injected messages
+   * into one turn, and a client is free to POST the same question twice — so
+   * the counter drifts above zero, `closeStdin()` never fires, the child never
+   * exits, and the phase reads `running` forever. Measured: a session that had
+   * emitted its result and printed a completion report, still alive 80 minutes
+   * later blocked on stdin.
+   *
+   * What replaces it is two things that cannot drift:
+   *
+   *   `unecho`               the tags of messages written and not yet echoed
+   *                          back, keyed by tag rather than counted. A repeat
+   *                          of the same message is one entry, and two messages
+   *                          folded into one turn both drain, so folding is no
+   *                          longer a leak.
+   *   `sentSinceLastResult`  a flag, not a tally, and only for an *untagged*
+   *                          caller — one whose messages `unecho` cannot track.
+   *                          Setting it twice is the same as setting it once.
+   *   `turnsSeen`            the CLI's own `num_turns`, which is what tells an
+   *                          extra `result` for a turn already counted from a
+   *                          genuine new turn. Only a new turn may close stdin,
+   *                          so a duplicate cannot close the door on a question
+   *                          that has not been answered yet.
+   */
   /** The boot-prompt turn has produced its result: the phase's work is done. */
   let phaseTurnDone = false;
-  /** Operator messages written but not yet answered. */
-  let outstanding = 0;
+  /** An UNTAGGED message written since the previous result. See above. */
+  let sentSinceLastResult = false;
+  /** Tags of operator messages written but not yet echoed back by the CLI. */
+  const unecho = new Set<string>();
+  /** The highest turn number any result has reported. */
+  let turnsSeen = 0;
   let injected = 0;
   let stdinOpen = true;
-  /** How many of our own messages the CLI has echoed back at us. */
-  let echoes = 0;
 
   const finish = (outcome: SpawnOutcome) => {
     if (settled) return;
@@ -300,6 +385,7 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
   if (child.pid) request.onPid?.(child.pid);
 
   const emit = (event: StreamEvent) => {
+    lastEventAt = Date.now();
     try { request.onEvent?.(event); } catch { /* a listener must not kill the run */ }
   };
 
@@ -326,10 +412,46 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
   const closeStdin = (): void => {
     if (!stdinOpen) return;
     stdinOpen = false;
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     try { child.stdin?.end(); } catch { /* already gone */ }
   };
 
-  // The boot prompt, as the session's first turn.
+  /* ---- the idle watchdog ---- */
+
+  const idleAfter = request.idleCloseMs ?? IDLE_CLOSE_MS;
+  let idleTimer: NodeJS.Timeout | null = null;
+  let lastEventAt = Date.now();
+
+  /**
+   * Armed only once the phase's own turn has produced a result: before that,
+   * silence is a session thinking, and cutting it off would be the bug rather
+   * than the fix.
+   *
+   * It measures *silence*, not elapsed time, but it is not re-armed per event —
+   * a streaming session emits thousands of deltas and rescheduling a timer on
+   * each is real work for nothing. Instead every event stamps `lastEventAt` and
+   * the timer, on waking, either fires or sleeps out the remainder.
+   */
+  const armIdle = (delay = idleAfter): void => {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    if (!phaseTurnDone || !stdinOpen || settled || idleAfter <= 0) return;
+    idleTimer = setTimeout(() => {
+      idleTimer = null;
+      if (!stdinOpen || settled) return;
+      const quiet = Date.now() - lastEventAt;
+      if (quiet < idleAfter) { armIdle(idleAfter - quiet); return; }
+      const reason = unecho.size
+        ? `${unecho.size} operator message(s) were never echoed back`
+        : 'the session stopped streaming with stdin still open';
+      log.warn('spawn.idle-close', { afterMs: quiet, reason, pid: child.pid });
+      emit({ kind: 'idle', afterMs: quiet, reason });
+      closeStdin();
+    }, Math.max(1, delay));
+    idleTimer.unref?.();
+  };
+
+  // The boot prompt, as the session's first turn. Deliberately not marked as
+  // "sent": it IS the phase turn, and `phaseTurnDone` is what tracks that.
   write(request.prompt);
 
   request.onHandle?.({
@@ -338,8 +460,14 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
     send: (text: string) => {
       if (!text.trim()) return false;
       if (!write(text)) return false;
-      outstanding++;
+      // Untagged callers still work — they simply get no delivery confirmation
+      // and no attributed answer, which is the old behaviour rather than a new
+      // failure. Everything the console sends is tagged.
+      const mark = operatorMark(text);
+      if (mark) unecho.add(mark);
+      else sentSinceLastResult = true;
       injected++;
+      armIdle();
       return true;
     },
   });
@@ -456,7 +584,13 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
       for (const block of content?.content ?? []) {
         const item = block as { type?: string; text?: string; name?: string; input?: unknown };
         if (item.type === 'text' && item.text) {
-          if (parent) emit({ kind: 'subagent', text: item.text, parent });
+          // The reply to an operator's question repeats the question's tag, and
+          // that is the only thing separating it from the phase's own words.
+          // Without it the answer lands in the middle of a wall of build output
+          // and the operator never sees that anything replied at all.
+          const answering = !parent ? operatorMark(item.text.slice(0, 400)) : null;
+          if (answering) emit({ kind: 'answer', text: stripMark(item.text), mark: answering });
+          else if (parent) emit({ kind: 'subagent', text: item.text, parent });
           else emit({ kind: 'text', text: item.text });
         }
         if (item.type === 'tool_use' && item.name) {
@@ -473,12 +607,15 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
       const text = Array.isArray(content)
         ? content.map((b) => (b as { text?: string }).text).filter(Boolean).join(' ')
         : undefined;
-      // The first echo is always the boot prompt: not news, and thousands of
-      // lines long. Counted rather than compared by text, because an echo the
-      // CLI normalised even slightly would otherwise be shown in full as
-      // something the operator had supposedly just typed.
-      echoes++;
-      if (text && echoes > 1) emit({ kind: 'injected', text });
+      // An echo is ours if and only if it carries a tag we are still waiting
+      // on. This used to be positional — "the first echo is the boot prompt" —
+      // which is right exactly once: a session started with `--resume`, or
+      // restarted on another model, replays a history and every count is off by
+      // however long that history was. The boot prompt and any replayed turn
+      // carry no pending tag, so both are correctly ignored here.
+      const mark = text ? operatorMark(text) : null;
+      if (!mark || !unecho.delete(mark)) return;
+      emit({ kind: 'injected', text: stripMark(text!), mark, delivered: true });
       return;
     }
 
@@ -488,7 +625,12 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
       // `total_cost_usd` is the running total for the whole session, not this
       // turn's share — so the last one wins and they are never summed.
       if (typeof message.total_cost_usd === 'number') costUsd = message.total_cost_usd;
-      if (typeof message.num_turns === 'number') turns = Math.max(turns, message.num_turns);
+      // A result that reports a turn number already seen is a duplicate, not a
+      // turn boundary — and telling those apart is the CLI's job, not ours.
+      const reported = typeof message.num_turns === 'number' ? message.num_turns : null;
+      const newTurn = reported === null || reported > turnsSeen;
+      if (reported !== null) turnsSeen = Math.max(turnsSeen, reported);
+      if (reported !== null) turns = Math.max(turns, reported);
       const text = message.result ?? message.error;
       if (typeof text === 'string') resultText = text;
       emit({
@@ -500,11 +642,27 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
       });
 
       // One result per TURN. The first belongs to the boot prompt, so the phase
-      // has done its work; any after that answer an operator's question. When
-      // nothing is left to answer, stdin closes and the process exits.
-      if (!phaseTurnDone) phaseTurnDone = true;
-      else outstanding = Math.max(0, outstanding - 1);
-      if (phaseTurnDone && outstanding === 0) closeStdin();
+      // has done its work; any after that answer an operator's message.
+      //
+      // The close rule, stated once: stdin closes on a result that ends a NEW
+      // turn, when every message written has been echoed back. Reading it as
+      // two questions rather than one subtraction makes both failure modes fall
+      // out —
+      //
+      //   two messages folded into ONE turn: both drain from `unecho` as they
+      //   are echoed, so the single result that follows closes (the counter
+      //   needed a result each, and waited forever for the second — this is the
+      //   wedge that left a finished phase reading `running` for 80 minutes);
+      //
+      //   an EXTRA result beyond the session's own turns: it is not a new turn,
+      //   so it is not a close decision at all (the counter would have
+      //   decremented to zero and closed the door on an unanswered question).
+      if (!newTurn) { armIdle(); return; }
+      phaseTurnDone = true;
+      const wroteUntagged = sentSinceLastResult;
+      sentSinceLastResult = false;
+      if (!wroteUntagged && !unecho.size) closeStdin();
+      else armIdle();
     }
   };
 
@@ -532,6 +690,7 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
   child.on('close', (code, sig) => {
     request.signal?.removeEventListener('abort', onAbort);
     stdinOpen = false;
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     stdoutLines.flush();
     flushPartials();
 
@@ -568,6 +727,11 @@ function fail(reason: string, started: number, argv: string[]): SpawnOutcome {
     argv,
     injected: 0,
   };
+}
+
+/** The tag is plumbing; it belongs in the correlation, not on the screen. */
+export function stripMark(text: string): string {
+  return text.replace(OPERATOR_MARK, '').replace(/^\s+/, '');
 }
 
 function firstString(source: Record<string, unknown>, keys: string[]): string | undefined {

@@ -33,7 +33,7 @@ import {
 } from './analysis/graph.ts';
 import { planStats, portfolio, type PlanStats, type Portfolio, type PlanContext } from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
-import { Runner, applySettings, type RunSettingsPatch, type StartOptions } from './runner/runner.ts';
+import { Runner, applySettings, type AskResult, type RunSettingsPatch, type StartOptions } from './runner/runner.ts';
 import { Journal } from './runner/journal.ts';
 import { latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT, type RunState } from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
@@ -928,12 +928,41 @@ export class Service {
    * all — and the honest answer is to say so rather than to write the question
    * somewhere it will never be read.
    */
-  askRun(slug: string, question: string, by = 'console'): { ok: boolean; reason?: string } {
+  askRun(slug: string, question: string, by = 'console', key?: string): AskResult {
     const live = this.runner.current();
     if (!live || live.slug !== slug) {
       return { ok: false, reason: `nothing is running for ${slug} in this console` };
     }
-    return this.runner.ask(question, by);
+    return this.runner.ask(question, by, key);
+  }
+
+  /** The same channel, said as an instruction rather than a question. */
+  steerRun(slug: string, instruction: string, by = 'console', key?: string): AskResult {
+    const live = this.runner.current();
+    if (!live || live.slug !== slug) {
+      return { ok: false, reason: `nothing is running for ${slug} in this console` };
+    }
+    return this.runner.steer(instruction, by, key);
+  }
+
+  /**
+   * Freeze and thaw the session mid-phase.
+   *
+   * No on-disk fallback, and for the same reason `askRun` has none: both act on
+   * a live child. A run this console is not driving has a child belonging to
+   * another console or to nothing, and signalling a pid we do not own is not a
+   * fallback, it is a different and much worse action.
+   */
+  freezeRun(slug: string, by = 'console'): RunState | null {
+    const live = this.runner.current();
+    if (live?.slug !== slug || !this.runner.freeze(by)) return live?.slug === slug ? live : null;
+    return this.runner.current();
+  }
+
+  thawRun(slug: string): RunState | null {
+    const live = this.runner.current();
+    if (live?.slug !== slug || !this.runner.thaw()) return live?.slug === slug ? live : null;
+    return this.runner.current();
   }
 
   /** Change model, autonomy or budgets on a run in flight; applies next phase. */

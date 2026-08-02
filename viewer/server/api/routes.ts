@@ -103,6 +103,21 @@ function phaseList(value: unknown): number[] | undefined {
   return phases.slice(0, 500);
 }
 
+/**
+ * The client's idempotency key for a write to a live session.
+ *
+ * Read from the header first because that is where the convention lives, and
+ * from the body as a fallback so a `curl` or `bin/btw` can send one too. Kept
+ * short and to a safe alphabet: it is used as a map key and echoed back.
+ */
+function idempotencyKey(req: IncomingMessage, body: Record<string, unknown>): string | undefined {
+  const raw = req.headers['idempotency-key'] ?? body.key;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== 'string') return undefined;
+  const key = value.trim().slice(0, 100);
+  return /^[\w.:-]{8,100}$/.test(key) ? key : undefined;
+}
+
 /** A skill id: what `/name` or `/plugin:name` accepts, and nothing else. */
 const SKILL_ID = /^[a-z0-9][\w.-]{0,63}(:[a-z0-9][\w.-]{0,63})?$/i;
 
@@ -469,20 +484,34 @@ export async function handleApi(
           // console restart there is no in-memory run to act on, and the
           // runner's own methods return silently — a button that answers 200
           // and does nothing. The service edits the checkpoint on disk instead.
-          case 'ask': {
+          case 'ask':
+          case 'steer': {
             // 409 rather than 400: the request is well formed, there is simply
             // nothing listening — and the difference is what tells the console
             // to say "no session is running" instead of "bad request".
-            const asked = service.askRun(
-              slug,
-              String(body.question ?? ''),
-              typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
-            );
-            json(res, asked.ok ? 200 : 409, asked);
+            const by = typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console';
+            const key = idempotencyKey(req, body);
+            const sent = verb === 'ask'
+              ? service.askRun(slug, String(body.question ?? ''), by, key)
+              : service.steerRun(slug, String(body.instruction ?? body.question ?? ''), by, key);
+            json(res, sent.ok ? 200 : 409, sent);
             return true;
           }
           case 'pause': json(res, 200, { run: service.pauseRun(slug) }); return true;
           case 'resume': json(res, 200, { run: service.resumePause(slug) }); return true;
+          // Freeze/thaw act on a live child, so unlike pause they have no
+          // on-disk fallback: a null run here means this console is not the one
+          // driving, which the client reports rather than papering over.
+          case 'freeze': {
+            const run = service.freezeRun(slug, typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console');
+            json(res, run ? 200 : 409, run ? { run } : { error: `nothing is running for ${slug} in this console` });
+            return true;
+          }
+          case 'thaw': {
+            const run = service.thawRun(slug);
+            json(res, run ? 200 : 409, run ? { run } : { error: `nothing is running for ${slug} in this console` });
+            return true;
+          }
           case 'stop': json(res, 200, { run: await service.stopRun(slug) }); return true;
           case 'skip': json(res, 200, { run: service.skipPhase(slug, Number(body.phase)) }); return true;
           case 'retry': json(res, 200, { run: service.retryPhase(slug, Number(body.phase)) }); return true;
