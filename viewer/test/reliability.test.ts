@@ -52,8 +52,13 @@ test('a file change reaches the handler', async () => {
   try {
     assert.equal(watcher.healthy(), true, 'watchers should be armed after start');
     writeFileSync(join(dir.plans, 'demo.md'), '# demo\n');
-    assert.ok(await until(() => seen.length > 0), 'the handler should fire for a new plan file');
-    assert.ok(seen.flat().some((p) => p.includes('demo.md')));
+    // What the platform actually promises is that the change is reported, not
+    // that it is reported by filename: on a coalesced FSEvents batch macOS
+    // gives no filename and the watcher reports the directory instead. Asserting
+    // on "demo.md" asserted a guarantee that does not exist, and failed roughly
+    // one run in three. The service only needs to know which tree moved.
+    const arrived = await until(() => seen.flat().some((p) => p.startsWith(dir.plans)));
+    assert.ok(arrived, `the handler should report the plans tree; got ${JSON.stringify(seen.flat())}`);
   } finally {
     watcher.stop();
     dir.cleanup();
