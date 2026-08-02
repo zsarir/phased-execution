@@ -143,45 +143,84 @@ function nextClockTime(opts: {
   if (opts.meridiem === 'am' && hour === 12) hour = 0;
   if (hour < 0 || hour > 23 || opts.minute < 0 || opts.minute > 59) return null;
 
-  const at = new Date(opts.now);
-  at.setSeconds(0, 0);
-
   if (opts.timeZone) {
-    const offset = zoneOffsetMs(opts.now, opts.timeZone);
-    if (offset === null) return null;
-    // Build the instant whose representation in `timeZone` is hour:minute.
-    const utcMidnight = Date.UTC(
-      at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate(), hour, opts.minute, 0, 0,
-    );
-    let candidate = new Date(utcMidnight - offset);
-    if (candidate.getTime() <= opts.now.getTime()) {
-      candidate = new Date(candidate.getTime() + 24 * 3600 * 1000);
+    // The day must come from the clock in THAT zone, not from UTC. Using the
+    // UTC date lands on the wrong calendar day whenever the two disagree —
+    // 11pm Los Angeles asked at 01:00 UTC used to resolve 24h late, which for a
+    // runner means sleeping through a whole working day it could have used.
+    const today = zoneParts(opts.now, opts.timeZone);
+    if (!today) return null;
+    let candidate = zonedInstant(today.year, today.month, today.day, hour, opts.minute, opts.timeZone);
+    if (!candidate || candidate.getTime() <= opts.now.getTime()) {
+      // Date.UTC normalises a day past the end of the month for us.
+      candidate = zonedInstant(today.year, today.month, today.day + 1, hour, opts.minute, opts.timeZone);
     }
     return candidate;
   }
 
+  const at = new Date(opts.now);
+  at.setSeconds(0, 0);
   at.setHours(hour, opts.minute, 0, 0);
   if (at.getTime() <= opts.now.getTime()) at.setDate(at.getDate() + 1);
   return at;
 }
 
-/** How far `timeZone` is ahead of UTC at this instant, in ms. */
-function zoneOffsetMs(at: Date, timeZone: string): number | null {
+/** The calendar date and clock this instant shows in `timeZone`. */
+function zoneParts(at: Date, timeZone: string): { year: number; month: number; day: number } | null {
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      hour12: false,
+      timeZone, hour12: false,
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
     }).formatToParts(at);
     const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
-    const asUTC = Date.UTC(
-      get('year'), get('month') - 1, get('day'),
-      get('hour') % 24, get('minute'), get('second'),
-    );
-    return asUTC - Math.floor(at.getTime() / 1000) * 1000;
+    const year = get('year');
+    if (!Number.isFinite(year)) return null;
+    return { year, month: get('month'), day: get('day') };
   } catch {
     return null; // an unknown zone id
+  }
+}
+
+/**
+ * The instant at which `timeZone` reads this wall-clock date and time.
+ *
+ * Two passes: guess with the offset at the naive instant, then correct with the
+ * offset actually in force there — they differ across a DST boundary, and a
+ * usage window reopening at 3am on a spring-forward Sunday is exactly the kind
+ * of edge an unattended runner meets at 3am with nobody watching.
+ */
+function zonedInstant(
+  year: number, month: number, day: number, hour: number, minute: number, timeZone: string,
+): Date | null {
+  const naive = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const first = zoneOffsetMs(new Date(naive), timeZone);
+  if (first === null) return null;
+  const corrected = zoneOffsetMs(new Date(naive - first), timeZone);
+  return new Date(naive - (corrected ?? first));
+}
+
+/** How far `timeZone` is ahead of UTC at this instant, in ms. */
+function zoneOffsetMs(at: Date, timeZone: string): number | null {
+  const parts = zoneShown(at, timeZone);
+  if (!parts) return null;
+  return parts - Math.floor(at.getTime() / 1000) * 1000;
+}
+
+/** This instant's zone-local wall clock, expressed as if it were UTC. */
+function zoneShown(at: Date, timeZone: string): number | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(at);
+    const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+    const year = get('year');
+    if (!Number.isFinite(year)) return null;
+    return Date.UTC(year, get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second'));
+  } catch {
+    return null;
   }
 }
 
@@ -189,17 +228,28 @@ function zoneOffsetMs(at: Date, timeZone: string): number | null {
  * Classification
  * ------------------------------------------------------------------ */
 
+/**
+ * Every pattern here is matched against `text`, which is the session's own
+ * output as well as its stderr. That makes loose tokens actively dangerous: a
+ * phase that refactors a rate limiter, counts 401 lines, or touches a billing
+ * module would otherwise be read as an auth failure and park the whole run for
+ * a human who has nothing to fix. So each pattern demands the framing Claude
+ * Code actually prints — `API Error:`, a full sentence — never a bare number or
+ * a single common word.
+ */
 const RE = {
   // Shared across every model — switching model does NOT help, only time does.
   planLimit: /you'?ve hit your (session|weekly) limit|usage limit reached|claude ai usage limit/i,
   // Model-specific — the run continues immediately on another model.
   modelLimit: /you'?ve hit your (opus|sonnet|haiku|fable)[a-z0-9. -]* limit/i,
-  overloaded: /529|overloaded|api is at capacity/i,
-  rateLimit: /request rejected \(429\)|rate limit|temporarily limiting requests/i,
-  auth: /please run \/login|not logged in|invalid api key|oauth (token|session)|login expired|authentication_error|could not resolve authentication|401/i,
-  billing: /credit balance is too low|billing|usage credits required|spend limit/i,
+  overloaded: /api error:?\s*529|\b529\b[^\n]{0,24}overload|overloaded[_ ]error|overloaded errors|api is at capacity|is currently overloaded/i,
+  rateLimit: /api error:?\s*429|request rejected \(429\)|rate[_ ]limit_error|rate.?limited|temporarily limiting requests|too many requests/i,
+  // `login expired` is anchored to the start of a line or clause: the CLI leads
+  // with the condition, prose embeds it ("tests for the login expired path").
+  auth: /please run \/login|not logged in|invalid api key|invalid x-api-key|oauth (token|session) (expired|revoked|invalid)|(^|[·|\n]\s*)login expired|authentication_error|could not resolve authentication|api error:?\s*401|401 unauthorized/i,
+  billing: /credit balance is too low|insufficient credits|usage credits required|billing (error|issue|problem)|spend limit (reached|exceeded)|payment (required|method)/i,
   orgPolicy: /organization has (been )?disabled|oauth_org_not_allowed|disabled api key authentication|disabled claude subscription/i,
-  serverError: /api error: 5\d\d|internal server error/i,
+  serverError: /api error:?\s*5\d\d|internal server error/i,
   timeout: /request timed out/i,
 };
 
@@ -217,6 +267,17 @@ export function classify(signal: StopSignal, now = new Date()): Disposition {
   // Killed by a supervisor or the OS — not the model's doing.
   if (signal.code === 143) return { kind: 'needs-human', reason: 'session was terminated (SIGTERM)' };
   if (signal.code === 137) return { kind: 'retry', afterMs: 30_000, reason: 'session was killed (SIGKILL/OOM) — retrying once' };
+
+  // The work is intact, just capped. `subtype` is a structured field the CLI
+  // sets deliberately, so it outranks every text heuristic below — a phase that
+  // spent its budget while *discussing* rate limits must still resume, not be
+  // read as rate-limited. Resuming the SAME session keeps what it already did.
+  if (signal.subtype === 'error_max_budget_usd') {
+    return { kind: 'resume', raise: 'budget', reason: 'phase hit its cost cap mid-work' };
+  }
+  if (signal.subtype === 'error_max_turns') {
+    return { kind: 'resume', raise: 'turns', reason: 'phase hit its turn cap mid-work' };
+  }
 
   // Human-only. Retrying these is pure waste and can lock an account harder.
   if (RE.orgPolicy.test(text) || cats.includes('oauth_org_not_allowed')) {
@@ -270,15 +331,6 @@ export function classify(signal: StopSignal, now = new Date()): Disposition {
   }
   if (RE.serverError.test(text) || RE.timeout.test(text) || cats.includes('server_error')) {
     return { kind: 'retry', afterMs: 2 * 60_000, reason: 'server error or timeout' };
-  }
-
-  // The work is intact, just capped. Resuming the SAME session keeps everything
-  // it already did — this is the one place resume is right.
-  if (signal.subtype === 'error_max_budget_usd') {
-    return { kind: 'resume', raise: 'budget', reason: 'phase hit its cost cap mid-work' };
-  }
-  if (signal.subtype === 'error_max_turns') {
-    return { kind: 'resume', raise: 'turns', reason: 'phase hit its turn cap mid-work' };
   }
 
   // The model declined. A retry produces the same refusal; a person must look.

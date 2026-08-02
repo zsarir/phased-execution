@@ -64,6 +64,48 @@ test('parses an explicit IANA timezone rather than assuming local', () => {
   assert.equal(Number(shown) % 24, 15);
 });
 
+test('a zoned time uses that zone\'s calendar day, not the UTC one', () => {
+  // 01:00 UTC is still the previous evening in Los Angeles. Taking the day from
+  // UTC put the answer 24h out — a runner that sleeps through a working day.
+  const now = at('2026-08-02T01:00:00Z');
+  const reset = parseResetTime('Your limit will reset at 11pm (America/Los_Angeles)', now);
+  assert.ok(reset);
+  const hours = (reset.getTime() - now.getTime()) / 3_600_000;
+  assert.ok(hours > 0 && hours < 24, `expected the next 11pm within a day, got ${hours}h`);
+  const shown = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles', hour: 'numeric', hour12: false,
+  }).format(reset);
+  assert.equal(Number(shown) % 24, 23);
+});
+
+test('a zoned time east of UTC resolves to the next such moment', () => {
+  const now = at('2026-08-02T20:00:00Z'); // already 05:00 on the 3rd in Tokyo
+  const reset = parseResetTime('Your limit will reset at 3pm (Asia/Tokyo)', now);
+  assert.ok(reset);
+  const hours = (reset.getTime() - now.getTime()) / 3_600_000;
+  assert.ok(hours > 0 && hours < 24, `expected the next 3pm within a day, got ${hours}h`);
+  const shown = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tokyo', hour: 'numeric', hour12: false,
+  }).format(reset);
+  assert.equal(Number(shown) % 24, 15);
+});
+
+test('a reset across a DST boundary lands on the right wall clock', () => {
+  // US DST starts 2026-03-08. Asking on the 7th for 3pm must give 3pm as the
+  // clock will actually read it that afternoon, not 2pm or 4pm.
+  const now = at('2026-03-07T23:00:00Z');
+  const reset = parseResetTime('Your limit will reset at 3pm (America/New_York)', now);
+  assert.ok(reset);
+  const shown = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: 'numeric', hour12: false,
+  }).format(reset);
+  assert.equal(Number(shown) % 24, 15);
+});
+
+test('an unknown timezone falls back rather than throwing', () => {
+  assert.doesNotThrow(() => parseResetTime('Your limit will reset at 3pm (Not/AZone)'));
+});
+
 test('unparseable text yields null rather than a guess', () => {
   assert.equal(parseResetTime('something went wrong'), null);
   assert.equal(parseResetTime(''), null);
@@ -159,6 +201,30 @@ test('signals distinguish a supervisor kill from an OOM kill', () => {
 test('an unrecognised failure is a phase failure, not a silent success', () => {
   const d = classify(stop({ subtype: undefined, code: 2, text: 'something unexpected' }));
   assert.equal(d.kind, 'phase-failed');
+});
+
+test('a phase whose own output discusses these topics is not misread as one', () => {
+  // `text` carries the session's own words. Loose patterns turned a phase that
+  // merely worked on this subject matter into a parked run waiting on a human
+  // who had nothing to fix — the worst kind of false positive, because it looks
+  // exactly like a real outage.
+  for (const text of [
+    'Refactored the 429 backoff and added 401 handling to billing.ts',
+    'Added a rate limit table with 529 rows to the billing module',
+    'Wrote tests for the login expired path; see docs/auth.md',
+  ]) {
+    assert.equal(classify(stop({ subtype: undefined, code: 2, text })).kind, 'phase-failed', text);
+  }
+});
+
+test('a budget cap resumes even when the text mentions a rate limit', () => {
+  // subtype is structured and deliberate; the prose is a heuristic. The
+  // structured signal has to win, or capped work gets thrown away and re-run.
+  const d = classify(stop({
+    subtype: 'error_max_budget_usd',
+    text: 'Investigated the API Error: 429 retry path before running out of budget',
+  }));
+  assert.equal(d.kind, 'resume');
 });
 
 /* ---------------- child environment + model fallback ---------------- */

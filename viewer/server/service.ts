@@ -28,6 +28,9 @@ import {
 } from './analysis/graph.ts';
 import { planStats, portfolio, type PlanStats, type Portfolio, type PlanContext } from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
+import { Runner, type StartOptions } from './runner/runner.ts';
+import { Journal } from './runner/journal.ts';
+import { latestRun, listRuns, type RunState } from './runner/state.ts';
 
 /** One live update, with the id a reconnecting client replays from. */
 export type LiveEvent = { id: number; event: string; data: unknown };
@@ -125,11 +128,20 @@ export class Service {
   eventCursor = 0;
   private eventLog: LiveEvent[] = [];
 
+  readonly runner: Runner;
+
   constructor(flags: Flags) {
     this.flags = flags;
     this.prefs = loadPrefs();
     this.sizing = loadSizing(flags.scriptsDir);
     this.watcher = new DocsWatcher((paths) => this.onChange(paths));
+    this.runner = new Runner({
+      scriptsDir: flags.scriptsDir,
+      // The plan is the only source for what proves a phase worked, exactly as
+      // it is the only source for what the phase should do.
+      verificationText: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verification,
+      onEvent: (event, data) => this.emit(event, data),
+    });
     // A fault anywhere in the process reaches the browser as a health event,
     // so a degraded console announces itself instead of looking healthy.
     onDegraded((state) => this.emit('health', { ...state, watcher: this.watcher.status() }));
@@ -504,6 +516,8 @@ export class Service {
       root: this.root,
       prefs: this.prefs,
       allowWrites: this.flags.allowWrites,
+      allowRun: this.flags.allowRun,
+      run: this.runner.current(),
       scriptsDir: this.flags.scriptsDir,
       sizing: this.sizing,
       generation: this.generation,
@@ -515,6 +529,50 @@ export class Service {
       watcher: this.watcher.status(),
       health: degradedState(),
     };
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Runs
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Start or continue a run. Whether the plan is fresh or half-finished is not
+   * a distinction the caller has to make — the engine derives ready phases from
+   * the done-set, so both are the same code path.
+   */
+  async startRun(slug: string, options: Partial<StartOptions> = {}): Promise<RunState> {
+    if (!this.flags.allowRun) throw new Error('Runs are disabled. Restart with --allow-run to enable them.');
+    if (!this.root?.ok) throw new Error('No source directory is open.');
+    const record = this.store?.get(slug);
+    if (!record) throw new Error(`No plan named ${slug}.`);
+    if (!record.plan?.phased) throw new Error(`${slug} has no phase graph — there is nothing to run.`);
+    const state = await this.runner.start({ ...options, slug, root: this.root.path });
+    this.emit('run:state', { state });
+    return state;
+  }
+
+  /** The live run if there is one, otherwise the last one recorded on disk. */
+  runFor(slug: string): RunState | null {
+    const live = this.runner.current();
+    if (live && live.slug === slug) return live;
+    return this.root ? latestRun(this.root.path, slug) : null;
+  }
+
+  runsFor(slug: string): RunState[] {
+    return this.root ? listRuns(this.root.path, slug) : [];
+  }
+
+  /** Every run across every plan, for the runs list. */
+  allRuns(): RunState[] {
+    const slugs = this.store?.list().map((r) => r.slug) ?? [];
+    return slugs
+      .flatMap((slug) => this.runsFor(slug))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  runJournal(slug: string, id: string, limit = 500) {
+    if (!this.root) return [];
+    return new Journal(this.root.path, slug, id).read(limit);
   }
 
   savePreferences(patch: Partial<Prefs>): Prefs {

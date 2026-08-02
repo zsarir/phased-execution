@@ -178,3 +178,47 @@ test('shutdown handlers all run, and one that hangs cannot block the rest', asyn
   await runShutdownHandlers(50);
   assert.equal(order.filter((o) => o === 'fast').length, 1);
 });
+
+/* ------------------------------------------------------------------ *
+ * SSE — the client that is already gone
+ * ------------------------------------------------------------------ */
+
+const { handleApi } = await import('../server/api/routes.ts');
+
+/**
+ * A browser can vanish between the response header and the first write — a
+ * closed laptop, a killed tab, a reload landing mid-handshake. The stream then
+ * retires itself on that very first write, which used to reach the interval
+ * timer and the listener handle before either existed. That is a ReferenceError
+ * thrown from the one handler whose entire job is surviving dead clients.
+ */
+test('an SSE client that dies before the first write does not throw', async () => {
+  let unsubscribed = false;
+  const service = {
+    generation: 1,
+    eventCursor: 7,
+    eventsSince: () => [{ id: 8, event: 'changed', data: {} }],
+    onEvent: () => () => { unsubscribed = true; },
+  };
+
+  const res = {
+    // Already finished: every send() call takes the retire-immediately path.
+    writableEnded: true,
+    destroyed: false,
+    writeHead() { return this; },
+    write() { throw new Error('write after end'); },
+    end() {},
+    on() { return this; },
+  };
+  const req = { headers: { 'last-event-id': '7' }, on() { return this; } };
+
+  const handled = await handleApi(
+    { service } as never,
+    req as never,
+    res as never,
+    new URL('http://127.0.0.1/events'),
+  );
+
+  assert.equal(handled, true, 'the route still owns the request');
+  assert.equal(unsubscribed, true, 'the listener must be released, not leaked');
+});

@@ -48,9 +48,24 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
 
 /** A write must come from this app, in this browser, with writes enabled. */
 function guardWrite(req: IncomingMessage, service: Service): string | null {
-  if (!service.flags.allowWrites) {
-    return 'Writes are disabled. Restart with --allow-writes to enable them.';
-  }
+  return guardMutation(req, service.flags.allowWrites
+    ? null
+    : 'Writes are disabled. Restart with --allow-writes to enable them.');
+}
+
+/**
+ * Starting a run is its own decision. `--allow-writes` scaffolds a file;
+ * `--allow-run` spawns agent sessions that edit a repository unattended, so it
+ * is a separate flag and a separate guard rather than a wider reading of one.
+ */
+function guardRun(req: IncomingMessage, service: Service): string | null {
+  return guardMutation(req, service.flags.allowRun
+    ? null
+    : 'Runs are disabled. Restart with --allow-run to enable the autopilot.');
+}
+
+function guardMutation(req: IncomingMessage, disabled: string | null): string | null {
+  if (disabled) return disabled;
   if (req.headers['x-phase-console'] !== '1') return 'Missing console header.';
   const origin = req.headers.origin;
   if (origin) {
@@ -60,6 +75,11 @@ function guardWrite(req: IncomingMessage, service: Service): string | null {
     } catch { return 'Bad origin.'; }
   }
   return null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 export async function handleApi(
@@ -79,11 +99,17 @@ export async function handleApi(
     });
 
     let closed = false;
+    // Declared before `stop` can run: a client that vanishes between the header
+    // and the first write makes `send` call `stop` immediately, and reaching a
+    // `const` declared further down would be a ReferenceError inside the very
+    // handler whose job is to survive dead clients.
+    let ping: NodeJS.Timeout | undefined;
+    let off: (() => void) | undefined;
     const stop = () => {
       if (closed) return;
       closed = true;
-      clearInterval(ping);
-      off();
+      if (ping) clearInterval(ping);
+      off?.();
     };
 
     /**
@@ -116,10 +142,13 @@ export async function handleApi(
       send(`id: ${item.id}\nevent: ${item.event}\ndata: ${JSON.stringify(item.data)}\n\n`);
     }
 
-    const off = service.onEvent((event, data, id) => {
+    off = service.onEvent((event, data, id) => {
       send(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     });
-    const ping = setInterval(() => send(': ping\n\n'), 25_000);
+    ping = setInterval(() => send(': ping\n\n'), 25_000);
+    // The client may already have gone during the replay above, in which case
+    // `stop` ran before either of these existed. Retire them now.
+    if (closed) { clearInterval(ping); off(); }
 
     res.on('error', (error) => {
       if (!isClientDisconnect(error)) log.warn('sse.socket', { error });
@@ -213,6 +242,52 @@ export async function handleApi(
       }
       if (sub === 'lint') { json(res, 200, await service.lint(slug)); return true; }
       if (sub === 'work') { json(res, 200, await service.work(slug)); return true; }
+    }
+
+    /* ---------------- runs ---------------- */
+    if (head === 'runs' && req.method === 'GET') { json(res, 200, service.allRuns()); return true; }
+
+    if (head === 'run' && rest.length >= 1) {
+      const slug = rest[0];
+      const verb = rest[1];
+
+      if (req.method === 'GET') {
+        if (verb === 'journal') {
+          const id = rest[2] ?? service.runFor(slug)?.id;
+          json(res, 200, id ? service.runJournal(slug, id, Number(url.searchParams.get('limit') ?? 500)) : []);
+          return true;
+        }
+        json(res, 200, { run: service.runFor(slug), history: service.runsFor(slug) });
+        return true;
+      }
+
+      if (req.method === 'POST') {
+        const refusal = guardRun(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const runner = service.runner;
+
+        switch (verb) {
+          case 'start': {
+            const state = await service.startRun(slug, {
+              model: typeof body.model === 'string' ? body.model : undefined,
+              autonomy: body.autonomy === 'keep-going' ? 'keep-going' : 'halt-on-everything',
+              phaseBudgetUsd: numberOrNull(body.phaseBudgetUsd),
+              runBudgetUsd: numberOrNull(body.runBudgetUsd),
+              resumeRunId: typeof body.resumeRunId === 'string' ? body.resumeRunId : undefined,
+            });
+            json(res, 200, { run: state });
+            return true;
+          }
+          case 'pause': runner.pause(); json(res, 200, { run: runner.current() }); return true;
+          case 'stop': await runner.stop(); json(res, 200, { run: runner.current() }); return true;
+          case 'skip': runner.skip(Number(body.phase)); json(res, 200, { run: runner.current() }); return true;
+          case 'retry': runner.retry(Number(body.phase)); json(res, 200, { run: runner.current() }); return true;
+          default:
+            json(res, 404, { error: `No run verb "${verb}"` });
+            return true;
+        }
+      }
     }
 
     /* ---------------- guarded writes ---------------- */

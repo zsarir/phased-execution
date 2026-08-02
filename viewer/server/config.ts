@@ -20,6 +20,12 @@ export type Flags = {
   host: string;
   open: boolean;
   allowWrites: boolean;
+  /**
+   * Separate from `allowWrites` on purpose. A write scaffolds a file; a run
+   * spawns agent sessions that edit a repo for hours. Same server, very
+   * different blast radius, so they are two decisions.
+   */
+  allowRun: boolean;
   scriptsDir: string;
   /** Where the structured log goes. `null` disables file logging entirely. */
   logFile: string | null;
@@ -48,6 +54,7 @@ export function parseFlags(argv: string[]): Flags {
     // (or PHASE_CONSOLE_NO_OPEN=1, which scripts and tests use).
     open: process.env.PHASE_CONSOLE_NO_OPEN !== '1',
     allowWrites: false,
+    allowRun: false,
     scriptsDir: join(SKILL_DIR, 'scripts'),
     logFile: process.env.PHASE_CONSOLE_LOG === '' ? null : (process.env.PHASE_CONSOLE_LOG ?? defaultLogFile()),
   };
@@ -60,6 +67,7 @@ export function parseFlags(argv: string[]): Flags {
     else if (arg === '--open') flags.open = true;
     else if (arg === '--no-open') flags.open = false;
     else if (arg === '--allow-writes') flags.allowWrites = true;
+    else if (arg === '--allow-run') flags.allowRun = true;
     else if (arg === '--scripts') flags.scriptsDir = resolve(expandHome(next() ?? ''));
     else if (arg === '--log-file') flags.logFile = resolve(expandHome(next() ?? ''));
     else if (arg === '--no-log-file') flags.logFile = null;
@@ -78,6 +86,7 @@ function printHelp(): void {
   --host <addr>     interface to bind (default 127.0.0.1 — localhost only)
   --no-open         do not open the browser (it opens by default)
   --allow-writes    enable the guarded write verbs (scaffold, QA record, locks)
+  --allow-run       enable the autopilot: spawn \`claude -p\` sessions per phase
   --scripts <dir>   phased-execution scripts dir (default: the skill this lives in)
   --log-file <p>    structured log (default ${defaultLogFile()})
   --no-log-file     log to stderr only

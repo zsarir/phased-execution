@@ -146,6 +146,7 @@ server.listen(flags.port, flags.host, () => {
   process.stdout.write(`  source        ${service.root?.path ?? 'not chosen yet — pick one in the browser'}\n`);
   process.stdout.write(`  scripts       ${flags.scriptsDir}\n`);
   process.stdout.write(`  writes        ${flags.allowWrites ? 'enabled (--allow-writes)' : 'read-only'}\n`);
+  process.stdout.write(`  autopilot     ${flags.allowRun ? 'enabled (--allow-run) — this console can spawn agent sessions' : 'off'}\n`);
   process.stdout.write(`  log           ${flags.logFile ?? 'stderr only'}\n\n`);
   if (flags.open) {
     const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
