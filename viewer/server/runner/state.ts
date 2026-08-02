@@ -33,14 +33,27 @@ export type RunStatus =
   /** Nothing left to do on this plan. */
   | 'finished'
   /** A stop was requested; the child is being wound down. */
-  | 'stopping';
+  | 'stopping'
+  /** Nothing is driving this run any more, and nothing recorded why. */
+  | 'interrupted';
 
 export type PhaseStatus =
   | 'pending' | 'gated' | 'running' | 'verifying' | 'done'
-  | 'failed' | 'interrupted' | 'skipped' | 'parked';
+  | 'failed' | 'interrupted' | 'skipped' | 'parked'
+  /** Verified as far as a machine can; the rest is a question for a person. */
+  | 'awaiting-verification';
 
 /** Terminal for this run: the loop will not pick these up again by itself. */
 export const SETTLED: readonly PhaseStatus[] = ['done', 'skipped', 'failed', 'parked', 'interrupted'];
+
+/**
+ * Statuses that assert work is in flight — each one a claim made by a process
+ * that can be killed between writing it and acting on it.
+ */
+export const IN_FLIGHT: readonly RunStatus[] = ['running', 'pausing', 'stopping', 'waiting'];
+
+/** The same, per phase. A phase in one of these had a live loop behind it. */
+const PHASE_IN_FLIGHT: readonly PhaseStatus[] = ['running', 'verifying', 'awaiting-verification'];
 
 export type VerifyRun = {
   command: string;
@@ -179,23 +192,99 @@ export function saveRun(state: RunState): void {
   renameSync(tmp, target);
 }
 
-export function loadRun(root: string, slug: string, id: string): RunState | null {
+/* ------------------------------------------------------------------ *
+ * Reclaiming a run whose writer died
+ * ------------------------------------------------------------------ */
+
+/**
+ * Make a loaded run tell the truth about whether anything is driving it.
+ *
+ * `status: "running"` is not an observation, it is a claim — written by a
+ * process that can be killed in the next microsecond, and then never corrected,
+ * because correcting it was that process's job. A console that reads the claim
+ * back and believes it shows a run as live forever, offers a Stop button whose
+ * handler has nothing to stop, and hides the one fact the operator needs: that
+ * this run ended some time ago and nobody wrote down why.
+ *
+ * This is the ordinary stale-lease problem, and it takes the ordinary fix:
+ * liveness is *derived* at read time from evidence that cannot be faked — is
+ * this the run the in-process loop is actually driving, and is the recorded
+ * child pid still alive — rather than trusted from a field.
+ *
+ * `liveRunId` is the id the current `Runner` is driving, and it is the only
+ * thing that licenses an in-flight status. Everything else gets reclaimed.
+ * Returns whether anything changed, so callers only write when there is
+ * something to write.
+ */
+export function reconcileRun(state: RunState, liveRunId?: string | null): boolean {
+  if (state.id === liveRunId) return false;
+  if (!IN_FLIGHT.includes(state.status)) return false;
+
+  const at = new Date().toISOString();
+
+  // The dangerous case: the console went away but its child did not. That
+  // session is still editing the working tree, unobserved. Say so precisely —
+  // with the pid — rather than reclaiming a run something is still writing.
+  if (state.child && pidAlive(state.child.pid)) {
+    state.status = 'parked';
+    state.halt ??= {
+      at,
+      reason: `a session from an earlier console is still running (pid ${state.child.pid}, `
+        + `phase ${state.child.phase}). Let it finish or stop it, then continue this run.`,
+      phase: state.child.phase,
+    };
+    return true;
+  }
+
+  const phase = state.child?.phase ?? state.activePhase ?? undefined;
+  state.halt ??= {
+    at,
+    reason: phase === undefined
+      ? `nothing has been driving this run since ${state.updatedAt} — the console that started it stopped without recording why.`
+      : `nothing has been driving this run since ${state.updatedAt} — the console stopped while phase ${phase} was in flight, without recording why.`,
+    phase,
+  };
+  state.status = 'interrupted';
+  state.child = null;
+
+  // A phase left mid-flight may have half-finished something, so it is marked
+  // interrupted rather than failed: continuing asks about it instead of
+  // silently running it a second time.
+  for (const record of Object.values(state.phases)) {
+    if (!PHASE_IN_FLIGHT.includes(record.status)) continue;
+    const was = record.status;
+    record.status = 'interrupted';
+    record.note ??= `the console stopped while phase ${record.phase} was `
+      + (was === 'awaiting-verification' ? 'waiting to be verified' : 'running');
+    record.endedAt ??= at;
+  }
+  return true;
+}
+
+/** Reclaim on read, and make the correction stick so it is done once. */
+function settle(state: RunState, liveRunId?: string | null): RunState {
+  if (!reconcileRun(state, liveRunId)) return state;
+  try { saveRun(state); } catch { /* a read must not fail because the disk did */ }
+  return state;
+}
+
+export function loadRun(root: string, slug: string, id: string, liveRunId?: string | null): RunState | null {
   try {
-    return JSON.parse(readFileSync(runFile(root, slug, id), 'utf8')) as RunState;
+    return settle(JSON.parse(readFileSync(runFile(root, slug, id), 'utf8')) as RunState, liveRunId);
   } catch {
     return null;
   }
 }
 
 /** Every run recorded for a plan, newest first. */
-export function listRuns(root: string, slug: string): RunState[] {
+export function listRuns(root: string, slug: string, liveRunId?: string | null): RunState[] {
   const dir = runDir(root, slug);
   if (!existsSync(dir)) return [];
   const runs: RunState[] = [];
   for (const name of readdirSync(dir)) {
     const id = /^run-([0-9a-f]{8})\.json$/.exec(name)?.[1];
     if (!id) continue;
-    const state = loadRun(root, slug, id);
+    const state = loadRun(root, slug, id, liveRunId);
     if (state) runs.push(state);
   }
   return runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -206,8 +295,8 @@ export function listRuns(root: string, slug: string): RunState[] {
  * most recent. A finished run is still worth showing — it is the record of what
  * happened — but it must never be silently resumed.
  */
-export function latestRun(root: string, slug: string): RunState | null {
-  const runs = listRuns(root, slug);
+export function latestRun(root: string, slug: string, liveRunId?: string | null): RunState | null {
+  const runs = listRuns(root, slug, liveRunId);
   return runs.find((r) => r.status !== 'finished') ?? runs[0] ?? null;
 }
 

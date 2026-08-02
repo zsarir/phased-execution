@@ -263,6 +263,21 @@ export async function handleApi(
     /* ---------------- runs + approvals ---------------- */
     if (head === 'runs' && req.method === 'GET') { json(res, 200, service.allRuns()); return true; }
 
+    // Signing in. The GET is a read of `claude auth status` — memoised, free,
+    // and safe to poll. The POST opens a terminal, so it is a run-class action.
+    if (head === 'auth') {
+      if (req.method === 'GET') {
+        json(res, 200, await service.authStatus(url.searchParams.get('force') === '1'));
+        return true;
+      }
+      if (req.method === 'POST' && rest[0] === 'login') {
+        const refusal = guardRun(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        json(res, 200, await service.startLogin());
+        return true;
+      }
+    }
+
     if (head === 'approvals') {
       if (req.method === 'GET') { json(res, 200, service.approvals.all()); return true; }
       if (req.method === 'POST' && rest[0]) {
@@ -290,6 +305,10 @@ export async function handleApi(
           json(res, 200, id ? service.runJournal(slug, id, Number(url.searchParams.get('limit') ?? 500)) : []);
           return true;
         }
+        if (verb === 'transcript') {
+          json(res, 200, service.runTranscript(slug, rest[2], Number(url.searchParams.get('limit') ?? 400)));
+          return true;
+        }
         json(res, 200, { run: service.runFor(slug), history: service.runsFor(slug) });
         return true;
       }
@@ -313,9 +332,13 @@ export async function handleApi(
             return true;
           }
           case 'pause': runner.pause(); json(res, 200, { run: runner.current() }); return true;
-          case 'stop': await runner.stop(); json(res, 200, { run: runner.current() }); return true;
-          case 'skip': runner.skip(Number(body.phase)); json(res, 200, { run: runner.current() }); return true;
-          case 'retry': runner.retry(Number(body.phase)); json(res, 200, { run: runner.current() }); return true;
+          // These three go through the service, not the runner: after a console
+          // restart there is no in-memory run to act on, and the runner's own
+          // methods return silently — a button that answers 200 and does
+          // nothing. The service edits the checkpoint on disk instead.
+          case 'stop': json(res, 200, { run: await service.stopRun(slug) }); return true;
+          case 'skip': json(res, 200, { run: service.skipPhase(slug, Number(body.phase)) }); return true;
+          case 'retry': json(res, 200, { run: service.retryPhase(slug, Number(body.phase)) }); return true;
           default:
             json(res, 404, { error: `No run verb "${verb}"` });
             return true;

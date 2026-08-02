@@ -20,12 +20,16 @@ import { LiveConsole, useLiveLines, toLine } from '../components/live-console.js
 const PHASE_TONE = {
   done: 'ok', running: 'busy', verifying: 'busy', failed: 'bad',
   parked: 'warn', interrupted: 'warn', gated: 'warn', skipped: '', pending: '',
+  'awaiting-verification': 'warn',
 };
 
 const RUN_TONE = {
   running: 'busy', finished: 'ok', halted: 'bad', parked: 'warn',
-  waiting: 'warn', paused: '', pausing: '', stopping: '',
+  waiting: 'warn', paused: '', pausing: '', stopping: '', interrupted: 'warn',
 };
+
+/** Statuses that mean a loop is genuinely behind this run right now. */
+const LIVE_STATUSES = ['running', 'waiting', 'pausing', 'stopping'];
 
 export function RunView({ slug, state }) {
   const [run, setRun] = useState(null);
@@ -33,7 +37,8 @@ export function RunView({ slug, state }) {
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
-  const { lines, push, clear } = useLiveLines();
+  const [auth, setAuth] = useState(null);
+  const { lines, push, clear, hydrate } = useLiveLines();
 
   // The client is served fresh from disk; the server is whatever Node loaded at
   // startup. Upgrading the skill under a running console leaves this page
@@ -56,6 +61,19 @@ export function RunView({ slug, state }) {
   }, [slug, stale]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // Replay before subscribing, so the window is populated on arrival rather
+  // than waiting for the next thing to happen — which, on a run that already
+  // finished, is never.
+  useEffect(() => {
+    if (stale) return;
+    api.runTranscript(slug).then(hydrate).catch(() => { /* a missing replay is not worth a toast */ });
+  }, [slug, stale, hydrate]);
+
+  const checkAuth = useCallback(async (force) => {
+    try { setAuth(await api.auth(force)); } catch { /* the card simply stays hidden */ }
+  }, []);
+  useEffect(() => { if (!stale) void checkAuth(false); }, [stale, checkAuth]);
 
   useEffect(() => stale ? undefined : subscribeRun({
     run: () => void refresh(),
@@ -86,8 +104,9 @@ export function RunView({ slug, state }) {
 
   if (loading) return html`<${Spinner} label="Reading run state" />`;
 
-  const live = run && ['running', 'waiting', 'pausing', 'stopping'].includes(run.status);
+  const live = run && LIVE_STATUSES.includes(run.status);
   const phases = Object.values(run?.phases ?? {}).sort((a, b) => a.phase - b.phase);
+  const authBroken = auth && auth.loggedIn === false;
 
   // No page wrapper or heading: this renders inside the plan's own page, which
   // has already said which plan you are looking at.
@@ -104,6 +123,9 @@ export function RunView({ slug, state }) {
           This console is read-only for runs. Restart it with <code>--allow-run</code> to start,
           pause or approve anything. You can still watch a run that another console started.
         </${Banner}>` : null}
+
+      ${authBroken || /sign(ed)? in|authenticat/i.test(run?.halt?.reason ?? '') ? html`
+        <${AuthCard} auth=${auth} allowRun=${state.allowRun} onRecheck=${() => checkAuth(true)} />` : null}
 
       <${ApprovalQueue}
         approvals=${approvals}
@@ -310,6 +332,64 @@ function PhaseTable({ slug, run, phases, allowRun, onAct }) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Signing in
+ * ------------------------------------------------------------------ */
+
+/**
+ * An expired login is the cheapest thing here to fix and the most confusing to
+ * hit, because a signed-out session does not look like a failure: it reports
+ * `success`, uses one turn, costs nothing and changes nothing. The card names
+ * what happened and puts the fix one click away, because "run /login in this
+ * workspace" is an instruction a browser cannot carry out.
+ */
+function AuthCard({ auth, allowRun, onRecheck }) {
+  const [opened, setOpened] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const command = 'claude auth login';
+
+  const signIn = async () => {
+    setBusy(true);
+    try {
+      const result = await api.authLogin();
+      setOpened(true);
+      toast(result.opened
+        ? 'A terminal is open on the sign-in — finish there, then choose Check again.'
+        : result.detail ?? 'Run the command below in a terminal.', result.opened ? 'ok' : 'warn');
+    } catch (error) { toast(error.message, 'error'); }
+    finally { setBusy(false); }
+  };
+
+  return html`
+    <section class="card auth-card">
+      <div class="row spread">
+        <h2 class="card-title">Claude Code is signed out</h2>
+        ${auth?.checkedAt ? html`<span class="muted small">checked ${relativeTime(Date.parse(auth.checkedAt))}</span>` : null}
+      </div>
+      <p class="muted">
+        Sessions still start, spend a turn and report success — they simply cannot do anything.
+        That is why a run can look like it worked and change nothing.
+        ${auth?.detail ? html` <span class="small">(${auth.detail})</span>` : null}
+      </p>
+
+      <div class="row wrap" style="gap:8px;margin-top:10px">
+        <button class="btn primary" disabled=${!allowRun || busy} onClick=${signIn}>
+          ${busy ? 'Opening a terminal…' : 'Open a terminal and sign in'}
+        </button>
+        <button class="btn" onClick=${onRecheck}>Check again</button>
+      </div>
+
+      ${opened ? html`
+        <p class="muted small" style="margin-top:8px">
+          Finish signing in over there, then choose <strong>Check again</strong> and start the run.
+        </p>` : null}
+      <p class="muted small" style="margin-top:8px">Or run it yourself:</p>
+      <pre class="code">${command}</pre>
+      ${!allowRun ? html`
+        <p class="muted small">Opening a terminal needs <code>--allow-run</code>; the command above works regardless.</p>` : null}
+    </section>`;
+}
+
+/* ------------------------------------------------------------------ *
  * Approvals
  * ------------------------------------------------------------------ */
 
@@ -328,6 +408,17 @@ function ApprovalQueue({ approvals, allowRun, onDecide }) {
 function ApprovalCard({ approval, allowRun, onDecide }) {
   const [reason, setReason] = useState('');
   const left = Math.max(0, Date.parse(approval.expiresAt) - Date.now());
+
+  // A permission question and a "did you check this?" question deserve
+  // different words. Labelling both Allow/Deny is how a card that means "the
+  // plan asked for something only you can confirm" reads as one more thing to
+  // rubber-stamp — and an approval nobody reads is not an approval.
+  const asking = approval.kind === 'verify';
+  const yes = asking ? 'I checked it — mark verified' : 'Allow';
+  const no = asking ? 'It failed' : 'Deny';
+  const placeholder = asking
+    ? 'What you saw (optional — recorded against the phase)'
+    : 'Why (optional — the session is told)';
 
   return html`
     <article class="approval">
@@ -352,13 +443,19 @@ function ApprovalCard({ approval, allowRun, onDecide }) {
             </details>`)}
         </div>` : null}
 
+      ${asking ? html`
+        <p class="muted small">
+          The runner will not execute prose out of a plan file, so these were left for you.
+          Marking them verified records that you checked them, against this phase, with your name on it.
+        </p>` : null}
+
       <div class="row wrap" style="gap:8px;margin-top:8px">
-        <input class="grow" placeholder="Why (optional — the session is told)"
+        <input class="grow" placeholder=${placeholder}
                value=${reason} onInput=${(e) => setReason(e.target.value)} />
         <button class="btn primary" disabled=${!allowRun}
-                onClick=${() => onDecide(approval.id, 'allow', reason)}>Allow</button>
+                onClick=${() => onDecide(approval.id, 'allow', reason)}>${yes}</button>
         <button class="btn danger" disabled=${!allowRun}
-                onClick=${() => onDecide(approval.id, 'deny', reason)}>Deny</button>
+                onClick=${() => onDecide(approval.id, 'deny', reason)}>${no}</button>
       </div>
       ${!allowRun ? html`
         <p class="muted small">This console cannot answer — it was started without <code>--allow-run</code>.</p>` : null}
@@ -377,7 +474,8 @@ function ApprovalCard({ approval, allowRun, onDecide }) {
 export function RunsView({ state }) {
   const [runs, setRuns] = useState(null);
   const [approvals, setApprovals] = useState([]);
-  const { lines, push, clear } = useLiveLines();
+  const [auth, setAuth] = useState(null);
+  const { lines, push, clear, hydrate } = useLiveLines();
 
   const refresh = useCallback(async () => {
     if (state && !state.autopilot) { setRuns([]); return; }
@@ -385,10 +483,18 @@ export function RunsView({ state }) {
       const [all, queue] = await Promise.all([api.runs(), api.approvals()]);
       setRuns(all);
       setApprovals(queue.filter((a) => a.status === 'pending'));
+      // Replay the run worth watching: the live one, else the most recent.
+      const show = all.find((r) => LIVE_STATUSES.includes(r.status)) ?? all[0];
+      if (show) api.runTranscript(show.slug, show.id).then(hydrate).catch(() => {});
     } catch (error) { toast(error.message, 'error'); setRuns([]); }
-  }, [state?.autopilot]);
+  }, [state?.autopilot, hydrate]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  const checkAuth = useCallback(async (force) => {
+    try { setAuth(await api.auth(force)); } catch { /* the card simply stays hidden */ }
+  }, []);
+  useEffect(() => { if (!state || state.autopilot) void checkAuth(false); }, [state?.autopilot, checkAuth]);
   useEffect(() => (state && !state.autopilot) ? undefined : subscribeRun({
     run: refresh,
     approval: refresh,
@@ -409,7 +515,7 @@ export function RunsView({ state }) {
   }
   if (!runs) return html`<div class="page"><${Spinner} label="Reading runs" /></div>`;
 
-  const active = runs.find((r) => ['running', 'waiting', 'pausing', 'stopping'].includes(r.status));
+  const active = runs.find((r) => LIVE_STATUSES.includes(r.status));
 
   return html`
     <div class="page">
@@ -423,6 +529,9 @@ export function RunsView({ state }) {
         </div>
         ${approvals.length ? html`<${Chip} kind="warn">${approvals.length} waiting on you</${Chip}>` : null}
       </header>
+
+      ${auth && auth.loggedIn === false ? html`
+        <${AuthCard} auth=${auth} allowRun=${state?.allowRun} onRecheck=${() => checkAuth(true)} />` : null}
 
       <${ApprovalQueue}
         approvals=${approvals}

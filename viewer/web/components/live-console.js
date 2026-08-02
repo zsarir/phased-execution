@@ -44,6 +44,12 @@ export function toLine(event, data) {
     if (data.status === 'running') return { kind: 'phase', text: `phase ${data.phase} started on ${data.model}` };
     if (data.status === 'verifying') return { kind: 'phase', text: `phase ${data.phase} finished — verifying independently` };
     if (data.status === 'done') return { kind: 'phase', text: `phase ${data.phase} confirmed done` };
+    if (data.status === 'awaiting-verification') {
+      return {
+        kind: 'runner',
+        text: `phase ${data.phase} is waiting on you — ${data.notRun ?? 'some'} check(s) the runner cannot make itself`,
+      };
+    }
     if (data.disposition && data.disposition !== 'ok') {
       return { kind: 'runner', text: `phase ${data.phase}: ${data.disposition} — ${data.reason ?? ''}` };
     }
@@ -72,6 +78,7 @@ export function toLine(event, data) {
 export function useLiveLines() {
   const [lines, setLines] = useState([]);
   const seq = useRef(0);
+  const hydrated = useRef(false);
 
   const push = useCallback((line) => {
     if (!line || !line.text) return;
@@ -81,8 +88,29 @@ export function useLiveLines() {
     });
   }, []);
 
+  /**
+   * Replay a run's recorded events, once, in front of whatever is arriving live.
+   *
+   * Without this the window was empty until the next event happened to fire —
+   * so a finished phase showed nothing at all, and a reload mid-run threw away
+   * everything printed before the refresh. The events are stored raw and folded
+   * through the same `toLine` the live stream uses, so a replayed run and a
+   * watched one cannot drift apart in how they read.
+   */
+  const hydrate = useCallback((entries) => {
+    if (hydrated.current || !entries?.length) return;
+    hydrated.current = true;
+    const replayed = [];
+    for (const entry of entries) {
+      const line = toLine(entry.event, entry.data ?? {});
+      if (line?.text) replayed.push({ ...line, id: ++seq.current, at: Date.parse(entry.at) || Date.now(), replayed: true });
+    }
+    if (!replayed.length) return;
+    setLines((current) => [...replayed, ...current].slice(-MAX_LINES));
+  }, []);
+
   const clear = useCallback(() => setLines([]), []);
-  return { lines, push, clear };
+  return { lines, push, clear, hydrate };
 }
 
 export function LiveConsole({ lines, onClear, title = 'Session console', subtitle, height = 380 }) {
@@ -123,13 +151,14 @@ export function LiveConsole({ lines, onClear, title = 'Session console', subtitl
       <div class="live-body" ref=${box} onScroll=${onScroll} style=${`height:${height}px`}
            role="log" aria-live="polite" aria-label=${title}>
         ${lines.length ? lines.map((line) => html`
-          <div key=${line.id} class=${`live-line k-${line.kind}`}>
+          <div key=${line.id} class=${`live-line k-${line.kind}${line.replayed ? ' is-replayed' : ''}`}>
             <span class="k">${KIND_LABEL[line.kind] ?? line.kind}</span>
             <span class="t">${line.text}</span>
           </div>`) : html`
           <div class="live-idle">
-            Nothing running. When a phase starts, everything the session does appears here as it
-            happens — tool calls, files touched, retries, and the verification that follows.
+            Nothing to show yet. When a phase runs, everything the session does appears here as it
+            happens — tool calls, files touched, retries, and the verification that follows — and it
+            is kept, so coming back to a finished run replays it rather than showing you this.
           </div>`}
       </div>
     </section>`;

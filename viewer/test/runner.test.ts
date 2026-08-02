@@ -462,8 +462,15 @@ test('an incomplete verification stops the cautious run and not the eager one', 
     await instance.wait();
     assert.equal(instance.current()!.status, expected, autonomy);
     if (autonomy === 'halt-on-everything') {
-      assert.equal(instance.current()!.phases['1'].status, 'done', 'the phase did pass what could be run');
-      assert.match(instance.current()!.halt!.reason, /need a person/);
+      // This used to mark the phase `done` and halt with "N steps need a
+      // person" — a dead end, because nothing on the page could then tell the
+      // runner that a person had looked. The fragment now becomes a question,
+      // and a question with nobody to ask is a halt that says so. This harness
+      // deliberately has no approval broker; the answered path lives in
+      // verify-signoff.test.ts.
+      assert.equal(instance.current()!.phases['1'].status, 'awaiting-verification',
+        'the phase is waiting on a person, which is neither done nor failed');
+      assert.match(instance.current()!.halt!.reason, /no way to ask/);
     }
     r.cleanup();
   }

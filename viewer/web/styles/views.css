@@ -451,6 +451,14 @@
 }
 .evidence .code { max-height: 220px; }
 
+/* Signed out is a blocked state, not a warning: nothing will work until it is
+   fixed, so it reads with the same weight as a halt. */
+.auth-card {
+  border-left: 3px solid var(--line-blocked, var(--line-ready));
+  background: color-mix(in oklab, var(--line-blocked, var(--line-ready)) 6%, var(--surface-raised));
+}
+.auth-card .code { margin-top: var(--s2); }
+
 .run-view tr.is-active { background: color-mix(in oklab, var(--line-ready) 12%, transparent); }
 .run-view .ok { color: var(--line-done); }
 .run-view .bad { color: var(--line-stuck, crimson); }
@@ -895,6 +903,11 @@
   padding-top: 2px;
 }
 .live-line .t { white-space: pre-wrap; word-break: break-word; color: var(--ink-muted); }
+
+/* Replayed history sits a shade back from what is arriving now, so the boundary
+   between "this already happened" and "this is happening" is visible without a
+   divider announcing itself. */
+.live-line.is-replayed .t { opacity: 0.72; }
 
 .live-line.k-tool .k, .live-line.k-tool .t { color: var(--line-progress); }
 .live-line.k-verify .k, .live-line.k-verify .t { color: var(--line-done); }

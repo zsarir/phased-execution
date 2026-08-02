@@ -94,6 +94,14 @@ export const api = {
   runStop: (slug) => post(`/api/run/${encodeURIComponent(slug)}/stop`),
   runSkip: (slug, phase) => post(`/api/run/${encodeURIComponent(slug)}/skip`, { phase }),
   runRetry: (slug, phase) => post(`/api/run/${encodeURIComponent(slug)}/retry`, { phase }),
+  /** Replay of what the session printed, so a reload is not a blank window. */
+  runTranscript: (slug, id, limit) => request(
+    `/api/run/${encodeURIComponent(slug)}/transcript${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`,
+  ),
+
+  /* ---- signing in ---- */
+  auth: (force) => request(`/api/auth${force ? '?force=1' : ''}`),
+  authLogin: () => post('/api/auth/login'),
 
   approvals: () => request('/api/approvals'),
   decide: (id, decision, reason) => post(`/api/approvals/${encodeURIComponent(id)}`, { decision, reason, by: 'console' }),

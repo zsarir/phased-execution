@@ -32,7 +32,9 @@ import { planStats, portfolio, type PlanStats, type Portfolio, type PlanContext 
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
 import { Runner, type StartOptions } from './runner/runner.ts';
 import { Journal } from './runner/journal.ts';
-import { latestRun, listRuns, type RunState } from './runner/state.ts';
+import { latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT, type RunState } from './runner/state.ts';
+import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
+import { checkAuth, forgetAuth, openLoginTerminal, type AuthStatus } from './runner/auth.ts';
 import { Approvals, classifyTool, loadPolicy, type Evidence } from './runner/approvals.ts';
 
 /** One live update, with the id a reconnecting client replays from. */
@@ -587,15 +589,119 @@ export class Service {
     return state;
   }
 
+  /**
+   * The id the loop is actually driving right now, or null.
+   *
+   * Every read of a run passes through this. A status of `running` on disk is a
+   * claim by a process that may have been killed since; only this answers
+   * whether anything is behind it, and reads that skip it report corpses as
+   * live runs — which is precisely what a Stop button then fails to stop.
+   */
+  private liveRunId(): string | null {
+    return this.runner.busy() ? this.runner.current()?.id ?? null : null;
+  }
+
   /** The live run if there is one, otherwise the last one recorded on disk. */
   runFor(slug: string): RunState | null {
     const live = this.runner.current();
     if (live && live.slug === slug) return live;
-    return this.root ? latestRun(this.root.path, slug) : null;
+    return this.root ? latestRun(this.root.path, slug, this.liveRunId()) : null;
   }
 
   runsFor(slug: string): RunState[] {
-    return this.root ? listRuns(this.root.path, slug) : [];
+    return this.root ? listRuns(this.root.path, slug, this.liveRunId()) : [];
+  }
+
+  /**
+   * Everything the session printed, replayed from disk.
+   *
+   * The live console used to exist only in whichever browser tab happened to be
+   * open when the phase ran. This is the same events, kept, so a reload or a
+   * console restart does not erase the only record of what a session did.
+   */
+  runTranscript(slug: string, id: string | undefined, limit = 400): TranscriptEntry[] {
+    const runId = id ?? this.runFor(slug)?.id;
+    if (!runId || !this.root?.ok) return [];
+    return readTranscript(transcriptFile(this.root.path, slug, runId), limit);
+  }
+
+  /* ---- controls that must work whether or not a loop is behind them ---- */
+
+  /**
+   * Apply a change to a run the loop is not driving.
+   *
+   * Stop, Retry and Skip all used to begin `if (!this.state) return` inside the
+   * Runner, which is true of every run after a console restart. The buttons
+   * stayed on screen, the API answered 200, and nothing happened — the worst of
+   * the three possible behaviours, because it is indistinguishable from working.
+   */
+  private editStoredRun(slug: string, apply: (state: RunState) => void): RunState | null {
+    if (!this.root?.ok) throw new Error('No source directory is open.');
+    const state = latestRun(this.root.path, slug, this.liveRunId());
+    if (!state) return null;
+    apply(state);
+    saveRun(state);
+    this.emit('run:state', { state });
+    return state;
+  }
+
+  async stopRun(slug: string): Promise<RunState | null> {
+    const live = this.runner.current();
+    if (live?.slug === slug && this.runner.busy()) {
+      await this.runner.stop();
+      return this.runner.current();
+    }
+    return this.editStoredRun(slug, (state) => {
+      if (!IN_FLIGHT.includes(state.status)) return;
+      state.status = 'interrupted';
+      state.child = null;
+      state.halt ??= { at: new Date().toISOString(), reason: 'stopped by the operator', phase: state.activePhase ?? undefined };
+    });
+  }
+
+  retryPhase(slug: string, phase: number): RunState | null {
+    const live = this.runner.current();
+    if (live?.slug === slug && this.runner.busy()) { this.runner.retry(phase); return live; }
+    return this.editStoredRun(slug, (state) => {
+      const record = phaseRecord(state, phase);
+      record.status = 'pending';
+      record.note = undefined;
+      record.endedAt = undefined;
+      state.consecutiveFailures = 0;
+      state.halt = null;
+    });
+  }
+
+  skipPhase(slug: string, phase: number): RunState | null {
+    const live = this.runner.current();
+    if (live?.slug === slug && this.runner.busy()) { this.runner.skip(phase); return live; }
+    return this.editStoredRun(slug, (state) => {
+      const record = phaseRecord(state, phase);
+      record.status = 'skipped';
+      record.note = 'skipped by the operator';
+      state.halt = null;
+    });
+  }
+
+  /* ---- signing in ---- */
+
+  /** Free, non-interactive, and about a second — cheap enough to poll. */
+  authStatus(force = false): Promise<AuthStatus> {
+    return checkAuth(this.root?.path ?? process.cwd(), force);
+  }
+
+  /**
+   * Open a real terminal on `claude auth login`.
+   *
+   * The OAuth flow needs a TTY and a browser, so a web page cannot host it. It
+   * can, however, remove every step between reading "authentication failed" and
+   * being signed in, which is the actual complaint.
+   */
+  async startLogin(): Promise<{ opened: boolean; command: string; detail?: string }> {
+    if (!this.flags.allowRun) throw new Error('Runs are disabled. Restart with --allow-run to enable them.');
+    const result = openLoginTerminal(this.root?.path ?? process.cwd());
+    forgetAuth();
+    return result;
   }
 
   /** Every run across every plan, for the runs list. */

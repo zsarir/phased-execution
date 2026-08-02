@@ -34,10 +34,12 @@ import { classify, nextModel, type Disposition } from './errors.ts';
 import { spawnClaude, type SpawnFn, type StreamEvent } from './spawn.ts';
 import { verifyPhase } from './verify.ts';
 import {
-  loadRun, newRun, phaseRecord, saveRun, pidAlive, SETTLED,
+  loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
   type Autonomy, type RunState, type PhaseStatus, type VerifySummary,
 } from './state.ts';
 import { Journal } from './journal.ts';
+import { Transcript } from './transcript.ts';
+import { checkAuth } from './auth.ts';
 import { buildSettings, writeSettingsFile, type Approvals } from './approvals.ts';
 
 export type RunnerEvent = (event: string, data: Record<string, unknown>) => void;
@@ -72,6 +74,13 @@ export type StartOptions = {
 const MAX_ATTEMPTS = 4;
 /** Give a stopped session time to run its own SessionEnd hooks before SIGKILL. */
 const SIGTERM_GRACE_MS = 15_000;
+/**
+ * How long a "please check this by hand" card waits. Unlike a tool approval
+ * there is no hook holding a socket open, and the honest unit for "open the app
+ * and look at the gate stack" is hours, not the ten minutes a permission
+ * prompt gets.
+ */
+const VERIFY_ANSWER_MS = 12 * 60 * 60 * 1_000;
 
 /**
  * Things worth knowing before spending a session finding them out.
@@ -107,6 +116,7 @@ export class Runner {
   private deps: RunnerDeps;
   private state: RunState | null = null;
   private journal: Journal | null = null;
+  private transcript: Transcript | null = null;
   private abort: AbortController | null = null;
   private driving: Promise<void> | null = null;
   private childPid: number | null = null;
@@ -132,7 +142,10 @@ export class Runner {
     if (this.driving) throw new Error('A run is already in progress. Pause or stop it first.');
 
     const state = options.resumeRunId
-      ? loadRun(options.root, options.slug, options.resumeRunId)
+      // No live id: by definition nothing is driving anything, or the guard
+      // above would have thrown. Reconciling here is what turns a run left
+      // claiming "running" by a killed console into one that can be continued.
+      ? loadRun(options.root, options.slug, options.resumeRunId, null)
       : null;
     if (options.resumeRunId && !state) throw new Error(`No run ${options.resumeRunId} for ${options.slug}.`);
 
@@ -157,8 +170,14 @@ export class Runner {
     }
 
     this.journal = new Journal(this.state.root, this.state.slug, this.state.id);
+    this.transcript = new Transcript(this.state.root, this.state.slug, this.state.id);
 
-    const refusal = preflight(this.state.root);
+    // Both refusals cost about a second and save a session each. The auth one
+    // saves considerably more than that: without it an expired login is
+    // discovered once per phase, each time as a session that reports success,
+    // spends nothing and does nothing.
+    const auth = await checkAuth(this.state.root, true);
+    const refusal = preflight(this.state.root) ?? (auth.loggedIn ? null : authRefusal(auth.detail));
     if (refusal) {
       this.state.status = 'parked';
       this.state.halt = { at: new Date().toISOString(), reason: refusal };
@@ -265,6 +284,21 @@ export class Runner {
   /** Stop now: the child gets SIGTERM so its own SessionEnd hooks still run. */
   async stop(): Promise<void> {
     if (!this.state) return;
+    // Nothing is driving: the loop already ended and left a status behind. A
+    // Stop that quietly does nothing here is worse than no Stop at all — the
+    // operator presses it, the badge still says `running`, and the console has
+    // told them a lie about its own state.
+    if (!this.driving) {
+      if (IN_FLIGHT.includes(this.state.status)) {
+        this.state.status = 'interrupted';
+        this.state.child = null;
+        this.state.halt ??= { at: new Date().toISOString(), reason: 'stopped by the operator', phase: this.state.activePhase ?? undefined };
+        this.record('run.stopped-while-idle', { was: this.state.status });
+        this.persist();
+        this.emit('run', { state: this.state });
+      }
+      return;
+    }
     this.stopRequested = true;
     this.state.status = 'stopping';
     this.record('run.stop-requested', { pid: this.childPid ?? undefined });
@@ -328,6 +362,20 @@ export class Runner {
 
         if (!candidates.length) {
           state.status = outstanding.length ? 'parked' : 'finished';
+          if (outstanding.length) {
+            // Parking with work left is not self-explanatory: every ready phase
+            // is in a state this loop will not pick up again by itself, and the
+            // operator needs to know which and why to know what to press.
+            const held = board.ready
+              .map((p) => `phase ${p} is ${phaseRecord(state, p).status}`)
+              .join(', ');
+            state.halt ??= {
+              at: new Date().toISOString(),
+              reason: held
+                ? `nothing left to run on its own — ${held}. Retry or skip them to carry on.`
+                : `nothing is ready to run: ${outstanding.length} phase(s) are still waiting on a gate or an earlier phase.`,
+            };
+          }
           this.record(outstanding.length ? 'run.parked' : 'run.finished', {
             outstanding, done: board.done,
           });
@@ -589,7 +637,30 @@ export class Runner {
       notRun: verification.notRun,
     }, phase);
 
-    if (!verification.ok) {
+    // A command that ran and failed is a verdict. A verification that could not
+    // be run is not — it is an unanswered question, and answering it with
+    // "failed" is how this run ended up stopped on a phase nothing had actually
+    // found fault with, showing a Retry button that could only ever reproduce
+    // the same non-result. The two are now told apart.
+    const broke = verification.ran.filter((r) => !r.ok);
+    if (broke.length) {
+      record.status = 'failed';
+      state.consecutiveFailures++;
+      this.halt(
+        `phase ${phase} did not verify: ${broke.length} of ${verification.ran.length} command(s) failed `
+        + `— ${broke.map((r) => r.command).join(', ')}`,
+        phase,
+      );
+      return false;
+    }
+
+    // Anything the runner would not or could not execute goes to a person, with
+    // the plan's own words attached. Under `keep-going` a verification that
+    // otherwise passed does not stop for this; under the cautious default it
+    // always does, which is what that setting means.
+    if (verification.notRun.length && (!verification.ok || state.autonomy === 'halt-on-everything')) {
+      if (!await this.askHuman(phase, verification)) return false;
+    } else if (!verification.ok) {
       record.status = 'failed';
       state.consecutiveFailures++;
       this.halt(`phase ${phase} did not verify: ${verification.reason}`, phase);
@@ -625,19 +696,82 @@ export class Runner {
     state.activePhase = null;
     this.record('phase.done', { costUsd: record.costUsd, attempts: record.attempts }, phase);
     this.emit('phase', { phase, status: 'done' });
+    return true;
+  }
 
-    // An incomplete verification is not a failure, but it is not a clean bill of
-    // health either: something in the plan was left for a person to check. Under
-    // the cautious default that is where the run stops.
-    if (verification.notRun.length && state.autonomy === 'halt-on-everything') {
-      this.halt(
-        `phase ${phase} passed the commands that could be run, but ${verification.notRun.length} `
-        + 'verification step(s) need a person — see the run journal',
-        phase,
-      );
+  /**
+   * Put the checks the runner could not make in front of a person, and wait.
+   *
+   * Refusing to execute prose out of a markdown file is correct — a plan that
+   * says "run those commands" is not a command, and executing what a document
+   * tells you to is how a document becomes an exploit. But refusing and then
+   * stopping with no way to say "I have checked it" left the run wedged: the
+   * only controls offered were Retry, which re-runs a session that was never
+   * the problem, and Skip, which discards a phase that had in fact succeeded.
+   *
+   * So the fragments become a card carrying the plan's own words, and a person
+   * decides. Allow records the verification as satisfied by hand — attributed,
+   * not silently rewritten. Deny halts, which is what Retry was pretending to
+   * offer. Returns false when the run must stop.
+   */
+  private async askHuman(phase: number, verification: VerifySummary): Promise<boolean> {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+    const { approvals } = this.deps;
+
+    record.status = 'awaiting-verification';
+    this.record('phase.awaiting-verification', { notRun: verification.notRun }, phase);
+    this.emit('phase', { phase, status: 'awaiting-verification', notRun: verification.notRun.length });
+    this.persist();
+
+    if (!approvals) {
+      record.note = `${verification.notRun.length} verification step(s) need a person, and this console has no `
+        + 'approval broker to ask with.';
+      this.halt(`phase ${phase} needs a person to verify it, and there is no way to ask`, phase);
       return false;
     }
-    return true;
+
+    const { decided } = approvals.request({
+      runId: state.id,
+      slug: state.slug,
+      phase,
+      kind: 'verify',
+      title: `Phase ${phase}: ${verification.notRun.length} check${verification.notRun.length === 1 ? '' : 's'} only you can make`,
+      detail: verification.ran.length
+        ? `${verification.ran.length} command(s) ran and passed. The rest is written as prose in the plan, so the runner will not execute it.`
+        : 'Nothing in this phase\'s verification is a command the runner can execute, so nothing has been proven either way.',
+      evidence: [
+        ...verification.notRun.map((n, i) => ({
+          label: `Check ${i + 1} — ${n.reason}`,
+          body: n.text,
+        })),
+        ...(verification.ran.length ? [{
+          label: `${verification.ran.length} command(s) that did run`,
+          body: verification.ran.map((r) => `$ ${r.command}\n${r.output || '(no output)'}`).join('\n\n'),
+        }] : []),
+      ],
+    }, VERIFY_ANSWER_MS);
+
+    const outcome = await decided;
+    this.record('phase.human-verified', { decision: outcome.decision, by: outcome.by, reason: outcome.reason }, phase);
+
+    if (outcome.decision === 'allow') {
+      record.verification = {
+        ...verification,
+        ok: true,
+        reason: `${verification.notRun.length} manual check(s) confirmed by ${outcome.by}`
+          + (outcome.reason ? ` — ${outcome.reason}` : ''),
+      };
+      return true;
+    }
+
+    record.status = 'failed';
+    state.consecutiveFailures++;
+    this.halt(
+      `phase ${phase} was not verified: ${outcome.reason || `${outcome.by} marked the manual checks as failed`}`,
+      phase,
+    );
+    return false;
   }
 
   /* ---------------------------------------------------------------- *
@@ -699,6 +833,10 @@ export class Runner {
   }
 
   private emit(event: string, data: Record<string, unknown>): void {
+    // Broadcast and record are the same act. A console opened after the fact,
+    // or reloaded mid-phase, replays this file and sees what a console that had
+    // been watching all along would have seen.
+    try { this.transcript?.append(event, data); } catch { /* never at the cost of the run */ }
     try { this.deps.onEvent?.(`run:${event}`, { runId: this.state?.id, slug: this.state?.slug, ...data }); }
     catch { /* the UI channel must never break the run */ }
   }
@@ -741,6 +879,17 @@ export class Runner {
 
 function reasonOf(disposition: Disposition): string {
   return 'reason' in disposition ? disposition.reason : 'completed';
+}
+
+/**
+ * Worded for the person who has to fix it. "Authentication failed" describes
+ * the machine's experience; what the operator needs is which command, where.
+ */
+function authRefusal(detail?: string): string {
+  return 'Claude Code is not signed in for this console, so every phase would spend a turn '
+    + 'and report success without doing anything. Sign in — the Autopilot page has a button '
+    + 'that opens a terminal on it, or run `claude auth login` yourself — then start the run again.'
+    + (detail ? ` (${detail})` : '');
 }
 
 export type { PhaseStatus, RunState, VerifySummary };

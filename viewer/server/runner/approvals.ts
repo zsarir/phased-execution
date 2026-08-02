@@ -235,7 +235,12 @@ export type Approval = {
   runId: string;
   slug: string;
   phase: number | null;
-  kind: 'gate' | 'tool';
+  /**
+   * `verify` is not a permission question. It asks a person to confirm a check
+   * the runner could not make itself — a browser step, a look at a dashboard —
+   * so no hook is blocked on the far end and it can afford to wait far longer.
+   */
+  kind: 'gate' | 'tool' | 'verify';
   title: string;
   detail: string;
   evidence: Evidence[];
@@ -311,13 +316,14 @@ export class Approvals {
    */
   request(
     request: Omit<Approval, 'id' | 'createdAt' | 'expiresAt' | 'status'>,
+    answerByMs = ANSWER_BY_MS,
   ): { approval: Approval; decided: Promise<{ decision: Decision; by: string; reason?: string }> } {
     const id = `${Date.now().toString(36)}-${++this.counter}`;
     const approval: Approval = {
       ...request,
       id,
       createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + ANSWER_BY_MS).toISOString(),
+      expiresAt: new Date(Date.now() + answerByMs).toISOString(),
       status: 'pending',
     };
 
@@ -337,8 +343,8 @@ export class Approvals {
       // Unreferenced: the listening socket is what keeps this process alive, and
       // a pending approval must never be the reason it cannot exit.
       const timer = setTimeout(
-        () => settle('deny', 'timeout', `nobody answered within ${Math.round(ANSWER_BY_MS / 60000)} minutes`),
-        ANSWER_BY_MS,
+        () => settle('deny', 'timeout', `nobody answered within ${Math.round(answerByMs / 60000)} minutes`),
+        answerByMs,
       ).unref();
       this.waiting.set(id, { approval, settle, timer });
     });
