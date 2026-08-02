@@ -96,6 +96,26 @@ export type PhaseRecord = {
 
 export type Autonomy = 'halt-on-everything' | 'keep-going';
 
+/**
+ * What the operator chose for one phase, before it runs.
+ *
+ * Every field is optional and an absent field means "inherit". Three sources
+ * are consulted in order — this, then the plan's own `**Model:**` /
+ * `**Effort:**` bullets for that phase, then the run's defaults — so a plan
+ * that already says a phase wants Opus gets Opus without anyone re-typing it,
+ * and an operator who disagrees can say so for one run without editing a
+ * versioned file.
+ */
+export type PhaseOptions = {
+  model?: string;
+  effort?: string;
+  /** Restrict the built-in tool set for this phase. Empty means every tool. */
+  tools?: string[];
+  permissionMode?: string;
+  /** Skills to invoke on top of the plan's own, for this phase. */
+  skills?: string[];
+};
+
 export type RunState = {
   id: string;
   slug: string;
@@ -140,6 +160,10 @@ export type RunState = {
    * means "every phase that becomes ready", which is the normal run.
    */
   onlyPhases?: number[];
+  /** Per-phase choices, keyed by phase number. See `PhaseOptions`. */
+  phaseOptions?: Record<string, PhaseOptions>;
+  /** Skills every phase of this run invokes, on top of the plan's own. */
+  skills?: string[];
   phases: Record<string, PhaseRecord>;
 };
 
@@ -179,6 +203,8 @@ export type NewRunOptions = {
   runBudgetUsd?: number | null;
   maxConsecutiveFailures?: number;
   onlyPhases?: number[];
+  phaseOptions?: Record<string, PhaseOptions>;
+  skills?: string[];
 };
 
 export function newRun(opts: NewRunOptions): RunState {
@@ -206,6 +232,8 @@ export function newRun(opts: NewRunOptions): RunState {
     halt: null,
     pause: null,
     ...(opts.onlyPhases?.length ? { onlyPhases: [...opts.onlyPhases] } : {}),
+    ...(opts.phaseOptions ? { phaseOptions: { ...opts.phaseOptions } } : {}),
+    ...(opts.skills?.length ? { skills: [...opts.skills] } : {}),
     phases: {},
   };
 }

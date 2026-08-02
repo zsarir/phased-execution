@@ -20,6 +20,7 @@ import {
   readText, readBoardText, type Board, type QaMode, type SessionPlan, type LintResult,
 } from './engine.ts';
 import { SearchIndex, type SearchResult } from './search.ts';
+import { listSkills, type SkillInfo } from './skills.ts';
 import { DocsWatcher } from './watch.ts';
 import { degradedState, onDegraded } from './lifecycle.ts';
 import { repoInfo, lastCommit, type GitRepoInfo, type GitFileInfo } from './git.ts';
@@ -60,6 +61,7 @@ export type PhaseView = {
   gates?: string;
   gateCheck?: string;
   model?: string;
+  effort?: string;
   goal?: string;
   readFirst?: string;
   files?: string;
@@ -122,6 +124,25 @@ function describeToolInput(input: unknown): string {
   return '';
 }
 
+/**
+ * The model alias inside a plan's `**Model:**` bullet.
+ *
+ * Plans write these as prose — "`claude-opus-4-8` (1M window)", "Opus for the
+ * hard reasoning", "Haiku — mechanical". Passing that whole string to `--model`
+ * would fail, so only a known alias is taken and anything unrecognised is left
+ * to the run's default rather than guessed at.
+ */
+export function modelAlias(text?: string): string | undefined {
+  const match = /\b(fable|opus|sonnet|haiku)\b/i.exec(text ?? '');
+  return match ? match[1].toLowerCase() : undefined;
+}
+
+/** The same, for `**Effort:**` — one of the five the CLI accepts, or nothing. */
+export function effortOf(text?: string): string | undefined {
+  const match = /\b(low|medium|high|xhigh|max)\b/i.exec(text ?? '');
+  return match ? match[1].toLowerCase() : undefined;
+}
+
 /** Read-only git, for approval evidence. Never fails the request it decorates. */
 function gitRead(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve) => {
@@ -169,6 +190,13 @@ export class Service {
       // The plan is the only source for what proves a phase worked, exactly as
       // it is the only source for what the phase should do.
       verificationText: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verification,
+      // …and for what it should run as. These bullets have been in the plan
+      // format from the start; until now nothing read them.
+      phaseDefaults: (slug, phase) => {
+        const detail = this.store?.get(slug)?.plan?.phases[phase];
+        if (!detail) return undefined;
+        return { model: modelAlias(detail.model), effort: effortOf(detail.effort) };
+      },
       onEvent: (event, data) => this.emit(event, data),
     });
     // A fault anywhere in the process reaches the browser as a health event,
@@ -460,6 +488,7 @@ export class Service {
         gates: detail?.gates,
         gateCheck: detail?.gateCheck,
         model: detail?.model,
+        effort: detail?.effort,
         goal: detail?.goal,
         readFirst: detail?.readFirst,
         files: detail?.files,
@@ -539,6 +568,15 @@ export class Service {
   }
 
   searchAll(query: string): SearchResult { return this.search.search(query); }
+
+  /**
+   * Every skill a phase of this plan could invoke.
+   *
+   * Read from the Claude home the spawned session will use, not from wherever
+   * this file happens to live — the console can be started from any of several
+   * homes and the child inherits its environment.
+   */
+  skills(): SkillInfo[] { return listSkills(this.root?.path); }
 
   state() {
     return {

@@ -16,6 +16,7 @@ import { api, subscribeRun } from '../api.js';
 import { toast } from '../store.js';
 import { Banner, Chip, Empty, Modal, Spinner, Tile, relativeTime } from '../components/ui.js';
 import { LiveConsole, useLiveLines, toLine } from '../components/live-console.js';
+import { SkillPicker } from '../components/skill-picker.js';
 
 const PHASE_TONE = {
   done: 'ok', running: 'busy', verifying: 'busy', failed: 'bad',
@@ -34,13 +35,23 @@ const RUN_TONE = {
 /** Statuses that mean a loop is genuinely behind this run right now. */
 const LIVE_STATUSES = ['running', 'waiting', 'pausing', 'stopping'];
 
-export function RunView({ slug, state }) {
+/** Wall-clock, at the precision a person reading a phase table cares about. */
+function duration(ms) {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 90) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
   const [run, setRun] = useState(null);
   const [history, setHistory] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [auth, setAuth] = useState(null);
+  const [skills, setSkills] = useState([]);
   const { lines, push, clear, hydrate } = useLiveLines();
 
   // The client is served fresh from disk; the server is whatever Node loaded at
@@ -77,6 +88,13 @@ export function RunView({ slug, state }) {
     try { setAuth(await api.auth(force)); } catch { /* the card simply stays hidden */ }
   }, []);
   useEffect(() => { if (!stale) void checkAuth(false); }, [stale, checkAuth]);
+
+  // Cached by the api layer, so switching tabs does not rescan a few hundred
+  // SKILL.md files; an empty list simply hides the picker.
+  useEffect(() => {
+    if (stale) return;
+    api.skills().then(setSkills).catch(() => { /* the picker stays empty */ });
+  }, [stale]);
 
   useEffect(() => stale ? undefined : subscribeRun({
     run: () => void refresh(),
@@ -178,6 +196,9 @@ export function RunView({ slug, state }) {
       <${Controls}
         slug=${slug} run=${run} live=${live} busy=${busy}
         allowRun=${state.allowRun}
+        planPhases=${planPhases}
+        planSkills=${planSkills}
+        skills=${skills}
         onAct=${act} />
 
       ${run ? html`
@@ -257,12 +278,124 @@ const EFFORT_NOTE = {
   max: 'the hardest phases, and the slowest',
 };
 
-function Controls({ slug, run, live, busy, allowRun, onAct }) {
+/**
+ * Per-phase model and effort.
+ *
+ * Three things can decide what a phase runs as, and the table says which did.
+ * The plan's own `**Model:**` / `**Effort:**` bullets have been in the format
+ * from the beginning and were read by nothing, so a phase that said it wanted
+ * Opus quietly ran on whatever the run defaulted to; here they show as the
+ * inherited value, and choosing something overrules them for this run only —
+ * per field, so setting a model does not discard an effort the plan asked for.
+ */
+function PhaseMatrix({ planPhases, overrides, runModel, runEffort, skills = [], disabled, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [skillsFor, setSkillsFor] = useState(null);
+  if (!planPhases.length) return null;
+
+  const set = (phase, key, value) => {
+    const next = { ...overrides, [phase]: { ...(overrides[phase] ?? {}) } };
+    if (value && (!Array.isArray(value) || value.length)) next[phase][key] = value;
+    else delete next[phase][key];
+    if (!Object.keys(next[phase]).length) delete next[phase];
+    onChange(next);
+  };
+
+  const count = Object.keys(overrides).length;
+
+  return html`
+    <details class="phase-matrix" open=${open} onToggle=${(e) => setOpen(e.currentTarget.open)}>
+      <summary>
+        Per phase
+        ${count ? html` <span class="chip">${count} overridden</span>` : html`
+          <span class="muted small"> — every phase inherits the run's model and effort</span>`}
+      </summary>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Phase</th><th></th>
+            <th style="width:120px">Model</th><th style="width:120px">Effort</th>
+            ${skills.length ? html`<th style="width:110px">Skills</th>` : null}
+          </tr>
+        </thead>
+        <tbody>
+          ${planPhases.map((p) => {
+            const own = overrides[p.phase] ?? {};
+            // What it would run as with nothing chosen here: the plan if the
+            // plan says, otherwise the run's own default.
+            const planModel = modelAlias(p.model);
+            const planEffort = effortAlias(p.effort);
+            const inheritModel = planModel ? `${planModel} (plan)` : `${runModel} (run)`;
+            const inheritEffort = planEffort ? `${planEffort} (plan)` : `${runEffort || 'default'} (run)`;
+            return html`
+              <tr key=${p.phase} class=${p.state === 'done' ? 'muted' : ''}>
+                <td><strong>${p.phase}</strong></td>
+                <td class="small">
+                  ${p.title}
+                  ${p.state === 'done' ? html` <span class="muted">· done</span>` : null}
+                </td>
+                <td>
+                  <select value=${own.model ?? ''} disabled=${disabled}
+                          onChange=${(e) => set(p.phase, 'model', e.target.value)}>
+                    <option value="">${inheritModel}</option>
+                    ${MODELS.map((m) => html`<option key=${m} value=${m}>${m}</option>`)}
+                  </select>
+                </td>
+                <td>
+                  <select value=${own.effort ?? ''} disabled=${disabled}
+                          onChange=${(e) => set(p.phase, 'effort', e.target.value)}>
+                    <option value="">${inheritEffort}</option>
+                    ${EFFORTS.filter(Boolean).map((e) => html`<option key=${e} value=${e}>${e}</option>`)}
+                  </select>
+                </td>
+                ${skills.length ? html`
+                  <td>
+                    <button class="btn small" disabled=${disabled}
+                            onClick=${() => setSkillsFor(skillsFor === p.phase ? null : p.phase)}>
+                      ${own.skills?.length ? `${own.skills.length} extra` : 'add'}
+                    </button>
+                  </td>` : null}
+              </tr>
+              ${skillsFor === p.phase ? html`
+                <tr key=${`${p.phase}-skills`}>
+                  <td colspan="5">
+                    <${SkillPicker}
+                      label=${`Extra skills for phase ${p.phase} only`}
+                      skills=${skills}
+                      chosen=${own.skills ?? []}
+                      disabled=${disabled}
+                      onChange=${(next) => set(p.phase, 'skills', next)} />
+                  </td>
+                </tr>` : null}`;
+          })}
+        </tbody>
+      </table>
+      <p class="muted small">
+        A phase already running keeps what it started with — these apply to phases that have not
+        begun. Clearing a row hands it back to the plan, or to the run's own default.
+      </p>
+    </details>`;
+}
+
+/** Plans write these as prose; only a known alias is a choice. */
+function modelAlias(text) {
+  const match = /\b(fable|opus|sonnet|haiku)\b/i.exec(text ?? '');
+  return match ? match[1].toLowerCase() : undefined;
+}
+
+function effortAlias(text) {
+  const match = /\b(low|medium|high|xhigh|max)\b/i.exec(text ?? '');
+  return match ? match[1].toLowerCase() : undefined;
+}
+
+function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills = [], skills = [], onAct }) {
   const [model, setModel] = useState(run?.model ?? 'sonnet');
   const [effort, setEffort] = useState(run?.effort ?? '');
   const [autonomy, setAutonomy] = useState(run?.autonomy ?? 'halt-on-everything');
   const [phaseBudget, setPhaseBudget] = useState(run?.phaseBudgetUsd ?? '');
   const [runBudget, setRunBudget] = useState(run?.runBudgetUsd ?? '');
+  const [overrides, setOverrides] = useState(run?.phaseOptions ?? {});
+  const [runSkills, setRunSkills] = useState(run?.skills ?? []);
   const [confirmStop, setConfirmStop] = useState(false);
 
   // Follow the run when it changes underneath us — a different run id, or the
@@ -275,6 +408,8 @@ function Controls({ slug, run, live, busy, allowRun, onAct }) {
     setAutonomy(run?.autonomy ?? 'halt-on-everything');
     setPhaseBudget(run?.phaseBudgetUsd ?? '');
     setRunBudget(run?.runBudgetUsd ?? '');
+    setOverrides(run?.phaseOptions ?? {});
+    setRunSkills(run?.skills ?? []);
   }, [run?.id, run?.model, run?.effort, run?.autonomy, run?.phaseBudgetUsd, run?.runBudgetUsd]);
 
   const resumable = run && !live && run.status !== 'finished';
@@ -288,6 +423,8 @@ function Controls({ slug, run, live, busy, allowRun, onAct }) {
     autonomy,
     phaseBudgetUsd: Number(phaseBudget) || null,
     runBudgetUsd: Number(runBudget) || null,
+    phaseOptions: overrides,
+    skills: runSkills,
   };
   const changed = live && (
     model !== run?.model
@@ -295,6 +432,8 @@ function Controls({ slug, run, live, busy, allowRun, onAct }) {
     || autonomy !== run?.autonomy
     || (Number(phaseBudget) || null) !== (run?.phaseBudgetUsd ?? null)
     || (Number(runBudget) || null) !== (run?.runBudgetUsd ?? null)
+    || JSON.stringify(overrides) !== JSON.stringify(run?.phaseOptions ?? {})
+    || JSON.stringify(runSkills) !== JSON.stringify(run?.skills ?? [])
   );
 
   return html`
@@ -344,8 +483,25 @@ function Controls({ slug, run, live, busy, allowRun, onAct }) {
         </label>
       </div>
 
+      ${skills.length ? html`
+        <${SkillPicker}
+          skills=${skills}
+          chosen=${runSkills}
+          planSkills=${planSkills}
+          disabled=${disabled}
+          onChange=${setRunSkills} />` : null}
+
+      <${PhaseMatrix}
+        planPhases=${planPhases}
+        overrides=${overrides}
+        runModel=${model}
+        runEffort=${effort}
+        skills=${skills}
+        disabled=${disabled}
+        onChange=${setOverrides} />
+
       ${changed ? html`
-        <p class="muted small" style="margin:0 0 8px">
+        <p class="muted small" style="margin:8px 0">
           These apply from the <strong>next</strong> phase. The session already running was started
           with its model and budget fixed in its own command line, and there is no honest way to
           change those underneath it.
@@ -439,15 +595,28 @@ function PhaseTable({ slug, run, phases, live, allowRun, onAct }) {
       </div>
       <table class="table">
         <thead>
-          <tr><th>Phase</th><th>Status</th><th>Tries</th><th class="num">Cost</th><th>Notes</th><th></th></tr>
+          <tr>
+            <th>Phase</th><th>Status</th><th>Ran as</th><th>Tries</th>
+            <th class="num">Cost</th><th class="num">Turns</th><th class="num">Took</th>
+            <th>Notes</th><th></th>
+          </tr>
         </thead>
         <tbody>
           ${phases.map((p) => html`
             <tr key=${p.phase} class=${run.activePhase === p.phase ? 'is-active' : ''}>
               <td><a href=${`#/plan/${encodeURIComponent(slug)}/phase/${p.phase}`}>Phase ${p.phase}</a></td>
               <td><${Chip} kind=${PHASE_TONE[p.status] ?? ''}>${p.status}</${Chip}></td>
+              <td class="small">
+                ${p.model ?? '—'}${p.effort ? html` · ${p.effort}` : null}
+                ${p.actualModel && !p.actualModel.includes(p.model ?? ' ') ? html`
+                  <div class="muted" title="the session fell back to another model in-place">
+                    ran on ${p.actualModel}
+                  </div>` : null}
+              </td>
               <td>${p.attempts}</td>
               <td class="num">$${(p.costUsd ?? 0).toFixed(2)}</td>
+              <td class="num">${p.turns ?? '—'}</td>
+              <td class="num">${p.durationMs ? duration(p.durationMs) : '—'}</td>
               <td class="muted small">
                 ${p.note ?? ''}
                 ${p.verification ? html`

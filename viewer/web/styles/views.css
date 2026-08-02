@@ -937,6 +937,51 @@
 
 .live-idle { color: var(--ink-faint); max-width: 62ch; line-height: 1.7; }
 
+/* Per-phase model/effort: folded away by default, because the common case is
+   "every phase inherits the run" and a table of identical rows is noise. */
+.phase-matrix { margin: var(--s2) 0; border-top: 1px solid var(--rule); padding-top: var(--s3); }
+.phase-matrix > summary { cursor: pointer; user-select: none; font-size: var(--text-sm); }
+.phase-matrix > summary::marker { color: var(--ink-faint); }
+.phase-matrix table { margin-top: var(--s3); }
+.phase-matrix select { width: 100%; font-size: var(--text-xs); }
+.phase-matrix tr.muted td { opacity: 0.6; }
+
+/* The skill picker. Two hundred-odd of them, so it opens closed and filters. */
+.skill-picker { margin: var(--s2) 0; border-top: 1px solid var(--rule); padding-top: var(--s3); }
+.skill-picker > summary { cursor: pointer; user-select: none; font-size: var(--text-sm); }
+.skill-picker > summary::marker { color: var(--ink-faint); }
+.skill-search { width: 100%; margin: var(--s2) 0; }
+.skill-fixed { margin: var(--s3) 0; padding: var(--s3); border: 1px solid var(--rule); border-radius: 4px; }
+.skill-list { max-height: 320px; overflow-y: auto; }
+.skill-group {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  color: var(--ink-faint);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: var(--s2) 0 2px;
+}
+.skill-row {
+  display: grid;
+  grid-template-columns: 18px minmax(140px, 220px) 1fr;
+  gap: var(--s2);
+  align-items: baseline;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.skill-row:hover { background: var(--surface-raised, transparent); }
+.skill-id { font-family: var(--font-mono); font-size: var(--text-xs); }
+.skill-what {
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip.is-picked { cursor: pointer; }
+
 /* The ask box under the console. */
 .live-ask {
   display: flex;

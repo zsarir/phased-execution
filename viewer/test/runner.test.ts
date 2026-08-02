@@ -141,15 +141,31 @@ function workingSession(r: Repo, seen: number[] = []): SpawnFn {
   };
 }
 
-function runner(r: Repo, spawn: SpawnFn, verification: string | undefined = '`true`') {
+function runner(
+  r: Repo,
+  spawn: SpawnFn,
+  verification: string | undefined = '`true`',
+  phaseDefaults?: (slug: string, phase: number) => { model?: string; effort?: string } | undefined,
+) {
   const events: { event: string; data: Record<string, unknown> }[] = [];
   const instance = new Runner({
     scriptsDir: r.scripts,
     spawn,
     verificationText: () => verification,
+    phaseDefaults,
     onEvent: (event, data) => events.push({ event, data }),
   });
   return { instance, events };
+}
+
+/** Records what each phase was actually asked to run as. */
+function recordingSession(r: Repo, seen: { phase: number; model?: string; effort?: string; tools?: string[] }[]): SpawnFn {
+  return async (request: SpawnRequest) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    seen.push({ phase, model: request.model, effort: request.effort, tools: request.tools });
+    r.markDone(phase);
+    return ok();
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -727,6 +743,61 @@ test('pausing a run nothing is driving reports that it did nothing', async () =>
   r.cleanup();
 });
 
+/* ------------------------------------------------------------------ *
+ * What a phase runs as
+ * ------------------------------------------------------------------ */
+
+test('the operator wins over the plan, the plan wins over the run default', async () => {
+  const r = repo();
+  const seen: { phase: number; model?: string; effort?: string }[] = [];
+  // The plan asks for opus/high on phase 2, and says nothing about 1 or 3.
+  const { instance } = runner(r, recordingSession(r, seen), '`true`',
+    (_slug, phase) => (phase === 2 ? { model: 'opus', effort: 'high' } : undefined));
+
+  await instance.start({
+    slug: 'demo', root: r.root, model: 'sonnet', effort: 'medium', autonomy: 'keep-going',
+    // …and the operator overrules the plan on 2, and the default on 3.
+    phaseOptions: { 2: { model: 'haiku' }, 3: { effort: 'max' } },
+  });
+  await instance.wait();
+
+  assert.deepEqual(seen, [
+    { phase: 1, model: 'sonnet', effort: 'medium', tools: undefined },
+    // Model from the operator, effort still from the plan: an override is per
+    // field, not per phase — saying "run this on haiku" must not silently
+    // discard the effort the plan asked for.
+    { phase: 2, model: 'haiku', effort: 'high', tools: undefined },
+    { phase: 3, model: 'sonnet', effort: 'max', tools: undefined },
+  ]);
+  r.cleanup();
+});
+
+test('the journal says where each choice came from', async () => {
+  const r = repo();
+  const { instance, events } = runner(r, workingSession(r), '`true`',
+    (_slug, phase) => (phase === 1 ? { model: 'opus' } : undefined));
+  await instance.start({ slug: 'demo', root: r.root, effort: 'low', autonomy: 'keep-going', onlyPhases: [1] });
+  await instance.wait();
+
+  const start = events.find((e) => e.event === 'run:journal' && e.data.event === 'phase.start');
+  assert.ok(start, 'a phase that started must say so in the journal');
+  assert.deepEqual((start.data.data as { source: unknown }).source, { model: 'plan', effort: 'default' });
+  r.cleanup();
+});
+
+test('a restricted tool set reaches the session', async () => {
+  const r = repo();
+  const seen: { phase: number; tools?: string[] }[] = [];
+  const { instance } = runner(r, recordingSession(r, seen));
+  await instance.start({
+    slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1],
+    phaseOptions: { 1: { tools: ['Read', 'Grep'] } },
+  });
+  await instance.wait();
+  assert.deepEqual(seen[0].tools, ['Read', 'Grep']);
+  r.cleanup();
+});
+
 test('a run asked for one phase runs that phase and stops', async () => {
   const r = repo();
   const seen: number[] = [];
@@ -862,13 +933,40 @@ test('a proper start request reaches the service with its options', async () => 
     body: { model: 'sonnet', effort: 'high', autonomy: 'keep-going', phaseBudgetUsd: 4 },
   });
   assert.equal(status, 200);
-  assert.deepEqual(started, [{
-    slug: 'demo',
-    options: {
-      model: 'sonnet', effort: 'high', autonomy: 'keep-going', phaseBudgetUsd: 4, runBudgetUsd: null,
-      resumeRunId: undefined, onlyPhases: undefined,
+  assert.equal(started.length, 1);
+  const { slug, options } = started[0] as { slug: string; options: Record<string, unknown> };
+  assert.equal(slug, 'demo');
+  // Asserted field by field rather than as one object: a deep-equal here fails
+  // every time a new option is added, which teaches you to edit the expected
+  // value without reading it — and then it is no longer checking anything.
+  assert.equal(options.model, 'sonnet');
+  assert.equal(options.effort, 'high');
+  assert.equal(options.autonomy, 'keep-going');
+  assert.equal(options.phaseBudgetUsd, 4);
+  assert.equal(options.runBudgetUsd, null, 'an unsent budget is no budget, not zero');
+  assert.equal(options.resumeRunId, undefined);
+});
+
+test('per-phase choices are checked against known values, never passed through', async () => {
+  const { started } = await call('/api/run/demo/start', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+    body: {
+      phaseOptions: {
+        1: { model: 'fable', effort: 'max' },
+        2: { model: 'gpt-4', effort: 'ludicrous' },          // neither is ours
+        3: { permissionMode: 'bypassPermissions' },          // never, from here
+        4: { tools: ['Read', 'Bash(rm -rf /)', 'Edit'] },    // not a tool name
+        '-1': { model: 'opus' },                             // not a phase
+      },
+      skills: ['systematic-debugging', 'plugin:test-first', '../../etc/passwd', 'ok-name'],
     },
-  }]);
+  });
+  const options = (started[0] as { options: Record<string, unknown> }).options;
+  assert.deepEqual(options.phaseOptions, {
+    1: { model: 'fable', effort: 'max' },
+    4: { tools: ['Read', 'Edit'] },
+  }, 'anything unrecognised is dropped, and a phase left with nothing is dropped with it');
+  assert.deepEqual(options.skills, ['systematic-debugging', 'plugin:test-first', 'ok-name']);
 });
 
 test('an effort the CLI would silently ignore is dropped at the door', async () => {

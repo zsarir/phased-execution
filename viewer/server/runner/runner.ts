@@ -30,12 +30,13 @@ import { join } from 'node:path';
 import { log } from '../log.ts';
 import { onShutdown, offShutdown } from '../lifecycle.ts';
 import { run as engineRun, readMemoryBlock, readGateStatus, readLint, readText, type Board } from '../engine.ts';
+import { skillDirective } from '../skills.ts';
 import { classify, fallbackChain, nextModel, type Disposition } from './errors.ts';
 import { spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
 import { verifyPhase } from './verify.ts';
 import {
   loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
-  type Autonomy, type RunState, type PhaseStatus, type VerifySummary,
+  type Autonomy, type PhaseOptions, type RunState, type PhaseStatus, type VerifySummary,
 } from './state.ts';
 import { Journal } from './journal.ts';
 import { Transcript } from './transcript.ts';
@@ -51,6 +52,16 @@ export type RunnerDeps = {
   verify?: typeof verifyPhase;
   /** The plan's `**Verification:**` text for a phase, from the service's store. */
   verificationText: (slug: string, phase: number) => Promise<string | undefined> | string | undefined;
+  /**
+   * The plan's own `**Model:**` / `**Effort:**` bullets for a phase.
+   *
+   * The plan format has allowed a per-phase model override for as long as there
+   * has been a plan format, and the runner ignored it completely — so a plan
+   * that said "this phase wants Opus" ran on whatever the run defaulted to and
+   * nobody was told. Read from the store, exactly as the verification text is,
+   * because the plan is the source for what a phase needs.
+   */
+  phaseDefaults?: (slug: string, phase: number) => { model?: string; effort?: string } | undefined;
   /** Without one, sessions run on the deny rules alone and nothing can be asked. */
   approvals?: Approvals;
   /** Where the child posts its hook calls, e.g. `http://127.0.0.1:4123`. */
@@ -78,6 +89,10 @@ export type StartOptions = {
   resumeRunId?: string;
   /** Drive only these phases, then finish. Absent means the whole plan. */
   onlyPhases?: number[];
+  /** Per-phase model / effort / tools / skills, keyed by phase number. */
+  phaseOptions?: Record<string, PhaseOptions>;
+  /** Skills every phase invokes, on top of the plan's own. */
+  skills?: string[];
 };
 
 /** Per phase: one first try, plus room for a model switch, a resume and a retry. */
@@ -170,6 +185,8 @@ export class Runner {
       phaseBudgetUsd: options.phaseBudgetUsd,
       runBudgetUsd: options.runBudgetUsd,
       onlyPhases: options.onlyPhases,
+      phaseOptions: options.phaseOptions,
+      skills: options.skills,
     });
 
     if (state) {
@@ -191,6 +208,10 @@ export class Runner {
       // one clears it, so "Continue" never silently inherits a single-phase run.
       if (options.onlyPhases?.length) this.state.onlyPhases = [...options.onlyPhases];
       else delete this.state.onlyPhases;
+      // Per-phase choices and skills are sticky across a continue: they belong
+      // to the run, not to one press of the button.
+      if (options.phaseOptions) this.state.phaseOptions = { ...options.phaseOptions };
+      if (options.skills) this.state.skills = [...options.skills];
     }
 
     this.journal = new Journal(this.state.root, this.state.slug, this.state.id);
@@ -535,22 +556,38 @@ export class Runner {
     }
 
     /* ---- prompt ---- */
-    const prompt = readText(await this.engine(['--boot-prompt', String(phase)]));
-    if (!prompt.trim()) {
+    const engineText = readText(await this.engine(['--boot-prompt', String(phase)]));
+    if (!engineText.trim()) {
       await this.release(phase, owner);
       this.halt(`the engine produced no boot prompt for phase ${phase}`, phase);
       return false;
     }
+    // Appended, never woven in: `phase-graph.sh` stays the only thing that
+    // decides what a boot prompt says about the plan — including the plan's own
+    // skills line. This is the operator adding to it for one run.
+    const extraSkills = [...(state.skills ?? []), ...(state.phaseOptions?.[String(phase)]?.skills ?? [])];
+    const prompt = engineText + skillDirective(extraSkills);
+    if (extraSkills.length) this.record('phase.skills', { skills: [...new Set(extraSkills)] }, phase);
 
+    /* ---- what this phase runs as ---- */
+    const chosen = this.optionsFor(phase);
     record.status = 'running';
     record.startedAt = new Date().toISOString();
-    record.model = record.model ?? state.model;
-    record.effort = record.effort ?? state.effort;
-    this.record('phase.start', { model: record.model, effort: record.effort ?? null, title: board.states[phase] }, phase);
+    record.model = record.model ?? chosen.model;
+    record.effort = record.effort ?? chosen.effort;
+    this.record('phase.start', {
+      model: record.model, effort: record.effort ?? null,
+      // Where each choice came from, so a phase that ran on an unexpected model
+      // can be explained without re-reading three files.
+      source: chosen.source,
+      ...(chosen.tools?.length ? { tools: chosen.tools } : {}),
+      ...(chosen.permissionMode ? { permissionMode: chosen.permissionMode } : {}),
+      title: board.states[phase],
+    }, phase);
     this.emit('phase', { phase, status: 'running', model: record.model, effort: record.effort });
 
     /* ---- the session, with the error policy driving retries ---- */
-    const settled = await this.attempt(phase, prompt, record.model!, owner);
+    const settled = await this.attempt(phase, prompt, record.model!, owner, chosen);
     await this.release(phase, owner);
     if (!settled.carryOn) return false;
     if (!settled.completed) return true;
@@ -560,11 +597,43 @@ export class Runner {
   }
 
   /**
+   * What one phase runs as, resolved from the three places that may say.
+   *
+   * Order is deliberate and never rearranged: what the operator chose for THIS
+   * run wins, because it is the most recent and most specific decision; then
+   * the plan, because it is the durable statement of what the phase needs; then
+   * the run's defaults. `source` records which of the three answered, so the
+   * journal can explain a surprising model rather than merely recording it.
+   */
+  private optionsFor(phase: number): PhaseOptions & { source: Record<string, string> } {
+    const state = this.state!;
+    const chosen = state.phaseOptions?.[String(phase)] ?? {};
+    const plan = this.deps.phaseDefaults?.(state.slug, phase) ?? {};
+    const source: Record<string, string> = {};
+
+    const pick = (key: 'model' | 'effort', fallback?: string): string | undefined => {
+      if (chosen[key]) { source[key] = 'run'; return chosen[key]; }
+      if (plan[key]) { source[key] = 'plan'; return plan[key]; }
+      if (fallback) source[key] = 'default';
+      return fallback;
+    };
+
+    return {
+      model: pick('model', state.model),
+      effort: pick('effort', state.effort),
+      tools: chosen.tools,
+      permissionMode: chosen.permissionMode,
+      skills: chosen.skills,
+      source,
+    };
+  }
+
+  /**
    * Run the phase until it either finishes or the error policy says to stop.
    * Every disposition from `classify` is handled here and nowhere else.
    */
   private async attempt(
-    phase: number, prompt: string, model: string, owner: string,
+    phase: number, prompt: string, model: string, owner: string, chosen: PhaseOptions = {},
   ): Promise<{ carryOn: boolean; completed: boolean }> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
@@ -598,6 +667,10 @@ export class Runner {
         budgetUsd: budget,
         maxTurns,
         settings: this.settingsPath ?? undefined,
+        // A mechanical phase can run with a small tool set and no MCP servers:
+        // less blast radius, and a smaller system prompt to pay for every turn.
+        tools: chosen.tools?.length ? chosen.tools : undefined,
+        permissionMode: chosen.permissionMode as never,
         partialMessages: this.deps.stream?.partialMessages ?? true,
         subagentText: this.deps.stream?.subagentText ?? true,
         hookEvents: this.deps.stream?.hookEvents ?? true,
@@ -1036,6 +1109,8 @@ export type RunSettingsPatch = {
   runBudgetUsd?: number | null;
   maxConsecutiveFailures?: number;
   onlyPhases?: number[] | null;
+  phaseOptions?: Record<string, PhaseOptions> | null;
+  skills?: string[] | null;
 };
 
 /**
@@ -1058,6 +1133,14 @@ export function applySettings(state: RunState, patch: RunSettingsPatch): RunStat
   if (patch.onlyPhases !== undefined) {
     if (patch.onlyPhases?.length) state.onlyPhases = [...patch.onlyPhases];
     else delete state.onlyPhases;
+  }
+  if (patch.phaseOptions !== undefined) {
+    if (patch.phaseOptions) state.phaseOptions = { ...patch.phaseOptions };
+    else delete state.phaseOptions;
+  }
+  if (patch.skills !== undefined) {
+    if (patch.skills?.length) state.skills = [...patch.skills];
+    else delete state.skills;
   }
   return state;
 }

@@ -68,6 +68,8 @@ export const api = {
 
   plans: () => get('/api/plans'),
   stats: () => get('/api/stats'),
+  /** Every skill a spawned session could invoke, from its own Claude home. */
+  skills: () => get('/api/skills'),
   search: (query) => request(`/api/search?q=${encodeURIComponent(query)}`),
 
   plan: (slug, model) => get(`/api/plans/${encodeURIComponent(slug)}${model ? `?model=${encodeURIComponent(model)}` : ''}`),

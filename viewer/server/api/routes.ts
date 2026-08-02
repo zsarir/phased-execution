@@ -12,8 +12,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Service } from '../service.ts';
 import { checkRoot, listDirs } from '../config.ts';
 import { isClientDisconnect, log } from '../log.ts';
-import { isEffort } from '../runner/spawn.ts';
+import { isEffort, PERMISSION_MODES } from '../runner/spawn.ts';
+import { MODEL_FALLBACK as MODELS } from '../runner/errors.ts';
 import { planWrite, runWrite, openInEditor, WriteError, type WriteRequest } from '../writes.ts';
+import type { PhaseOptions } from '../runner/state.ts';
 
 export type ApiContext = { service: Service };
 
@@ -88,6 +90,47 @@ function phaseList(value: unknown): number[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const phases = [...new Set(value.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   return phases.slice(0, 500);
+}
+
+/** A skill id: what `/name` or `/plugin:name` accepts, and nothing else. */
+const SKILL_ID = /^[a-z0-9][\w.-]{0,63}(:[a-z0-9][\w.-]{0,63})?$/i;
+
+function skillList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return [...new Set(value.filter((v): v is string => typeof v === 'string' && SKILL_ID.test(v)))].slice(0, 40);
+}
+
+/**
+ * Per-phase choices from a browser.
+ *
+ * Everything is checked against a known set rather than passed through: these
+ * values end up in a child process's argv, so "whatever the client sent" is not
+ * an acceptable definition of any of them.
+ */
+function phaseOptions(value: unknown): Record<string, PhaseOptions> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, PhaseOptions> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>).slice(0, 500)) {
+    const phase = Number(key);
+    if (!Number.isInteger(phase) || phase <= 0) continue;
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as Record<string, unknown>;
+    const option: PhaseOptions = {};
+    if (typeof item.model === 'string' && MODELS.includes(item.model)) option.model = item.model;
+    if (isEffort(item.effort)) option.effort = item.effort;
+    if (typeof item.permissionMode === 'string'
+        && (PERMISSION_MODES as readonly string[]).includes(item.permissionMode)) {
+      option.permissionMode = item.permissionMode;
+    }
+    if (Array.isArray(item.tools)) {
+      const tools = item.tools.filter((t): t is string => typeof t === 'string' && /^[A-Za-z_][\w]{0,63}$/.test(t));
+      if (tools.length) option.tools = [...new Set(tools)].slice(0, 40);
+    }
+    const skills = skillList(item.skills);
+    if (skills?.length) option.skills = skills;
+    if (Object.keys(option).length) out[String(phase)] = option;
+  }
+  return out;
 }
 
 export async function handleApi(
@@ -224,6 +267,7 @@ export async function handleApi(
       json(res, 200, service.searchAll(url.searchParams.get('q') ?? ''));
       return true;
     }
+    if (head === 'skills' && req.method === 'GET') { json(res, 200, service.skills()); return true; }
 
     /* ---------------- one plan ---------------- */
     if (head === 'plans' && rest.length >= 1) {
@@ -339,6 +383,8 @@ export async function handleApi(
               runBudgetUsd: numberOrNull(body.runBudgetUsd),
               resumeRunId: typeof body.resumeRunId === 'string' ? body.resumeRunId : undefined,
               onlyPhases: phaseList(body.onlyPhases),
+              phaseOptions: phaseOptions(body.phaseOptions),
+              skills: skillList(body.skills),
             });
             json(res, 200, { run: state });
             return true;
@@ -363,6 +409,8 @@ export async function handleApi(
               ...('maxConsecutiveFailures' in body
                 ? { maxConsecutiveFailures: Number(body.maxConsecutiveFailures) } : {}),
               ...('onlyPhases' in body ? { onlyPhases: phaseList(body.onlyPhases) ?? null } : {}),
+              ...('phaseOptions' in body ? { phaseOptions: phaseOptions(body.phaseOptions) ?? null } : {}),
+              ...('skills' in body ? { skills: skillList(body.skills) ?? null } : {}),
             });
             json(res, 200, { run });
             return true;

@@ -66,6 +66,26 @@ export function parseFrontMatter(text: string): FrontMatter {
 
     if (rest.trim().startsWith('[')) { values[key] = inlineList(rest); continue; }
 
+    // A block scalar: `description: >` (folded) or `description: |` (literal),
+    // with the value on the following indented lines. Common in skill front
+    // matter, where a description is a paragraph — and read naively the value
+    // becomes the single character ">", which is worse than reading nothing.
+    const block = /^([|>])([+-]?)\d*$/.exec(rest.trim());
+    if (block) {
+      const collected: string[] = [];
+      let j = i + 1;
+      for (; j < body.length; j++) {
+        const next = body[j];
+        if (!next.trim()) { collected.push(''); continue; }
+        if (!/^\s/.test(next)) break;
+        collected.push(next.replace(/^\s+/, ''));
+      }
+      while (collected.at(-1) === '') collected.pop();
+      values[key] = block[1] === '>' ? collected.join(' ').replace(/\s+/g, ' ').trim() : collected.join('\n');
+      i = j - 1;
+      continue;
+    }
+
     if (scalar(rest) !== '') { values[key] = scalar(rest); continue; }
 
     // Empty value: look ahead for an indented block (list or mapping).

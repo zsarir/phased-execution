@@ -38,6 +38,8 @@ export type PhaseDetail = {
   gateCheck?: string;
   size: PhaseSize;
   model?: string;
+  /** `**Effort:**` — the reasoning level this phase is worth running at. */
+  effort?: string;
   goal?: string;
   readFirst?: string;
   files?: string;
@@ -248,6 +250,7 @@ export function parsePlan(text: string, slug: string, path: string): Plan {
       gateCheck: firstBulletValue(block.raw, /gate-check[^:]*:\s*(.+)$/i),
       size: phaseSize(body, phase),
       model: bullet(bullets, 'Model'),
+      effort: bullet(bullets, 'Effort'),
       goal: bullet(bullets, 'Goal'),
       readFirst: bullet(bullets, 'Read first'),
       files: bullet(bullets, 'Files'),

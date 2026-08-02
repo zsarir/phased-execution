@@ -728,7 +728,15 @@ export function PlanView({ slug, tab, arg, state }) {
   else if (active === 'analysis') body = html`<${AnalysisTab} detail=${detail} />`;
   else if (active === 'overview') body = html`<${OverviewTab} detail=${detail} />`;
   else if (active === 'raw') body = html`<${RawTab} slug=${slug} />`;
-  else if (active === 'run') body = html`<${RunView} slug=${slug} state=${state} />`;
+  // The plan's own phases go in: the autopilot needs to offer a model and an
+  // effort for phases that have never run, and a run only knows about the ones
+  // it has already attempted.
+  else if (active === 'run') {
+    body = html`<${RunView}
+      slug=${slug} state=${state}
+      planPhases=${detail.phases}
+      planSkills=${detail.plan?.sessionBudget?.skills ?? []} />`;
+  }
   else body = html`<${RouteTab} detail=${detail} />`;
 
   const tabId = ['phase', 'handoff'].includes(active) ? (active === 'phase' ? 'phases' : 'handoffs') : active;
