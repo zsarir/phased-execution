@@ -152,6 +152,112 @@ gate_check_directive() {  # gate_check_directive <phase>
     | head -1 || true
 }
 
+# The gate-check vocabulary, in one place so --gate-status and --lint cannot
+# drift apart. A directive whose type is not on this list is treated as manual
+# (fail-safe), and --lint now reports it rather than letting it pass silently:
+# a typo used to demote an automated gate to a human one with no warning.
+GATE_TYPES="phase phases plan cmd date deadline by manual"
+
+_gate_type_known() {  # _gate_type_known <type>
+  case " $GATE_TYPES " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
+# A real YYYY-MM-DD, not merely something shaped like one. Shape alone let
+# "2020-13-99" through, and since the comparison is numeric it then read as a
+# date already past — a gate that opened itself. Range-checked rather than
+# handed to `date`, whose flags differ between BSD and GNU.
+_valid_date() {  # _valid_date <string>
+  case "$1" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) return 1 ;; esac
+  local m d
+  # 10# forces base 10: "08" and "09" are invalid octal and would error out.
+  m=$((10#${1:5:2})); d=$((10#${1:8:2}))
+  [ "$m" -ge 1 ] && [ "$m" -le 12 ] && [ "$d" -ge 1 ] && [ "$d" -le 31 ]
+}
+
+# Portable bounded execution — macOS ships neither GNU `timeout` nor `gtimeout`,
+# but it does ship perl. A gate command that hangs must not wedge the engine.
+_run_bounded() {  # _run_bounded <seconds> <command-string>
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$1" bash -c "$2"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$1" bash -c "$2"
+  else
+    perl -e 'alarm shift; exec @ARGV' "$1" bash -c "$2"
+  fi
+}
+
+# Commands no gate has any business running. A gate answers "is the world in the
+# required state" — it never changes the world. Defence in depth behind the
+# opt-in below, not the primary control.
+GATE_CMD_DENY='(^|[;&|[:space:]])(rm|mv|dd|mkfs|shutdown|reboot|kill|pkill|chown|chmod)([[:space:]]|$)|terraform[[:space:]]+(apply|destroy)|git[[:space:]]+(push|reset|clean|checkout)|docker[[:space:]]+(rm|rmi|kill|stop)|task[[:space:]]+[a-z:]*(deploy|ship|update|apply|destroy)|[[:space:]](delete|put|create|set|modify|terminate|reboot)-'
+
+# Executing a command written in a markdown file is remote code execution by
+# document: clone a repo, run the board, run their shell. So `cmd` gates are OFF
+# unless the caller opts in with PHASE_EXEC_GATES=1 — which the console's runner
+# does deliberately and a passer-by does not. When off the gate still reports
+# itself, showing the exact command, so a human and the automation never
+# disagree about what the gate says.
+_gate_exec_enabled() { [ "${PHASE_EXEC_GATES:-0}" = "1" ]; }
+
+# Evaluate a `cmd` gate. Echoes the verdict; returns 0 = clear, 1 = not clear.
+_gate_cmd() {  # _gate_cmd <command-string>
+  local out rc
+  if printf '%s' "$1" | grep -qE "$GATE_CMD_DENY"; then
+    printf 'manual: REFUSED — a gate must not mutate anything: %s\n' "$1"
+    return 1
+  fi
+  if ! _gate_exec_enabled; then
+    printf 'manual: cmd gate not executed (set PHASE_EXEC_GATES=1 to evaluate): %s\n' "$1"
+    return 1
+  fi
+  out="$(_run_bounded "${PHASE_GATE_TIMEOUT:-15}" "$1" 2>&1)" && rc=0 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'clear (cmd ok): %s\n' "$1"
+    return 0
+  fi
+  # 124 is what both timeout implementations use; perl's alarm kills with SIGALRM (142).
+  case "$rc" in
+    124|142) printf 'blocked: cmd timed out after %ss: %s\n' "${PHASE_GATE_TIMEOUT:-15}" "$1" ;;
+    *)       printf 'blocked: cmd exit %s: %s%s\n' "$rc" "$1" \
+               "$( [ -n "$out" ] && printf ' — %s' "$(printf '%s' "$out" | head -1)" )" ;;
+  esac
+  return 1
+}
+
+# Are these phases of ANOTHER plan done? Delegates to this same script rather
+# than re-reading a second plan's handoffs here — one implementation of "done".
+_gate_plan() {  # _gate_plan <slug:phases>
+  local other list done_line missing q
+  other="${1%%:*}"; list="${1#*:}"
+  if [ "$other" = "$1" ] || [ -z "$list" ]; then
+    printf 'manual: malformed plan gate (expected <slug>:<phases>): %s\n' "$1"
+    return 1
+  fi
+  if [ ! -f "$DOCS_ROOT/docs/plans/${other}.md" ]; then
+    printf 'blocked: plan gate references a plan that does not exist: %s\n' "$other"
+    return 1
+  fi
+  done_line="$(DOCS_ROOT="$DOCS_ROOT" "$0" "$other" --memory-block 2>/dev/null \
+    | grep '^done:' | sed 's/^done:[[:space:]]*//' || true)"
+  # Comma-delimited on both sides so "1" cannot match inside "11".
+  local done_set
+  done_set=",$(printf '%s' "$done_line" | tr -d ' '),"
+  missing=""
+  for q in $(printf '%s' "$list" | tr ',' ' '); do
+    case "$q" in ''|*[!0-9]*) continue ;; esac
+    case "$done_set" in
+      *",$q,"*) ;;
+      *) missing="$missing $q" ;;
+    esac
+  done
+  if [ -z "$missing" ]; then
+    printf 'clear (%s phases %s done)\n' "$other" "$list"
+    return 0
+  fi
+  printf 'blocked: %s phase(s)%s not done\n' "$other" "$missing"
+  return 1
+}
+
 # Rough working-set size of a phase: S | M | L (default M). Read from a
 # "- **Size:** X" bullet in the ### Phase N block — mirrors the Gates convention,
 # so no change to the machine-parsed Phase-graph table is needed.
@@ -271,6 +377,54 @@ compute_issues() {
   done
   undefined_deps
   if detect_cycle; then printf 'dependency cycle: %s\n' "$CYCLE_PATH"; fi
+  gate_issues
+  return 0
+}
+
+# Gate-check grammar. The evaluator falls back to `manual` for anything it does
+# not recognise, which is fail-safe but silent — so `Gate-check: phase-21 …`
+# (hyphen, not space) read as manual and nobody knew the automation was off.
+# Every deviation is reported here instead.
+gate_issues() {
+  local p gc gtype gval q
+  for p in "${PHASES[@]}"; do
+    gc="$(gate_check_directive "$p")"
+    [ -z "$gc" ] && continue
+
+    if [ "${GATED[$p]:-no}" != yes ]; then
+      printf 'phase %s: has a Gate-check but the heading is not marked *(GATED)* — the board will batch it as ungated\n' "$p"
+    fi
+
+    gtype="${gc%% *}"; gval="${gc#"$gtype"}"; gval="${gval# }"
+    if ! _gate_type_known "$gtype"; then
+      printf 'phase %s: unknown Gate-check type "%s" (expected one of: %s) — it will be treated as manual\n' \
+        "$p" "$gtype" "$GATE_TYPES"
+      continue
+    fi
+    [ "$gtype" != manual ] && [ -z "$gval" ] && \
+      printf 'phase %s: Gate-check type "%s" has no value\n' "$p" "$gtype"
+
+    case "$gtype" in
+      phase|phases)
+        for q in $(printf '%s' "$gval" | tr ',' ' '); do
+          case "$q" in ''|*[!0-9]*) printf 'phase %s: Gate-check %s references "%s", which is not a phase number\n' "$p" "$gtype" "$q"; continue ;; esac
+          case " ${PHASES[*]} " in *" $q "*) ;; *) printf 'phase %s: Gate-check %s references phase %s, which is not in this plan\n' "$p" "$gtype" "$q" ;; esac
+          [ "$q" = "$p" ] && printf 'phase %s: Gate-check %s references itself\n' "$p" "$gtype"
+        done ;;
+      plan)
+        case "$gval" in
+          *:*) [ -f "$DOCS_ROOT/docs/plans/${gval%%:*}.md" ] || \
+                 printf 'phase %s: Gate-check plan references "%s", which has no docs/plans entry\n' "$p" "${gval%%:*}" ;;
+          *)   printf 'phase %s: Gate-check plan must be <slug>:<phases>, got "%s"\n' "$p" "$gval" ;;
+        esac ;;
+      date|deadline|by)
+        _valid_date "$gval" || \
+          printf 'phase %s: Gate-check %s needs a real YYYY-MM-DD date, got "%s"\n' "$p" "$gtype" "$gval" ;;
+      cmd)
+        printf '%s' "$gval" | grep -qE "$GATE_CMD_DENY" && \
+          printf 'phase %s: Gate-check cmd looks like it mutates state — a gate must only observe: %s\n' "$p" "$gval" ;;
+    esac
+  done
   return 0
 }
 
@@ -563,11 +717,32 @@ case "$mode" in
       phase)
         if _is_verified "$gval"; then echo "clear (phase $gval verified)"; exit 0
         else echo "blocked: waiting on phase $gval"; exit 1; fi ;;
+      phases)
+        # Several phases of THIS plan, comma- or space-separated. One `phase`
+        # gate could not express "6,7,8,9,11,13,16,17,18", so plans wrote that
+        # as prose and lost the automation.
+        missing=""
+        for q in $(printf '%s' "$gval" | tr ',' ' '); do
+          case "$q" in ''|*[!0-9]*) continue ;; esac
+          _is_verified "$q" || missing="$missing $q"
+        done
+        if [ -z "$missing" ]; then echo "clear (phases $gval verified)"; exit 0
+        else echo "blocked: waiting on phase(s)$missing"; exit 1; fi ;;
+      plan)
+        # Cross-plan: "<slug>:<phases>". Plans really do gate on each other and
+        # the graph had no way to say so.
+        if _gate_plan "$gval"; then exit 0; else exit 1; fi ;;
+      cmd)
+        # A fact about the world, asserted by a command. See _gate_cmd — off
+        # unless PHASE_EXEC_GATES=1.
+        if _gate_cmd "$gval"; then exit 0; else exit 1; fi ;;
       date)
+        _valid_date "$gval" || { echo "manual: not a valid date: $gval"; exit 1; }
         today="$(date +%F)"; ti="${today//-/}"; gi="${gval//-/}"
         if [ "$ti" -ge "$gi" ]; then echo "clear (date $gval reached)"; exit 0
         else echo "blocked: opens on $gval (today $today)"; exit 1; fi ;;
       deadline|by)
+        _valid_date "$gval" || { echo "manual: not a valid date: $gval"; exit 1; }
         today="$(date +%F)"; ti="${today//-/}"; gi="${gval//-/}"
         if [ "$ti" -gt "$gi" ]; then echo "OVERDUE: deadline $gval passed (today $today)"; exit 1
         else echo "clear (before deadline $gval)"; exit 0; fi ;;
