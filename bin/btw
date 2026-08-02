@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Ask the phase that is running right now a question, from any terminal.
+#
+#   btw "why did you skip the cache?"
+#   btw --plan my-plan "is that migration reversible?"
+#
+# A supervised phase is a session you can watch and could not speak to. Its
+# stdin is held open by the console, so a question becomes one more turn in the
+# same conversation — the context is intact, the prompt cache stays warm, and
+# the phase carries on where it left off afterwards. The answer appears in the
+# console's session window, which is where the rest of the session already is.
+#
+# Claude Code puts a plugin's bin/ on the Bash tool's PATH, so an installed
+# plugin gets this as a bare command. Cloned instead? Link it once:
+#
+#   ln -s ~/.claude/skills/phased-execution/bin/btw ~/.local/bin/btw
+#
+# The console must be running with --allow-run. Point at a different one with
+# PHASE_CONSOLE_URL.
+set -euo pipefail
+
+url="${PHASE_CONSOLE_URL:-http://127.0.0.1:4123}"
+plan=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --plan) plan="${2:-}"; shift 2 ;;
+    --url) url="${2:-}"; shift 2 ;;
+    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+
+question="$*"
+if [ -z "$question" ]; then
+  echo "btw: nothing to ask — try: btw \"why did you skip the cache?\"" >&2
+  exit 2
+fi
+
+for tool in curl python3; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "btw: $tool is required" >&2; exit 127; }
+done
+
+# Which plan is running, unless one was named. Asking the console rather than
+# guessing means this works with no arguments in the common case: one run.
+if [ -z "$plan" ]; then
+  plan="$(curl -fsS --max-time 5 "$url/api/runs" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    runs = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+live = [r for r in runs if r.get("status") in ("running", "waiting", "pausing")]
+print(live[0]["slug"] if live else "")
+' || true)"
+fi
+
+if [ -z "$plan" ]; then
+  echo "btw: nothing is running at $url — name a plan with --plan <slug>, or check the console." >&2
+  exit 1
+fi
+
+# The console refuses cross-origin writes and requires its own header; both are
+# satisfied here the same way the browser satisfies them.
+body="$(python3 -c 'import json,sys; print(json.dumps({"question": sys.argv[1], "by": "btw"}))' "$question")"
+
+response="$(curl -sS --max-time 20 \
+  -X POST "$url/api/run/$plan/ask" \
+  -H 'content-type: application/json' \
+  -H 'x-phase-console: 1' \
+  -d "$body" 2>&1)" || {
+    echo "btw: could not reach the console at $url" >&2
+    exit 1
+  }
+
+printf '%s' "$response" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    body = json.loads(raw)
+except Exception:
+    print(raw.strip() or "btw: the console said nothing", file=sys.stderr)
+    sys.exit(1)
+if body.get("ok"):
+    print("asked — the answer appears in the console session window")
+    sys.exit(0)
+print("btw: " + str(body.get("reason") or body.get("error") or "refused"), file=sys.stderr)
+sys.exit(1)
+'

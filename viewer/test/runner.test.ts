@@ -744,6 +744,94 @@ test('pausing a run nothing is driving reports that it did nothing', async () =>
 });
 
 /* ------------------------------------------------------------------ *
+ * Asking a running phase something
+ * ------------------------------------------------------------------ */
+
+test('a question reaches the session that is running, framed so it cannot redirect it', async () => {
+  const r = repo();
+  const sent: string[] = [];
+  let release: () => void = () => {};
+  let entered: () => void = () => {};
+  const inSession = new Promise<void>((resolve) => { entered = resolve; });
+
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    if (phase === 1) {
+      request.onHandle?.({
+        pid: 1,
+        open: () => true,
+        send: (text: string) => { sent.push(text); return true; },
+      });
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+    }
+    r.markDone(phase);
+    return ok();
+  };
+
+  const { instance } = runner(r, spawn);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await inSession;
+
+  assert.deepEqual(instance.ask('why did you skip the cache?'), { ok: true });
+  assert.equal(sent.length, 1);
+  // The frame is what keeps a question a question. Dropped in bare, text from
+  // the operator outranks almost everything in a phase's context and reads as
+  // a change of direction.
+  assert.match(sent[0], /out-of-band question/i);
+  assert.match(sent[0], /continue exactly where you left off/i);
+  assert.match(sent[0], /Question: why did you skip the cache\?$/);
+
+  release();
+  await instance.wait();
+  r.cleanup();
+});
+
+test('an empty or oversized question is refused before it is sent anywhere', async () => {
+  const r = repo();
+  const sent: string[] = [];
+  let release: () => void = () => {};
+  let entered: () => void = () => {};
+  const inSession = new Promise<void>((resolve) => { entered = resolve; });
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    if (phase === 1) {
+      request.onHandle?.({ pid: 1, open: () => true, send: (t: string) => { sent.push(t); return true; } });
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+    }
+    r.markDone(phase);
+    return ok();
+  };
+  const { instance } = runner(r, spawn);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await inSession;
+
+  assert.equal(instance.ask('   ').ok, false);
+  assert.equal(instance.ask('x'.repeat(9_000)).ok, false);
+  assert.equal(sent.length, 0);
+
+  release();
+  await instance.wait();
+  r.cleanup();
+});
+
+test('asking when nothing is running says so rather than swallowing it', async () => {
+  const r = repo();
+  const { instance } = runner(r, workingSession(r));
+  const before = instance.ask('anyone there?');
+  assert.equal(before.ok, false);
+  assert.match(before.reason!, /nothing is running/);
+
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const after = instance.ask('and now?');
+  assert.equal(after.ok, false, 'a finished run has no session to ask');
+  r.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
  * What a phase runs as
  * ------------------------------------------------------------------ */
 
@@ -849,7 +937,12 @@ test('nothing was written inside the repo — run state lives outside it', async
 const { handleApi } = await import('../server/api/routes.ts');
 
 function call(
-  path: string, opts: { method?: string; headers?: Record<string, string>; allowRun?: boolean; body?: unknown } = {},
+  path: string,
+  opts: {
+    method?: string; headers?: Record<string, string>; allowRun?: boolean; body?: unknown;
+    /** Replace a service method for one call — used to test a refusal path. */
+    overrides?: Record<string, unknown>;
+  } = {},
 ) {
   let status = 0;
   let payload: unknown;
@@ -877,6 +970,7 @@ function call(
     pauseRun: record('pauseRun'),
     resumePause: record('resumePause'),
     configureRun: record('configureRun'),
+    askRun: (...args: unknown[]) => { calls.push({ method: 'askRun', args }); return { ok: true }; },
     stopRun: record('stopRun'),
     skipPhase: record('skipPhase'),
     retryPhase: record('retryPhase'),
@@ -884,6 +978,7 @@ function call(
     runsFor: () => [{ id: 'r1' }],
     allRuns: () => [{ id: 'r1' }],
     runJournal: () => [{ seq: 1, event: 'run.start' }],
+    ...(opts.overrides ?? {}),
   };
   const res = {
     writeHead(code: number) { status = code; return this; },
@@ -900,6 +995,13 @@ function call(
   };
   return handleApi({ service } as never, req as never, res as never, new URL(`http://127.0.0.1:4123${path}`))
     .then(() => ({ status, payload, started, calls }));
+}
+
+/** A console POST with one service method replaced. */
+function callWith(overrides: Record<string, unknown>, path: string, body: unknown) {
+  return call(path, {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' }, body, overrides,
+  });
 }
 
 test('starting a run is refused unless the console was started with --allow-run', async () => {
@@ -1004,6 +1106,7 @@ test('every control verb goes through the service, so it works after a restart',
   for (const [verb, method] of [
     ['pause', 'pauseRun'], ['resume', 'resumePause'], ['stop', 'stopRun'],
     ['skip', 'skipPhase'], ['retry', 'retryPhase'], ['settings', 'configureRun'],
+    ['ask', 'askRun'],
   ]) {
     const { status, calls } = await call(`/api/run/demo/${verb}`, {
       method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' }, body: { phase: 2 },
@@ -1013,8 +1116,27 @@ test('every control verb goes through the service, so it works after a restart',
   }
 });
 
+test('a question that lands nowhere answers 409, not 200', async () => {
+  // Well formed, nothing listening. A 200 here would tell the console the
+  // question was delivered, and it would show it in the transcript as if a
+  // session had heard it — which is exactly the lie this whole change is about.
+  const { status } = await call('/api/run/demo/ask', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+    body: { question: 'anyone there?' },
+  });
+  assert.equal(status, 200, 'the stub service says it landed');
+
+  const refused = await callWith(
+    { askRun: () => ({ ok: false, reason: 'nothing is running' }) },
+    '/api/run/demo/ask',
+    { question: 'anyone there?' },
+  );
+  assert.equal(refused.status, 409);
+  assert.match(String((refused.payload as { reason: string }).reason), /nothing is running/);
+});
+
 test('pause is refused without --allow-run, like every other control', async () => {
-  for (const verb of ['pause', 'resume', 'settings']) {
+  for (const verb of ['pause', 'resume', 'settings', 'ask']) {
     const { status, calls } = await call(`/api/run/demo/${verb}`, {
       method: 'POST', headers: { 'x-phase-console': '1' }, body: {},
     });

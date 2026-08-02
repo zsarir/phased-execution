@@ -100,6 +100,8 @@ export const api = {
   runRetry: (slug, phase) => post(`/api/run/${encodeURIComponent(slug)}/retry`, { phase }),
   /** Change model, autonomy or budgets on a run in flight; applies next phase. */
   runSettings: (slug, patch) => post(`/api/run/${encodeURIComponent(slug)}/settings`, patch),
+  /** Put a question to the session running right now — the `/btw` box. */
+  runAsk: (slug, question) => post(`/api/run/${encodeURIComponent(slug)}/ask`, { question }),
   /** Replay of what the session printed, so a reload is not a blank window. */
   runTranscript: (slug, id, limit) => request(
     `/api/run/${encodeURIComponent(slug)}/transcript${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`,

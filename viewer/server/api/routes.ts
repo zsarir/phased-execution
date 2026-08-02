@@ -393,6 +393,18 @@ export async function handleApi(
           // console restart there is no in-memory run to act on, and the
           // runner's own methods return silently — a button that answers 200
           // and does nothing. The service edits the checkpoint on disk instead.
+          case 'ask': {
+            // 409 rather than 400: the request is well formed, there is simply
+            // nothing listening — and the difference is what tells the console
+            // to say "no session is running" instead of "bad request".
+            const asked = service.askRun(
+              slug,
+              String(body.question ?? ''),
+              typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
+            );
+            json(res, asked.ok ? 200 : 409, asked);
+            return true;
+          }
           case 'pause': json(res, 200, { run: service.pauseRun(slug) }); return true;
           case 'resume': json(res, 200, { run: service.resumePause(slug) }); return true;
           case 'stop': json(res, 200, { run: await service.stopRun(slug) }); return true;

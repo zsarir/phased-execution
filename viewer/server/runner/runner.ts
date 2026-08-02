@@ -395,6 +395,46 @@ export class Runner {
     await this.driving;
   }
 
+  /**
+   * Put a question to the phase that is running right now.
+   *
+   * A phase is otherwise a process you can watch and cannot speak to: the only
+   * way to ask it anything was to stop it, which throws away the session. The
+   * session's stdin is held open for exactly this, so the question becomes one
+   * more turn in the same conversation — same context, same warm cache — and
+   * the phase carries on afterwards.
+   *
+   * The framing is not decoration. Dropped in bare, "why did you skip the
+   * cache?" reads as a new instruction and can quietly redirect the phase; the
+   * preamble says what it is and what to do after answering.
+   */
+  ask(question: string, by = 'console'): { ok: boolean; reason?: string } {
+    const text = question.trim();
+    if (!text) return { ok: false, reason: 'nothing to ask' };
+    if (text.length > 8_000) return { ok: false, reason: 'that is longer than a question' };
+
+    const handle = this.handle;
+    if (!handle?.open()) {
+      return {
+        ok: false,
+        reason: this.driving
+          ? 'no session is running just now — the run is between phases, or verifying'
+          : 'nothing is running to ask',
+      };
+    }
+    if (!handle.send(frameQuestion(text))) {
+      return { ok: false, reason: 'the session stopped accepting input as the question was sent' };
+    }
+
+    const phase = this.state?.activePhase ?? undefined;
+    this.record('phase.asked', { by, question: text.slice(0, 500) }, phase);
+    // Shown immediately rather than waiting for the CLI's echo: the operator
+    // pressed a key and is owed the evidence of it, and the echo confirms
+    // delivery a moment later on the same channel.
+    this.emit('stream', { phase, kind: 'injected', text });
+    return { ok: true };
+  }
+
   /** Take a phase off this run's list without running it. */
   skip(phase: number): void {
     if (!this.state) return;
@@ -1143,6 +1183,21 @@ export function applySettings(state: RunState, patch: RunSettingsPatch): RunStat
     else delete state.skills;
   }
   return state;
+}
+
+/**
+ * Wrap an operator's question so it cannot be mistaken for a new instruction.
+ *
+ * A phase is mid-task and holds a plan of its own. Text arriving from the user
+ * outranks almost everything in that context, so an unframed "why did you skip
+ * the cache?" is read as a change of direction. The frame says what this is,
+ * asks for brevity, and — the part that matters — says to carry on afterwards.
+ */
+export function frameQuestion(question: string): string {
+  return 'An out-of-band question from the operator watching this run. It is NOT a change to '
+    + 'the phase: answer it briefly, in a sentence or two, then continue exactly where you left '
+    + 'off. Do not alter your plan, your task list, or what you were about to do — unless the '
+    + `question itself explicitly asks you to.\n\nQuestion: ${question}`;
 }
 
 function reasonOf(disposition: Disposition): string {

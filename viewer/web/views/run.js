@@ -236,7 +236,14 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
       <${LiveConsole}
         lines=${lines}
         onClear=${clear}
-        subtitle=${run?.activePhase ? `phase ${run.activePhase} · ${run.model}` : run?.status ?? 'idle'} />
+        subtitle=${run?.activePhase ? `phase ${run.activePhase} · ${run.model}` : run?.status ?? 'idle'}
+        footer=${html`
+          <${AskBox}
+            slug=${slug}
+            enabled=${Boolean(state.allowRun && live && run?.activePhase != null)}
+            allowRun=${state.allowRun}
+            phase=${run?.activePhase}
+            onAsked=${(text) => push({ kind: 'injected', text })} />`} />
 
       ${history.length > 1 ? html`
         <section class="card">
@@ -576,6 +583,62 @@ function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills
 }
 
 /* ------------------------------------------------------------------ *
+ * Asking the running session something
+ * ------------------------------------------------------------------ */
+
+/**
+ * The `/btw` box.
+ *
+ * A phase used to be a process you could watch and not speak to: the only way
+ * to ask it anything was to stop it, which throws the session away. Its stdin
+ * is held open now, so a question is one more turn in the same conversation —
+ * the context is intact, the cache is warm, and the phase carries on after
+ * answering.
+ *
+ * The `/btw` prefix is optional and stripped if typed. It is there because it
+ * is what people reach for, not because anything needs it.
+ */
+function AskBox({ slug, enabled, allowRun, phase, onAsked }) {
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
+    const question = text.replace(/^\/btw\s*/i, '').trim();
+    if (!question || sending) return;
+    setSending(true);
+    try {
+      await api.runAsk(slug, question);
+      setText('');
+      onAsked?.(question);
+    } catch (error) {
+      // The server distinguishes "nothing is listening" from "bad request", so
+      // the message is worth showing verbatim rather than flattening to failed.
+      toast(error.message, 'warn');
+    } finally { setSending(false); }
+  };
+
+  return html`
+    <div class="live-ask">
+      <input
+        value=${text}
+        disabled=${!enabled || sending}
+        placeholder=${enabled
+          ? `/btw ask the session running phase ${phase}…`
+          : allowRun ? 'Nothing is running to ask' : 'Asking needs --allow-run'}
+        onInput=${(e) => setText(e.target.value)}
+        onKeyDown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); void send(); } }} />
+      <button class="btn small" disabled=${!enabled || sending || !text.trim()} onClick=${send}>
+        ${sending ? 'Sending…' : 'Ask'}
+      </button>
+      <span class="hint">
+        ${enabled
+          ? 'Answered in the same session, then it carries on'
+          : 'Available while a phase is running'}
+      </span>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ *
  * Phases
  * ------------------------------------------------------------------ */
 
@@ -869,7 +932,14 @@ export function RunsView({ state }) {
         lines=${lines}
         onClear=${clear}
         title="Session console"
-        subtitle=${active ? `${active.slug} · phase ${active.activePhase ?? '?'} · ${active.model}` : 'idle'} />
+        subtitle=${active ? `${active.slug} · phase ${active.activePhase ?? '?'} · ${active.model}` : 'idle'}
+        footer=${active ? html`
+          <${AskBox}
+            slug=${active.slug}
+            enabled=${Boolean(state?.allowRun && active.activePhase != null)}
+            allowRun=${state?.allowRun}
+            phase=${active.activePhase}
+            onAsked=${(text) => push({ kind: 'injected', text })} />` : null} />
 
       ${runs.length ? html`
         <section class="card" style="margin-top:var(--s4)">

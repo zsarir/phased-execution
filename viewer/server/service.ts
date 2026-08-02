@@ -730,6 +730,23 @@ export class Service {
     });
   }
 
+  /**
+   * Put a question to the session running this plan's current phase.
+   *
+   * Unlike every other control here there is no on-disk fallback, and there
+   * should not be: a question needs something listening. A run this console is
+   * not driving has a session belonging to another console — or to nothing at
+   * all — and the honest answer is to say so rather than to write the question
+   * somewhere it will never be read.
+   */
+  askRun(slug: string, question: string, by = 'console'): { ok: boolean; reason?: string } {
+    const live = this.runner.current();
+    if (!live || live.slug !== slug) {
+      return { ok: false, reason: `nothing is running for ${slug} in this console` };
+    }
+    return this.runner.ask(question, by);
+  }
+
   /** Change model, autonomy or budgets on a run in flight; applies next phase. */
   configureRun(slug: string, patch: RunSettingsPatch): RunState | null {
     const live = this.runner.current();
