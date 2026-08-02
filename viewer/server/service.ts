@@ -542,6 +542,12 @@ export class Service {
       root: this.root,
       prefs: this.prefs,
       allowWrites: this.flags.allowWrites,
+      // Present only on a server that has the run endpoints at all. The client
+      // is read from disk per request but the server is whatever Node loaded at
+      // startup, so upgrading the skill under a running console leaves a new UI
+      // talking to an old API. Without something to test, that shows up as a
+      // wall of 404s and error toasts instead of "restart me".
+      autopilot: true,
       allowRun: this.flags.allowRun,
       run: this.runner.current(),
       scriptsDir: this.flags.scriptsDir,

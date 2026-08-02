@@ -130,17 +130,20 @@ function App() {
   // A session parked on an approval is invisible until someone looks, so the
   // badge is kept current from wherever you happen to be in the app.
   useEffect(() => {
+    // Nothing to poll on a server that predates the runner — asking anyway just
+    // fills the browser console with 404s.
+    if (!state?.autopilot) return undefined;
     let alive = true;
     const count = async () => {
       try {
         const queue = await api.approvals();
         if (alive) setPendingApprovals(queue.filter((a) => a.status === 'pending').length);
-      } catch { /* an older server has no approvals endpoint */ }
+      } catch { /* transient — the badge is not worth a toast */ }
     };
     void count();
     const unsubscribe = subscribeRun({ approval: count, run: count });
     return () => { alive = false; unsubscribe(); };
-  }, []);
+  }, [state?.autopilot]);
 
   useEffect(() => {
     const onKey = (event) => {

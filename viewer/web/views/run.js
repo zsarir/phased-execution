@@ -39,7 +39,14 @@ export function RunView({ slug, state }) {
   const streamRef = useRef(null);
   const pinned = useRef(true);
 
+  // The client is served fresh from disk; the server is whatever Node loaded at
+  // startup. Upgrading the skill under a running console leaves this page
+  // talking to an API that has no run endpoints, and the honest thing to show
+  // is why — not a stack of failed requests.
+  const stale = state && !state.autopilot;
+
   const refresh = useCallback(async () => {
+    if (stale) { setLoading(false); return; }
     try {
       const [detail, queue] = await Promise.all([api.run(slug), api.approvals()]);
       setRun(detail.run);
@@ -50,11 +57,11 @@ export function RunView({ slug, state }) {
     } finally {
       setLoading(false);
     }
-  }, [slug]);
+  }, [slug, stale]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  useEffect(() => subscribeRun({
+  useEffect(() => stale ? undefined : subscribeRun({
     run: () => void refresh(),
     phase: () => void refresh(),
     approval: () => void refresh(),
@@ -65,7 +72,7 @@ export function RunView({ slug, state }) {
       else if (data.kind === 'retry') push(setStream, { kind: 'retry', text: `API retry${data.category ? ` (${data.category})` : ''}` });
       else if (data.kind === 'result') push(setStream, { kind: 'result', text: `session ended: ${data.subtype} · $${(data.costUsd ?? 0).toFixed(3)}` });
     },
-  }), [refresh]);
+  }), [refresh, stale]);
 
   // Follow the transcript, but stop fighting someone who scrolled up to read.
   useEffect(() => {
@@ -79,6 +86,18 @@ export function RunView({ slug, state }) {
     catch (error) { toast(error.message, 'error'); }
     finally { setBusy(''); }
   };
+
+  if (stale) {
+    return html`
+      <${Banner} kind="warn">
+        <strong>This console is running an older build.</strong> The page you are looking at was
+        loaded from disk, but the server behind it started before the autopilot existed, so its
+        run endpoints are not there — that is what the 404s in the browser console are.
+        <p style="margin-top:8px">Stop it and start it again to pick up the new server. Adding
+        <code>--allow-run</code> is what actually turns the autopilot on; without it this page
+        works but stays read-only.</p>
+      </${Banner}>`;
+  }
 
   if (loading) return html`<${Spinner} label="Reading run state" />`;
 
