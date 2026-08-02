@@ -87,7 +87,15 @@ export function NotificationsCard() {
                 <button class="btn small" disabled=${busy !== ''}
                         onClick=${() => run('test', async () => {
                           const result = await sendTest(mine.id);
-                          toast(result.ok ? `Sent — ${result.detail}` : `Not sent — ${result.detail}`,
+                          // "Accepted" is the truth and is not the same as
+                          // "you saw it": the push service, the browser and the
+                          // operating system are three separate yeses, and only
+                          // the first one answers back. Saying just "sent" makes
+                          // a muted OS look like a broken console.
+                          toast(result.ok
+                            ? `Handed to the push service. If nothing appeared, it got no further than your `
+                              + `system notification settings for this browser.`
+                            : `Not sent — ${result.detail}`,
                             result.ok ? 'ok' : 'error');
                         })}>
                   ${busy === 'test' ? 'Sending…' : 'Send a test'}
@@ -156,6 +164,15 @@ export function NotificationsCard() {
                 </div>`)}
             </div>
           </div>` : null}
+
+        ${subscribed ? html`
+          <p class="muted small" style="margin:0">
+            A test that says it was handed over and never appears has almost always been stopped by
+            the operating system rather than by anything here — macOS
+            ${' '}<em>System Settings → Notifications → your browser</em>, or Windows
+            ${' '}<em>Settings → System → Notifications</em>. A Focus or Do Not Disturb mode does the
+            same thing silently.
+          </p>` : null}
 
         <p class="muted small" style="margin:0">
           For a machine with no browser in the picture at all,

@@ -20,7 +20,7 @@
  */
 
 import {
-  generateKeyPairSync, createPublicKey, diffieHellman, hkdfSync, createCipheriv, randomBytes,
+  generateKeyPairSync, createPublicKey, createHash, diffieHellman, hkdfSync, createCipheriv, randomBytes,
 } from 'node:crypto';
 
 import { log } from '../log.ts';
@@ -135,8 +135,9 @@ export async function deliver(
         ttl: String(ttlSeconds),
         urgency: urgent ? 'high' : 'normal',
         // Same topic replaces rather than queues, so a device that was off does
-        // not wake to six notifications about one run.
-        topic: message.tag.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'phase',
+        // not wake to six notifications about one run. See `topicFor` for why
+        // this is a hash and not the tag with its punctuation removed.
+        topic: topicFor(message.tag),
       },
       body: new Uint8Array(body),
     });
@@ -168,4 +169,30 @@ export async function deliver(
 /** Endpoints carry a device-identifying token; the origin is the useful half for a log. */
 export function origin(endpoint: string): string {
   try { return new URL(endpoint).origin; } catch { return 'unparseable'; }
+}
+
+/**
+ * A `Topic` a push service will actually accept.
+ *
+ * RFC 8030 says this header is a "token", which would allow almost anything
+ * short. Apple means something much narrower, and says so only by rejecting the
+ * message with `BadWebPushTopic` — measured against the real service:
+ *
+ *   (no header)                        accepted
+ *   phase                        (5)   REJECTED
+ *   a1b2c3d4e5f60718            (16)   accepted
+ *   push-test                    (9)   REJECTED
+ *   32 chars of base64url       (32)   accepted
+ *   33 chars                    (33)   REJECTED
+ *
+ * Every one of those is explained by a single rule: it must be a *decodable*
+ * base64url string — a length of `n % 4 === 1` cannot be one — of at most 32
+ * characters. The hyphen in `push-test` was innocent; it failed on its length.
+ *
+ * Hashing rather than sanitising means the caller never has to know any of
+ * that, and the same tag still maps to the same topic, which is the only
+ * property the header is there for.
+ */
+export function topicFor(tag: string): string {
+  return createHash('sha256').update(tag).digest('base64url').slice(0, 24);
 }

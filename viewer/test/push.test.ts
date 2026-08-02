@@ -206,7 +206,7 @@ test('a delivery carries the headers a push service requires', async () => {
   assert.equal(headers['content-encoding'], 'aes128gcm');
   assert.equal(headers['content-type'], 'application/octet-stream');
   assert.equal(headers.urgency, 'high');
-  assert.equal(headers.topic, 'abc123');
+  assert.equal(headers.topic, send.topicFor('abc123'));
   assert.match(headers.authorization, /^vapid t=/);
   assert.ok(Number(headers.ttl) > 0);
 
@@ -216,14 +216,34 @@ test('a delivery carries the headers a push service requires', async () => {
   assert.equal(decoded.category, 'approval');
 });
 
-test('a topic is sanitised to what the header grammar allows', async () => {
+test('every topic is one a push service will accept', () => {
+  // Apple answers `BadWebPushTopic` to anything that is not a decodable
+  // base64url string of at most 32 characters — measured, not read. A length of
+  // `n % 4 === 1` is the case that catches people, because it looks fine.
+  const tags = ['phase', 'push-test', 'run/slug:1 with spaces!', '', 'x'.repeat(500), 'a1b2c3d4e5f60718'];
+  for (const tag of tags) {
+    const topic = send.topicFor(tag);
+    assert.match(topic, /^[A-Za-z0-9_-]+$/, `${tag} produced non-base64url`);
+    assert.ok(topic.length <= 32, `${tag} produced ${topic.length} chars`);
+    assert.notEqual(topic.length % 4, 1, `${tag} produced an undecodable length`);
+  }
+});
+
+test('the same tag always collapses to the same topic', () => {
+  // The header exists to replace rather than queue. That only works if the tag
+  // maps to one topic, every time.
+  assert.equal(send.topicFor('run:abc:halted'), send.topicFor('run:abc:halted'));
+  assert.notEqual(send.topicFor('run:abc:halted'), send.topicFor('run:abc:parked'));
+});
+
+test('the topic on the wire is the hashed one', async () => {
   const browser = makeBrowser();
   const vapid = vapidMod.loadVapid('mailto:you@example.com');
   const { calls, impl } = stubFetch(201);
   await send.deliver(vapid, browser.subscription, {
-    title: 't', body: 'b', tag: 'run/slug:1 with spaces!', url: '/', category: 'phase',
+    title: 't', body: 'b', tag: 'push-test', url: '/', category: 'phase',
   }, { fetchImpl: impl });
-  assert.equal((calls[0].init.headers as Record<string, string>).topic, 'runslug1withspaces');
+  assert.equal((calls[0].init.headers as Record<string, string>).topic, send.topicFor('push-test'));
 });
 
 test('an over-long body is trimmed rather than rejected by the service', async () => {

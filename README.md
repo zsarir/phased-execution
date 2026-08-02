@@ -996,6 +996,7 @@ console at all.
 | The console will not start | `--remote` with no `--remote-user`. The error says so. |
 | The notification button does nothing on iOS | Not installed to the Home Screen, or you are on plain HTTP. Both are required. |
 | **Turn on** is missing and a banner explains why | Permission was refused for this site once. A page cannot ask twice — it has to be changed in browser settings. |
+| **Send a test** says it was handed over, and nothing appears | Three separate yeses are involved — the push service, the browser, and the operating system — and only the first answers back. This is almost always the third: macOS *System Settings → Notifications → your browser*, or Windows *Settings → System → Notifications*. A Focus mode does it silently too. |
 | **Send a test** says *gone* | The subscription was revoked at the browser end. Turn it off and on again; the register drops dead subscriptions by itself. |
 | Push worked, then stopped after reinstalling the app | A reinstall makes a new subscription. The old row is dropped on its next failure; subscribe again from the new install. |
 | Worked yesterday, dead after a reboot | `tailscale serve` was run without `--bg`. |
