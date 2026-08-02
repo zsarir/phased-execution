@@ -11,7 +11,8 @@ import { basename } from 'node:path';
 import { execFile } from 'node:child_process';
 
 import {
-  checkRoot, rememberRoot, loadPrefs, savePrefs, type Flags, type Prefs, type RootCheck,
+  checkRoot, rememberRoot, loadPrefs, savePrefs, serverIsStale,
+  type Flags, type Prefs, type RootCheck,
 } from './config.ts';
 import { Store, handoffFor, lockFor, qaFor, type PlanRecord } from './store.ts';
 import {
@@ -548,6 +549,9 @@ export class Service {
       // talking to an old API. Without something to test, that shows up as a
       // wall of 404s and error toasts instead of "restart me".
       autopilot: true,
+      // True once the server files on disk are newer than this process. The
+      // browser reloads from disk; this process cannot.
+      serverStale: serverIsStale(),
       allowRun: this.flags.allowRun,
       run: this.runner.current(),
       scriptsDir: this.flags.scriptsDir,

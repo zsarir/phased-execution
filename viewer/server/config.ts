@@ -93,6 +93,46 @@ function printHelp(): void {
 `);
 }
 
+/* ------------------------------------------------------------------ *
+ * Is the code on disk newer than the code we are running?
+ * ------------------------------------------------------------------ */
+
+const BOOTED_AT = Date.now();
+let mtimeCache: { at: number; newest: number } | null = null;
+
+/**
+ * Node reads the server once, at startup. Pulling the skill — or editing it —
+ * under a running console leaves a process executing code that no longer exists
+ * on disk, while the browser happily loads the new client from the same
+ * directory. Every symptom of that is misleading: a route that 404s, a fix that
+ * "did not work", an error that was corrected twenty minutes ago.
+ *
+ * So the console checks its own freshness and says so, because the alternative
+ * is the operator debugging a version they are not running.
+ */
+export function serverIsStale(): boolean {
+  const now = Date.now();
+  if (mtimeCache && now - mtimeCache.at < 5_000) return mtimeCache.newest > BOOTED_AT;
+
+  let newest = 0;
+  const walk = (dir: string, depth = 0): void => {
+    if (depth > 4) return;
+    for (const name of safeList(dir)) {
+      if (name.startsWith('.') || name === 'node_modules') continue;
+      const full = join(dir, name);
+      try {
+        const info = statSync(full);
+        if (info.isDirectory()) walk(full, depth + 1);
+        else if (name.endsWith('.ts')) newest = Math.max(newest, info.mtimeMs);
+      } catch { /* a file that vanished mid-walk is not a signal */ }
+    }
+  };
+  walk(join(VIEWER_DIR, 'server'));
+
+  mtimeCache = { at: now, newest };
+  return newest > BOOTED_AT;
+}
+
 export function expandHome(input: string): string {
   return input.startsWith('~') ? join(homedir(), input.slice(1)) : input;
 }

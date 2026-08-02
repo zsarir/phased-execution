@@ -207,6 +207,14 @@ function App() {
     <div class="app">
       <${Rail} state=${state} counts=${counts} route=${route} onPickSource=${() => navigate('source')} />
       <main class="main">
+        ${state.serverStale ? html`
+          <div class="page" style="padding-bottom:0">
+            <${Banner} kind="warn">
+              <strong>This console is running older code than is on disk.</strong>
+              Node loads the server once, at startup — the page reloads from disk but the process
+              cannot. Restart it, or a fix you already have will look like it did not work.
+            </${Banner}>
+          </div>` : null}
         ${error ? html`<div class="page"><${Banner} kind="error">${error}</${Banner}></div>` : view}
       </main>
     </div>
