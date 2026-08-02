@@ -31,7 +31,7 @@ Key files by repo.
 ## Session budget
 
 **Target model:** \`claude-opus-5\` (1M window) · **Budget:** ~200K weight/session · **Branch:** current branch (no new branch)
-**Skills (every session):** \`platform-architecture\`, \`frontend-design\`
+**Skills (every session):** \`api-conventions\`, \`design-system\`
 **QA gate:** on
 
 ## Phase graph
@@ -85,20 +85,20 @@ test('front matter survives trailing legends and block lists', () => {
 status: complete          # active | complete | abandoned
 phases: 10
 key_files:
-  - front-admin/src/one.ts
-  - front-admin/src/two.ts
+  - packages/api/src/one.ts
+  - packages/api/src/two.ts
 depends_on: [5]
 blocks: [10]
-skills_used: [platform-architecture, frontend-design]
+skills_used: [api-conventions, design-system]
 metadata:
   type: project
 ---
 body`);
   assert.equal(fmString(fm, 'status'), 'complete');
   assert.equal(fmString(fm, 'phases'), '10');
-  assert.deepEqual(fmList(fm, 'key_files'), ['front-admin/src/one.ts', 'front-admin/src/two.ts']);
+  assert.deepEqual(fmList(fm, 'key_files'), ['packages/api/src/one.ts', 'packages/api/src/two.ts']);
   assert.deepEqual(fmPhaseList(fm, 'depends_on'), [5]);
-  assert.deepEqual(fmList(fm, 'skills_used'), ['platform-architecture', 'frontend-design']);
+  assert.deepEqual(fmList(fm, 'skills_used'), ['api-conventions', 'design-system']);
   assert.deepEqual(fm.values.metadata, { type: 'project' });
 });
 
@@ -139,7 +139,7 @@ test('plan parse reads the graph, phases, sizes, gates and budget', () => {
 
   assert.equal(plan.sessionBudget.targetModel, 'claude-opus-5');
   assert.equal(plan.sessionBudget.qaGate, 'on');
-  assert.deepEqual(plan.sessionBudget.skills, ['platform-architecture', 'frontend-design']);
+  assert.deepEqual(plan.sessionBudget.skills, ['api-conventions', 'design-system']);
   assert.match(plan.sessionBudget.branch ?? '', /current branch/);
 
   assert.equal(plan.phases[1].size, 'S');
@@ -223,7 +223,7 @@ next_phase: 3
 depends_on: [1]
 blocks: [4]
 parallel_safe: [3]
-skills_used: [platform-architecture]
+skills_used: [api-conventions]
 key_files:
   - api/routes.py
 memory: project_demo-plan
@@ -276,8 +276,8 @@ none
 });
 
 test('handoff filenames and off-roster statuses degrade safely', () => {
-  assert.deepEqual(parseHandoffFilename('phase-07-front-admin-review-console.md'),
-    { phase: 7, title: 'front-admin-review-console' });
+  assert.deepEqual(parseHandoffFilename('phase-07-cart-api-endpoint.md'),
+    { phase: 7, title: 'cart-api-endpoint' });
   assert.deepEqual(parseHandoffFilename('README.md'), { title: 'README' });
   assert.equal(normaliseStatus('complete'), 'complete');
   assert.equal(normaliseStatus('COMPLETE  '), 'complete');

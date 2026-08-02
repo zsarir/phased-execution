@@ -71,7 +71,7 @@ export function SearchView({ query }) {
             id="q"
             ref=${input}
             class="grow"
-            placeholder="content guard · a423b9b5 · trade-frontend/src · &quot;exit criteria&quot;"
+            placeholder="cart api · a1b2c3d · packages/web/src · &quot;exit criteria&quot;"
             value=${value}
             onInput=${(event) => setValue(event.target.value)} />
           ${busy ? html`<span class="spinner"></span>` : null}

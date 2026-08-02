@@ -60,7 +60,7 @@ export function normaliseStatus(raw?: string): HandoffStatus {
   return (KNOWN as string[]).includes(v) ? (v as HandoffStatus) : 'unknown';
 }
 
-/** `phase-07-front-admin-review-console.md` → `{ phase: 7, title: 'front-admin-review-console' }` */
+/** `phase-07-cart-api-endpoint.md` → `{ phase: 7, title: 'cart-api-endpoint' }` */
 export function parseHandoffFilename(file: string): { phase?: number; title: string } {
   const m = /^phase-(\d+)-(.+)\.md$/.exec(file);
   if (!m) return { title: file.replace(/\.md$/, '') };

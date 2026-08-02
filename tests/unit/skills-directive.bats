@@ -10,15 +10,15 @@ load ../helpers/test_helper
   run pg skilled --boot-prompt 2
   [ "$status" -eq 0 ]
   assert_contains "$output" "invoke these skills"
-  assert_contains "$output" "frontend-design"
-  assert_contains "$output" "superpowers:test-driven-development"
+  assert_contains "$output" "design-system"
+  assert_contains "$output" "some-plugin:test-first"
 }
 
 @test "qa-prompt: the Skills directive is injected into the QA brief too" {
   setup_docs skilled skilled
   run pg skilled --qa-prompt 2
   [ "$status" -eq 0 ]
-  assert_contains "$output" "frontend-design"
+  assert_contains "$output" "design-system"
 }
 
 @test "boot-prompt: a plan with NO Skills directive emits no skills line and still succeeds" {

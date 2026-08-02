@@ -74,7 +74,7 @@ export function planWrite(request: WriteRequest, opts: { root: string; docsDir?:
       const slug = requireSlug(request.slug);
       const phase = requirePhase(request.phase);
       const title = (request.title ?? '').trim();
-      if (!TITLE.test(title)) throw new WriteError('Title must be kebab-case, e.g. front-admin-review-console.');
+      if (!TITLE.test(title)) throw new WriteError('Title must be kebab-case, e.g. cart-api-endpoint.');
       const status = request.status ?? 'complete';
       if (!HANDOFF_STATUS.includes(status)) throw new WriteError(`Status must be one of ${HANDOFF_STATUS.join(', ')}.`);
       const args = [slug, String(phase), title, status];

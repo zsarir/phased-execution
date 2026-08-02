@@ -24,7 +24,7 @@ Keep the broad roadmap in the plan, never in the task list. (Memory: `feedback_p
 ## Commits (per phase)
 - Stage **explicit feature paths**, never `git add -A` — submodules carry unrelated uncommitted work.
 - Commit **inside** the relevant submodule(s); the parent `hub` repo only tracks submodule pointers, so a
-  phase touching `aws` + `front-admin` makes one commit in each, then (if desired) a pointer-bump in `hub`.
+  phase touching two submodules makes one commit in each, then (if desired) a pointer-bump in the superproject.
 - End the message with the repo's `Co-Authored-By:` trailer.
 - One phase = one logical commit per repo (squash WIP before finishing).
 - **Verify the sha:** run `git log -1` after committing — never carry a sha from memory into the next

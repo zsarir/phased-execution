@@ -17,6 +17,7 @@
       },
       "homepage": "https://github.com/zsarir/phased-execution",
       "repository": "https://github.com/zsarir/phased-execution",
+      "license": "MIT",
       "category": "productivity",
       "keywords": [
         "planning",

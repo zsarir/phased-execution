@@ -14,7 +14,7 @@ must re-inject those skills into every boot prompt + the QA brief.
 
 ## Session budget
 **Target model:** `claude-opus-4-8`  ·  **Budget:** ~1M working set/session  ·  **Branch:** current branch (no new branch)
-**Skills (every session):** `frontend-design`, `superpowers:test-driven-development`
+**Skills (every session):** `design-system`, `some-plugin:test-first`
 
 ## Phase graph
 

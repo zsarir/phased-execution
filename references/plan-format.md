@@ -40,7 +40,7 @@ memory: project_<slug>      # or pre-existing project_<other> when reusing an ex
    model overrides, the **branch** (default: the
    current branch — **no new branch** unless the user asked; then ONE branch for *all* phases, including
    independent ones), and — when the user named skills to use for this work — a **`Skills (every session):`**
-   line listing them, **backticked** (e.g. `` `frontend-design` ``). The engine reads that line and
+   line listing them, **backticked** (e.g. `` `design-system` ``). The engine reads that line and
    re-injects those skills into **every** phase's boot prompt (and the QA brief), so each cold-start session
    re-invokes them rather than forgetting them.
    **QA is off by default** — add a line with exactly `**QA gate:** on` ONLY when the user asked for QA on
@@ -49,7 +49,7 @@ memory: project_<slug>      # or pre-existing project_<other> when reusing an ex
    machine-read (`phase-graph.sh --qa-mode`). See `references/sizing.md` for sizing and
    `references/conventions.md` §Branches for the branch policy. Example:
    > **Target model:** `claude-opus-4-8` (1M window) · **Budget:** ~200K weight/session (≈60% of the window) · **Branch:** current branch (no new branch).
-   > **Skills (every session):** `frontend-design`, `superpowers:test-driven-development`
+   > **Skills (every session):** `design-system`, `some-plugin:test-first`
    > Hard-reasoning phases → Opus/Fable; mechanical phases → Haiku if run in their own sessions.
 5. **`## Phase graph`** — a table that makes blocking vs parallel obvious. **This table is machine-read:**
    `scripts/phase-graph.sh` parses the `Depends on` column to compute live readiness, so keep it exact.

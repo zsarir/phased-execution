@@ -283,8 +283,8 @@ plan_model() {
 # Skills directive: backtick-quoted skill names on the canonical
 # "**Skills (every session):**" line in the plan's "## Session budget" section — the
 # skills EVERY session in this plan must invoke. Re-injected into every boot prompt +
-# the QA brief so a cold-start session re-activates them (e.g. `frontend-design`,
-# `superpowers:test-driven-development`). Empty if none. ONLY that exact phrase
+# the QA brief so a cold-start session re-activates them (e.g. `design-system`,
+# `some-plugin:test-first`). Empty if none. ONLY that exact phrase
 # matches — a loose 'skill' match would swallow backticked tokens from unrelated
 # budget prose (e.g. "skill v3 sizing — `claude-opus-4-8`") into the skills list.
 plan_skills() {

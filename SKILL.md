@@ -99,7 +99,7 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    target model + budget in a `## Session budget` note in the plan, and tag each phase's rough
    `- **Size:** S|M|L` (drives the batch engine; default is `M`). **QA is off by default** — only if the
    user asked for QA on this work, record `**QA gate:** on` in that note (see Mode 3 step on QA).
-   **If the user named skills to use for this work** (e.g. `frontend-design`,
+   **If the user named skills to use for this work** (e.g. `design-system`,
    a TDD skill), record them on a `**Skills (every session):**` line in that note — backtick each — so the
    engine re-injects them into every phase's boot prompt (and the QA brief) and each fresh session re-invokes
    them. Also record the **branch** in that note: by default the branch already

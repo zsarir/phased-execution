@@ -9,6 +9,7 @@ session — as a dependency graph of right-sized sessions, with a local web cons
 ![Plugin](https://img.shields.io/badge/install-plugin%20or%20clone-4FA8FF?style=flat-square)
 ![App](https://img.shields.io/badge/app-Phase%20Console-ffb627?style=flat-square)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-3fb68b?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-7A8B92?style=flat-square)
 
 </div>
 
@@ -405,7 +406,7 @@ plain language at plan time, or edit the file yourself afterwards.
 | Turn QA on | `**QA gate:** on` | `## Session budget` |
 | Turn QA off explicitly | `**QA gate:** off` | `## Session budget` |
 | Commit to a specific branch | `**Branch:** feature/checkout` | `## Session budget` |
-| Force skills into every session | ``**Skills (every session):** `frontend-design` `` | `## Session budget` |
+| Force skills into every session | ``**Skills (every session):** `design-system` `` | `## Session budget` |
 | Say a phase depends on others | the `Depends on` column | `## Phase graph` table |
 | Block a phase behind something external | `*(GATED)*` + `- **Gates (must clear first):** …` | that `### Phase N` heading |
 | Make that gate machine-checkable | `- **Gate-check:** date 2026-09-01` | that `### Phase N` block |
@@ -417,7 +418,7 @@ A complete `## Session budget` note looks like this:
 
 > **Target model:** `claude-opus-4-8` (1M window) · **Budget:** ~200K weight/session (≈60% of the
 > window) · **Branch:** current branch (no new branch).
-> **Skills (every session):** `frontend-design`, `superpowers:test-driven-development`
+> **Skills (every session):** `design-system`, `some-plugin:test-first`
 > **QA gate:** on
 ```
 
@@ -758,6 +759,10 @@ PHASE_CONSOLE_TEST_ROOT=~/code/your-repo node --test "test/*.test.ts"   # + engi
 
 The parity test re-derives every plan's board from the console's own parser and asserts it matches the
 engine. Run it after any change to a parser.
+
+## License
+
+[MIT](LICENSE). Use it, fork it, ship it.
 
 ---
 

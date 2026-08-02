@@ -191,7 +191,7 @@ export function normalisePlanStatus(raw?: string): string | undefined {
 }
 
 function splitRepos(cell: string): string[] {
-  // Parenthetical asides come off first — `trade-backend (+FE snapshot)` is one
+  // Parenthetical asides come off first — `api-server (+web snapshot)` is one
   // repo, and splitting on the `+` inside would invent two.
   return cell
     .replace(/\([^)]*\)?/g, ' ')

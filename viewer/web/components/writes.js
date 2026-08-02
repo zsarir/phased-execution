@@ -18,7 +18,7 @@ const FORMS = {
     title: 'Scaffold a handoff',
     hint: 'Runs new-handoff.sh, which also creates or updates INDEX.md and generates the boot prompts for whatever this phase unblocks.',
     fields: [
-      { name: 'title', label: 'Title (kebab-case)', placeholder: 'front-admin-review-console', required: true },
+      { name: 'title', label: 'Title (kebab-case)', placeholder: 'cart-api-endpoint', required: true },
       { name: 'status', label: 'Status', type: 'select', options: ['complete', 'in-progress', 'blocked', 'pending'] },
       { name: 'qa', label: 'Turn QA on for this plan (--qa)', type: 'checkbox' },
       { name: 'force', label: 'Overwrite an existing handoff (--force)', type: 'checkbox' },

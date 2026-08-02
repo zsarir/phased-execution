@@ -114,11 +114,11 @@ test('write requests are validated before any script runs', () => {
   assert.throws(() => planWrite({ action: 'lock-claim', slug: 'ok-slug', phase: 1, owner: 'no-slash' }, opts), WriteError);
 
   const handoff = planWrite(
-    { action: 'new-handoff', slug: 'ok-slug', phase: 7, title: 'front-admin-console', status: 'complete', qa: true },
+    { action: 'new-handoff', slug: 'ok-slug', phase: 7, title: 'cart-api-endpoint', status: 'complete', qa: true },
     opts,
   );
   assert.equal(handoff.script, 'new-handoff.sh');
-  assert.deepEqual(handoff.args, ['ok-slug', '7', 'front-admin-console', 'complete', '--qa']);
+  assert.deepEqual(handoff.args, ['ok-slug', '7', 'cart-api-endpoint', 'complete', '--qa']);
 
   const lock = planWrite({ action: 'lock-claim', slug: 'ok-slug', phase: 3, owner: 'me@example.com/session-1' }, opts);
   assert.deepEqual(lock.args, ['ok-slug', 'claim', '3', '--owner', 'me@example.com/session-1']);
