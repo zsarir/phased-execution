@@ -28,6 +28,7 @@
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -305,6 +306,75 @@ type Waiting = { approval: Approval; settle: (decision: Decision, by: string, re
 export const HOOK_TIMEOUT_SECONDS = 600;
 const ANSWER_BY_MS = (HOOK_TIMEOUT_SECONDS - 20) * 1000;
 
+/* ------------------------------------------------------------------ *
+ * Telling someone, when nobody is looking at the tab
+ * ------------------------------------------------------------------ */
+
+/**
+ * Run the operator's own notifier, if they set one.
+ *
+ * The console can raise a browser notification, and that covers the case where
+ * a tab is open somewhere. It does not cover the case the whole design is for:
+ * the run is unattended and so is the operator. `PHASE_CONSOLE_NOTIFY` is a
+ * command — `terminal-notifier`, a curl to a webhook, an `ntfy` publish — given
+ * the title as `$1` and the body as `$2`.
+ *
+ * Deliberately an environment variable and NOT a browser-settable preference:
+ * it runs a command on this machine, and nothing reachable from a web page
+ * should be able to choose which. Failures are logged and never propagated —
+ * a broken notifier must not be able to stop a run.
+ */
+export function notifyOutOfBand(title: string, body: string, env = process.env): void {
+  const command = env.PHASE_CONSOLE_NOTIFY;
+  if (!command) return;
+  try {
+    execFile(command, [title, body], { timeout: 10_000 }, (error) => {
+      if (error) log.warn('notify.failed', { command, error: error.message });
+    });
+  } catch (error) {
+    log.warn('notify.failed', { command, error });
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Surviving a restart
+ * ------------------------------------------------------------------ */
+
+const PENDING_FILE = join(STATE_DIR, 'approvals', 'pending.json');
+
+/**
+ * Pending approvals, on disk.
+ *
+ * A card lived only in memory, so restarting the console with a phase parked
+ * on "these checks need a person" erased the question and the evidence
+ * gathered for it — the phase came back as `interrupted` and what it had been
+ * asking was simply gone.
+ *
+ * What is restored is deliberately NOT answerable. The promise a decision
+ * would have resolved died with the process, and so did the hook socket on the
+ * far end; a card offering Allow and Deny to something nobody is listening to
+ * would be the same lie as a Pause button that changes nothing. They come back
+ * as what they are: questions that were never answered, with their evidence,
+ * marked expired.
+ */
+function writePending(pending: Approval[], file: string): void {
+  try {
+    mkdirSync(join(file, '..'), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(pending, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    log.warn('approvals.persist', { error });
+  }
+}
+
+export function readPending(file = PENDING_FILE): Approval[] {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Approval[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export class Approvals {
   private waiting = new Map<string, Waiting>();
   private history: Approval[] = [];
@@ -312,9 +382,29 @@ export class Approvals {
   private runId: string | null = null;
   private counter = 0;
   private notify: (approval: Approval) => void;
+  private file: string;
 
-  constructor(notify: (approval: Approval) => void = () => {}) {
+  constructor(notify: (approval: Approval) => void = () => {}, file = PENDING_FILE) {
     this.notify = notify;
+    this.file = file;
+    // Anything an earlier console was still asking about, recovered as record.
+    for (const approval of readPending(file)) {
+      this.history.push({
+        ...approval,
+        status: 'expired',
+        reason: approval.reason
+          ?? 'the console restarted before this was answered — the session it was asking for is gone',
+      });
+    }
+    if (this.history.length) {
+      log.info('approvals.recovered', { count: this.history.length });
+      writePending([], file);
+    }
+  }
+
+  /** Keep the on-disk copy in step with what is genuinely outstanding. */
+  private flush(): void {
+    writePending([...this.waiting.values()].map((w) => w.approval), this.file);
   }
 
   /* ---- the per-run token ---- */
@@ -380,6 +470,7 @@ export class Approvals {
         approval.decidedBy = by;
         approval.reason = reason;
         this.remember(approval);
+        this.flush();
         resolve({ decision, by, reason });
       };
       // Unreferenced: the listening socket is what keeps this process alive, and
@@ -389,6 +480,7 @@ export class Approvals {
         answerByMs,
       ).unref();
       this.waiting.set(id, { approval, settle, timer });
+      this.flush();
     });
 
     log.info('approval.requested', { id, runId: approval.runId, phase: approval.phase, title: approval.title });

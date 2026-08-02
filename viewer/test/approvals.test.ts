@@ -257,4 +257,58 @@ test('the answer deadline lands before the hook gives up, not after', () => {
   );
 });
 
+/* ------------------------------------------------------------------ *
+ * Surviving a restart
+ * ------------------------------------------------------------------ */
+
+test('a question nobody answered survives the console that was asking it', () => {
+  const file = join(STATE_HOME, 'pending-a.json');
+
+  const first = new Approvals(() => {}, file);
+  first.arm('run-1');
+  ask(first);
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).length, 1, 'written while it is outstanding');
+
+  // The console dies here. A new one starts and reads what was left.
+  const second = new Approvals(() => {}, file);
+  const recovered = second.all();
+  assert.equal(recovered.length, 1, 'the question and its evidence are still here');
+  assert.ok(recovered[0].evidence.length, 'including what a person would have needed to answer it');
+
+  // Recovered as a record, NOT as something answerable. The promise a decision
+  // would have resolved died with the process, and so did the hook socket on
+  // the far end — an Allow button here would be answering into a void.
+  assert.equal(recovered[0].status, 'expired');
+  assert.match(recovered[0].reason, /console restarted/);
+  assert.equal(second.pending().length, 0);
+  assert.equal(second.settle(recovered[0].id, 'allow', 'me'), false);
+
+  // And it is not recovered a second time, forever.
+  assert.equal(new Approvals(() => {}, file).all().length, 0);
+});
+
+test('an answered question leaves nothing outstanding on disk', () => {
+  const file = join(STATE_HOME, 'pending-b.json');
+  const approvals = new Approvals(() => {}, file);
+  approvals.arm('run-1');
+  const { approval } = ask(approvals);
+  approvals.settle(approval.id, 'allow', 'me');
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), []);
+  assert.equal(new Approvals(() => {}, file).all().length, 0);
+});
+
+/* ------------------------------------------------------------------ *
+ * Reaching someone who is not looking at a tab
+ * ------------------------------------------------------------------ */
+
+test('the out-of-band notifier is environment-only, and never breaks a run', async () => {
+  const { notifyOutOfBand } = await import('../server/runner/approvals.ts');
+  // No command configured is the normal case and must be silent.
+  assert.doesNotThrow(() => notifyOutOfBand('t', 'b', {} as NodeJS.ProcessEnv));
+  // A command that does not exist must not propagate — a broken notifier
+  // stopping a run would be worse than no notifier at all.
+  assert.doesNotThrow(() =>
+    notifyOutOfBand('t', 'b', { PHASE_CONSOLE_NOTIFY: '/nonexistent/notifier' } as NodeJS.ProcessEnv));
+});
+
 test.after(() => rmSync(STATE_HOME, { recursive: true, force: true }));

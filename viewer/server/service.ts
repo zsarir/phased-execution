@@ -37,7 +37,7 @@ import { latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT, type RunState } f
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
 import { checkAuth, forgetAuth, openLoginTerminal, type AuthStatus } from './runner/auth.ts';
 import {
-  Approvals, classifyTool, loadPolicy, policyExtras, addPolicyRules,
+  Approvals, classifyTool, loadPolicy, policyExtras, addPolicyRules, notifyOutOfBand,
   DEFAULT_DENY, DEFAULT_ASK, DEFAULT_ALLOW, POLICY_PATH, type Evidence,
 } from './runner/approvals.ts';
 
@@ -176,6 +176,8 @@ export class Service {
   /** Monotonic id per emitted event, so a client can say what it already saw. */
   eventCursor = 0;
   private eventLog: LiveEvent[] = [];
+  /** The last run+status announced, so a halt is not announced on every poll. */
+  private notifiedRun: { id: string; status: string } | null = null;
 
   readonly runner: Runner;
   readonly approvals: Approvals;
@@ -185,7 +187,16 @@ export class Service {
     this.prefs = loadPrefs();
     this.sizing = loadSizing(flags.scriptsDir);
     this.watcher = new DocsWatcher((paths) => this.onChange(paths));
-    this.approvals = new Approvals((approval) => this.emit('approval', approval));
+    this.approvals = new Approvals((approval) => {
+      this.emit('approval', approval);
+      // The browser can only be told if a browser is open. This is the path
+      // that reaches an operator who is asleep, which is the case the whole
+      // unattended design exists for.
+      notifyOutOfBand(
+        `Phase Console: ${approval.title}`,
+        `${approval.slug}${approval.phase != null ? ` phase ${approval.phase}` : ''} — ${approval.detail}`,
+      );
+    });
     this.runner = new Runner({
       scriptsDir: flags.scriptsDir,
       approvals: this.approvals,
@@ -200,7 +211,7 @@ export class Service {
         if (!detail) return undefined;
         return { model: modelAlias(detail.model), effort: effortOf(detail.effort) };
       },
-      onEvent: (event, data) => this.emit(event, data),
+      onEvent: (event, data) => this.onRunnerEvent(event, data),
     });
     // A fault anywhere in the process reaches the browser as a health event,
     // so a degraded console announces itself instead of looking healthy.
@@ -273,6 +284,36 @@ export class Service {
     if (this.eventLog.length > EVENT_BUFFER) this.eventLog.shift();
     for (const listener of this.listeners) {
       try { listener(event, data, id); } catch { /* a dead client must not stop the others */ }
+    }
+  }
+
+  /**
+   * Everything the runner emits, plus the two moments worth waking someone for.
+   *
+   * A run that halts at 2am and a run that finishes are the only states where
+   * nothing further happens until a person acts, so they are the only ones that
+   * earn an out-of-band notification. Announcing every phase would train the
+   * habit of ignoring them, which costs exactly the halt that mattered.
+   */
+  private onRunnerEvent(event: string, data: unknown): void {
+    this.emit(event, data);
+    if (event !== 'run:run') return;
+    const state = (data as { state?: RunState } | undefined)?.state;
+    if (!state || state.id === this.notifiedRun?.id) return;
+
+    if (state.status === 'halted' || state.status === 'parked') {
+      this.notifiedRun = { id: state.id, status: state.status };
+      notifyOutOfBand(
+        `Phase Console: ${state.slug} ${state.status}`,
+        state.halt?.reason ?? 'the run stopped and needs a person',
+      );
+    } else if (state.status === 'finished') {
+      this.notifiedRun = { id: state.id, status: state.status };
+      const done = Object.values(state.phases).filter((p) => p.status === 'done').length;
+      notifyOutOfBand(
+        `Phase Console: ${state.slug} finished`,
+        `${done} phase(s) done · $${state.spentUsd.toFixed(2)} spent`,
+      );
     }
   }
 

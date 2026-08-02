@@ -17,6 +17,7 @@ import { toast } from '../store.js';
 import { Banner, Chip, Empty, Modal, Spinner, Tile, relativeTime } from '../components/ui.js';
 import { LiveConsole, useLiveLines, toLine } from '../components/live-console.js';
 import { SkillPicker } from '../components/skill-picker.js';
+import { announceRun, announceApproval, notifyState, askToNotify } from '../notify.js';
 
 const PHASE_TONE = {
   done: 'ok', running: 'busy', verifying: 'busy', failed: 'bad',
@@ -97,11 +98,11 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
   }, [stale]);
 
   useEffect(() => stale ? undefined : subscribeRun({
-    run: () => void refresh(),
+    run: (data) => { announceRun(data?.state); void refresh(); },
     // Actions taken against a run no loop is driving — a pause or a stop from
     // another tab, or from a phone — arrive on this channel and nowhere else.
-    state: () => void refresh(),
-    approval: () => void refresh(),
+    state: (data) => { announceRun(data?.state); void refresh(); },
+    approval: (data) => { announceApproval(data); void refresh(); },
     phase: (data) => { push(toLine('phase', data)); void refresh(); },
     verify: (data) => push(toLine('verify', data)),
     stream: (data) => push(toLine('stream', data)),
@@ -780,12 +781,38 @@ function ApprovalQueue({ approvals, allowRun, onDecide }) {
   if (!approvals.length) return null;
   return html`
     <section class="card approvals">
-      <h2 class="card-title">
-        Waiting on you
-        <span class="count hot">${approvals.length}</span>
-      </h2>
+      <div class="row spread">
+        <h2 class="card-title">
+          Waiting on you
+          <span class="count hot">${approvals.length}</span>
+        </h2>
+        <${NotifyToggle} />
+      </div>
       ${approvals.map((a) => html`<${ApprovalCard} key=${a.id} approval=${a} allowRun=${allowRun} onDecide=${onDecide} />`)}
     </section>`;
+}
+
+/**
+ * Offered here, where the value of it is on screen: you are looking at a queue
+ * that waited for you to notice it. Asking on page load instead gets refused by
+ * reflex, and that refusal sticks.
+ */
+function NotifyToggle() {
+  const [state, setState] = useState(notifyState());
+  if (state === 'unsupported' || state === 'granted') {
+    return state === 'granted'
+      ? html`<span class="muted small">You will be notified when this happens again.</span>`
+      : null;
+  }
+  if (state === 'denied') {
+    return html`<span class="muted small">
+      Notifications are blocked for this site — your browser's settings can undo that.
+    </span>`;
+  }
+  return html`
+    <button class="btn small" onClick=${async () => setState(await askToNotify())}>
+      Notify me next time
+    </button>`;
 }
 
 function ApprovalCard({ approval, allowRun, onDecide }) {
@@ -879,9 +906,9 @@ export function RunsView({ state }) {
   }, []);
   useEffect(() => { if (!state || state.autopilot) void checkAuth(false); }, [state?.autopilot, checkAuth]);
   useEffect(() => (state && !state.autopilot) ? undefined : subscribeRun({
-    run: refresh,
-    state: refresh,
-    approval: refresh,
+    run: (data) => { announceRun(data?.state); void refresh(); },
+    state: (data) => { announceRun(data?.state); void refresh(); },
+    approval: (data) => { announceApproval(data); void refresh(); },
     phase: (data) => { push(toLine('phase', data)); void refresh(); },
     verify: (data) => push(toLine('verify', data)),
     stream: (data) => push(toLine('stream', data)),
