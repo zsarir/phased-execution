@@ -1,7 +1,7 @@
 /** One plan: its route, its board, its phases, handoffs and analysis. */
 
 import { html, useState, useEffect, useMemo, useCallback } from '../html.js';
-import { api } from '../api.js';
+import { api, subscribe } from '../api.js';
 import { navigate, planHref, phaseHref, handoffHref } from '../router.js';
 import { Markdown } from '../components/markdown.js';
 import { RouteMap } from '../components/dag.js';
@@ -707,6 +707,19 @@ export function PlanView({ slug, tab, arg, state }) {
   }, [slug, nonce]);
 
   useEffect(() => { setDetail(null); return load(); }, [load]);
+
+  /**
+   * Follow the repository.
+   *
+   * The app shell reloaded its own data on a `changed` event and this page did
+   * not, so a phase finished by any other session — a hand-run session, another
+   * console, a colleague — left the board on screen saying whatever it said when
+   * the page was opened. The Autopilot tab then offered to run a phase that was
+   * already done. The watcher knows; this is it being listened to.
+   */
+  useEffect(() => subscribe((data) => {
+    if (!data || data.warm || !data.slugs || data.slugs.includes(slug)) setNonce((n) => n + 1);
+  }), [slug]);
 
   const tabs = useMemo(() => TABS.map((entry) => ({
     ...entry,

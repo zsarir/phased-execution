@@ -937,6 +937,63 @@
 
 .live-idle { color: var(--ink-faint); max-width: 62ch; line-height: 1.7; }
 
+/* ── The phase board on the Autopilot tab ─────────────────────────────────
+   A status table read at a glance, so the rules that matter are: figures line
+   up (tabular numerals), the header stays put while you scroll, status is never
+   carried by colour alone (the chip has a dot AND a word), and a finished phase
+   recedes rather than competing with the ones that still need something. */
+
+.board-counts { gap: var(--s3); }
+.board-count { display: inline-flex; align-items: center; gap: 6px; }
+.board-count b { font-variant-numeric: tabular-nums; }
+.board-note { margin: var(--s2) 0 var(--s3); max-width: 78ch; }
+
+/* Figures that sit in a column must not dance as they change. */
+.tabular, .phase-table .num { font-variant-numeric: tabular-nums; }
+
+.phase-table { table-layout: auto; }
+.phase-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+.phase-table .col-num { width: 46px; }
+.phase-table .col-state { width: 124px; }
+.phase-table .col-run { width: 158px; }
+.phase-table .col-cost { width: 80px; }
+.phase-table .col-turns { width: 62px; }
+.phase-table .col-took { width: 72px; }
+.phase-table .col-actions { width: 172px; }
+
+.phase-table td { vertical-align: top; }
+.phase-table .phase-num { color: var(--ink-faint); font-family: var(--font-mono); font-size: var(--text-xs); }
+.phase-link { font-weight: 500; }
+.phase-flags { gap: 4px; margin-top: 3px; font-size: var(--text-2xs); }
+.phase-ran { margin-top: 2px; font-size: var(--text-2xs); }
+.phase-actions { gap: 4px; justify-content: flex-end; }
+
+/* A done phase is context, not a call to action. */
+.phase-table tr.is-done td { opacity: 0.62; }
+.phase-table tr.is-done:hover td { opacity: 1; }
+.phase-table tr.is-active td { background: color-mix(in oklab, var(--line-progress) 8%, transparent); }
+
+/* The note row belongs to the row above it, so it is not separated from it. */
+.phase-table tr.phase-note td { padding-top: 0; border-top: 0; }
+.phase-table tr.phase-note ul { margin: 4px 0 0; padding-left: 18px; }
+
+/* Present for screen readers, absent for everyone else — used on the actions
+   column header, which has no visible label and would otherwise be unnamed. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Per-phase model/effort: folded away by default, because the common case is
    "every phase inherits the run" and a table of identical rows is noise. */
 .phase-matrix { margin: var(--s2) 0; border-top: 1px solid var(--rule); padding-top: var(--s3); }
@@ -946,33 +1003,74 @@
 .phase-matrix select { width: 100%; font-size: var(--text-xs); }
 .phase-matrix tr.muted td { opacity: 0.6; }
 
-/* The skill picker. Two hundred-odd of them, so it opens closed and filters. */
+/* ── The skill picker ─────────────────────────────────────────────────────
+   A few hundred entries, so: opens closed, chosen ones pinned to the top where
+   they can be removed without hunting, a source filter that cuts the list by an
+   order of magnitude, and a search that matches the description too — "the one
+   that does screenshots" is how people actually look for these. */
 .skill-picker { margin: var(--s2) 0; border-top: 1px solid var(--rule); padding-top: var(--s3); }
-.skill-picker > summary { cursor: pointer; user-select: none; font-size: var(--text-sm); }
+.skill-picker > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
 .skill-picker > summary::marker { color: var(--ink-faint); }
-.skill-search { width: 100%; margin: var(--s2) 0; }
-.skill-fixed { margin: var(--s3) 0; padding: var(--s3); border: 1px solid var(--rule); border-radius: 4px; }
-.skill-list { max-height: 320px; overflow-y: auto; }
+.skill-summary-label { font-weight: 500; }
+
+.skill-fixed {
+  margin: var(--s3) 0;
+  padding: var(--s3);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+.skill-chosen { display: flex; flex-wrap: wrap; gap: 6px; margin: var(--s3) 0; }
+
+.skill-controls { display: flex; flex-direction: column; gap: var(--s2); margin: var(--s3) 0 var(--s2); }
+.skill-search { width: 100%; }
+.skill-filters { gap: 6px; }
+
+.chip.filter { cursor: pointer; border: 1px solid var(--rule); background: transparent; }
+.chip.filter[aria-pressed='true'] { border-color: var(--line-progress); color: var(--ink); }
+.chip.filter:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.skill-list {
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0 var(--s2) var(--s2);
+}
 .skill-group {
   position: sticky;
   top: 0;
+  z-index: 1;
   background: var(--surface);
   color: var(--ink-faint);
   font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: var(--s2) 0 2px;
+  padding: var(--s2) 0 3px;
 }
 .skill-row {
   display: grid;
-  grid-template-columns: 18px minmax(140px, 220px) 1fr;
+  grid-template-columns: 18px minmax(150px, 240px) 1fr;
   gap: var(--s2);
   align-items: baseline;
-  padding: 2px 0;
+  /* Comfortable enough to hit without being a list you have to scroll forever. */
+  padding: 5px 4px;
+  margin: 0 -4px;
+  border-radius: 4px;
   cursor: pointer;
 }
-.skill-row:hover { background: var(--surface-raised, transparent); }
-.skill-id { font-family: var(--font-mono); font-size: var(--text-xs); }
+.skill-row:hover { background: color-mix(in oklab, var(--ink) 6%, transparent); }
+.skill-row:focus-within { outline: 2px solid var(--line-progress); outline-offset: -2px; }
+.skill-row input { cursor: pointer; }
+.skill-row:has(input:disabled) { cursor: not-allowed; opacity: 0.55; }
+.skill-id { font-family: var(--font-mono); font-size: var(--text-xs); word-break: break-word; }
 .skill-what {
   color: var(--ink-faint);
   font-size: var(--text-xs);
@@ -980,7 +1078,25 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chip.is-picked { cursor: pointer; }
+.skill-more, .skill-empty { padding: var(--s2) 4px 0; margin: 0; }
+
+.chip.is-picked { cursor: pointer; border: 1px solid var(--line-progress); }
+.chip.is-picked:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--line-progress);
+  cursor: pointer;
+  text-decoration: underline;
+  font: inherit;
+}
+
+/* Motion is meaning here, and some people have asked for less of it. */
+@media (prefers-reduced-motion: reduce) {
+  .skill-row, .chip.filter, .phase-table tr { transition: none !important; }
+}
 
 /* The ask box under the console. */
 .live-ask {
@@ -1161,3 +1277,9 @@
 .link-card:hover { background: var(--surface); border-color: var(--rule-strong); }
 .link-card strong { font-family: var(--font-display); font-size: var(--text-md); font-weight: 700; }
 .link-card span { font-size: var(--text-xs); color: var(--ink-faint); line-height: 1.45; }
+
+/* A select in the run controls must show the option it has selected. With
+   `min-width: 0` inherited from `.field` they collapsed to ~45px and truncated
+   their own value, which on the effort control meant you could not read what
+   you had chosen. */
+.run-view .field select { min-width: 12ch; }

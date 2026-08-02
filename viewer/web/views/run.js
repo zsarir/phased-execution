@@ -14,9 +14,11 @@
 import { html, useState, useEffect, useCallback } from '../html.js';
 import { api, subscribeRun } from '../api.js';
 import { toast } from '../store.js';
-import { Banner, Chip, Empty, Modal, Spinner, Tile, relativeTime } from '../components/ui.js';
+import { Banner, Chip, Empty, Modal, Spinner, StateChip, Tile, relativeTime } from '../components/ui.js';
 import { LiveConsole, useLiveLines, toLine } from '../components/live-console.js';
 import { SkillPicker } from '../components/skill-picker.js';
+import { mergePhases, boardCounts, phaseActions, fellOverToAnotherModel, BOARD_ORDER }
+  from '../components/phase-model.js';
 import { announceRun, announceApproval, notifyState, askToNotify } from '../notify.js';
 
 const PHASE_TONE = {
@@ -229,7 +231,7 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
           is the account's own figure rather than an estimate.
         </${Banner}>` : null}
 
-      ${run ? html`<${PhaseTable} slug=${slug} run=${run} phases=${phases} live=${live} allowRun=${state.allowRun} onAct=${act} />` : html`
+      ${planPhases.length ? html`<${PhaseTable} slug=${slug} run=${run} planPhases=${planPhases} live=${live} allowRun=${state.allowRun} onAct=${act} />` : html`
         <${Empty}
           title="No run yet"
           hint=${`Nothing has been run for ${slug}. Starting one works the same whether the plan is fresh or half finished — the board decides where to begin.`} />`}
@@ -277,13 +279,20 @@ const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
  */
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 
+/**
+ * What each level is for, read while choosing it rather than after.
+ *
+ * These were a note beside the select, which made `.field` — a horizontal flex
+ * row of label + control — lay out three columns and overlap. Putting them in
+ * the options is both a smaller layout and a better moment to read them.
+ */
 const EFFORT_NOTE = {
-  '': "this machine's default",
-  low: 'fastest and cheapest — mechanical phases',
-  medium: 'balanced',
-  high: 'most implementation phases',
-  xhigh: 'hard reasoning',
-  max: 'the hardest phases, and the slowest',
+  '': "default · this machine's",
+  low: 'low · mechanical work',
+  medium: 'medium · balanced',
+  high: 'high · implementation',
+  xhigh: 'xhigh · hard reasoning',
+  max: 'max · hardest, slowest',
 };
 
 /**
@@ -466,11 +475,12 @@ function Controls({ slug, run, live, busy, allowRun, planPhases = [], planSkills
         </label>
         <label class="field">
           <span>Effort</span>
-          <select value=${effort} disabled=${disabled} onChange=${(e) => setEffort(e.target.value)}>
+          <select value=${effort} disabled=${disabled}
+                  title=${EFFORT_NOTE[effort]}
+                  onChange=${(e) => setEffort(e.target.value)}>
             ${EFFORTS.map((e) => html`
-              <option key=${e} value=${e}>${e || 'default'}${e ? '' : ''}</option>`)}
+              <option key=${e} value=${e}>${EFFORT_NOTE[e]}</option>`)}
           </select>
-          <span class="muted small">${EFFORT_NOTE[effort]}</span>
         </label>
         <label class="field">
           <span>If something is unclear</span>
@@ -643,76 +653,151 @@ function AskBox({ slug, enabled, allowRun, phase, onAsked }) {
  * Phases
  * ------------------------------------------------------------------ */
 
-function PhaseTable({ slug, run, phases, live, allowRun, onAct }) {
-  if (!phases.length) {
-    return html`<${Empty} title="No phases attempted yet" hint="The first one appears here as soon as it starts." />`;
+function PhaseTable({ slug, run, planPhases, live, allowRun, onAct }) {
+  if (!planPhases.length) {
+    return html`
+      <${Empty}
+        title="This plan has no phase graph"
+        hint="The autopilot drives phases from the plan's own graph table, so there is nothing here to run." />`;
   }
+
+  const rows = mergePhases(planPhases, run);
+  const counts = boardCounts(rows);
+  const asked = run?.onlyPhases?.length ? new Set(run.onlyPhases) : null;
+  const spent = rows.reduce((sum, r) => sum + (r.record?.costUsd ?? 0), 0);
+
   return html`
-    <section class="card">
-      <div class="row spread">
-        <h2 class="card-title">Phases in this run</h2>
-        ${run.onlyPhases?.length ? html`
-          <span class="muted small">
-            this run was asked for phase${run.onlyPhases.length === 1 ? '' : 's'}
-            ${' '}${run.onlyPhases.join(', ')} only
-          </span>` : null}
+    <section class="card phase-board">
+      <div class="row spread wrap" style="gap:var(--s3)">
+        <h2 class="card-title">Phases</h2>
+        <div class="row wrap board-counts">
+          ${BOARD_ORDER.filter((state) => counts[state]).map((state) => html`
+            <span key=${state} class="board-count">
+              <${StateChip} state=${state} board=${true} small=${true} />
+              <b>${counts[state]}</b>
+            </span>`)}
+        </div>
       </div>
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Phase</th><th>Status</th><th>Ran as</th><th>Tries</th>
-            <th class="num">Cost</th><th class="num">Turns</th><th class="num">Took</th>
-            <th>Notes</th><th></th>
-          </tr>
-        </thead>
-        <tbody>
-          ${phases.map((p) => html`
-            <tr key=${p.phase} class=${run.activePhase === p.phase ? 'is-active' : ''}>
-              <td><a href=${`#/plan/${encodeURIComponent(slug)}/phase/${p.phase}`}>Phase ${p.phase}</a></td>
-              <td><${Chip} kind=${PHASE_TONE[p.status] ?? ''}>${p.status}</${Chip}></td>
-              <td class="small">
-                ${p.model ?? '—'}${p.effort ? html` · ${p.effort}` : null}
-                ${p.actualModel && !p.actualModel.includes(p.model ?? ' ') ? html`
-                  <div class="muted" title="the session fell back to another model in-place">
-                    ran on ${p.actualModel}
-                  </div>` : null}
-              </td>
-              <td>${p.attempts}</td>
-              <td class="num">$${(p.costUsd ?? 0).toFixed(2)}</td>
-              <td class="num">${p.turns ?? '—'}</td>
-              <td class="num">${p.durationMs ? duration(p.durationMs) : '—'}</td>
-              <td class="muted small">
-                ${p.note ?? ''}
-                ${p.verification ? html`
-                  <div class=${p.verification.ok ? 'ok' : 'bad'}>${p.verification.reason}</div>` : null}
-                ${p.verification?.notRun?.length ? html`
-                  <details>
-                    <summary>${p.verification.notRun.length} step(s) a person must check</summary>
-                    <ul>${p.verification.notRun.map((n, i) => html`
-                      <li key=${i}><code>${n.text}</code> — ${n.reason}</li>`)}</ul>
-                  </details>` : null}
-              </td>
-              <td class="row" style="gap:4px">
-                ${allowRun && ['failed', 'interrupted', 'parked'].includes(p.status) ? html`
-                  <button class="btn small" onClick=${() => onAct('retry', () => api.runRetry(slug, p.phase))}>Retry</button>` : null}
-                ${allowRun && p.status !== 'done' && p.status !== 'skipped' ? html`
-                  <button class="btn small" onClick=${() => onAct('skip', () => api.runSkip(slug, p.phase))}>Skip</button>` : null}
-                ${allowRun && !live && p.status !== 'done' ? html`
-                  <button class="btn small"
-                          title="Run this phase on its own, then stop — the loop does not carry on into the rest of the plan"
-                          onClick=${() => onAct('only', () => api.runStart(slug, {
-                            model: run.model,
-                            autonomy: run.autonomy,
-                            phaseBudgetUsd: run.phaseBudgetUsd,
-                            runBudgetUsd: run.runBudgetUsd,
-                            resumeRunId: run.status === 'finished' ? undefined : run.id,
-                            onlyPhases: [p.phase],
-                          }))}>Run only this</button>` : null}
-              </td>
-            </tr>`)}
-        </tbody>
-      </table>
+
+      <p class="muted small board-note">
+        Status is the plan's own board, so a phase finished by any other session reads as finished
+        here.${asked ? ` This run was asked for phase${asked.size === 1 ? '' : 's'} ${[...asked].join(', ')} only.` : ''}
+      </p>
+
+      <div class="table-scroll">
+        <table class="table phase-table">
+          <thead>
+            <tr>
+              <th scope="col" class="col-num">#</th>
+              <th scope="col">Phase</th>
+              <th scope="col" class="col-state">Status</th>
+              <th scope="col" class="col-run">This run</th>
+              <th scope="col" class="num col-cost">Cost</th>
+              <th scope="col" class="num col-turns">Turns</th>
+              <th scope="col" class="num col-took">Took</th>
+              <th scope="col" class="col-actions"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((p) => PhaseRow({ phase: p, slug, run, live, allowRun, onAct }))}
+          </tbody>
+        </table>
+      </div>
+
+      ${spent > 0 ? html`
+        <p class="muted small" style="margin:var(--s3) 0 0">
+          This run has spent <b class="tabular">$${spent.toFixed(2)}</b> across
+          ${rows.filter((r) => r.record).length} phase(s) it touched.
+        </p>` : null}
     </section>`;
+}
+
+function PhaseRow({ phase: p, slug, run, live, allowRun, onAct }) {
+  const r = p.record;
+  const isActive = run?.activePhase === p.phase;
+
+  // Gated on the BOARD, never on the run record. Offering to run a phase the
+  // board calls done is the defect this table was rebuilt for.
+  const can = phaseActions(p, { live, allowRun });
+  const fellOver = fellOverToAnotherModel(r);
+
+  return html`
+    <tr key=${p.phase}
+        class=${`${isActive ? 'is-active' : ''} ${p.state === 'done' ? 'is-done' : ''}`}>
+      <td class="phase-num tabular">${String(p.phase).padStart(2, '0')}</td>
+
+      <td>
+        <a class="phase-link" href=${`#/plan/${encodeURIComponent(slug)}/phase/${p.phase}`}>${p.title}</a>
+        <div class="row wrap phase-flags">
+          ${p.gated ? html`<${Chip} kind="gate">gated</${Chip}>` : null}
+          ${isActive ? html`<${Chip} kind="busy">running now</${Chip}>` : null}
+          ${p.elsewhere ? html`
+            <span class="muted"
+                  title="The run record beside this is what this run did; the board is what is true now.">
+              finished outside this run
+            </span>` : null}
+        </div>
+      </td>
+
+      <td><${StateChip} state=${p.state} board=${true} /></td>
+
+      <td class="small">
+        ${r ? html`
+          <${Chip} kind=${PHASE_TONE[r.status] ?? ''}>${r.status}</${Chip}>
+          <div class="muted phase-ran">
+            ${r.model ?? '—'}${r.effort ? ` · ${r.effort}` : ''}${r.attempts > 1 ? ` · ${r.attempts} tries` : ''}
+          </div>
+          ${fellOver ? html`
+            <div class="muted" title="the session fell over to another model without restarting">
+              ran on ${r.actualModel}
+            </div>` : null}`
+        : html`<span class="muted">not attempted</span>`}
+      </td>
+
+      <td class="num tabular">${r?.costUsd ? `$${r.costUsd.toFixed(2)}` : '—'}</td>
+      <td class="num tabular">${r?.turns ?? '—'}</td>
+      <td class="num tabular">${r?.durationMs ? duration(r.durationMs) : '—'}</td>
+
+      <td>
+        <div class="row wrap phase-actions">
+          ${can.retry ? html`
+            <button class="btn small" onClick=${() => onAct('retry', () => api.runRetry(slug, p.phase))}>
+              Retry
+            </button>` : null}
+          ${can.skip ? html`
+            <button class="btn small" onClick=${() => onAct('skip', () => api.runSkip(slug, p.phase))}>
+              Skip
+            </button>` : null}
+          ${can.runAlone ? html`
+            <button class="btn small"
+                    title="Run this phase on its own, then stop — the loop does not carry on into the rest of the plan"
+                    onClick=${() => onAct('only', () => api.runStart(slug, {
+                      model: run?.model,
+                      effort: run?.effort,
+                      autonomy: run?.autonomy,
+                      phaseBudgetUsd: run?.phaseBudgetUsd,
+                      runBudgetUsd: run?.runBudgetUsd,
+                      resumeRunId: run && run.status !== 'finished' ? run.id : undefined,
+                      onlyPhases: [p.phase],
+                    }))}>Run only this</button>` : null}
+        </div>
+      </td>
+    </tr>
+    ${r?.note || r?.verification ? html`
+      <tr key=${`${p.phase}-note`} class="phase-note">
+        <td></td>
+        <td colspan="7">
+          ${r.note ? html`<div class="muted small">${r.note}</div>` : null}
+          ${r.verification ? html`
+            <div class=${`small ${r.verification.ok ? 'ok' : 'bad'}`}>${r.verification.reason}</div>` : null}
+          ${r.verification?.notRun?.length ? html`
+            <details>
+              <summary class="small">${r.verification.notRun.length} step(s) a person must check</summary>
+              <ul class="small">${r.verification.notRun.map((n, i) => html`
+                <li key=${i}><code>${n.text}</code> — ${n.reason}</li>`)}</ul>
+            </details>` : null}
+        </td>
+      </tr>` : null}`;
 }
 
 /* ------------------------------------------------------------------ *
