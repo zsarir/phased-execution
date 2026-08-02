@@ -136,6 +136,48 @@ The server binds to `127.0.0.1`, and every write requires an `x-phase-console` h
 same-origin `Origin`, which a browser will not send cross-origin without a CORS preflight the server
 never answers.
 
+## From a phone
+
+The point of an unattended run is that you stop watching it, and the point of the approval queue is
+that a run can ask you something while you are not watching. That only works if the console can be
+reached from wherever you are.
+
+It still binds to `127.0.0.1`. What changes is that something in front of that socket authenticates
+the caller and says who they are. [Tailscale Serve][serve] is the case this was written for: it
+terminates TLS, checks the caller against your private network, and forwards to loopback with their
+login in `Tailscale-User-Login`.
+
+```bash
+# the console: unchanged bind, plus who may arrive through the proxy
+./start --root ~/code/your-repo --allow-writes --allow-run \
+        --remote your-machine.your-tailnet.ts.net \
+        --remote-user you@example.com
+
+# the proxy: HTTPS on the private network, forwarding to loopback
+tailscale serve --bg --https=443 http://127.0.0.1:4123
+```
+
+Naming a hostname turns on strict `Host` checking, and from then on exactly two kinds of request are
+served: a loopback `Host` with no identity header (you, at this machine) and the named hostname with
+an allowlisted login (you, through the proxy). Everything else is refused — including a proxied
+request asking for a loopback `Host`, which is how someone else on the network would otherwise skip
+the identity check, and any unknown `Host`, which is what a DNS-rebinding page arrives with.
+
+Three things are worth being clear about:
+
+- **The identity header is only worth anything because the app stays on loopback.** If it listened on
+  a network interface, anyone could send the header themselves. `--remote` deliberately does not
+  widen `--host`; the [Tailscale documentation][serve] makes the same point.
+- **Do not put this on the public internet.** With `--allow-run` the console starts agent sessions
+  that edit a repository. A private network with an access policy is the boundary; a tunnel that
+  publishes it to everyone is not.
+- **HTTPS is not optional if you want notifications.** Browsers only allow them in a secure context,
+  and on iOS only for a site added to the Home Screen — Share → Add to Home Screen, then grant
+  permission from the button in Settings. For alerts when the console is closed, point
+  `PHASE_CONSOLE_NOTIFY` at a script; it is run as `cmd "<title>" "<body>"` whenever a run needs you.
+
+[serve]: https://tailscale.com/docs/features/tailscale-serve
+
 ## Development
 
 ```bash

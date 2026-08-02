@@ -522,3 +522,36 @@
   border-radius: var(--radius);
 }
 @keyframes shimmer { to { background-position: -200% 0; } }
+
+/* ---------------- phones ----------------
+   A pointer is precise and a thumb is not, so the controls grow; a phone is
+   narrow, so the two-column pairs stop being two columns. Nothing here changes
+   anything on a display wide enough to have meant it. */
+
+@media (max-width: 640px) {
+  /* 6px of vertical padding is a ~28px target. Apple asks for 44; 40 with the
+     row gap around it is the honest compromise against this much density. */
+  .btn { min-height: 40px; padding: 8px var(--s3); }
+  .btn.small { min-height: 32px; padding: 5px var(--s2); }
+
+  /* A search field sharing a line with three filters is neither. */
+  .filter-bar .field.grow { flex-basis: 100%; }
+  .field input, .field select { min-height: 32px; }
+
+  /* Key-above-value: a `max-content` key column and a phone are not compatible
+     — the value ends up in a two-character gutter. */
+  .kv { grid-template-columns: 1fr; gap: 1px var(--s2); }
+  .kv dt { padding-top: var(--s2); }
+
+  /* Sheet-like: full width, off the home indicator, and taller because there
+     is no desktop around it to leave room for. */
+  .scrim { padding: var(--s2); place-items: end center; }
+  .modal { max-height: 92vh; margin-bottom: env(safe-area-inset-bottom); }
+
+  .toast-stack {
+    left: var(--s3);
+    right: var(--s3);
+    bottom: calc(var(--s3) + env(safe-area-inset-bottom));
+  }
+  .toast { width: 100%; }
+}

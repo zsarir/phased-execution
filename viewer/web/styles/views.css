@@ -1283,3 +1283,45 @@
    their own value, which on the effort control meant you could not read what
    you had chosen. */
 .run-view .field select { min-width: 12ch; }
+
+/* ------------------------------------------------------------------ *
+ * Phones
+ *
+ * The shell already folds at 900px and the plan rows at 780px. What is left
+ * are the pieces that needed more than a narrower column: the ones sized for
+ * a pointer, a wide viewport, or the assumption that you are sitting down.
+ *
+ * The bias throughout is towards a run you are watching rather than a plan
+ * you are reading, because watching one is the reason to open this on a phone
+ * at all — and answering an approval is the only thing here that cannot wait
+ * until you are back at the desk.
+ * ------------------------------------------------------------------ */
+
+@media (max-width: 640px) {
+  /* Half the screen is too much to give a log when the controls underneath it
+     are what you came for. The component sets its height inline, and a cap is
+     how you argue with an inline height without shouting `!important`. */
+  .live-body { max-height: 46vh; }
+
+  /* 62px of right-aligned label is a fifth of a phone's width. */
+  .live-line { grid-template-columns: 46px 1fr; gap: var(--s2); }
+  .live-head { padding: var(--s2); }
+  .live-sub { flex-basis: 100%; }
+
+  /* The map already pans and zooms under a finger; it should not also own the
+     whole screen before you can reach what is below it. */
+  .route-frame { max-height: 60vh; }
+
+  .departures th, .departures td { padding: var(--s2); }
+  .departures .phase-title { font-size: var(--text-sm); }
+
+  /* An approval is the one thing on this page you act on rather than read.
+     The reason field takes its own line so the two answers can be finger-sized
+     and side by side, which is the shape a thumb expects. */
+  .approval input.grow { flex: 1 1 100%; }
+  .approval .btn { flex: 1 1 auto; min-height: 42px; justify-content: center; }
+  .approval .code { max-height: 34vh; }
+
+  .plan-head h1 { font-size: var(--text-xl); }
+  .chart .axis-label { font-size: 10px; }
+}

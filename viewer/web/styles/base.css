@@ -72,11 +72,20 @@ button, input, select, textarea { font: inherit; color: inherit; }
   height: 100%;
 }
 
+/* Installed to a home screen the app draws under the status bar and the home
+   indicator — that is what `viewport-fit=cover` and `black-translucent` buy,
+   and the price is putting the content back inside the safe area by hand.
+   Every `env()` is 0 on a display without insets, so each `max()` collapses to
+   the value it has always had and nothing changes anywhere else. */
 .rail {
   display: flex;
   flex-direction: column;
   gap: var(--s4);
-  padding: var(--s4) var(--s3);
+  padding:
+    max(var(--s4), env(safe-area-inset-top))
+    var(--s3)
+    max(var(--s4), env(safe-area-inset-bottom))
+    max(var(--s3), env(safe-area-inset-left));
   background: var(--ground-deep);
   border-right: 1px solid var(--rule);
   overflow-y: auto;
@@ -93,7 +102,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
   width: 100%;
   max-width: var(--content-max);
   margin: 0 auto;
-  padding: var(--s5) var(--s6) var(--s8);
+  padding:
+    var(--s5)
+    max(var(--s6), env(safe-area-inset-right))
+    max(var(--s8), env(safe-area-inset-bottom))
+    max(var(--s6), env(safe-area-inset-left));
   flex: 1;
 }
 
@@ -147,9 +160,39 @@ button, input, select, textarea { font: inherit; color: inherit; }
     position: sticky;
     top: 0;
     z-index: 20;
+    /* A bar, not a column now: the top inset still applies — this is the strip
+       the status bar sits over — but the bottom one belongs to the page. */
+    padding:
+      max(var(--s3), env(safe-area-inset-top))
+      max(var(--s3), env(safe-area-inset-right))
+      var(--s3)
+      max(var(--s3), env(safe-area-inset-left));
   }
   .rail .rail-section-title, .rail .rail-footer { display: none; }
-  .page { padding: var(--s4) var(--s4) var(--s7); }
+
+  /* The rail turns into a bar, and everything inside it has to turn with it.
+     `.nav` is a column by default, so without this the six links stack and the
+     "bar" is six rows tall; `.source-chip` is `width: 100%`, so it claims the
+     whole bar and pushes itself off the end of it. */
+  .rail .brand { flex: none; }
+  .rail .nav { flex-direction: row; gap: var(--s1); }
+  .rail .nav-item { white-space: nowrap; padding: var(--s2) var(--s3); }
+  /* In a column the count sits at the far edge; in a row that edge is the next
+     link along. */
+  .rail .nav-item .count { margin-left: 0; }
+  /* A tick down the left side of a row of links marks the gap, not the link.
+     The background and weight already say which one is current. */
+  .rail .nav-item[aria-current='page']::before { display: none; }
+  .rail .source-chip { width: auto; flex: none; }
+  .rail .source-chip .path { display: none; }
+
+  .page {
+    padding:
+      var(--s4)
+      max(var(--s4), env(safe-area-inset-right))
+      max(var(--s7), env(safe-area-inset-bottom))
+      max(var(--s4), env(safe-area-inset-left));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

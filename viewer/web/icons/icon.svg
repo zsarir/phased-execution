@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Phase Console">
+  <!--
+    The home-screen icon: the same two-station mark as the favicon, on a
+    full-bleed ground. Full bleed because both platforms mask it themselves —
+    iOS to a rounded square, Android to whatever the launcher prefers — and an
+    icon that draws its own rounded corners ends up with them clipped twice.
+
+    Everything that carries meaning sits inside the maskable safe zone (the
+    centre 80%): the mark spans x 134→378 with a 46px cap, so its furthest
+    point is 168px from centre against a 205px budget.
+  -->
+  <rect width="512" height="512" fill="#0e1b22"/>
+  <path d="M134 256h244" stroke="#ffb627" stroke-width="34" stroke-linecap="round" fill="none"/>
+  <circle cx="134" cy="256" r="46" fill="#3fb68b"/>
+  <circle cx="378" cy="256" r="46" fill="#ffb627"/>
+</svg>

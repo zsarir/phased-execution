@@ -253,6 +253,8 @@ const FLAGS = [
   ['--allow-writes', 'Enable scaffolding, QA records and locks.'],
   ['--allow-run', 'Enable the autopilot. Separate on purpose.'],
   ['--port <n>', 'Listen somewhere other than 4123.'],
+  ['--remote <host>', 'Also answer to this hostname, behind a proxy that authenticates callers. Turns on strict Host checking.'],
+  ['--remote-user <l>', 'A login allowed to arrive that way. Required by --remote.'],
   ['--scripts <dir>', 'Use a different phased-execution checkout.'],
   ['--log-file <p>', 'Structured log. Defaults under ~/.local/state/phase-console/.'],
 ];

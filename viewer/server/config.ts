@@ -26,6 +26,17 @@ export type Flags = {
    * different blast radius, so they are two decisions.
    */
   allowRun: boolean;
+  /**
+   * Hostnames this console answers to besides localhost, reached through an
+   * authenticating proxy that puts the caller's identity in a header.
+   *
+   * Empty — the default — means the console is local-only and every Host is
+   * treated exactly as it was before this existed. Naming even one turns on
+   * strict Host validation, so an unknown Host is refused rather than served.
+   */
+  remoteHosts: string[];
+  /** Logins allowed to arrive through `remoteHosts`. See `server/api/access.ts`. */
+  remoteUsers: string[];
   scriptsDir: string;
   /** Where the structured log goes. `null` disables file logging entirely. */
   logFile: string | null;
@@ -55,6 +66,8 @@ export function parseFlags(argv: string[]): Flags {
     open: process.env.PHASE_CONSOLE_NO_OPEN !== '1',
     allowWrites: false,
     allowRun: false,
+    remoteHosts: [],
+    remoteUsers: splitList(process.env.PHASE_CONSOLE_REMOTE_USERS),
     scriptsDir: join(SKILL_DIR, 'scripts'),
     logFile: process.env.PHASE_CONSOLE_LOG === '' ? null : (process.env.PHASE_CONSOLE_LOG ?? defaultLogFile()),
   };
@@ -68,12 +81,50 @@ export function parseFlags(argv: string[]): Flags {
     else if (arg === '--no-open') flags.open = false;
     else if (arg === '--allow-writes') flags.allowWrites = true;
     else if (arg === '--allow-run') flags.allowRun = true;
+    else if (arg === '--remote') flags.remoteHosts.push(...splitList(next()));
+    else if (arg === '--remote-user') flags.remoteUsers.push(...splitList(next()));
     else if (arg === '--scripts') flags.scriptsDir = resolve(expandHome(next() ?? ''));
     else if (arg === '--log-file') flags.logFile = resolve(expandHome(next() ?? ''));
     else if (arg === '--no-log-file') flags.logFile = null;
     else if (arg === '--help' || arg === '-h') { printHelp(); process.exit(0); }
   }
+  // Hostnames and logins are compared, never displayed, so they are folded once
+  // here rather than at every comparison site.
+  flags.remoteHosts = unique(flags.remoteHosts.map((h) => h.toLowerCase().replace(/\.$/, '')));
+  flags.remoteUsers = unique(flags.remoteUsers.map((u) => u.toLowerCase()));
   return flags;
+}
+
+/** `a,b, c` and `a` both mean the same thing, and neither may contain blanks. */
+function splitList(value: string | undefined): string[] {
+  return (value ?? '').split(',').map((part) => part.trim()).filter(Boolean);
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+/**
+ * Refuse to start rather than start wrong.
+ *
+ * `--remote` widens who can reach a console that may be able to spawn agent
+ * sessions. Doing that with no allowlist is never what anyone meant, and the
+ * failure would be silent — the console would come up looking correct and let
+ * the whole tailnet in. So it is a startup error, not a warning.
+ *
+ * Returns the message to print, or `null` when the flags are coherent.
+ */
+export function flagsRefusal(flags: Flags): string | null {
+  if (flags.remoteHosts.length && !flags.remoteUsers.length) {
+    return '--remote needs at least one --remote-user (or PHASE_CONSOLE_REMOTE_USERS).\n'
+      + '  Without one, every request arriving at that hostname would be accepted.';
+  }
+  if (!flags.remoteHosts.length && flags.remoteUsers.length) {
+    return '--remote-user does nothing without --remote <hostname>.';
+  }
+  const bad = flags.remoteHosts.find((h) => !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(h));
+  if (bad) return `--remote ${bad} is not a hostname. Give the name the proxy serves, with no scheme or port.`;
+  return null;
 }
 
 function printHelp(): void {
@@ -87,6 +138,11 @@ function printHelp(): void {
   --no-open         do not open the browser (it opens by default)
   --allow-writes    enable the guarded write verbs (scaffold, QA record, locks)
   --allow-run       enable the autopilot: spawn \`claude -p\` sessions per phase
+  --remote <host>   also answer to this hostname, fronted by an authenticating
+                    proxy (e.g. \`tailscale serve\`). Repeatable. Turns on strict
+                    Host checking, so any other Host is refused.
+  --remote-user <l> a login allowed to arrive via --remote. Repeatable; also
+                    PHASE_CONSOLE_REMOTE_USERS. Required by --remote.
   --scripts <dir>   phased-execution scripts dir (default: the skill this lives in)
   --log-file <p>    structured log (default ${defaultLogFile()})
   --no-log-file     log to stderr only

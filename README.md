@@ -671,7 +671,9 @@ and asserts it matches the engine, so the two readings cannot drift apart unnoti
 
 **Writes are off by default.** With `--allow-writes` the console can scaffold a plan or handoff,
 record a QA result and manage phase locks — each behind a dialog showing the exact command first.
-`--git` is never passed, so it can never commit or push. The server binds to `127.0.0.1` only.
+`--git` is never passed, so it can never commit or push. The server binds to `127.0.0.1`, and keeps
+binding there even when you reach it from elsewhere — `--remote` puts an authenticating proxy in
+front of the loopback socket rather than opening one on a network.
 
 Details: [viewer/README.md](viewer/README.md).
 

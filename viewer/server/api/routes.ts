@@ -67,6 +67,17 @@ function guardRun(req: IncomingMessage, service: Service): string | null {
     : 'Runs are disabled. Restart with --allow-run to enable the autopilot.');
 }
 
+/**
+ * The cross-site check on its own, for POSTs that are not a capability.
+ *
+ * Choosing a source directory and saving a theme both have to work in a
+ * read-only console, so neither belongs behind `--allow-writes`. They still
+ * must not be drivable by another page, which is what this is.
+ */
+function guardCsrf(req: IncomingMessage): string | null {
+  return guardMutation(req, null);
+}
+
 function guardMutation(req: IncomingMessage, disabled: string | null): string | null {
   if (disabled) return disabled;
   if (req.headers['x-phase-console'] !== '1') return 'Missing console header.';
@@ -245,6 +256,8 @@ export async function handleApi(
         return true;
       }
       if (req.method === 'POST') {
+        const refusal = guardCsrf(req);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
         const body = await readBody(req);
         const check = service.open(String(body.path ?? ''));
         json(res, check.ok ? 200 : 400, { check, state: service.state() });
@@ -253,6 +266,8 @@ export async function handleApi(
     }
 
     if (head === 'prefs' && req.method === 'POST') {
+      const refusal = guardCsrf(req);
+      if (refusal) { json(res, 403, { error: refusal }); return true; }
       const body = await readBody(req);
       json(res, 200, service.savePreferences(body));
       return true;

@@ -16,15 +16,24 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 
-import { parseFlags, VIEWER_DIR } from './config.ts';
+import { flagsRefusal, parseFlags, VIEWER_DIR } from './config.ts';
 import {
   configureLog, installExitLogging, isClientDisconnect, log, noteExit, previousRunEndedCleanly,
 } from './log.ts';
 import { markDegraded, runShutdownHandlers } from './lifecycle.ts';
 import { Service } from './service.ts';
 import { handleApi } from './api/routes.ts';
+import { classify } from './api/access.ts';
 
 const flags = parseFlags(process.argv.slice(2));
+
+// Before anything opens a port: incoherent access flags are a refusal to start,
+// never a warning. See `flagsRefusal` for why.
+const refusal = flagsRefusal(flags);
+if (refusal) {
+  process.stderr.write(`\n  phase-console: ${refusal}\n\n`);
+  process.exit(1);
+}
 
 // Logging comes up before anything else can fail, so the first fault is on record.
 configureLog(flags.logFile);
@@ -62,6 +71,9 @@ const MIME: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  // iOS ignores a manifest served as anything else, and ignoring it silently is
+  // the whole difference between a home-screen app and a bookmark.
+  '.webmanifest': 'application/manifest+json',
   '.svg': 'image/svg+xml',
   '.woff2': 'font/woff2',
   '.png': 'image/png',
@@ -86,6 +98,27 @@ const server = createServer(async (req, res) => {
   req.on('error', noteStreamError('request.error'));
 
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+
+  // Ahead of the API and the static files alike: a refused caller should not be
+  // able to tell which routes exist, and `/events` is as worth guarding as any
+  // of them. A no-op unless --remote is set.
+  const verdict = classify(req, flags);
+  if (!verdict.ok) {
+    // A silent refusal on a phone is unfixable, so every one of these is on
+    // record with the two facts that explain it.
+    log.warn('access.refused', {
+      reason: verdict.reason,
+      host: req.headers.host,
+      login: req.headers['tailscale-user-login'],
+      url: req.url,
+    });
+    res.writeHead(verdict.status, {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+    });
+    res.end(`${verdict.message}\n`);
+    return;
+  }
 
   try {
     if (await handleApi({ service }, req, res, url)) return;
@@ -116,6 +149,13 @@ function sendFile(res: import('node:http').ServerResponse, path: string): void {
   res.writeHead(200, {
     'content-type': type,
     'cache-control': immutable ? 'public, max-age=86400' : 'no-store',
+    // Nothing here is meant to be sniffed, framed, or to leak the URL it came
+    // from. `frame-ancestors` only: a script-src policy would have to carry the
+    // inline importmap in index.html, which is a bigger promise than this is a
+    // problem.
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+    'content-security-policy': "frame-ancestors 'none'",
   });
   const stream = createReadStream(path);
   // A file deleted between the stat above and this read, or a client that
@@ -147,6 +187,9 @@ server.listen(flags.port, flags.host, () => {
   process.stdout.write(`  scripts       ${flags.scriptsDir}\n`);
   process.stdout.write(`  writes        ${flags.allowWrites ? 'enabled (--allow-writes)' : 'read-only'}\n`);
   process.stdout.write(`  autopilot     ${flags.allowRun ? 'enabled (--allow-run) — this console can spawn agent sessions' : 'off'}\n`);
+  if (flags.remoteHosts.length) {
+    process.stdout.write(`  remote        ${flags.remoteHosts.join(', ')} — only ${flags.remoteUsers.join(', ')}\n`);
+  }
   process.stdout.write(`  log           ${flags.logFile ?? 'stderr only'}\n\n`);
   if (flags.open) {
     const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';

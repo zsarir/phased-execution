@@ -10,8 +10,16 @@
  * notification permission the moment it opens gets refused by reflex, and that
  * refusal is sticky — one impatient click and the feature is off for good.
  *
- * `http://127.0.0.1` counts as a secure context, so this works over plain HTTP
- * on localhost, which is the only place this console ever runs.
+ * Notifications need a secure context. `http://127.0.0.1` is one by definition,
+ * so this works over plain HTTP where the console usually runs. Reached through
+ * a proxy (`--remote`), the context is only secure if that proxy terminates
+ * TLS — over plain HTTP to a hostname, `Notification` is simply not defined and
+ * everything here degrades to `unsupported` rather than failing.
+ *
+ * On iOS there is one more condition, and it is not a browser setting: web
+ * notifications exist only for a site added to the Home Screen. In a Safari tab
+ * the permission cannot even be asked for. That is what the manifest and the
+ * apple-mobile-web-app tags in index.html are for.
  */
 
 const SUPPORTED = typeof Notification !== 'undefined';
