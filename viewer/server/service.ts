@@ -8,6 +8,7 @@
  */
 
 import { basename } from 'node:path';
+import { execFile } from 'node:child_process';
 
 import {
   checkRoot, rememberRoot, loadPrefs, savePrefs, type Flags, type Prefs, type RootCheck,
@@ -31,6 +32,7 @@ import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
 import { Runner, type StartOptions } from './runner/runner.ts';
 import { Journal } from './runner/journal.ts';
 import { latestRun, listRuns, type RunState } from './runner/state.ts';
+import { Approvals, type Evidence } from './runner/approvals.ts';
 
 /** One live update, with the id a reconnecting client replays from. */
 export type LiveEvent = { id: number; event: string; data: unknown };
@@ -106,6 +108,26 @@ export type PlanDetail = {
 
 type Cached<T> = { revision: number; value: T };
 
+/** The one line of a tool call that tells you what it is about to do. */
+function describeToolInput(input: unknown): string {
+  if (!input || typeof input !== 'object') return '';
+  const record = input as Record<string, unknown>;
+  for (const key of ['command', 'file_path', 'path', 'url', 'query', 'pattern']) {
+    const value = record[key];
+    if (typeof value === 'string' && value) return value.replace(/\s+/g, ' ').slice(0, 300);
+  }
+  return '';
+}
+
+/** Read-only git, for approval evidence. Never fails the request it decorates. */
+function gitRead(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd, timeout: 5_000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      resolve(error ? '' : String(stdout).trim().slice(0, 4_000));
+    });
+  });
+}
+
 export class Service {
   readonly flags: Flags;
   prefs: Prefs;
@@ -129,14 +151,18 @@ export class Service {
   private eventLog: LiveEvent[] = [];
 
   readonly runner: Runner;
+  readonly approvals: Approvals;
 
   constructor(flags: Flags) {
     this.flags = flags;
     this.prefs = loadPrefs();
     this.sizing = loadSizing(flags.scriptsDir);
     this.watcher = new DocsWatcher((paths) => this.onChange(paths));
+    this.approvals = new Approvals((approval) => this.emit('approval', approval));
     this.runner = new Runner({
       scriptsDir: flags.scriptsDir,
+      approvals: this.approvals,
+      origin: `http://${flags.host}:${flags.port}`,
       // The plan is the only source for what proves a phase worked, exactly as
       // it is the only source for what the phase should do.
       verificationText: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verification,
@@ -568,6 +594,73 @@ export class Service {
     return slugs
       .flatMap((slug) => this.runsFor(slug))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  /**
+   * Answer one PreToolUse hook call.
+   *
+   * The reply shape is the one a live session was measured accepting:
+   * `hookSpecificOutput.permissionDecision`, with the reason handed to the
+   * model so a denial reads as a decision it can work around rather than an
+   * unexplained failure.
+   */
+  async decideToolUse(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const run = this.runner.current();
+    const toolName = String(body.tool_name ?? 'unknown');
+    const input = body.tool_input;
+    const phase = run?.activePhase ?? null;
+
+    const { decided } = this.approvals.request({
+      runId: run?.id ?? 'unknown',
+      slug: run?.slug ?? 'unknown',
+      phase,
+      kind: 'tool',
+      title: `${toolName}: ${describeToolInput(input)}`,
+      detail: `Phase ${phase ?? '?'} of ${run?.slug ?? 'a run'} wants to use ${toolName}.`,
+      evidence: await this.evidenceFor(phase),
+      tool: { name: toolName, input, cwd: typeof body.cwd === 'string' ? body.cwd : undefined },
+    });
+
+    const { decision, by, reason } = await decided;
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: decision,
+        permissionDecisionReason: decision === 'allow'
+          ? `approved by ${by}`
+          : `not approved (${by})${reason ? `: ${reason}` : ''}`,
+      },
+    };
+  }
+
+  /**
+   * What a person would have gone and looked up before answering. A bare
+   * "allow this?" automates the ceremony of approval and deletes its substance.
+   */
+  private async evidenceFor(phase: number | null): Promise<Evidence[]> {
+    const evidence: Evidence[] = [];
+    const root = this.root?.path;
+    if (!root) return evidence;
+
+    const [status, diff] = await Promise.all([
+      gitRead(root, ['status', '--short']),
+      gitRead(root, ['diff', '--stat']),
+    ]);
+    if (status) evidence.push({ label: 'Working tree', body: status });
+    if (diff) evidence.push({ label: 'Uncommitted changes', body: diff });
+
+    const run = this.runner.current();
+    const record = phase === null ? undefined : run?.phases[String(phase)];
+    if (record?.verification?.ran.length) {
+      evidence.push({
+        label: 'Verification so far',
+        body: record.verification.ran.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.command}`).join('\n'),
+      });
+    }
+    if (record?.gate) {
+      evidence.push({ label: 'Phase gate', body: `${record.gate.kind}: ${record.gate.detail}` });
+    }
+    return evidence;
   }
 
   runJournal(slug: string, id: string, limit = 500) {

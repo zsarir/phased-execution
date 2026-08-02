@@ -87,7 +87,23 @@ export async function handleApi(
 ): Promise<boolean> {
   const { service } = ctx;
   const path = url.pathname;
-  if (!path.startsWith('/api/') && path !== '/events') return false;
+  if (!path.startsWith('/api/') && path !== '/events' && !path.startsWith('/hooks/')) return false;
+
+  /* ---------------- the approval hook ---------------- */
+  if (path === '/hooks/pre-tool-use') {
+    // Deliberately not `guardWrite`: the caller is a `claude` child process,
+    // which sends neither the console header nor an origin. Its credential is
+    // the per-run bearer token, compared in constant time and dead the moment
+    // the run ends.
+    if (req.method !== 'POST') { json(res, 405, { error: 'POST only' }); return true; }
+    if (!service.approvals.verify(req.headers.authorization)) {
+      log.warn('hook.rejected', { reason: service.approvals.armed() ? 'bad token' : 'no run is armed' });
+      json(res, 401, { error: 'bad or expired run token' });
+      return true;
+    }
+    json(res, 200, await service.decideToolUse(await readBody(req)));
+    return true;
+  }
 
   /* ---------------- live updates ---------------- */
   if (path === '/events') {
@@ -244,8 +260,25 @@ export async function handleApi(
       if (sub === 'work') { json(res, 200, await service.work(slug)); return true; }
     }
 
-    /* ---------------- runs ---------------- */
+    /* ---------------- runs + approvals ---------------- */
     if (head === 'runs' && req.method === 'GET') { json(res, 200, service.allRuns()); return true; }
+
+    if (head === 'approvals') {
+      if (req.method === 'GET') { json(res, 200, service.approvals.all()); return true; }
+      if (req.method === 'POST' && rest[0]) {
+        const refusal = guardRun(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const decision = body.decision === 'allow' ? 'allow' : 'deny';
+        const settled = service.approvals.settle(
+          rest[0], decision,
+          typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
+          typeof body.reason === 'string' ? body.reason.slice(0, 500) : undefined,
+        );
+        json(res, settled ? 200 : 404, settled ? { ok: true, decision } : { error: 'no such pending approval' });
+        return true;
+      }
+    }
 
     if (head === 'run' && rest.length >= 1) {
       const slug = rest[0];

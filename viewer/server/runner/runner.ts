@@ -34,6 +34,7 @@ import {
   type Autonomy, type RunState, type PhaseStatus, type VerifySummary,
 } from './state.ts';
 import { Journal } from './journal.ts';
+import { buildSettings, writeSettingsFile, type Approvals } from './approvals.ts';
 
 export type RunnerEvent = (event: string, data: Record<string, unknown>) => void;
 
@@ -44,6 +45,10 @@ export type RunnerDeps = {
   verify?: typeof verifyPhase;
   /** The plan's `**Verification:**` text for a phase, from the service's store. */
   verificationText: (slug: string, phase: number) => Promise<string | undefined> | string | undefined;
+  /** Without one, sessions run on the deny rules alone and nothing can be asked. */
+  approvals?: Approvals;
+  /** Where the child posts its hook calls, e.g. `http://127.0.0.1:4123`. */
+  origin?: string;
   onEvent?: RunnerEvent;
   now?: () => Date;
 };
@@ -73,6 +78,8 @@ export class Runner {
   private childPid: number | null = null;
   /** Set when the operator stopped us, so exit 143 is not read as a mystery. */
   private stopRequested = false;
+  /** Path to the 0600 settings file carrying this run's deny rules and hook. */
+  private settingsPath: string | null = null;
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
@@ -119,6 +126,7 @@ export class Runner {
     this.journal = new Journal(this.state.root, this.state.slug, this.state.id);
     this.abort = new AbortController();
     this.stopRequested = false;
+    this.settingsPath = this.armSettings(this.state.id);
     this.record('run.start', {
       runId: this.state.id, slug: this.state.slug, model: this.state.model,
       autonomy: this.state.autonomy, resumed: Boolean(state),
@@ -131,6 +139,33 @@ export class Runner {
       offShutdown('runner');
     });
     return this.state;
+  }
+
+  /**
+   * Mint this run's token and write the settings the children will load.
+   *
+   * The settings carry two things that must not be confused: `permissions.deny`,
+   * which the CLI enforces itself and which was measured holding with this
+   * console unreachable, and the HTTP hook, which fails open and therefore
+   * carries workflow rather than safety.
+   */
+  private armSettings(runId: string): string | null {
+    const { approvals, origin } = this.deps;
+    if (!approvals || !origin) {
+      log.warn('runner.no-approvals', {
+        note: 'no approval broker configured — sessions run on the deny rules alone',
+      });
+      return null;
+    }
+    try {
+      const token = approvals.arm(runId);
+      const path = writeSettingsFile(runId, buildSettings({ runId, token, origin }));
+      this.record('run.settings', { path });
+      return path;
+    } catch (error) {
+      log.error('runner.settings', { error });
+      return null;
+    }
   }
 
   /**
@@ -266,6 +301,9 @@ export class Runner {
     } finally {
       state.child = null;
       this.childPid = null;
+      // The token dies with the loop. Anything still waiting on a decision is
+      // answered rather than left holding a socket nobody is watching.
+      this.deps.approvals?.disarm();
       this.persist();
       this.emit('run', { state });
     }
@@ -348,6 +386,7 @@ export class Runner {
         resume,
         budgetUsd: budget,
         maxTurns,
+        settings: this.settingsPath ?? undefined,
         signal: this.abort?.signal,
         onPid: (pid) => {
           this.childPid = pid;

@@ -1,0 +1,185 @@
+/**
+ * Approvals.
+ *
+ * The load-bearing fact here was measured, not read: Claude Code's `http`
+ * PreToolUse hook **fails open**. A live session with nothing listening on the
+ * hook URL ran its Bash call and created a file; the same session with a
+ * `permissions.deny` rule was blocked twice and gave up. So these tests hold
+ * the line between the two layers — the deny list is safety, the hook is
+ * workflow — and fail loudly if anything dangerous drifts from one to the other.
+ */
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, statSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const STATE_HOME = mkdtempSync(join(tmpdir(), 'pc-approvals-'));
+process.env.XDG_STATE_HOME = STATE_HOME;
+process.env.PHASE_CONSOLE_LOG = '';
+
+const {
+  Approvals, buildSettings, writeSettingsFile, loadPolicy, DEFAULT_DENY, DEFAULT_ASK, HOOK_TIMEOUT_SECONDS,
+} = await import('../server/runner/approvals.ts');
+
+/* ------------------------------------------------------------------ *
+ * The two layers
+ * ------------------------------------------------------------------ */
+
+test('everything irreversible sits in deny, where it holds without the console', () => {
+  const settings = buildSettings({ runId: 'r1', token: 't', origin: 'http://127.0.0.1:4123' });
+  const deny = (settings.permissions as { deny: string[] }).deny;
+  const ask = (settings.permissions as { ask: string[] }).ask;
+
+  // These reach a remote or destroy something. The hook cannot be trusted to
+  // stop them, because with the console down the hook does not run at all.
+  for (const rule of ['Bash(git push:*)', 'Bash(terraform apply:*)', 'Bash(terraform destroy:*)', 'Bash(sudo:*)']) {
+    assert.ok(deny.includes(rule), `${rule} must be denied outright, never merely asked`);
+    assert.ok(!ask.includes(rule), `${rule} must not be approvable from a phone`);
+  }
+});
+
+test('the hook is pointed at this console and given a bearer token', () => {
+  const settings = buildSettings({ runId: 'r1', token: 'secret-token', origin: 'http://127.0.0.1:4123' });
+  const entry = (settings.hooks as { PreToolUse: { matcher: string; hooks: Record<string, unknown>[] }[] }).PreToolUse[0];
+  const hook = entry.hooks[0];
+  assert.equal(hook.type, 'http');
+  assert.equal(hook.url, 'http://127.0.0.1:4123/hooks/pre-tool-use');
+  assert.deepEqual(hook.headers, { Authorization: 'Bearer secret-token' });
+  assert.equal(hook.timeout, HOOK_TIMEOUT_SECONDS);
+  // Matching every tool would put a network round trip in front of every Read.
+  assert.match(entry.matcher, /Bash/);
+  assert.ok(!/\bRead\b/.test(entry.matcher));
+});
+
+test('an operator policy adds rules but can never remove a default', () => {
+  const file = join(STATE_HOME, 'autopilot.json');
+  writeFileSync(file, JSON.stringify({ deny: ['Bash(task deploy:*)'], ask: ['Bash(make release:*)'] }));
+  const policy = loadPolicy(file);
+  assert.ok(policy.deny.includes('Bash(task deploy:*)'), 'a repo can add its own dangerous verbs');
+  for (const rule of DEFAULT_DENY) assert.ok(policy.deny.includes(rule), `${rule} survived the merge`);
+  for (const rule of DEFAULT_ASK) assert.ok(policy.ask.includes(rule), `${rule} survived the merge`);
+});
+
+test('a malformed policy file falls back to the defaults rather than to nothing', () => {
+  const file = join(STATE_HOME, 'broken.json');
+  writeFileSync(file, '{ not json');
+  assert.deepEqual(loadPolicy(file).deny, DEFAULT_DENY);
+  // A policy of `{"deny": "everything"}` is a string, not a list — ignoring the
+  // whole file here would be safe; silently accepting it would not.
+  writeFileSync(file, JSON.stringify({ deny: 'everything' }));
+  assert.deepEqual(loadPolicy(file).deny, DEFAULT_DENY);
+});
+
+test('the settings file is not world-readable — it holds the run token', () => {
+  const path = writeSettingsFile('r2', buildSettings({ runId: 'r2', token: 'shh', origin: 'http://x' }));
+  const mode = statSync(path).mode & 0o777;
+  assert.equal(mode, 0o600, `expected 0600, got ${mode.toString(8)}`);
+  assert.match(readFileSync(path, 'utf8'), /shh/);
+  // Rewriting an existing file must not leave a looser mode behind.
+  writeSettingsFile('r2', buildSettings({ runId: 'r2', token: 'shh2', origin: 'http://x' }));
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+});
+
+/* ------------------------------------------------------------------ *
+ * The token
+ * ------------------------------------------------------------------ */
+
+test('the hook endpoint rejects anything but this run\'s token', () => {
+  const approvals = new Approvals();
+  assert.equal(approvals.armed(), false);
+  assert.equal(approvals.verify('Bearer anything'), false, 'nothing is accepted before a run arms one');
+
+  const token = approvals.arm('run-1');
+  assert.equal(approvals.verify(`Bearer ${token}`), true);
+  assert.equal(approvals.verify(token), true, 'the scheme prefix is optional');
+  assert.equal(approvals.verify('Bearer wrong'), false);
+  assert.equal(approvals.verify(`Bearer ${token}x`), false);
+  assert.equal(approvals.verify(undefined), false);
+
+  approvals.disarm();
+  assert.equal(approvals.verify(`Bearer ${token}`), false, 'the token dies with the run');
+});
+
+test('two runs never share a token', () => {
+  const approvals = new Approvals();
+  const first = approvals.arm('run-1');
+  const second = approvals.arm('run-2');
+  assert.notEqual(first, second);
+  assert.equal(approvals.verify(`Bearer ${first}`), false, 'the previous run cannot drive the current one');
+});
+
+/* ------------------------------------------------------------------ *
+ * Deciding
+ * ------------------------------------------------------------------ */
+
+function ask(approvals: InstanceType<typeof Approvals>, title = 'Bash: git commit -m wip') {
+  return approvals.request({
+    runId: 'run-1', slug: 'demo', phase: 2, kind: 'tool',
+    title, detail: 'phase 2 wants to commit',
+    evidence: [{ label: 'Working tree', body: ' M src/app.ts' }],
+    tool: { name: 'Bash', input: { command: 'git commit -m wip' } },
+  });
+}
+
+test('an approval waits for a person and reports who decided', async () => {
+  const seen: string[] = [];
+  const approvals = new Approvals((a) => seen.push(a.title));
+  approvals.arm('run-1');
+
+  const { approval, decided } = ask(approvals);
+  assert.deepEqual(seen, ['Bash: git commit -m wip'], 'the notifier fires immediately, not after the decision');
+  assert.equal(approvals.pending().length, 1);
+
+  assert.equal(approvals.settle(approval.id, 'allow', 'phone'), true);
+  const outcome = await decided;
+  assert.equal(outcome.decision, 'allow');
+  assert.equal(outcome.by, 'phone');
+  assert.equal(approvals.pending().length, 0);
+  assert.equal(approvals.recent().at(-1)?.status, 'allow');
+});
+
+test('deciding the same approval twice changes nothing', async () => {
+  const approvals = new Approvals();
+  approvals.arm('run-1');
+  const { approval, decided } = ask(approvals);
+  approvals.settle(approval.id, 'deny', 'console');
+  assert.equal(approvals.settle(approval.id, 'allow', 'attacker'), false, 'a settled approval cannot be reopened');
+  assert.equal((await decided).decision, 'deny');
+});
+
+test('ending a run denies whatever was still waiting, rather than hanging it', async () => {
+  const approvals = new Approvals();
+  approvals.arm('run-1');
+  const { decided } = ask(approvals);
+  approvals.disarm();
+  const outcome = await decided;
+  assert.equal(outcome.decision, 'deny');
+  assert.match(outcome.reason!, /run ended/);
+});
+
+test('the card carries evidence, not just a yes/no', () => {
+  const approvals = new Approvals();
+  approvals.arm('run-1');
+  const { approval } = ask(approvals);
+  assert.ok(approval.evidence.length, 'a bare "allow this?" deletes the substance of approving');
+  assert.equal(approval.tool!.name, 'Bash');
+  assert.equal(approval.phase, 2);
+  assert.ok(Date.parse(approval.expiresAt) > Date.parse(approval.createdAt));
+});
+
+test('the answer deadline lands before the hook gives up, not after', () => {
+  // Our timeout must fire first. If the hook's own timeout wins, the call is
+  // not denied — it falls through, because this hook fails open.
+  const approvals = new Approvals();
+  approvals.arm('run-1');
+  const { approval } = ask(approvals);
+  const ourDeadlineMs = Date.parse(approval.expiresAt) - Date.parse(approval.createdAt);
+  assert.ok(
+    ourDeadlineMs < HOOK_TIMEOUT_SECONDS * 1000,
+    'answering after the hook has already given up is the same as not answering',
+  );
+});
+
+test.after(() => rmSync(STATE_HOME, { recursive: true, force: true }));
