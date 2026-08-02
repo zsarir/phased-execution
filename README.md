@@ -11,6 +11,8 @@ session — as a dependency graph of right-sized sessions, with a local web cons
 ![Dependencies](https://img.shields.io/badge/dependencies-none-3fb68b?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-7A8B92?style=flat-square)
 
+**English** · [فارسی](README.fa.md)
+
 </div>
 
 ```
@@ -640,6 +642,7 @@ phase-console                      # installed as a plugin — from anywhere
 ./start                            # cloned — from the folder
 ./start ~/code/your-repo           # skip the picker
 ./start --allow-writes             # plus the guarded write verbs
+./start --allow-run                # plus the autopilot
 ```
 
 A plan library outgrows a terminal: dozens of plans, hundreds of phases, hundreds of handoff files —
@@ -656,8 +659,10 @@ work is left, and whether a plan's graph even lints.
 | **Phase** | Goal, read-first, files, steps, exit criteria, verification — plus that phase's handoff, gate status, lock and its **boot prompt**, ready to copy. |
 | **Handoffs** | Every handoff with its front-matter contract, body and the boot prompts it generated. |
 | **Analysis** | Critical path, bottleneck, best next phase, remaining weight and sessions, completion timeline, QA table, health issues. |
+| **Overview** | Context, architecture, session budget, the phase-graph table, end-to-end verification and the plan's memory entry. |
 | **Ready now** | Every ready phase across every plan, ranked by how much it unblocks. |
 | **Statistics** | Portfolio totals, velocity, completions calendar, size mix, repos, skills, target models, locks and every health issue. |
+| **Autopilot** | Drive a plan unattended: one `claude -p` per phase, the live session console, the approval queue, and the controls to pause, stop, retry, skip or run a single phase. |
 | **Search** | Full text across all plans and handoffs, grouped by plan. |
 
 It **updates itself**: a watch on `docs/` pushes changes over server-sent events, so a handoff written
@@ -675,6 +680,15 @@ record a QA result and manage phase locks — each behind a dialog showing the e
 `--git` is never passed, so it can never commit or push. The server binds to `127.0.0.1`, and keeps
 binding there even when you reach it from elsewhere — `--remote` puts an authenticating proxy in
 front of the loopback socket rather than opening one on a network.
+
+**Runs are off by default too, behind their own flag.** `--allow-run` enables the **autopilot**: the
+console drives a plan unattended, one `claude -p` process per phase, so "clear the session between
+phases" needs no implementing — the process exits and takes its context with it. A phase advances only
+when three independent checks agree: the plan's own verification passes, `validate.sh` still passes,
+and the board re-read *from disk* says done. Nothing asks the session whether it succeeded. Model,
+effort and skills are chosen per run or per phase; a command that reaches outside the working tree
+raises an **approval** and waits for a person. It is a separate flag from `--allow-writes` on purpose:
+a write scaffolds a file, a run edits a repository for hours.
 
 **It runs on a phone.** Watching a run and answering an approval are the two things that cannot wait
 until you are back at the desk, so the console can be driven from one — over your own private

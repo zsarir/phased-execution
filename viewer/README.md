@@ -1,5 +1,7 @@
 # Phase Console
 
+**English** · [فارسی](README.fa.md)
+
 A local web console for phased execution: browse plans, phases and handoffs, see live status,
 copy the boot prompt for any ready phase, and read statistics across the whole plan library.
 

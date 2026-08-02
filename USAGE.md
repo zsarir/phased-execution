@@ -1,5 +1,7 @@
 # Using phased-execution (right-sized sessions, QA on request)
 
+**English** · [فارسی](USAGE.fa.md)
+
 `phased-execution` **plans** large multi-phase work and **runs** it one right-sized session at a time —
 several phases usually share a session (sized to ~0.2 × the model's window in phase weight; ~200K for
 1M-class models), each phase still gets its own handoff, and a copy-pasteable boot prompt chains the
@@ -25,7 +27,9 @@ board, the dependency graph drawn as a route map, phase and handoff detail, the 
 ready phase, portfolio statistics (velocity, critical paths, locks, health), and full-text search
 across plans and handoffs. It updates itself as agent sessions write files, and it takes every status
 claim from `scripts/phase-graph.sh` rather than recomputing it. Read-only unless you pass
-`--allow-writes`; it never commits or pushes. No install step — see `viewer/README.md`.
+`--allow-writes` (guarded scaffold / QA / lock verbs) or `--allow-run` (the **autopilot** — one
+`claude -p` per phase, driving a plan unattended, with approvals for anything reaching outside the
+working tree); it never commits or pushes. No install step — see `viewer/README.md`.
 
 ## Where things live (two places)
 
