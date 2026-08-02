@@ -25,7 +25,8 @@ Two ways in. Same skill, same console — they differ only in how updates arrive
 ```
 
 Then `phase-console` starts the app from any directory. The plugin is versioned by commit, so
-`/plugin update phased-execution` always brings you current.
+`/plugin update phased-execution` always brings you current. Full detail, and what each command
+actually does: [**Installing as a plugin**](#installing-as-a-plugin).
 
 **As a plain skill** — a folder you own, on a path that never moves:
 
@@ -164,10 +165,122 @@ phased-execution/
 └── .claude-plugin/   # marketplace.json — makes this repo installable as a plugin
 ```
 
-The repo is its own one-plugin marketplace: `.claude-plugin/marketplace.json` declares the plugin
-(`strict: false`, so no separate `plugin.json` is needed and the folder stays a plain skill when you
-clone it). No `version` field is set, which puts the plugin on the commit channel — every push to
-`main` is an update.
+There is deliberately no `plugin.json`. The marketplace entry carries the plugin's metadata itself
+(`strict: false`), which keeps this folder a plain skill when you clone it — one tree, both install
+paths, neither getting in the other's way.
+
+---
+
+## Installing as a plugin
+
+Two words to keep straight. A **plugin** is the package — skills, and optionally agents, hooks and
+executables, in one directory. A **marketplace** is a catalog that lists plugins and says where to
+fetch them. They are separate things, and installing takes one command for each. This repo is both:
+it ships a catalog called **`mobin`** listing exactly one plugin, itself.
+
+### 1 · Register the marketplace
+
+Inside Claude Code:
+
+```
+/plugin marketplace add zsarir/phased-execution
+```
+
+Claude Code clones the repository, validates the catalog inside it and remembers it as `mobin`.
+Nothing is installed yet — a marketplace is only a list.
+
+`owner/repo` shorthand clones over SSH. If you would rather it used HTTPS, set
+`CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` in your environment first, or pass the full URL instead:
+`/plugin marketplace add https://github.com/zsarir/phased-execution.git`.
+
+### 2 · Install the plugin
+
+```
+/plugin install phased-execution@mobin
+```
+
+The `@mobin` suffix names the catalog to install from — it matters once you have several registered
+and two of them list the same plugin name. Claude Code copies the plugin into its own cache under
+`~/.claude/plugins/cache/mobin/phased-execution/<commit>/`, keyed by the commit it came from.
+
+### 3 · Load it
+
+```
+/reload-plugins
+```
+
+Or restart Claude Code. Confirm it took with `/plugin`, which lists what is installed and has an
+**Errors** tab if anything failed to load.
+
+From a terminal, `claude plugin details phased-execution@mobin` prints the same thing plus what it
+costs you: **~190 tokens always-on** (the skill's name and description, in every session) and ~9k
+only on the turns where the skill actually fires.
+
+### What you get
+
+**The skill**, as `/phased-execution:phased-execution`. Claude Code namespaces every plugin skill
+under its plugin so two plugins can ship a `review` skill without clashing; here that reads as a
+stutter. Type `/phased` and let autocomplete finish it — and note you will rarely type it at all,
+because the skill's description is written to make Claude reach for it on its own when the work is
+phased.
+
+**The console**, as `phase-console` — from any directory, no path to remember:
+
+```bash
+phase-console                      # pick the plan directory in the browser
+phase-console ~/code/your-repo     # or name it up front
+phase-console --allow-writes       # plus the guarded write verbs
+```
+
+Claude Code puts an enabled plugin's `bin/` on the Bash tool's `PATH`, which is what makes that a
+bare command. Disable the plugin and it goes away with it.
+
+### Updating
+
+```
+/plugin update phased-execution
+```
+
+Because the manifest sets no `version`, the plugin is versioned by **commit SHA**: every push to
+`main` counts as a new release, and Claude Code also refreshes in the background. Restart to apply
+an update — the cache directory is per-version, so a running session keeps working from the copy it
+already loaded.
+
+### Removing
+
+```
+/plugin uninstall phased-execution@mobin
+/plugin marketplace remove mobin
+```
+
+The second line is optional; leaving the catalog registered costs nothing and makes reinstalling one
+command.
+
+### From a terminal instead
+
+Every step has a non-interactive equivalent, useful in a dotfiles script or a container image:
+
+```bash
+claude plugin marketplace add zsarir/phased-execution
+claude plugin install phased-execution@mobin
+claude plugin details phased-execution@mobin      # components + token cost
+claude plugin update phased-execution
+claude plugin uninstall phased-execution@mobin
+```
+
+### Plugin or clone?
+
+|  | Plugin | Clone |
+|---|---|---|
+| **Install** | two commands, inside Claude Code | one `git clone` |
+| **Updates** | automatic, every commit | when you `git pull` |
+| **Skill** | `/phased-execution:phased-execution` | `/phased-execution` |
+| **Console** | `phase-console`, from anywhere | `./start`, from the folder |
+| **Lives at** | a per-version cache directory that moves on every update | wherever you cloned it, permanently |
+| **Suits** | wanting it present and current, with nothing to maintain | scripting against the path, or editing the skill itself |
+
+Both at once works, but you would see the skill twice in the catalog and pay its always-on cost
+twice. Pick one.
 
 ## Requirements
 
