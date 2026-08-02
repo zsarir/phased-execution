@@ -36,7 +36,10 @@ import { Journal } from './runner/journal.ts';
 import { latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT, type RunState } from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
 import { checkAuth, forgetAuth, openLoginTerminal, type AuthStatus } from './runner/auth.ts';
-import { Approvals, classifyTool, loadPolicy, type Evidence } from './runner/approvals.ts';
+import {
+  Approvals, classifyTool, loadPolicy, policyExtras, addPolicyRules,
+  DEFAULT_DENY, DEFAULT_ASK, DEFAULT_ALLOW, POLICY_PATH, type Evidence,
+} from './runner/approvals.ts';
 
 /** One live update, with the id a reconnecting client replays from. */
 export type LiveEvent = { id: number; event: string; data: unknown };
@@ -577,6 +580,29 @@ export class Service {
    * homes and the child inherits its environment.
    */
   skills(): SkillInfo[] { return listSkills(this.root?.path); }
+
+  /**
+   * The rules an unattended session runs under, and — the part that matters —
+   * which layer actually enforces each one.
+   *
+   * `deny` is evaluated inside the CLI and was measured holding with this
+   * console unreachable. `ask` goes through the HTTP hook, and that hook FAILS
+   * OPEN: with nothing listening the tool call simply proceeds. Presenting the
+   * two as one list would be the most dangerous thing this page could do.
+   */
+  policy() {
+    return {
+      defaults: { deny: DEFAULT_DENY, ask: DEFAULT_ASK, allow: DEFAULT_ALLOW },
+      extra: policyExtras(),
+      effective: loadPolicy(),
+      file: POLICY_PATH,
+    };
+  }
+
+  addPolicy(rules: { deny?: string[]; ask?: string[] }) {
+    addPolicyRules(rules);
+    return this.policy();
+  }
 
   state() {
     return {

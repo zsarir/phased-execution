@@ -110,30 +110,33 @@ const VERIFY_ANSWER_MS = 12 * 60 * 60 * 1_000;
 /**
  * Things worth knowing before spending a session finding them out.
  *
- * An untrusted workspace is the one that matters. Claude Code silently ignores
- * a repository's own `permissions.allow` entries — and its hooks — until
- * someone has accepted the trust prompt there interactively. A session spawned
- * into that state runs with *fewer* of the repo's protections than whoever
- * started the run believes, which for a repository that ships a
- * destructive-operation guard is exactly backwards. Refusing costs a second;
- * finding out costs a session and the trust in what it did.
+ * ## The check that used to be here, and why it is not
  *
- * Returns a reason to refuse, or null to proceed.
+ * This refused to start a run in a workspace whose trust prompt had not been
+ * accepted, on the grounds that Claude Code ignores a repository's own
+ * `permissions` and hooks until it has been. That was true once. Measured
+ * against CLI v2.1.220, in a directory with no trust record at all, it is not:
+ *
+ *   - a repo `.claude/settings.json` **PreToolUse hook fired**
+ *   - a repo `permissions.deny` rule **blocked the command**
+ *
+ * (`-p` mode skips the trust dialog outright — the CLI's own help says so —
+ * and loads the settings anyway.) So the refusal was blocking runs in every
+ * repository the operator happened not to have opened interactively, for a
+ * reason that had stopped being true, with a message explaining a danger that
+ * was not there. A wrong refusal is not the safe side of a guess.
+ *
+ * The deeper reason it is not needed: this runner passes its own deny rules to
+ * every child through `--settings`, at CLI scope. Those are not workspace
+ * settings and workspace trust has no bearing on them, so the layer the
+ * console actually relies on holds regardless. The repository's own rules are
+ * a bonus on top, and now they load too.
+ *
+ * `preflight` stays as the place for checks that ARE worth a second before a
+ * session — it currently has none, and adding a wrong one back would cost more
+ * than the empty function does. Returns a reason to refuse, or null.
  */
-export function preflight(root: string, configFile = join(homedir(), '.claude.json')): string | null {
-  let config: { projects?: Record<string, { hasTrustDialogAccepted?: boolean }> };
-  try {
-    config = JSON.parse(readFileSync(configFile, 'utf8')) as typeof config;
-  } catch {
-    return null; // no config to read is not evidence of anything
-  }
-  const project = config.projects?.[root];
-  if (project && project.hasTrustDialogAccepted === false) {
-    return `Claude Code has not been trusted in ${root}. A session spawned there ignores that `
-      + "repository's own permissions and hooks — including any destructive-operation guard it "
-      + 'ships — so the run would be less protected than it looks. Open Claude Code in that '
-      + 'directory once and accept the trust prompt, then start the run again.';
-  }
+export function preflight(_root: string, _configFile = join(homedir(), '.claude.json')): string | null {
   return null;
 }
 

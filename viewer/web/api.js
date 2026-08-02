@@ -70,6 +70,9 @@ export const api = {
   stats: () => get('/api/stats'),
   /** Every skill a spawned session could invoke, from its own Claude home. */
   skills: () => get('/api/skills'),
+  /** The rules an unattended session runs under, and which layer enforces each. */
+  policy: () => request('/api/policy'),
+  addPolicy: (rules) => post('/api/policy', rules),
   search: (query) => request(`/api/search?q=${encodeURIComponent(query)}`),
 
   plan: (slug, model) => get(`/api/plans/${encodeURIComponent(slug)}${model ? `?model=${encodeURIComponent(model)}` : ''}`),

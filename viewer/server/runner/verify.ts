@@ -56,6 +56,51 @@ const VERBS = new Set([
   'echo', 'printf', 'true', 'false', 'pwd', 'env', 'which',
 ]);
 
+/**
+ * Verbs that reach OUTSIDE this working tree, and are therefore only allowed in
+ * a shape that is demonstrably read-only.
+ *
+ * `MUTATION_DENY` above is a denylist, and a denylist is the wrong instrument
+ * for these: `curl -X POST https://…`, `ssh box 'systemctl restart api'` and
+ * `psql -c 'DELETE FROM orders'` all sail past it, and every one of them is a
+ * verification bullet somebody could plausibly write. The runner then executes
+ * it, unattended, at 3am, because a markdown file said so.
+ *
+ * So for this handful the question is inverted: not "does it look dangerous?"
+ * but "can I show it is safe?". Anything that cannot be shown safe goes to the
+ * person who wrote the plan, with the reason — which is a card in the console,
+ * not a dead end.
+ */
+const REACHES_OUT: Record<string, (command: string) => string | null> = {
+  // Anything that is not a plain GET, or that carries a body, is a write.
+  curl: (c) => (/\s-(X|-request)\s+(?!GET\b)/i.test(c) ? 'sends a non-GET request'
+    : /\s-(d|F|T)\b|--data|--form|--upload-file/.test(c) ? 'sends a request body'
+      : null),
+  // The command run on the far end is the thing to judge, and we cannot judge
+  // it: it is quoted prose on another machine. Only a bare connection check and
+  // an explicitly read-only remote command pass.
+  ssh: (c) => {
+    const remote = /^ssh\s+(?:-\S+\s+|-\S+\s+\S+\s+)*\S+\s+(.+)$/.exec(c)?.[1]?.trim();
+    if (!remote) return null; // `ssh host` alone connects and does nothing
+    const bare = remote.replace(/^['"]|['"]$/g, '').trim();
+    return /^(cat|ls|head|tail|grep|wc|stat|df|du|uptime|whoami|hostname|date|docker\s+(ps|logs|inspect)|systemctl\s+(status|is-active)|journalctl)\b/.test(bare)
+      ? null
+      : 'runs a command on another machine that cannot be shown to be read-only';
+  },
+  psql: (c) => (/-c\s*(['"])\s*(select|show|explain|\\d|\\l)/i.test(c) || !/-c\b|-f\b/.test(c)
+    ? null
+    : 'runs SQL that is not demonstrably a read'),
+  docker: (c) => (/^docker(-compose)?\s+(ps|logs|inspect|images|version|info|top|stats|port|diff)\b/.test(c)
+    ? null
+    : 'is not one of the read-only docker subcommands'),
+  kubectl: (c) => (/^kubectl\s+(get|describe|logs|top|explain|version|api-resources)\b/.test(c)
+    ? null
+    : 'is not one of the read-only kubectl subcommands'),
+  'redis-cli': (c) => (/\b(get|keys|scan|info|ping|ttl|type|llen|exists|dbsize)\b/i.test(c)
+    ? null
+    : 'runs a Redis command that is not demonstrably a read'),
+};
+
 export type Extraction = {
   commands: string[];
   notRun: { text: string; reason: string }[];
@@ -121,6 +166,15 @@ function refuse(candidate: string): string | null {
   if (!known) return `not a recognised command (starts with "${first.slice(0, 32)}")`;
 
   if (MUTATION_DENY.test(candidate)) return 'looks like it mutates something — a human should run this';
+
+  // For the verbs that reach outside this working tree, the denylist above is
+  // the wrong test: `curl -X POST` and `psql -c 'DELETE …'` both pass it. These
+  // must be shown safe instead.
+  const gate = REACHES_OUT[verb] ?? REACHES_OUT[first];
+  if (gate) {
+    const objection = gate(candidate.trim());
+    if (objection) return `${objection} — a person should run this, not an unattended runner`;
+  }
   return null;
 }
 

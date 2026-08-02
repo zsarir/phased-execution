@@ -84,6 +84,9 @@ export const DEFAULT_ASK = [
   'Bash(psql:*)',
   'Bash(ssh:*)',
   'WebFetch',
+  // The hook matcher has always covered WebSearch; the ask list did not, so it
+  // was silently auto-allowed while its sibling raised a card.
+  'WebSearch',
 ];
 
 /**
@@ -203,16 +206,55 @@ const POLICY_FILE = join(
  * Merged, never replaced: a policy file that forgot `git push` must not
  * quietly become a policy that permits it.
  */
-export function loadPolicy(file = POLICY_FILE): AutopilotPolicy {
+const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v) => typeof v === 'string') : []);
+
+/** Just the operator's own additions, unmerged — what the file actually holds. */
+export function policyExtras(file = POLICY_FILE): AutopilotPolicy {
   let extra: Partial<AutopilotPolicy> = {};
   try { extra = JSON.parse(readFileSync(file, 'utf8')) as Partial<AutopilotPolicy>; }
   catch { /* no policy file is the normal case */ }
-  const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v) => typeof v === 'string') : []);
+  return { deny: strings(extra.deny), ask: strings(extra.ask), allow: strings(extra.allow) };
+}
+
+export function loadPolicy(file = POLICY_FILE): AutopilotPolicy {
+  const extra = policyExtras(file);
   return {
-    deny: [...new Set([...DEFAULT_DENY, ...strings(extra.deny)])],
-    ask: [...new Set([...DEFAULT_ASK, ...strings(extra.ask)])],
-    allow: [...new Set([...DEFAULT_ALLOW, ...strings(extra.allow)])],
+    deny: [...new Set([...DEFAULT_DENY, ...extra.deny])],
+    ask: [...new Set([...DEFAULT_ASK, ...extra.ask])],
+    allow: [...new Set([...DEFAULT_ALLOW, ...extra.allow])],
   };
+}
+
+export const POLICY_PATH = POLICY_FILE;
+
+/**
+ * Add rules to the operator's policy file.
+ *
+ * Deliberately **additive and tightening only**: `deny` and `ask` may be added
+ * to, `allow` may not be touched from here. Rules from a browser can make an
+ * unattended run more careful and cannot make it less, so the worst case of a
+ * stray click is a run that stops to ask about something it need not have.
+ *
+ * Removing a rule means editing the file, which is the right amount of friction
+ * for the one direction that widens what an agent may do at 3am.
+ */
+export function addPolicyRules(
+  rules: { deny?: string[]; ask?: string[] }, file = POLICY_FILE,
+): AutopilotPolicy {
+  const current = policyExtras(file);
+  const clean = (list: string[]) => list
+    .map((rule) => rule.trim())
+    .filter((rule) => rule && rule.length <= 200 && /^[A-Za-z_][\w]*(\(.*\))?$/.test(rule));
+
+  const next: AutopilotPolicy = {
+    deny: [...new Set([...current.deny, ...clean(strings(rules.deny))])],
+    ask: [...new Set([...current.ask, ...clean(strings(rules.ask))])],
+    allow: current.allow,
+  };
+  mkdirSync(join(POLICY_FILE, '..'), { recursive: true });
+  writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  log.info('policy.updated', { deny: next.deny.length, ask: next.ask.length });
+  return next;
 }
 
 /* ------------------------------------------------------------------ *

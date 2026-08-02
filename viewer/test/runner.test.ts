@@ -203,6 +203,46 @@ test('a mutating command is refused even when it is well-formed', () => {
   }
 });
 
+test('a command that reaches outside the tree must be shown read-only, not merely innocent', () => {
+  // The hole this closes: MUTATION_DENY is a denylist, and every one of these
+  // sails straight past it while being a perfectly ordinary thing to write in
+  // a Verification bullet. The runner then executes it, unattended.
+  const dangerous = [
+    '`curl -X POST https://api.example.com/deploy`',
+    '`curl -d "release=1" https://api.example.com/hooks`',
+    "`ssh box 'systemctl restart api'`",
+    '`ssh box "rm -rf /srv/cache"`',
+    `\`psql -c 'DELETE FROM orders WHERE id > 0'\``,
+    '`docker compose up -d`',
+    '`kubectl rollout restart deploy/api`',
+    '`redis-cli flushall`',
+  ];
+  for (const text of dangerous) {
+    const { commands, notRun } = extractCommands(text);
+    assert.deepEqual(commands, [], text);
+    assert.equal(notRun.length, 1, text);
+    assert.match(notRun[0].reason, /person should run this|mutates/, text);
+  }
+});
+
+test('the read-only shapes of those same verbs still run', () => {
+  const safe = [
+    'curl -sS https://example.com/health',
+    'curl -X GET https://example.com/health',
+    "psql -c 'SELECT count(*) FROM orders'",
+    'docker ps',
+    'docker logs api',
+    'kubectl get pods',
+    'ssh box',
+    "ssh box 'systemctl is-active api'",
+    'redis-cli ping',
+  ];
+  for (const command of safe) {
+    const { commands } = extractCommands(`\`${command}\``);
+    assert.deepEqual(commands, [command], `${command} is read-only and should still be run`);
+  }
+});
+
 test('fenced blocks contribute every command line, comments excluded', () => {
   const { commands } = extractCommands('```bash\n# check it\nnpm test\n$ task lint\n```');
   assert.deepEqual(commands, ['npm test', 'task lint']);
@@ -1173,34 +1213,27 @@ test.after(() => rmSync(STATE_HOME, { recursive: true, force: true }));
 
 const { preflight } = await import('../server/runner/runner.ts');
 
-test('an untrusted workspace is refused before a session is spent on it', () => {
-  // Claude Code silently ignores a repository's own permissions and hooks until
-  // someone accepts the trust prompt there. A session spawned into that state is
-  // less protected than whoever started the run believes.
+test('an untrusted workspace no longer blocks a run', async () => {
+  // This used to refuse, on the grounds that Claude Code ignores a repository's
+  // own permissions and hooks until its trust prompt is accepted. Measured
+  // against CLI v2.1.220 in a directory with no trust record at all: a repo
+  // PreToolUse hook fired, and a repo `permissions.deny` rule blocked the
+  // command. The premise had stopped being true, and the refusal was blocking
+  // runs in every repo the operator had not opened interactively.
   const dir = mkdtempSync(join(tmpdir(), 'pc-trust-'));
   const config = join(dir, 'claude.json');
-
   writeFileSync(config, JSON.stringify({ projects: { '/repo': { hasTrustDialogAccepted: false } } }));
-  const refusal = preflight('/repo', config);
-  assert.ok(refusal, 'an untrusted workspace must not start a run');
-  assert.match(refusal, /not been trusted/);
-
-  writeFileSync(config, JSON.stringify({ projects: { '/repo': { hasTrustDialogAccepted: true } } }));
-  assert.equal(preflight('/repo', config), null, 'a trusted workspace proceeds');
-
-  // Absence of evidence is not evidence: an unknown repo or no config at all
-  // must not block a run that would otherwise be fine.
+  assert.equal(preflight('/repo', config), null);
   assert.equal(preflight('/somewhere-else', config), null);
   assert.equal(preflight('/repo', join(dir, 'missing.json')), null);
   rmSync(dir, { recursive: true, force: true });
-});
 
-test('a run refused at preflight parks with the reason, spending nothing', async () => {
+  // And end to end: a run in such a workspace actually runs.
   const r = repo();
-  const config = join(r.root, 'claude.json');
-  writeFileSync(config, JSON.stringify({ projects: { [r.root]: { hasTrustDialogAccepted: false } } }));
-  // preflight reads the real ~/.claude.json, so drive the unit directly and
-  // assert the wiring separately: the reason has to reach the run state.
-  assert.ok(preflight(r.root, config));
+  const seen: number[] = [];
+  const { instance } = runner(r, workingSession(r, seen));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1] });
+  await instance.wait();
+  assert.deepEqual(seen, [1], 'the phase ran rather than parking on a stale premise');
   r.cleanup();
 });

@@ -269,6 +269,29 @@ export async function handleApi(
     }
     if (head === 'skills' && req.method === 'GET') { json(res, 200, service.skills()); return true; }
 
+    if (head === 'policy') {
+      if (req.method === 'GET') { json(res, 200, service.policy()); return true; }
+      if (req.method === 'POST') {
+        const refusal = guardWrite(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        // Only the tightening direction. Widening what an agent may do at 3am
+        // is a file edit, which is the right amount of friction for it.
+        if ('allow' in body) {
+          json(res, 400, {
+            error: 'the allow list is not editable from here — widening what an unattended run may '
+              + 'do is a deliberate file edit, not a click',
+          });
+          return true;
+        }
+        json(res, 200, service.addPolicy({
+          deny: Array.isArray(body.deny) ? body.deny.filter((v): v is string => typeof v === 'string') : [],
+          ask: Array.isArray(body.ask) ? body.ask.filter((v): v is string => typeof v === 'string') : [],
+        }));
+        return true;
+      }
+    }
+
     /* ---------------- one plan ---------------- */
     if (head === 'plans' && rest.length >= 1) {
       const slug = rest[0];

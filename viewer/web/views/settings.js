@@ -1,11 +1,124 @@
 /** Settings and what the console is reading. */
 
-import { html } from '../html.js';
+import { html, useState, useEffect, useCallback } from '../html.js';
 import { navigate } from '../router.js';
-import { usePrefs } from '../store.js';
-import { KeyValue, weight } from '../components/ui.js';
+import { api } from '../api.js';
+import { usePrefs, toast } from '../store.js';
+import { KeyValue, Banner, weight } from '../components/ui.js';
 
 const MODELS = ['', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-haiku-4-5'];
+
+/**
+ * What an unattended session is allowed to do, and — the part that matters —
+ * which layer actually stops it.
+ *
+ * These two lists look alike and are nothing alike. `deny` is evaluated inside
+ * the CLI with no network involved, and was measured holding with this console
+ * unreachable: it is the wall. `ask` goes through the HTTP hook, and that hook
+ * **fails open** — with nothing listening the tool call simply proceeds. Showing
+ * them as one list would be the most dangerous thing this page could do, so the
+ * difference is the first thing said about each.
+ */
+function PolicyCard({ allowWrites }) {
+  const [policy, setPolicy] = useState(null);
+  const [rule, setRule] = useState('');
+  const [kind, setKind] = useState('deny');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try { setPolicy(await api.policy()); } catch { /* the card stays hidden */ }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  if (!policy) return null;
+
+  const add = async () => {
+    const text = rule.trim();
+    if (!text) return;
+    setBusy(true);
+    try {
+      setPolicy(await api.addPolicy({ [kind]: [text] }));
+      setRule('');
+      toast(`Added to the ${kind} list`, 'ok');
+    } catch (error) { toast(error.message, 'error'); }
+    finally { setBusy(false); }
+  };
+
+  const list = (rules, extra) => html`
+    <div class="row wrap" style="gap:4px;margin-top:var(--s2)">
+      ${rules.map((r) => html`
+        <span key=${r} class=${`chip${extra.includes(r) ? ' is-picked' : ''}`}
+              title=${extra.includes(r) ? 'yours' : 'shipped default'}>${r}</span>`)}
+    </div>`;
+
+  return html`
+    <div class="card" style="grid-column:1/-1">
+      <div class="card-head">
+        <h3>What an unattended session may do</h3>
+        <span class="faint" style="font-size:var(--text-xs)">
+          yours are highlighted · <code>${policy.file}</code>
+        </span>
+      </div>
+      <div class="card-body stack">
+        <div>
+          <strong>Denied — the wall.</strong>
+          <span class="faint" style="font-size:var(--text-xs)">
+            Evaluated inside the CLI, with no network involved. Verified to hold with this console
+            stopped. Nothing can approve past it; you run these yourself, deliberately.
+          </span>
+          ${list(policy.effective.deny, policy.extra.deny)}
+        </div>
+
+        <div>
+          <strong>Asked — the workflow.</strong>
+          <span class="faint" style="font-size:var(--text-xs)">
+            These raise a card and wait for you. They go through the HTTP hook, and that hook
+            <b>fails open</b>: if this console is not running, the call proceeds unasked. Useful,
+            and never the thing to rely on for anything that must not happen.
+          </span>
+          ${list(policy.effective.ask, policy.extra.ask)}
+        </div>
+
+        <div>
+          <strong>Pre-approved reads.</strong>
+          <span class="faint" style="font-size:var(--text-xs)">
+            Never round-trip to the hook. A queue that fills with <code>find docs -type f</code> is
+            a queue nobody reads, and one nobody reads trains the answer “yes”.
+          </span>
+          ${list(policy.effective.allow, policy.extra.allow)}
+        </div>
+
+        ${allowWrites ? html`
+          <div class="row wrap" style="gap:8px;align-items:flex-end">
+            <label class="field">
+              <span>Add a rule</span>
+              <input value=${rule} placeholder="Bash(task deploy:*)" disabled=${busy}
+                     onInput=${(e) => setRule(e.target.value)}
+                     onKeyDown=${(e) => { if (e.key === 'Enter') void add(); }} />
+            </label>
+            <label class="field">
+              <span>to</span>
+              <select value=${kind} onChange=${(e) => setKind(e.target.value)} disabled=${busy}>
+                <option value="deny">deny — never, whatever I click</option>
+                <option value="ask">ask — stop and show me</option>
+              </select>
+            </label>
+            <button class="btn" disabled=${busy || !rule.trim()} onClick=${add}>
+              ${busy ? 'Adding…' : 'Add'}
+            </button>
+          </div>
+          <${Banner} kind="info">
+            Only these two lists can be added to from here, and rules can only be added — both
+            directions that make a run <em>more</em> careful. Widening what an agent may do at 3am,
+            or removing a rule, means editing <code>${policy.file}</code> yourself.
+          </${Banner}>` : html`
+          <p class="faint" style="font-size:var(--text-xs)">
+            Restart with <code>--allow-writes</code> to add rules here, or edit
+            <code>${policy.file}</code> directly.
+          </p>`}
+      </div>
+    </div>`;
+}
 
 export function SettingsView({ state }) {
   const [prefs, setPrefs] = usePrefs();
@@ -85,6 +198,8 @@ export function SettingsView({ state }) {
             </div>
           </div>
         </div>
+
+        <${PolicyCard} allowWrites=${state.allowWrites} />
 
         <div class="card">
           <div class="card-head"><h3>Keyboard</h3></div>
