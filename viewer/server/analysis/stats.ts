@@ -369,6 +369,135 @@ export function portfolio(contexts: PlanContext[], sizing: Sizing): Portfolio {
 }
 
 /* ------------------------------------------------------------------ *
+ * How long is left
+ * ------------------------------------------------------------------ */
+
+/**
+ * One completed phase, as evidence about how fast this plan goes.
+ *
+ * Weight rather than count, because phases are not interchangeable: an `S` and
+ * an `L` differ by six times the working set, and a plan whose last three
+ * phases were small would otherwise promise a finish it cannot keep.
+ */
+export type EtaSample = { weight: number; durationMs: number; at?: string };
+
+export type EtaEstimate = {
+  /** Milliseconds per unit of weight, EMA-smoothed. */
+  ratePerWeight: number;
+  /** How many completed phases the rate is built from. */
+  samples: number;
+  remainingWeight: number;
+  remainingPhases: number;
+  /** The range, in milliseconds, already snapped to its coarse bucket. */
+  lowMs: number;
+  highMs: number;
+  /** What to render. Always a range, always hedged. */
+  label: string;
+};
+
+/**
+ * Smoothing factor for the rate.
+ *
+ * An EMA is the standard online estimator for this shape of problem —
+ * recursive, no history to keep, and recency-weighted. Recency is the point
+ * here rather than a nicety: model and effort change between phases in this
+ * system, so a run's first phase on `haiku`/`low` says almost nothing about its
+ * fourth on `opus`/`xhigh`, and a plain mean would hold that stale evidence
+ * forever. At 0.4 the newest phase carries 40% of the estimate and anything
+ * five phases back is under 5% of it.
+ */
+export const ETA_ALPHA = 0.4;
+
+/** Completed phases across every run of a plan, oldest first. */
+export function etaSamples(
+  runs: { phases: Record<string, { phase: number; status: string; durationMs?: number; endedAt?: string }> }[],
+  weights: Map<number, number>,
+): EtaSample[] {
+  const samples: EtaSample[] = [];
+  for (const run of runs) {
+    for (const record of Object.values(run.phases ?? {})) {
+      // Only a phase that finished is evidence of how long a phase takes. An
+      // interrupted one measures when somebody pressed Stop.
+      if (record.status !== 'done' || !record.durationMs || record.durationMs <= 0) continue;
+      const weight = weights.get(record.phase);
+      if (!weight) continue;
+      samples.push({ weight, durationMs: record.durationMs, at: record.endedAt });
+    }
+  }
+  // Chronological, because the EMA's whole behaviour is order-dependent. A
+  // record with no `endedAt` sorts last: it is almost certainly the newest.
+  return samples.sort((a, b) => (a.at ?? '9999').localeCompare(b.at ?? '9999'));
+}
+
+/** EMA of duration-per-weight over samples in order. Null when there are none. */
+export function emaRate(samples: EtaSample[], alpha = ETA_ALPHA): number | null {
+  let ema: number | null = null;
+  for (const sample of samples) {
+    if (!sample.weight || sample.durationMs <= 0) continue;
+    const rate = sample.durationMs / sample.weight;
+    ema = ema === null ? rate : alpha * rate + (1 - alpha) * ema;
+  }
+  return ema;
+}
+
+/**
+ * What is left, as a range nobody should read to the minute.
+ *
+ * Two deliberate refusals. It is **suppressed entirely** until a phase of this
+ * plan has actually finished — an estimate with no evidence behind it is a
+ * number that gets believed and should not be. And it is a **range in coarse
+ * buckets**, never a countdown: the underlying quantity is a model's throughput
+ * on work nobody has seen yet, and rendering that to the second claims a
+ * precision that does not exist. The band widens when there is less evidence,
+ * which is the honest direction for it to move.
+ */
+export function estimateEta(
+  samples: EtaSample[],
+  remaining: { weight: number; phases: number },
+  alpha = ETA_ALPHA,
+): EtaEstimate | null {
+  const rate = emaRate(samples, alpha);
+  if (rate === null || rate <= 0) return null;
+  if (!remaining.weight || remaining.weight <= 0) return null;
+
+  const used = samples.filter((s) => s.weight && s.durationMs > 0).length;
+  const point = remaining.weight * rate;
+  const spread = used >= 4 ? 0.35 : used >= 2 ? 0.5 : 0.7;
+  const lowMs = bucketMs(point * (1 - spread));
+  const highMs = bucketMs(point * (1 + spread));
+
+  return {
+    ratePerWeight: rate,
+    samples: used,
+    remainingWeight: remaining.weight,
+    remainingPhases: remaining.phases,
+    lowMs,
+    highMs,
+    label: lowMs === highMs ? `~${humanMs(highMs)} left` : `~${humanMs(lowMs)}–${humanMs(highMs)} left`,
+  };
+}
+
+/** Snap to a scale a person would say out loud: 5 min, then half hours, then hours. */
+function bucketMs(ms: number): number {
+  const minutes = ms / 60_000;
+  if (minutes <= 5) return 5 * 60_000;
+  if (minutes < 60) return Math.round(minutes / 5) * 5 * 60_000;
+  const hours = minutes / 60;
+  if (hours < 4) return (Math.round(hours * 2) / 2) * 3_600_000;
+  if (hours < 24) return Math.round(hours) * 3_600_000;
+  return Math.round(hours / 6) * 6 * 3_600_000;
+}
+
+function humanMs(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = ms / 3_600_000;
+  if (hours < 24) return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} h`;
+  const days = ms / 86_400_000;
+  return `${days < 10 ? days.toFixed(1) : Math.round(days)} d`;
+}
+
+/* ------------------------------------------------------------------ *
  * Small helpers
  * ------------------------------------------------------------------ */
 

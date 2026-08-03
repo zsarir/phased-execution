@@ -14,8 +14,9 @@
 import { html, useState, useEffect, useCallback, useRef } from '../html.js';
 import { api, subscribeRun } from '../api.js';
 import { toast } from '../store.js';
-import { Banner, Chip, Empty, Modal, Spinner, StateChip, Tile, relativeTime } from '../components/ui.js';
-import { LiveConsole, useLiveLines, toLine } from '../components/live-console.js';
+import { Banner, Chip, Empty, Modal, Spinner, StateChip, Tile, relativeTime, useNow, elapsed }
+  from '../components/ui.js';
+import { LiveConsole, useLiveLines } from '../components/live-console.js';
 import { SkillPicker } from '../components/skill-picker.js';
 import { mergePhases, boardCounts, phaseActions, fellOverToAnotherModel, BOARD_ORDER }
   from '../components/phase-model.js';
@@ -60,12 +61,13 @@ function duration(ms) {
 export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
   const [run, setRun] = useState(null);
   const [history, setHistory] = useState([]);
+  const [eta, setEta] = useState(null);
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [auth, setAuth] = useState(null);
   const [skills, setSkills] = useState([]);
-  const { lines, push, clear, hydrate } = useLiveLines();
+  const { lines, activity, record, clear, hydrate } = useLiveLines();
 
   // The client is served fresh from disk; the server is whatever Node loaded at
   // startup. Upgrading the skill under a running console leaves this page
@@ -79,6 +81,10 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
       const [detail, queue] = await Promise.all([api.run(slug), api.approvals()]);
       setRun(detail.run);
       setHistory(detail.history ?? []);
+      // Null until a phase of this plan has actually finished. Absent is the
+      // right rendering of "no evidence" — a hedged guess is still a number,
+      // and a number on screen gets believed.
+      setEta(detail.eta ?? null);
       setApprovals(queue.filter((a) => a.status === 'pending'));
     } catch (error) {
       toast(error.message, 'error');
@@ -120,10 +126,12 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
     // or two people looking at one queue disagree about what is still waiting
     // and the second to press a button gets a 404 for a decision already made.
     approvalResolved: () => { void refresh(); },
-    phase: (data) => { push(toLine('phase', data)); void refresh(); },
-    verify: (data) => push(toLine('verify', data)),
-    stream: (data) => push(toLine('stream', data)),
-  }), [refresh, push, stale]);
+    // The raw event, not a rendered line: the console is only one of the two
+    // things an event becomes now, and the panels need the payload.
+    phase: (data) => { record('phase', data); void refresh(); },
+    verify: (data) => record('verify', data),
+    stream: (data) => record('stream', data),
+  }), [refresh, record, stale]);
 
   /**
    * The refresh is in `finally`, not in `try`, and that is the whole fix.
@@ -163,11 +171,7 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
   // has already said which plan you are looking at.
   return html`
     <div class="run-view">
-      ${run ? html`
-        <div class="row spread" style="margin-bottom:var(--s3)">
-          <span class="muted small">run <code>${run.id}</code> · started ${relativeTime(Date.parse(run.createdAt))}</span>
-          <${Chip} kind=${RUN_TONE[run.status] ?? ''}>${run.status}</${Chip}>
-        </div>` : null}
+      ${run ? html`<${RunHeader} run=${run} live=${live} eta=${eta} />` : null}
 
       ${!state.allowRun ? html`
         <${Banner} kind="warn">
@@ -335,6 +339,8 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
           title="No run yet"
           hint=${`Nothing has been run for ${slug}. Starting one works the same whether the plan is fresh or half finished — the board decides where to begin.`} />`}
 
+      <${ActivityPanels} activity=${activity} live=${live} />
+
       <${LiveConsole}
         lines=${lines}
         onClear=${clear}
@@ -362,6 +368,184 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
           </table>
         </section>` : null}
     </div>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * The header: status, a clock that moves, and how much is left
+ * ------------------------------------------------------------------ */
+
+/**
+ * What the run is doing right now, above everything that explains it.
+ *
+ * The line this replaces said "started 20 minutes ago" and then said it for the
+ * next forty, because nothing in the client had an interval in it: every figure
+ * on the page moved only when the server spoke. On a phase that thinks quietly
+ * for four minutes that is indistinguishable from a page that has died, which
+ * is the single most common reason someone reloads a console that was working
+ * perfectly.
+ */
+function RunHeader({ run, live, eta }) {
+  // Frozen is the one live status whose clock is genuinely not running: the
+  // child is stopped, so counting on would claim work that is not happening.
+  const ticking = Boolean(live) && run.status !== 'frozen';
+  const now = useNow(ticking);
+
+  const runMs = ticking
+    ? now - Date.parse(run.createdAt)
+    : Date.parse(run.updatedAt) - Date.parse(run.createdAt);
+
+  const startedAt = run.child?.startedAt ? Date.parse(run.child.startedAt) : null;
+  const frozenAt = run.freeze?.at ? Date.parse(run.freeze.at) : null;
+  const phaseMs = startedAt == null ? null : (frozenAt ?? (ticking ? now : Date.parse(run.updatedAt))) - startedAt;
+
+  return html`
+    <header class="run-head">
+      <div class="run-head-main">
+        <${Chip} kind=${RUN_TONE[run.status] ?? ''}>${run.status}</${Chip}>
+        ${run.activePhase != null ? html`
+          <span class="run-phase">phase ${run.activePhase}</span>` : null}
+        ${phaseMs != null ? html`
+          <span class=${`run-clock tabular${frozenAt ? ' is-held' : ''}`}
+                title=${frozenAt
+                  ? 'The session is stopped where it stood, so this clock is stopped too.'
+                  : 'How long the phase running now has been going'}>
+            ${elapsed(phaseMs)}
+          </span>` : null}
+      </div>
+      <div class="run-head-meta muted small">
+        <span>run <code>${run.id}</code></span>
+        <span title=${`started ${new Date(run.createdAt).toLocaleString()}`}>
+          ${ticking ? 'running for' : 'ran for'} ${elapsed(Math.max(0, runMs))}
+        </span>
+        ${/* Suppressed entirely until a phase of this plan has finished, and a
+              range rather than a countdown even then. The thing being predicted
+              is a model's throughput on work nobody has looked at yet. */
+          eta ? html`
+          <span class="run-eta"
+                title=${`Estimated from ${eta.samples} finished phase(s) of this plan and `
+                  + `${Math.round(eta.remainingWeight / 1000)}K of remaining weight. `
+                  + 'Weight-normalised, recency-weighted, and deliberately coarse.'}>
+            ${eta.label} <em>(estimate)</em>
+          </span>` : null}
+      </div>
+    </header>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * What the session is doing: tasks, tools, subagents
+ * ------------------------------------------------------------------ */
+
+/** Tool calls worth showing at once; the rest are in the console. */
+const TOOLS_SHOWN = 24;
+
+const TODO_TONE = { completed: 'done', in_progress: 'busy' };
+
+/**
+ * The three things a `claude -p` process does that a scrolling log cannot show.
+ *
+ * A transcript answers "what has it said". These answer "what is it doing" —
+ * which is a question about *state*, and state read off a log is the reader
+ * doing the folding in their head: scrolling back for the last `TodoWrite`,
+ * remembering which `Bash` never came back, unpicking two subagents' sentences
+ * from one interleaved paragraph. All three are derived from the same events
+ * the console renders, so they replay after a reload for the same reason it
+ * does.
+ */
+function ActivityPanels({ activity, live }) {
+  const { todos, tools, agents } = activity;
+  if (!todos.length && !tools.length && !agents.length) return null;
+
+  const doneCount = todos.filter((t) => t.status === 'completed').length;
+  const recent = tools.slice(-TOOLS_SHOWN).reverse();
+  const running = tools.filter((t) => t.ok === null).length;
+
+  return html`
+    <section class="card run-activity">
+      <h2 class="card-title">What it is doing</h2>
+      <div class="activity-grid">
+
+        ${todos.length ? html`
+          <div class="activity-panel">
+            <div class="row spread">
+              <h3>Task list</h3>
+              <span class="muted small tabular">${doneCount}/${todos.length}</span>
+            </div>
+            <ol class="todo-list">
+              ${todos.map((todo, i) => html`
+                <li key=${i} class=${`todo ${TODO_TONE[todo.status] ?? ''}`}>
+                  <span class="todo-dot"></span>
+                  <span class="todo-text">
+                    ${todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content}
+                  </span>
+                </li>`)}
+            </ol>
+            <p class="muted small">
+              The session's own list, as it last wrote it — not the plan's phases.
+            </p>
+          </div>` : null}
+
+        ${tools.length ? html`
+          <div class="activity-panel">
+            <div class="row spread">
+              <h3>Tool activity</h3>
+              <span class="muted small tabular">
+                ${tools.length}${tools.length === TOOLS_SHOWN ? '+' : ''}${running ? ` · ${running} running` : ''}
+              </span>
+            </div>
+            <ul class="tool-list">
+              ${recent.map((tool, i) => html`
+                <li key=${tool.id ?? `${tool.name}-${i}`}
+                    class=${`tool-row${tool.ok === null ? ' is-running' : ''}${tool.ok === false ? ' is-bad' : ''}`}>
+                  <span class="tool-name">
+                    ${tool.name}${tool.agent ? html` <span class="tool-agent">${tool.agent}</span>` : null}
+                  </span>
+                  ${tool.summary ? html`<code class="tool-summary">${tool.summary}</code>` : null}
+                  <span class="tool-ms tabular"
+                        title=${tool.ok === false ? tool.detail || 'the call failed' : ''}>
+                    ${/* No result yet means it is still going, and on an
+                          unattended run that is the interesting state — a
+                          `Bash` six minutes in reads identically to one that
+                          finished, without this. */
+                      tool.ok === null ? (live ? '…' : '—')
+                        : tool.ms == null ? (tool.ok ? 'ok' : 'failed')
+                          : `${tool.ok ? '' : '✗ '}${toolTime(tool.ms)}`}
+                  </span>
+                </li>`)}
+            </ul>
+          </div>` : null}
+
+        ${agents.length ? html`
+          <div class="activity-panel activity-agents">
+            <div class="row spread">
+              <h3>Subagents</h3>
+              <span class="muted small tabular">
+                ${agents.filter((a) => !a.done).length} running · ${agents.length} total
+              </span>
+            </div>
+            ${agents.map((agent) => html`
+              <div key=${agent.id} class=${`agent-lane${agent.done ? ' is-done' : ''}`}>
+                <div class="row spread">
+                  <strong>${agent.agent || 'agent'}</strong>
+                  <span class="muted small">${agent.done ? 'finished' : 'working'}</span>
+                </div>
+                ${agent.title ? html`<div class="muted small agent-title">${agent.title}</div>` : null}
+                ${agent.text ? html`<p class="agent-text">${agent.text.slice(-600)}</p>` : null}
+              </div>`)}
+            <p class="muted small">
+              One lane per delegated agent, matched to the <code>Agent</code> call that started it.
+              Unnamed when that call did not say which agent — the field is optional. Their words
+              used to arrive as one voice and read as neither.
+            </p>
+          </div>` : null}
+      </div>
+    </section>`;
+}
+
+/** Tool durations run from milliseconds to minutes; one format cannot serve both. */
+function toolTime(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.round(ms / 60_000)}m`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1212,7 +1396,7 @@ export function RunsView({ state }) {
   const [runs, setRuns] = useState(null);
   const [approvals, setApprovals] = useState([]);
   const [auth, setAuth] = useState(null);
-  const { lines, push, clear, hydrate } = useLiveLines();
+  const { lines, activity, record, clear, hydrate } = useLiveLines();
 
   const refresh = useCallback(async () => {
     if (state && !state.autopilot) { setRuns([]); return; }
@@ -1241,10 +1425,10 @@ export function RunsView({ state }) {
     // or two people looking at one queue disagree about what is still waiting
     // and the second to press a button gets a 404 for a decision already made.
     approvalResolved: () => { void refresh(); },
-    phase: (data) => { push(toLine('phase', data)); void refresh(); },
-    verify: (data) => push(toLine('verify', data)),
-    stream: (data) => push(toLine('stream', data)),
-  }), [refresh, push, state?.autopilot]);
+    phase: (data) => { record('phase', data); void refresh(); },
+    verify: (data) => record('verify', data),
+    stream: (data) => record('stream', data),
+  }), [refresh, record, state?.autopilot]);
 
   if (state && !state.autopilot) {
     return html`
@@ -1292,6 +1476,8 @@ export function RunsView({ state }) {
           finally { await refresh(); }
         }} />
 
+      <${ActivityPanels} activity=${activity} live=${Boolean(active)} />
+
       <${LiveConsole}
         lines=${lines}
         onClear=${clear}
@@ -1302,8 +1488,7 @@ export function RunsView({ state }) {
             slug=${active.slug}
             enabled=${Boolean(state?.allowRun && active.activePhase != null)}
             allowRun=${state?.allowRun}
-            phase=${active.activePhase}
-            onAsked=${(text) => push({ kind: 'injected', text })} />` : null} />
+            phase=${active.activePhase} />` : null} />
 
       ${runs.length ? html`
         <section class="card" style="margin-top:var(--s4)">

@@ -1379,6 +1379,9 @@ function call(
     retryPhase: record('retryPhase'),
     runFor: () => ({ id: 'r1', status: 'finished' }),
     runsFor: () => [{ id: 'r1' }],
+    // Null is the ordinary answer: no phase of this plan has finished, so
+    // there is nothing to estimate from.
+    runEta: async () => null,
     allRuns: () => [{ id: 'r1' }],
     runJournal: () => [{ seq: 1, event: 'run.start' }],
     ...(opts.overrides ?? {}),
@@ -1608,6 +1611,9 @@ test('reading a run needs no flag — only changing one does', async () => {
   const one = await call('/api/run/demo');
   assert.equal(one.status, 200);
   assert.equal((one.payload as { run: { id: string } }).run.id, 'r1');
+  // The estimate rides on this response rather than having an endpoint of its
+  // own, so that it and the board it rests on are answered from one read.
+  assert.ok('eta' in (one.payload as Record<string, unknown>));
   const journal = await call('/api/run/demo/journal');
   assert.equal(journal.status, 200);
 });

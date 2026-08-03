@@ -1,0 +1,149 @@
+/**
+ * How long is left.
+ *
+ * The estimator is small, which is exactly why it is worth pinning: a figure
+ * this cheap to produce is one somebody will read off the screen and plan an
+ * evening around. What is asserted here is mostly what it *refuses* to say —
+ * nothing at all without evidence, nothing precise with a little, and never a
+ * countdown.
+ */
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { emaRate, estimateEta, etaSamples, ETA_ALPHA } from '../server/analysis/stats.ts';
+
+const MIN = 60_000;
+const HOUR = 3_600_000;
+
+/** 15K / 40K / 90K, the S/M/L weights from `scripts/sizing.env`. */
+const S = 15_000;
+const M = 40_000;
+const L = 90_000;
+
+test('with no finished phase there is no estimate at all', () => {
+  assert.equal(emaRate([]), null);
+  assert.equal(estimateEta([], { weight: L * 3, phases: 3 }), null);
+});
+
+test('with nothing left to do there is nothing to estimate', () => {
+  const samples = [{ weight: M, durationMs: 40 * MIN }];
+  assert.equal(estimateEta(samples, { weight: 0, phases: 0 }), null);
+});
+
+test('one sample sets the rate outright', () => {
+  // 40 minutes for an M is one minute per thousand weight.
+  const rate = emaRate([{ weight: M, durationMs: 40 * MIN }])!;
+  assert.equal(rate, (40 * MIN) / M);
+});
+
+test('the rate is weight-normalised, so a small phase does not read as fast', () => {
+  // Same throughput, very different wall-clocks: an S in 15 min and an L in
+  // 90 min are the same rate, and a naive per-phase average would call the
+  // second one six times slower.
+  const rate = emaRate([
+    { weight: S, durationMs: 15 * MIN },
+    { weight: L, durationMs: 90 * MIN },
+  ])!;
+  assert.equal(rate, MIN / 1000, 'both phases agree, so smoothing changes nothing');
+});
+
+test('the newest phase carries alpha of the estimate, and the rest decays', () => {
+  // A run that switches from haiku/low to opus/xhigh halfway is the case this
+  // exists for: a plain mean would hold the fast early phases forever.
+  const fast = { weight: M, durationMs: 10 * MIN };
+  const slow = { weight: M, durationMs: 60 * MIN };
+  const rate = emaRate([fast, fast, slow], ETA_ALPHA)!;
+
+  const fastRate = (10 * MIN) / M;
+  const slowRate = (60 * MIN) / M;
+  assert.equal(rate, ETA_ALPHA * slowRate + (1 - ETA_ALPHA) * fastRate);
+  assert.ok(rate > fastRate && rate < slowRate, 'it moved toward the new evidence without jumping to it');
+});
+
+test('order is the whole behaviour, so reversing the samples changes the answer', () => {
+  const a = { weight: M, durationMs: 10 * MIN };
+  const b = { weight: M, durationMs: 60 * MIN };
+  assert.notEqual(emaRate([a, b]), emaRate([b, a]));
+});
+
+test('a fixed sequence produces a labelled range, and never a countdown', () => {
+  // Three M phases at 40 minutes each, three M phases left.
+  const samples = [
+    { weight: M, durationMs: 40 * MIN },
+    { weight: M, durationMs: 40 * MIN },
+    { weight: M, durationMs: 40 * MIN },
+  ];
+  const eta = estimateEta(samples, { weight: M * 3, phases: 3 })!;
+
+  assert.equal(eta.samples, 3);
+  assert.equal(eta.remainingPhases, 3);
+  // 2 hours of work, banded and snapped: the point estimate must sit inside it.
+  assert.ok(eta.lowMs < 2 * HOUR && eta.highMs > 2 * HOUR, `${eta.label} does not contain 2h`);
+  assert.match(eta.label, /^~.+ left$/);
+  assert.match(eta.label, /h|min/);
+  assert.doesNotMatch(eta.label, /\ds\b/, 'never to the second');
+});
+
+test('less evidence widens the band rather than hiding the doubt', () => {
+  const one = estimateEta([{ weight: M, durationMs: 40 * MIN }], { weight: M * 4, phases: 4 })!;
+  const many = estimateEta(
+    Array.from({ length: 5 }, () => ({ weight: M, durationMs: 40 * MIN })),
+    { weight: M * 4, phases: 4 },
+  )!;
+  assert.ok(
+    one.highMs - one.lowMs > many.highMs - many.lowMs,
+    'one sample must not read as confidently as five',
+  );
+});
+
+test('the range snaps to a scale a person would say out loud', () => {
+  const eta = estimateEta(
+    Array.from({ length: 4 }, () => ({ weight: M, durationMs: 40 * MIN })),
+    { weight: M * 6, phases: 6 },
+  )!;
+  // 4 hours ± 35% → snapped to whole or half hours, nothing like "2h 37m".
+  assert.equal(eta.lowMs % (HOUR / 2), 0);
+  assert.equal(eta.highMs % (HOUR / 2), 0);
+});
+
+test('a tiny remainder still reads as a floor rather than as zero', () => {
+  const eta = estimateEta([{ weight: M, durationMs: 40 * MIN }], { weight: 500, phases: 1 })!;
+  assert.equal(eta.lowMs, 5 * MIN);
+  assert.match(eta.label, /5 min/);
+});
+
+/* ---------------- gathering the samples ---------------- */
+
+const weights = new Map([[1, S], [2, M], [3, L]]);
+
+test('only phases that finished are evidence of how long a phase takes', () => {
+  const samples = etaSamples([{
+    phases: {
+      1: { phase: 1, status: 'done', durationMs: 15 * MIN, endedAt: '2026-08-01T10:00:00Z' },
+      2: { phase: 2, status: 'interrupted', durationMs: 90 * MIN, endedAt: '2026-08-01T11:00:00Z' },
+      3: { phase: 3, status: 'done', durationMs: 0, endedAt: '2026-08-01T12:00:00Z' },
+    },
+  }], weights);
+  // An interrupted phase measures when somebody pressed Stop; a zero-length one
+  // measures nothing at all.
+  assert.deepEqual(samples.map((s) => s.weight), [S]);
+});
+
+test('samples come from every run of the plan, oldest first', () => {
+  // This is what lets an estimate exist before the CURRENT run's first phase
+  // has finished — the reason to look across runs at all.
+  const samples = etaSamples([
+    { phases: { 2: { phase: 2, status: 'done', durationMs: 50 * MIN, endedAt: '2026-08-02T09:00:00Z' } } },
+    { phases: { 1: { phase: 1, status: 'done', durationMs: 20 * MIN, endedAt: '2026-08-01T09:00:00Z' } } },
+  ], weights);
+  assert.deepEqual(samples.map((s) => s.durationMs), [20 * MIN, 50 * MIN]);
+});
+
+test('a phase the plan no longer sizes is not a sample', () => {
+  // A phase number the graph does not carry has no weight, and a rate needs one.
+  const samples = etaSamples([{
+    phases: { 9: { phase: 9, status: 'done', durationMs: 30 * MIN, endedAt: '2026-08-01T09:00:00Z' } },
+  }], weights);
+  assert.deepEqual(samples, []);
+});

@@ -51,6 +51,9 @@ const extraResult = new Set((process.env.PC_STUB_EXTRA_RESULT || '').split(',').
 const answering = process.env.PC_STUB_ANSWER === '1';
 // Say nothing at all after the boot turn: never echo, never result.
 const goSilent = process.env.PC_STUB_SILENT === '1';
+// The tool traffic a real session makes: a call and its result, a task list,
+// and a Task whose subagent makes a call of its own and fails it.
+const tools = process.env.PC_STUB_TOOLS === '1';
 const tag = (text) => (/\\[\\[(ask|steer):[0-9a-z]{4,16}\\]\\]/i.exec(text) || [])[0];
 
 say({ type: 'system', subtype: 'init', session_id: sid, model: process.env.PC_STUB_MODEL || 'stub-1', tools: [] });
@@ -86,6 +89,45 @@ process.stdin.on('data', (chunk) => {
       }
       say({ type: 'stream_event', session_id: sid, parent_tool_use_id: 'toolu_sub',
             event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'from a subagent' } } });
+    }
+    if (tools && turn === 1) {
+      say({ type: 'assistant', session_id: sid, message: { role: 'assistant', content: [
+        { type: 'tool_use', id: 'toolu_bash', name: 'Bash', input: { command: 'npm test -- --run' } },
+        { type: 'tool_use', id: 'toolu_todo', name: 'TodoWrite', input: { todos: [
+          { content: 'wire the endpoint', status: 'completed', activeForm: 'Wiring the endpoint' },
+          { content: 'add the test', status: 'in_progress', activeForm: 'Adding the test' },
+        ] } },
+        { type: 'tool_use', id: 'toolu_task', name: 'Task',
+          input: { subagent_type: 'Explore', description: 'map the callers' } },
+        // The CLI's own name for the same tool, and with no type stated —
+        // which is legal, and still a delegation.
+        { type: 'tool_use', id: 'toolu_agent', name: 'Agent',
+          input: { description: 'count the widgets' } },
+        // What the CLI ACTUALLY calls for a task list — one row per call, with
+        // the id coming back in the result rather than going out in the input.
+        { type: 'tool_use', id: 'toolu_new', name: 'TaskCreate',
+          input: { subject: 'wire the endpoint', description: 'the long brief', activeForm: 'Wiring it' } },
+        { type: 'tool_use', id: 'toolu_upd', name: 'TaskUpdate',
+          input: { taskId: '1', status: 'in_progress' } },
+      ] } });
+      // Results come back as USER messages, which is why they were being
+      // dropped: the old handler joined \`.text\` and a tool_result has none.
+      say({ type: 'user', session_id: sid, message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'toolu_bash', is_error: false,
+          content: [{ type: 'text', text: '40 tests passed' }] },
+      ] } });
+      // The subagent's own call, parented — and failing.
+      say({ type: 'assistant', session_id: sid, parent_tool_use_id: 'toolu_task',
+            message: { role: 'assistant', content: [
+              { type: 'tool_use', id: 'toolu_inner', name: 'Grep', input: { pattern: 'createOrder' } },
+            ] } });
+      say({ type: 'user', session_id: sid, parent_tool_use_id: 'toolu_task',
+            message: { role: 'user', content: [
+              { type: 'tool_result', tool_use_id: 'toolu_inner', is_error: true, content: 'no matches' },
+            ] } });
+      say({ type: 'user', session_id: sid, message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'toolu_task', is_error: false, content: 'found 3 callers' },
+      ] } });
     }
     const mark = answering ? tag(text) : undefined;
     say({ type: 'assistant', session_id: sid,
@@ -426,6 +468,133 @@ test('streamed deltas are coalesced, and a subagent keeps its own voice', async 
   const sub = events.filter((e) => e.kind === 'subagent') as { text: string; parent: string }[];
   assert.equal(sub.length, 1, 'a subagent is not interleaved into the phase text');
   assert.equal(sub[0].parent, 'toolu_sub');
+  b.cleanup();
+});
+
+test('a tool call and its result are joined by id, and timed', async () => {
+  const b = bench();
+  const events: StreamEvent[] = [];
+  await spawnClaude({
+    prompt: 'BOOT phase 1', cwd: b.dir, env: { ...b.env, PC_STUB_TOOLS: '1' },
+    onEvent: (event) => events.push(event),
+  });
+
+  const call = events.find((e) => e.kind === 'tool' && e.id === 'toolu_bash') as
+    { name: string; summary: string; id: string } | undefined;
+  assert.ok(call, 'the tool_use id is captured — without it nothing can be correlated');
+  assert.equal(call.name, 'Bash');
+  assert.equal(call.summary, 'npm test -- --run');
+
+  const result = events.find((e) => e.kind === 'tool-result' && e.id === 'toolu_bash') as
+    { ok: boolean; ms?: number; detail?: string } | undefined;
+  assert.ok(result, 'the result was dropped entirely before this');
+  assert.equal(result.ok, true);
+  assert.equal(typeof result.ms, 'number', 'a call with no duration is a name and nothing else');
+  assert.ok(result.ms! >= 0);
+  assert.match(result.detail ?? '', /40 tests passed/);
+  b.cleanup();
+});
+
+test('a Task names the agent it hands to, and its subagent\'s failures stay its own', async () => {
+  const b = bench();
+  const events: StreamEvent[] = [];
+  await spawnClaude({
+    prompt: 'BOOT phase 1', cwd: b.dir, env: { ...b.env, PC_STUB_TOOLS: '1' },
+    onEvent: (event) => events.push(event),
+  });
+
+  const task = events.find((e) => e.kind === 'tool' && e.id === 'toolu_task') as
+    { agent?: string; delegates?: boolean; summary: string } | undefined;
+  assert.equal(task?.agent, 'Explore', '"agent" as a label says nothing when three are running');
+  assert.equal(task?.delegates, true);
+  assert.equal(task?.summary, 'map the callers');
+
+  // Measured, not assumed: the current CLI calls this `Agent`, and matching
+  // only `Task` is silent — the subagent's words still arrive carrying a
+  // parent, so the lane simply never opens and nothing says why.
+  const agentCall = events.find((e) => e.kind === 'tool' && e.id === 'toolu_agent') as
+    { agent?: string; delegates?: boolean } | undefined;
+  assert.equal(agentCall?.delegates, true, 'a delegation under the CLI\'s own name for it');
+  assert.equal(agentCall?.agent, undefined, 'and `subagent_type` is optional, so it may be unnamed');
+
+  // A subagent's own calls used to be invisible: the whole `user` branch was
+  // skipped whenever `parent_tool_use_id` was set.
+  const inner = events.find((e) => e.kind === 'tool-result' && e.id === 'toolu_inner') as
+    { ok: boolean; parent?: string; detail?: string } | undefined;
+  assert.ok(inner, 'the subagent\'s result reached the console');
+  assert.equal(inner.ok, false);
+  assert.equal(inner.parent, 'toolu_task', 'attributed to the agent, not to the phase');
+  assert.match(inner.detail ?? '', /no matches/);
+  b.cleanup();
+});
+
+test('a TodoWrite surfaces the whole list, not a sentence about it', async () => {
+  const b = bench();
+  const events: StreamEvent[] = [];
+  await spawnClaude({
+    prompt: 'BOOT phase 1', cwd: b.dir, env: { ...b.env, PC_STUB_TOOLS: '1' },
+    onEvent: (event) => events.push(event),
+  });
+
+  const todos = events.find((e) => e.kind === 'todos') as
+    { items: { content: string; status: string; activeForm?: string }[] } | undefined;
+  assert.ok(todos, 'the array was being discarded one function call before it was kept');
+  assert.equal(todos.items.length, 2);
+  assert.deepEqual(todos.items.map((t) => t.status), ['completed', 'in_progress']);
+  assert.equal(todos.items[1].activeForm, 'Adding the test');
+
+  // And the console line for the same call says something rather than nothing.
+  const line = events.find((e) => e.kind === 'tool' && e.id === 'toolu_todo') as { summary: string };
+  assert.match(line.summary, /1\/2 done · Adding the test/);
+  b.cleanup();
+});
+
+test('the task list the CLI really keeps — one row per call — reaches the client', async () => {
+  // The plan for this phase said the list arrives as `TodoWrite`'s array. It
+  // does not: a real run emits `TaskCreate` and `TaskUpdate`, one task at a
+  // time. Both spellings are carried, because only one of them ever fires.
+  const b = bench();
+  const events: StreamEvent[] = [];
+  await spawnClaude({
+    prompt: 'BOOT phase 1', cwd: b.dir, env: { ...b.env, PC_STUB_TOOLS: '1' },
+    onEvent: (event) => events.push(event),
+  });
+
+  const created = events.find((e) => e.kind === 'task' && e.op === 'create') as
+    { call?: string; content?: string; activeForm?: string } | undefined;
+  assert.equal(created?.content, 'wire the endpoint', 'the title, not the brief');
+  assert.equal(created?.activeForm, 'Wiring it');
+  assert.equal(created?.call, 'toolu_new', 'carries its own call id, so its result can name it');
+
+  const updated = events.find((e) => e.kind === 'task' && e.op === 'update') as
+    { taskId?: string; status?: string } | undefined;
+  assert.deepEqual([updated?.taskId, updated?.status], ['1', 'in_progress']);
+
+  // A TaskUpdate's input has no summarisable key at all, so its console line
+  // used to be the bare word "TaskUpdate".
+  const line = events.find((e) => e.kind === 'tool' && e.id === 'toolu_upd') as { summary: string };
+  assert.equal(line.summary, '#1 → in_progress');
+  b.cleanup();
+});
+
+test('tool results do not disturb the close rule or the operator echo', async () => {
+  // Both live in the same `user` branch now. If a result were mistaken for an
+  // echo the phase would wedge, which is the bug this whole protocol exists to
+  // have stopped — so it is worth asserting rather than assuming.
+  const b = bench();
+  const events: StreamEvent[] = [];
+  const outcome = await spawnClaude({
+    prompt: 'BOOT phase 1', cwd: b.dir, env: { ...b.env, PC_STUB_TOOLS: '1' },
+    onEvent: (event) => events.push(event),
+    onHandle: (handle) => {
+      setTimeout(() => handle.send(tagged('bbbb2222', 'and this?')), 60);
+    },
+  });
+
+  const injected = events.filter((e) => e.kind === 'injected') as { mark?: string; delivered?: boolean }[];
+  assert.equal(injected.length, 1, 'the operator message was still recognised');
+  assert.equal(injected[0].delivered, true);
+  assert.equal(outcome.turns, 2, 'and the session ended by itself, both turns answered');
   b.cleanup();
 });
 

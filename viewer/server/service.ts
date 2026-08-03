@@ -32,7 +32,10 @@ import {
   loadSizing, indexGraph, routeLayout, analysePhases, criticalPath, remainingWork,
   resolveBudget, weightOf, type Sizing, type PhaseAnalysis,
 } from './analysis/graph.ts';
-import { planStats, portfolio, type PlanStats, type Portfolio, type PlanContext } from './analysis/stats.ts';
+import {
+  planStats, portfolio, etaSamples, estimateEta,
+  type PlanStats, type Portfolio, type PlanContext, type EtaEstimate,
+} from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
 import { Runner, applySettings, type AskResult, type RunSettingsPatch, type StartOptions } from './runner/runner.ts';
 import { Journal } from './runner/journal.ts';
@@ -1183,6 +1186,39 @@ export class Service {
 
   runsFor(slug: string): RunState[] {
     return this.root ? listRuns(this.root.path, slug, this.liveRunId()) : [];
+  }
+
+  /**
+   * How much longer this plan has, from evidence it already has.
+   *
+   * Computed here rather than in the browser for the same reason the board is:
+   * the numbers it rests on — a phase's size, the sizing constants, which
+   * phases the engine calls done — all live on this side, and a second
+   * implementation of them would eventually disagree with the first.
+   *
+   * The samples come from **every** run of the plan, not just this one, which
+   * is what lets an estimate exist before the current run's first phase has
+   * finished. Null whenever nothing has finished at all, which is the honest
+   * answer to "how long will this take" the first time anyone asks.
+   */
+  async runEta(slug: string): Promise<EtaEstimate | null> {
+    const record = this.store?.get(slug);
+    if (!record?.plan?.phased || !this.root) return null;
+
+    const plan = record.plan;
+    const weights = new Map(plan.graph.map((r) => [r.phase, weightOf(plan.phases[r.phase]?.size, this.sizing)]));
+    const sizes = new Map(plan.graph.map((r) => [r.phase, plan.phases[r.phase]?.size ?? 'M' as const]));
+    const board = await this.board(slug);
+
+    // A scoped run is not going to do the rest of the plan, and saying it will
+    // is the same defect as not showing the scope in the header at all.
+    const run = this.runFor(slug);
+    const scope = run?.onlyPhases?.length ? new Set(run.onlyPhases) : null;
+    const rows = scope ? plan.graph.filter((r) => scope.has(r.phase)) : plan.graph;
+
+    const budget = resolveBudget(plan.sessionBudget.targetModel, this.sizing);
+    const remaining = remainingWork(rows, board, sizes, this.sizing, budget);
+    return estimateEta(etaSamples(this.runsFor(slug), weights), remaining);
   }
 
   /**

@@ -61,7 +61,7 @@ answer.
 | **Overview** | Context, architecture, session budget, the phase-graph table, end-to-end verification and the plan's memory entry. |
 | **Ready now** | Every ready phase across every plan, ranked by how much it unblocks, each with a copyable prompt. |
 | **Statistics** | Portfolio totals, velocity, completions calendar, size mix, repos, skills, models, locks and every health issue. |
-| **Autopilot** | Drive a plan unattended: one `claude -p` per phase, with the model, effort, skills and tool set chosen per run or per phase; the live session console; the approval queue; and the controls to pause, stop, retry, skip or run a single phase. |
+| **Autopilot** | Drive a plan unattended: one `claude -p` per phase, with the model, effort, skills and tool set chosen per run or per phase; the live session console; the approval queue; and the controls to pause, stop, retry, skip or run a single phase. A **status header** carries a clock that advances on its own and an estimate of how much is left, and **What it is doing** shows the session's task list, its tool calls with durations and outcomes, and one lane per subagent. |
 | **Search** | Full text across all plans and handoffs, grouped by plan. |
 
 The page updates itself: a watch on `docs/` pushes changes over server-sent events, so a handoff
@@ -99,6 +99,21 @@ fold into the work — with the caveat that the plan's exit criteria and its ver
 decide whether the phase passes, so steering a phase past its gate is not a thing that can happen.
 Each message carries a tag; the console shows it once, ticks it when the CLI echoes it back, and puts
 the session's reply beside the question rather than losing it in an hour of build output.
+
+**Watching a phase.** A `claude -p` process is opaque by default, and a scrolling transcript answers
+"what has it said" rather than "what is it doing". So the run page also reads the same stream as
+*state*: the session's **task list**, its **tool calls** with a duration and an ok/error outcome each
+— paired by the CLI's own `tool_use` id, so a call still running is told from one that finished
+instantly — and **one lane per subagent**, matched to the `Agent` call that started it rather than
+folded into a single voice. All three are rebuilt from the stored transcript, so they survive a
+reload the same way the console does.
+
+**How much is left** is estimated from what the plan has already done: each phase carries a size,
+each finished phase records how long it took, and the rate is an exponential moving average of
+duration-per-weight (α 0.4) over every run of that plan — recency-weighted, because model and effort
+change between phases. It is shown as a coarse range and never a countdown, the band widens when
+there is less evidence, and it is absent entirely until a phase has actually finished. Guessing is
+what it is for; pretending to know is not.
 
 **Stopping a phase.** Two pauses, deliberately named apart. *Pause after this phase* waits for the
 work in flight to finish and be verified. *Freeze now* stops the session where it stands (`SIGSTOP`)

@@ -160,6 +160,16 @@ export function markFor(kind: 'ask' | 'steer', id: string): string {
   return `[[${kind}:${id}]]`;
 }
 
+/**
+ * One entry of the session's own task list.
+ *
+ * Kept to the three fields the CLI actually writes, and bounded at this end
+ * rather than the reader's: the list goes into the transcript, which is
+ * replayed into a browser, and a producer that trusts its consumer to cope is
+ * how a console line becomes a log file.
+ */
+export type TodoItem = { content: string; status: string; activeForm?: string };
+
 export type StreamEvent =
   | { kind: 'init'; sessionId: string; model?: string; tools?: number }
   | { kind: 'text'; text: string }
@@ -169,7 +179,50 @@ export type StreamEvent =
   | { kind: 'thinking'; text: string }
   /** Text from a subagent, identified by `parent_tool_use_id`. */
   | { kind: 'subagent'; text: string; parent: string }
-  | { kind: 'tool'; name: string; summary: string }
+  /**
+   * A tool call, going out.
+   *
+   * `id` is the CLI's own `tool_use` id and it is the only thing that can pair
+   * this with the result that comes back — without it a call has a name and
+   * nothing else: no duration, no outcome, and no way to tell which of four
+   * concurrent `Read`s the failure belonged to. `agent` is a `Task`'s
+   * `subagent_type`, which is what turns "a subagent said something" into
+   * "the Explore agent said something".
+   */
+  | {
+    kind: 'tool';
+    name: string;
+    summary: string;
+    id?: string;
+    /** This call starts a subagent, whose output will name this call as its parent. */
+    delegates?: boolean;
+    /** Which agent, when the call said. It is optional on the tool itself. */
+    agent?: string;
+    parent?: string;
+  }
+  /** The result of one, paired back by `id`. See above. */
+  | { kind: 'tool-result'; id: string; ok: boolean; ms?: number; detail?: string; parent?: string }
+  /** The session's own task list, as `TodoWrite` last wrote it. */
+  | { kind: 'todos'; items: TodoItem[] }
+  /**
+   * One transition of a task list kept *incrementally* rather than rewritten.
+   *
+   * Measured against a real run rather than assumed: the current CLI does not
+   * call `TodoWrite` at all — it calls `TaskCreate` and `TaskUpdate`, one task
+   * per call, and the id an update names comes back in the **result** of the
+   * create rather than in its input. So the whole list only exists as the sum
+   * of these, which is why they are carried rather than summarised.
+   */
+  | {
+    kind: 'task';
+    op: 'create' | 'update';
+    /** The `tool_use` id of a create, so its result can hand back the task id. */
+    call?: string;
+    taskId?: string;
+    content?: string;
+    status?: string;
+    activeForm?: string;
+  }
   | { kind: 'hook'; name: string; event: string; outcome?: string }
   /**
    * A message the operator sent into a running session. Emitted twice for one
@@ -291,6 +344,23 @@ const PARTIAL_FLUSH_MS = 120;
  * session that is working.
  */
 const IDLE_CLOSE_MS = 10 * 60 * 1_000;
+/** Tool calls awaiting a result. A phase makes hundreds; none of them leak. */
+const MAX_PENDING_TOOLS = 500;
+/** A todo list is a task list, not a document. */
+const MAX_TODOS = 60;
+const MAX_TODO_TEXT = 200;
+/** Enough of a result to say what happened; never enough to be a build log. */
+const MAX_RESULT_TEXT = 200;
+/**
+ * The tools that start a subagent.
+ *
+ * Both spellings, because only one of them fires on any given CLI and matching
+ * the wrong one is silent: the subagent's text still arrives carrying a
+ * `parent_tool_use_id`, so the lane simply never opens and its words go into
+ * the log unattributed. Measured against a real session — the current CLI calls
+ * this `Agent`; `Task` is the older name and other harnesses still use it.
+ */
+const DELEGATING_TOOLS = new Set(['Agent', 'Task']);
 
 export function buildArgv(request: SpawnRequest): string[] {
   // Only the `bypass` profile reaches for it, and `sanitize()` is still what
@@ -448,6 +518,36 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
   let turnsSeen = 0;
   let injected = 0;
   let stdinOpen = true;
+
+  /* ---- pairing a tool call with its result ---- *
+   *
+   * The CLI reports a call and its result as two separate messages, minutes
+   * apart on a long one, and the only thing joining them is the `tool_use` id.
+   * Keeping the moment each call was announced is therefore the whole of the
+   * duration measurement: `Bash  npm test` with no time beside it cannot be
+   * told from `Bash  npm test` that has been hanging for six minutes, which is
+   * exactly the question someone watching an unattended run is asking.
+   *
+   * A call whose result never arrives — the session was killed mid-tool —
+   * leaves an entry behind, so the map is bounded and forgets its oldest
+   * rather than growing for the life of the phase.
+   */
+  const toolStartedAt = new Map<string, number>();
+
+  const noteToolStart = (id: string): void => {
+    toolStartedAt.set(id, Date.now());
+    if (toolStartedAt.size <= MAX_PENDING_TOOLS) return;
+    // Map iteration is insertion-ordered, so this is the oldest unanswered call.
+    const oldest = toolStartedAt.keys().next().value;
+    if (oldest !== undefined) toolStartedAt.delete(oldest);
+  };
+
+  const toolDuration = (id: string): number | undefined => {
+    const started = toolStartedAt.get(id);
+    if (started === undefined) return undefined;
+    toolStartedAt.delete(id);
+    return Date.now() - started;
+  };
 
   const finish = (outcome: SpawnOutcome) => {
     if (settled) return;
@@ -655,7 +755,7 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
       const content = (message.message as { content?: unknown[]; stop_reason?: string } | undefined);
       if (content?.stop_reason) stopReason = content.stop_reason;
       for (const block of content?.content ?? []) {
-        const item = block as { type?: string; text?: string; name?: string; input?: unknown };
+        const item = block as { type?: string; text?: string; name?: string; id?: string; input?: unknown };
         if (item.type === 'text' && item.text) {
           // The reply to an operator's question repeats the question's tag, and
           // that is the only thing separating it from the phase's own words.
@@ -667,19 +767,81 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
           else emit({ kind: 'text', text: item.text });
         }
         if (item.type === 'tool_use' && item.name) {
-          emit({ kind: 'tool', name: item.name, summary: summarise(item.input) });
+          const id = typeof item.id === 'string' && item.id ? item.id : undefined;
+          if (id) noteToolStart(id);
+          const input = (item.input ?? {}) as Record<string, unknown>;
+          // A delegation, and which agent it hands to — taken here rather than
+          // guessed from its prose, because the console pairs subagent output
+          // back to this call by id and "agent" as a label says nothing when
+          // three of them are running.
+          //
+          // Two facts, not one, and measured rather than assumed: `subagent_type`
+          // is **optional** on the tool, so a delegation with no type stated is
+          // still a delegation and still needs a lane. Both are recorded so the
+          // lane can open without a name rather than not open at all.
+          const delegates = DELEGATING_TOOLS.has(item.name);
+          const agent = delegates && typeof input.subagent_type === 'string' && input.subagent_type
+            ? input.subagent_type.slice(0, 60) : undefined;
+          emit({
+            kind: 'tool',
+            name: item.name,
+            summary: summarise(item.input),
+            ...(id ? { id } : {}),
+            ...(delegates ? { delegates } : {}),
+            ...(agent ? { agent } : {}),
+            ...(parent ? { parent } : {}),
+          });
+          // The task list is in the stream and was being thrown away one
+          // function call before it would have been kept: `summarise` reduces
+          // the whole array to a sentence, and the array itself is the only
+          // thing that can render as a task list.
+          const todos = todoList(input);
+          if (todos) emit({ kind: 'todos', items: todos });
+          // …and the incremental spelling of the same thing, which is the one
+          // the CLI actually uses.
+          const task = taskOp(item.name, id, input);
+          if (task) emit(task);
         }
       }
       return;
     }
 
-    // `--replay-user-messages` sends our own messages back. That is the only
-    // confirmation that an operator's question reached the session at all.
-    if (type === 'user' && !parent) {
-      const content = (message.message as { content?: unknown[] } | undefined)?.content;
-      const text = Array.isArray(content)
-        ? content.map((b) => (b as { text?: string }).text).filter(Boolean).join(' ')
-        : undefined;
+    // A `user` message is one of two quite different things: the results of the
+    // tool calls the assistant just made, or the CLI replaying something we
+    // wrote (`--replay-user-messages`). Both used to arrive at the same
+    // `.text`-joining filter below — and a `tool_result` block has no `.text`
+    // at all, which is why every result a session ever produced was dropped
+    // here without a trace.
+    if (type === 'user') {
+      const blocks = (message.message as { content?: unknown[] } | undefined)?.content;
+      const content = Array.isArray(blocks) ? blocks : [];
+
+      // A result closes the loop on a call already announced, and carries the
+      // id it was announced with. That pairing is what gives a tool call a
+      // duration and an ok/error outcome instead of only a name.
+      let results = 0;
+      for (const block of content) {
+        const item = block as { type?: string; tool_use_id?: string; is_error?: boolean; content?: unknown };
+        if (item.type !== 'tool_result' || typeof item.tool_use_id !== 'string' || !item.tool_use_id) continue;
+        results++;
+        const ms = toolDuration(item.tool_use_id);
+        emit({
+          kind: 'tool-result',
+          id: item.tool_use_id,
+          ok: item.is_error !== true,
+          ...(ms === undefined ? {} : { ms }),
+          detail: resultDetail(item.content),
+          // A subagent's tool calls are its own; attributing them to the phase
+          // is how a delegated `rm -rf` reads as something the phase did.
+          ...(parent ? { parent } : {}),
+        });
+      }
+      if (results) return;
+
+      // Everything below is the echo path, and a subagent's turns are never
+      // ours to echo.
+      if (parent) return;
+      const text = content.map((b) => (b as { text?: string }).text).filter(Boolean).join(' ');
       // An echo is ours if and only if it carries a tag we are still waiting
       // on. This used to be positional — "the first echo is the boot prompt" —
       // which is right exactly once: a session started with `--resume`, or
@@ -688,7 +850,7 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
       // carry no pending tag, so both are correctly ignored here.
       const mark = text ? operatorMark(text) : null;
       if (!mark || !unecho.delete(mark)) return;
-      emit({ kind: 'injected', text: stripMark(text!), mark, delivered: true });
+      emit({ kind: 'injected', text: stripMark(text), mark, delivered: true });
       return;
     }
 
@@ -819,11 +981,96 @@ function firstString(source: Record<string, unknown>, keys: string[]): string | 
 function summarise(input: unknown): string {
   if (!input || typeof input !== 'object') return '';
   const record = input as Record<string, unknown>;
-  for (const key of ['command', 'file_path', 'path', 'pattern', 'query', 'url', 'description']) {
+  // A todo write has none of the keys below, so it used to summarise as the
+  // empty string — a bare `TodoWrite` in the console, at the one moment the
+  // session is saying what it thinks it is doing.
+  const todos = todoList(record);
+  if (todos) {
+    const done = todos.filter((t) => t.status === 'completed').length;
+    const active = todos.find((t) => t.status === 'in_progress');
+    return `${done}/${todos.length} done${active ? ` · ${active.activeForm || active.content}` : ''}`.slice(0, 240);
+  }
+  // A `TaskUpdate` carries `{ taskId, status }` and nothing else, so it used to
+  // summarise as the empty string — a bare `TaskUpdate` in the console at the
+  // exact moment the session is saying it finished something.
+  if (typeof record.taskId === 'string' && record.taskId) {
+    const status = typeof record.status === 'string' ? record.status : 'updated';
+    return `#${record.taskId} → ${status}`;
+  }
+  for (const key of ['subject', 'command', 'file_path', 'path', 'pattern', 'query', 'url', 'description']) {
     const value = record[key];
-    if (typeof value === 'string' && value) return value.replace(/\s+/g, ' ').slice(0, 160);
+    // Long enough for a `git add … && git commit -m "…"` to keep its message:
+    // truncating exactly the part a person reads made the old cap worse than
+    // no summary at all.
+    if (typeof value === 'string' && value) return value.replace(/\s+/g, ' ').slice(0, 240);
   }
   return '';
+}
+
+/** `TaskCreate` / `TaskUpdate` as a task-list transition, or null. */
+function taskOp(name: string, call: string | undefined, input: Record<string, unknown>): StreamEvent | null {
+  const text = (value: unknown): string | undefined =>
+    typeof value === 'string' && value ? value.slice(0, MAX_TODO_TEXT) : undefined;
+
+  if (name === 'TaskCreate') {
+    // `subject` is the one-line title; `description` is the brief. The title is
+    // what a task list is a list of.
+    const content = text(input.subject) ?? text(input.description);
+    return content
+      ? { kind: 'task', op: 'create', ...(call ? { call } : {}), content, activeForm: text(input.activeForm) }
+      : null;
+  }
+
+  if (name === 'TaskUpdate') {
+    const taskId = typeof input.taskId === 'string' ? input.taskId.slice(0, 32) : undefined;
+    if (!taskId) return null;
+    return {
+      kind: 'task',
+      op: 'update',
+      taskId,
+      status: text(input.status),
+      content: text(input.subject),
+      activeForm: text(input.activeForm),
+    };
+  }
+
+  return null;
+}
+
+/** `TodoWrite`'s array, bounded, or null when this was not one. */
+function todoList(input: Record<string, unknown>): TodoItem[] | null {
+  const raw = input.todos;
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const items: TodoItem[] = [];
+  for (const entry of raw.slice(0, MAX_TODOS)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const todo = entry as Record<string, unknown>;
+    const content = typeof todo.content === 'string' ? todo.content
+      : typeof todo.subject === 'string' ? todo.subject : '';
+    if (!content) continue;
+    items.push({
+      content: content.slice(0, MAX_TODO_TEXT),
+      status: typeof todo.status === 'string' ? todo.status : 'pending',
+      ...(typeof todo.activeForm === 'string' && todo.activeForm
+        ? { activeForm: todo.activeForm.slice(0, MAX_TODO_TEXT) } : {}),
+    });
+  }
+  return items.length ? items : null;
+}
+
+/**
+ * Enough of a tool result to say what happened.
+ *
+ * The content is a string on some tools and a block array on others, and on a
+ * failure it is the error — which is the case this exists for. It is not a
+ * transcript of the output: that is what the session's own words are for.
+ */
+function resultDetail(content: unknown): string {
+  const text = typeof content === 'string' ? content
+    : Array.isArray(content)
+      ? content.map((b) => (b as { text?: string })?.text).filter((t) => typeof t === 'string' && t).join(' ')
+      : '';
+  return text.replace(/\s+/g, ' ').trim().slice(0, MAX_RESULT_TEXT);
 }
 
 /**

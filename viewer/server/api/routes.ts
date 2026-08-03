@@ -546,7 +546,14 @@ export async function handleApi(
           json(res, 200, service.runTranscript(slug, rest[2], Number(url.searchParams.get('limit') ?? 400)));
           return true;
         }
-        json(res, 200, { run: service.runFor(slug), history: service.runsFor(slug) });
+        // `eta` rides along rather than getting an endpoint of its own: it is
+        // derived from exactly this run plus the plan's board, and a second
+        // request could be answered against a board that had moved on.
+        json(res, 200, {
+          run: service.runFor(slug),
+          history: service.runsFor(slug),
+          eta: await service.runEta(slug),
+        });
         return true;
       }
 

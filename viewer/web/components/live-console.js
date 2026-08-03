@@ -17,19 +17,35 @@
 
 import { html, useState, useEffect, useRef, useCallback } from '../html.js';
 
-import { MAX_LINES, KIND_LABEL, QUIET, toLine, fold } from './console-model.js';
+import { MAX_LINES, KIND_LABEL, QUIET, NO_ACTIVITY, toLine, fold, activity } from './console-model.js';
 
 // Re-exported so every existing importer keeps its one import of this module.
 export { toLine, fold };
 
 export function useLiveLines() {
   const [lines, setLines] = useState([]);
+  const [panels, setPanels] = useState(NO_ACTIVITY);
   const seq = useRef(0);
   const hydrated = useRef(false);
 
   const push = useCallback((line) => {
     if (!line || !line.text) return;
     setLines((current) => fold(current, line, ++seq.current));
+  }, []);
+
+  /**
+   * One event, both readings.
+   *
+   * Callers used to map to a line themselves (`push(toLine('stream', data))`),
+   * which quietly made the console the only thing an event could become. The
+   * panels need the *raw* event — a task list is an array, not a sentence —
+   * so the mapping moved in here and every subscriber hands over what the
+   * server actually sent.
+   */
+  const record = useCallback((event, data) => {
+    const line = toLine(event, data);
+    if (line?.text) setLines((current) => fold(current, line, ++seq.current));
+    setPanels((current) => activity(current, event, data));
   }, []);
 
   /**
@@ -45,20 +61,28 @@ export function useLiveLines() {
     if (hydrated.current || !entries?.length) return;
     hydrated.current = true;
     let replayed = [];
+    let state = NO_ACTIVITY;
     for (const entry of entries) {
-      const line = toLine(entry.event, entry.data ?? {});
+      const at = Date.parse(entry.at) || Date.now();
+      const data = entry.data ?? {};
+      const line = toLine(entry.event, data);
       // Folded exactly as the live stream folds it — a replay that expanded
       // every recorded token fragment would be both unreadable and enormous.
       if (line?.text) {
-        replayed = fold(replayed, { ...line, replayed: true }, ++seq.current, Date.parse(entry.at) || Date.now());
+        replayed = fold(replayed, { ...line, replayed: true }, ++seq.current, at);
       }
+      // And the panels are rebuilt from the same events, so a phase whose run
+      // finished an hour ago still shows the task list it ended on rather than
+      // an empty box.
+      state = activity(state, entry.event, data, at);
     }
+    if (state !== NO_ACTIVITY) setPanels(state);
     if (!replayed.length) return;
     setLines((current) => [...replayed, ...current].slice(-MAX_LINES));
   }, []);
 
-  const clear = useCallback(() => setLines([]), []);
-  return { lines, push, clear, hydrate };
+  const clear = useCallback(() => { setLines([]); setPanels(NO_ACTIVITY); }, []);
+  return { lines, activity: panels, push, record, clear, hydrate };
 }
 
 export function LiveConsole({ lines, onClear, title = 'Session console', subtitle, height = 380, footer }) {

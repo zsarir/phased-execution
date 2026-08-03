@@ -38,6 +38,16 @@ const KEEP = new Set(['stream', 'phase', 'verify']);
 const MAX_BYTES = 4 * 1024 * 1024;
 /** One line of console output. A pasted file is not a console line. */
 const MAX_TEXT = 4_000;
+/**
+ * The longest array any one event may replay.
+ *
+ * Events carry lists now — a session's task list, most of all — and a list is
+ * the one shape the string cap below cannot see. It is bounded where it is
+ * produced too; this is the backstop, because the producer's bound and this
+ * file's size are two different people's problem and only one of them is read
+ * back into a browser months later.
+ */
+const MAX_ITEMS = 100;
 
 export function transcriptFile(root: string, slug: string, id: string): string {
   return join(runDir(root, slug), `run-${id}.log.jsonl`);
@@ -109,9 +119,13 @@ export function readTranscript(path: string, limit = 400): TranscriptEntry[] {
 function trim(data: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    out[key] = typeof value === 'string' && value.length > MAX_TEXT
-      ? `${value.slice(0, MAX_TEXT)}… (${value.length - MAX_TEXT} more characters)`
-      : value;
+    if (typeof value === 'string' && value.length > MAX_TEXT) {
+      out[key] = `${value.slice(0, MAX_TEXT)}… (${value.length - MAX_TEXT} more characters)`;
+    } else if (Array.isArray(value) && value.length > MAX_ITEMS) {
+      out[key] = value.slice(0, MAX_ITEMS);
+    } else {
+      out[key] = value;
+    }
   }
   return out;
 }

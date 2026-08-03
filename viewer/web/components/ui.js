@@ -132,7 +132,39 @@ export function Modal({ title, children, footer, onClose }) {
     </div>`;
 }
 
+/**
+ * A clock that advances on its own.
+ *
+ * The console had no interval anywhere in it: every number on screen moved only
+ * when the server said something, so a phase thinking quietly for four minutes
+ * showed the same "started 3 minutes ago" the whole time and read as a page
+ * that had stopped updating. It only runs while `active`, so a finished run
+ * costs nothing and a frozen one — whose clock is genuinely not running —
+ * stays where it stopped.
+ */
+export function useNow(active, intervalMs = 1000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [active, intervalMs]);
+  return now;
+}
+
 /* ---------------- formatting ---------------- */
+
+/** `12:04` / `1:12:04` — a running clock, at the precision a clock implies. */
+export function elapsed(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '0:00';
+  const total = Math.floor(ms / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return hours ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
+}
 
 const UNITS = [
   [60_000, 'minute'],

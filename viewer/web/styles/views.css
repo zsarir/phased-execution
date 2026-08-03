@@ -429,7 +429,131 @@
   margin-bottom: var(--s4);
 }
 
+/* ── The run header: status, a clock that moves, and how much is left ──── */
 
+.run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2) var(--s3);
+  margin-bottom: var(--s3);
+}
+.run-head-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+.run-head-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s3);
+}
+.run-phase { font-family: var(--font-display); font-weight: 600; }
+/* The clock is the one figure on this page that changes on its own, so it is
+   allowed to be the largest thing in the header. Tabular, or every tick of the
+   seconds column nudges everything beside it. */
+.run-clock {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+/* A frozen session's clock is stopped, and has to look stopped. */
+.run-clock.is-held { color: var(--ink-faint); text-decoration: line-through; }
+.run-eta em { font-style: normal; color: var(--ink-faint); }
+
+/* ── What it is doing: tasks, tools, subagents ─────────────────────────── */
+
+/* Self-contained rather than relying on `.run-view .card`: this panel is also
+   rendered on the Runs page, which has no `.run-view` around it. */
+.run-activity {
+  padding: var(--s4);
+  margin-bottom: var(--s4);
+}
+.run-activity .card-title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: var(--s3);
+}
+.activity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--s4);
+  align-items: start;
+}
+.activity-panel h3 {
+  font-family: var(--font-display);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: var(--s2);
+}
+
+.todo-list { list-style: none; margin: 0; padding: 0; }
+.todo {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: 2px 0;
+  font-size: var(--text-xs);
+}
+.todo-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--ink-faint);
+}
+.todo.done .todo-dot { background: var(--line-done); border-color: var(--line-done); }
+.todo.done .todo-text { color: var(--ink-faint); }
+.todo.busy .todo-dot { background: var(--line-progress); border-color: var(--line-progress); }
+.todo.busy .todo-text { color: var(--ink); font-weight: 600; }
+
+.tool-list { list-style: none; margin: 0; padding: 0; }
+.tool-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: 2px 0;
+  font-size: var(--text-2xs);
+  border-bottom: 1px solid color-mix(in oklab, var(--rule) 45%, transparent);
+}
+.tool-name { font-family: var(--font-display); font-weight: 600; white-space: nowrap; }
+.tool-agent { color: var(--ink-faint); font-weight: 400; }
+/* The command, legibly: collapsed to one line on the way in, then ellipsed
+   rather than wrapped, so a long `git commit -m` cannot make one row six. */
+.tool-summary {
+  font-family: var(--font-mono);
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-ms { color: var(--ink-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tool-row.is-running .tool-name { color: var(--line-progress); }
+.tool-row.is-bad .tool-ms { color: var(--line-blocked); }
+
+.agent-lane {
+  border-left: 2px solid var(--line-progress);
+  padding: 0 0 var(--s2) var(--s3);
+  margin-bottom: var(--s3);
+}
+.agent-lane.is-done { border-left-color: var(--rule); }
+.agent-lane.is-done strong { color: var(--ink-faint); }
+.agent-title { font-family: var(--font-mono); }
+.agent-text {
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+  margin: var(--s1) 0 0;
+  max-height: 7.5em;
+  overflow: hidden;
+}
 
 /* An approval is an interruption; it should look like one. */
 .run-view .approvals { border-color: var(--line-ready); }
@@ -915,6 +1039,9 @@
 .live-line.k-phase .k { color: var(--line-done); }
 .live-line.k-retry .k, .live-line.k-retry .t { color: var(--line-ready); }
 .live-line.k-stderr .k, .live-line.k-stderr .t { color: var(--line-blocked); }
+/* A tool call that failed. Only the failures get a line — every call already
+   printed one going out, and echoing the successes doubles the console. */
+.live-line.k-tool-fail .k, .live-line.k-tool-fail .t { color: var(--line-blocked); }
 .live-line.k-runner .t { color: var(--line-ready); }
 .live-line.k-result { border-top: 1px solid var(--rule); margin-top: var(--s2); padding-top: var(--s2); }
 .live-line.k-result .t { color: var(--ink); }
