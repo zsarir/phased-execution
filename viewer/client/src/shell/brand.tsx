@@ -20,18 +20,36 @@ export function RouteGlyph({ size = 26 }: { size?: number }) {
   );
 }
 
-/** The count that rides a nav item. Capped, because 1,284 is not a badge. */
-export function Badge({ count, hot = false }: { count: number; hot?: boolean }) {
+/**
+ * The count that rides a nav item. Capped, because 1,284 is not a badge.
+ *
+ * `cap` is lower where the badge is pinned to the corner of an icon: the number
+ * is what makes it wide, and a wide badge over a 19px glyph stops being a badge
+ * and becomes a label covering the thing it is counting. Nine is as much as a
+ * corner can say; the exact figure is one tap away on the page itself.
+ */
+export function Badge({
+  count,
+  hot = false,
+  cap = 99,
+  className = '',
+}: {
+  count: number;
+  hot?: boolean;
+  cap?: number;
+  className?: string;
+}) {
   if (!count) return null;
   return (
     <span
       className={
         'inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1 py-px ' +
         'text-2xs font-semibold leading-tight ' +
-        (hot ? 'bg-action/20 text-action' : 'bg-rule text-ink-muted')
+        (hot ? 'bg-action/20 text-action' : 'bg-rule text-ink-muted') +
+        (className ? ` ${className}` : '')
       }
     >
-      {count > 99 ? '99+' : count}
+      {count > cap ? `${cap}+` : count}
     </span>
   );
 }

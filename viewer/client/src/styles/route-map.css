@@ -25,9 +25,16 @@
     cursor: grab;
     overflow: hidden;
     block-size: clamp(300px, 56vh, 640px);
-    /* Without this the browser claims the pan and the pinch for scrolling and
-       the map never sees a second pointer. */
-    touch-action: none;
+    /* `pan-y`, not `none`.
+       `none` gave the map every touch that started inside it — and on a phone
+       the map is half the screen, so the Route tab could not be scrolled with a
+       finger at all: you had to find the sliver of card beside it. The browser
+       keeps vertical panning (the page scrolls, which is what a swipe down
+       means everywhere else); a horizontal drag and the second finger of a
+       pinch still reach the element, so pan and zoom are intact. Vertical
+       panning of the map itself is the one thing traded away, and the map is
+       fitted to the frame by default — Fit and the zoom buttons get you back. */
+    touch-action: pan-y;
     overscroll-behavior: contain;
   }
   .route-frame:active { cursor: grabbing; }

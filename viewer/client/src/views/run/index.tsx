@@ -193,8 +193,11 @@ export function RunView({ detail }: { detail: PlanDetail }) {
         />
       )}
 
-      <ActivityPanels activity={activity} live={live} />
-
+      {/* The console before the panels.
+          What the session is saying right now is the thing you came to read —
+          and it carries the ask box, the one control on this page that is only
+          useful *while* you are watching. The task list and the tool log are
+          the summary of what it said, so they read after it. */}
       <LiveConsole
         lines={lines}
         onClear={clear}
@@ -208,6 +211,8 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           />
         }
       />
+
+      <ActivityPanels activity={activity} live={live} />
 
       <RunHistory history={history} />
     </div>

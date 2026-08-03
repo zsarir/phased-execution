@@ -293,6 +293,11 @@
     /* The shell owns its own scrolling; the document must not also scroll
        sideways when a table is wider than the phone. */
     overflow-x: hidden;
+    /* And it must not bounce. An app shell that rubber-bands shows a band of
+       empty ground under the tab bar every time a flick overshoots the end of a
+       page — the "blank space at the bottom" of a phone that is behaving
+       exactly as a *document* should and exactly as an *app* should not. */
+    overscroll-behavior: none;
   }
 
   h1, h2, h3, h4 {
@@ -308,6 +313,15 @@
        nicety; in a diff, a command or a phase id it is a lie about the bytes. */
     font-variant-ligatures: none;
     font-feature-settings: 'liga' 0, 'calt' 0;
+  }
+
+  /* An absolute path is one unbreakable word, and one of them is wider than a
+     phone: the skill directory printed on Settings pushed the whole page 91px
+     sideways, tab bar and all. `.md` prose already allowed the break; every
+     `<code>` a component writes by hand did not. `pre` is excluded — a block of
+     shell wraps nowhere and scrolls inside itself instead. */
+  :not(pre) > code, kbd, samp {
+    overflow-wrap: anywhere;
   }
 
   :focus-visible {

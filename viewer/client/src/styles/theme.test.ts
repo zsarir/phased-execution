@@ -87,6 +87,34 @@ describe('theme tokens', () => {
   });
 });
 
+/**
+ * Three phone defects, each of which was one declaration, and each of which
+ * made a page unusable rather than untidy. They are asserted here because the
+ * fix is a stylesheet line with nothing else to hold it in place.
+ */
+describe('the phone holds together', () => {
+  const ROUTE_MAP = readFileSync(here('./route-map.css'), 'utf8');
+
+  it('lets a long path in a sentence wrap instead of widening the page', () => {
+    // The skill directory printed on Settings is one unbreakable word 91px
+    // wider than the phone, and it took the tab bar sideways with it.
+    expect(THEME).toMatch(/:not\(pre\)\s*>\s*code[^{]*\{[^}]*overflow-wrap:\s*anywhere/);
+    // …and a block of shell still scrolls inside itself rather than wrapping.
+    expect(THEME).not.toMatch(/\bpre\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  });
+
+  it('does not bounce a strip of empty ground in under the tab bar', () => {
+    expect(THEME).toMatch(/body\s*\{[^}]*overscroll-behavior:\s*none/s);
+  });
+
+  it('leaves the vertical swipe to the page, even over the route map', () => {
+    // `touch-action: none` gave the map every touch that began inside it, and
+    // on a phone the map is half the screen — so the tab could not be scrolled.
+    expect(ROUTE_MAP).toMatch(/\.route-frame\s*\{[^}]*touch-action:\s*pan-y/s);
+    expect(ROUTE_MAP).not.toMatch(/\.route-frame\s*\{[^}]*touch-action:\s*none/s);
+  });
+});
+
 describe('no stray breakpoints', () => {
   it('branches on no width outside 640/900/1200 anywhere in src/', () => {
     const offenders: string[] = [];

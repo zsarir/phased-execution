@@ -46,19 +46,21 @@ export function TopBar({
         {state?.root?.label ?? 'Choose a directory'}
       </button>
 
+      {/* The count sits BESIDE the bell, not on it.
+          Pinned to the corner it covered the glyph at every count — the badge
+          is 20px wide and the bell is 18 — and at three digits it grew left
+          across the whole icon and right off the edge of the screen. A row that
+          widens with its number cannot overlap anything, and the header has the
+          room: the directory button beside it already truncates. */}
       <button
         type="button"
         onClick={() => navigate('notifications')}
         aria-current={current === 'notifications' ? 'page' : undefined}
         aria-label={counts.unread ? `Notifications, ${counts.unread} unread` : 'Notifications'}
-        className="relative flex size-(--tap-min) shrink-0 items-center justify-center rounded"
+        className="flex min-h-(--tap-min) shrink-0 items-center gap-1.5 rounded px-2"
       >
         <Bell size={18} className={current === 'notifications' ? 'text-ink' : 'text-ink-muted'} />
-        {counts.unread > 0 && (
-          <span className="absolute right-1 top-1.5">
-            <Badge count={counts.unread} hot />
-          </span>
-        )}
+        <Badge count={counts.unread} hot />
       </button>
     </header>
   );
@@ -105,11 +107,16 @@ export function TabBar({
               active ? 'text-action' : 'text-ink-muted',
             )}
           >
+            {/* A tab is 78px wide with a 19px glyph in the middle of it, so the
+                corner badge stays — but ringed in the bar's own ground so the
+                glyph reads out from under it, capped at 9+ so it stays a circle
+                rather than growing into its neighbour, and deaf to pointers so
+                it can never eat the tap meant for the tab. */}
             <span className="relative">
               <item.icon size={19} aria-hidden />
               {count > 0 && (
-                <span className="absolute -right-2.5 -top-1.5">
-                  <Badge count={count} hot />
+                <span className="pointer-events-none absolute -right-3 -top-2">
+                  <Badge count={count} hot cap={9} className="ring-2 ring-ground-deep" />
                 </span>
               )}
             </span>

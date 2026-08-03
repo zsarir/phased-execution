@@ -139,7 +139,11 @@ export function App() {
           <Rail state={state} counts={counts} head={head} onPickSource={pickSource} />
         )}
 
-        <main className="min-w-0 overflow-y-auto overscroll-contain">
+        {/* `overscroll-none`, not `contain`: `contain` stops the scroll
+            *chaining* to the document but leaves the rubber band, so a flick
+            past the last card still bounces a strip of empty ground into view
+            above the tab bar. */}
+        <main className="min-w-0 overflow-y-auto overscroll-none">
           {(state.serverStale || stopped || !online || sse !== 'live') && (
             <div className="flex flex-col gap-2 px-3 pt-3 md:px-5">
               {state.serverStale && (
