@@ -25,12 +25,13 @@ import type { ConsoleState, TerminalState } from '@/lib/api';
  * Mocks
  * ------------------------------------------------------------------ */
 
-const { state, terminal, agentTicket, terminalClose, skills, pane } = vi.hoisted(() => ({
+const { state, terminal, agentTicket, terminalClose, skills, plansApi, pane } = vi.hoisted(() => ({
   state: vi.fn(),
   terminal: vi.fn(),
   agentTicket: vi.fn(),
   terminalClose: vi.fn(),
   skills: vi.fn(),
+  plansApi: vi.fn(),
   pane: vi.fn(),
 }));
 
@@ -41,7 +42,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     api: {
       ...actual.api,
       state, terminal, agentTicket, terminalClose, skills,
-      plans: vi.fn(async () => []),
+      plans: plansApi,
       approvals: vi.fn(async () => []),
     },
   };
@@ -105,6 +106,7 @@ beforeEach(() => {
   state.mockResolvedValue(BASE_STATE);
   terminal.mockResolvedValue(TERMINALS);
   skills.mockResolvedValue([]);
+  plansApi.mockResolvedValue([]);
   agentTicket.mockResolvedValue({
     ok: true, sessionId: 'a1', token: 't', expiresAt: 0, path: '/ws/terminal',
     session: { ...CLAUDE, id: 'a1', label: 'Claude 1' },
@@ -240,5 +242,107 @@ describe('sessions', () => {
     await openPage({ segments: ['agent', 'long-gone'], query: {}, path: 'agent/long-gone' });
 
     await waitFor(() => expect(window.location.hash).toBe('#/agent'));
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The plan wizard
+ * ------------------------------------------------------------------ */
+
+describe('the plan wizard', () => {
+  it('gates on the agent capability, not on writes', async () => {
+    const { NewPlanWizardButton } = await import('./wizard');
+    const { container } = mount(<NewPlanWizardButton allowAgent={false} />);
+    expect(container).toBeEmptyDOMElement();
+
+    mount(<NewPlanWizardButton allowAgent />);
+    expect(screen.getByRole('button', { name: /new plan with ai/i })).toBeInTheDocument();
+  });
+
+  it('sends the brief as a plan intent and lands on the session', async () => {
+    const { NewPlanWizard } = await import('./wizard');
+    const onClose = vi.fn();
+    mount(<NewPlanWizard onClose={onClose} />);
+
+    const start = await screen.findByRole('button', { name: /start authoring/i });
+    // An empty brief cannot start a session that would have nothing to author.
+    expect(start).toBeDisabled();
+
+    fireEvent.change(screen.getByPlaceholderText(/what should this plan achieve/i), {
+      target: { value: 'Ship a cart API.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /start authoring/i }));
+
+    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith({
+      intent: 'plan', brief: 'Ship a cart API.', model: 'opus', effort: 'max',
+    }));
+    await waitFor(() => expect(window.location.hash).toBe('#/agent/a1'));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('needs an open source directory before it can author anywhere', async () => {
+    state.mockResolvedValue({ ...BASE_STATE, root: undefined });
+    const { NewPlanWizard } = await import('./wizard');
+    mount(<NewPlanWizard onClose={() => {}} />);
+
+    expect(await screen.findByText(/open a source directory first/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/what should this plan achieve/i), {
+      target: { value: 'Ship it.' },
+    });
+    expect(screen.getByRole('button', { name: /start authoring/i })).toBeDisabled();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The plan-created banner
+ * ------------------------------------------------------------------ */
+
+describe('the plan-created banner', () => {
+  it('appears when a NEW slug enters the plans list, and links to it', async () => {
+    const planning = {
+      ...CLAUDE,
+      meta: { ...CLAUDE.meta, intent: 'plan' as const },
+    };
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [planning] });
+    plansApi.mockResolvedValue([{ slug: 'existing', phases: 1, ready: [] }]);
+
+    const client = new QueryClient(queryClientConfig);
+    const { default: AgentView } = await import('./index');
+    render(
+      <QueryClientProvider client={client}>
+        <AgentView route={{ segments: ['agent', 'c1'], query: {}, path: 'agent/c1' }} />
+      </QueryClientProvider>,
+    );
+    await screen.findByTestId('pane');
+    // The baseline must exist before the "new" list arrives — flipping the
+    // mock while the FIRST fetch is still in flight lets the query cache
+    // dedupe the refetch and the diff never sees a second list.
+    await waitFor(() => expect(client.getQueryData(['plans'])).toBeTruthy());
+    expect(screen.queryByText(/was created/i)).not.toBeInTheDocument();
+
+    // `new-plan.sh` writes the file → watcher emits `changed` → EVENT_EFFECTS
+    // invalidates keys.plans() → the refetch is what the watcher diffs.
+    plansApi.mockResolvedValue([
+      { slug: 'existing', phases: 1, ready: [] },
+      { slug: 'cart-api-endpoint', phases: 4, ready: [] },
+    ]);
+    await client.invalidateQueries({ queryKey: ['plans'] });
+    await waitFor(() => expect(plansApi).toHaveBeenCalledTimes(2));
+
+    expect(await screen.findByText(/was created/i)).toBeInTheDocument();
+    expect(screen.getByText('cart-api-endpoint')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /open it/i });
+    expect(link).toHaveAttribute('href', '#/plan/cart-api-endpoint/route');
+
+    // Dismiss is a choice, not a timeout.
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
+    expect(screen.queryByText(/was created/i)).not.toBeInTheDocument();
+  });
+
+  it('does not watch plain claude sessions', async () => {
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [CLAUDE] });
+    await openPage({ segments: ['agent', 'c1'], query: {}, path: 'agent/c1' });
+    await screen.findByTestId('pane');
+    expect(plansApi).not.toHaveBeenCalled();
   });
 });

@@ -14,16 +14,18 @@
  * whichever page had fewer tabs.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Bot, Plus, RotateCcw, X } from 'lucide-react';
+import { Bot, Plus, RotateCcw, Sparkles, X } from 'lucide-react';
+import { planHref } from '@shared/routes.js';
 import { api, type TerminalTicket } from '@/lib/api';
-import { keys, useConsoleState, useTerminals } from '@/lib/queries';
+import { keys, useConsoleState, usePlans, useTerminals } from '@/lib/queries';
 import { cn } from '@/lib/cn';
 import { navigate, type Route } from '@/router';
 import { Button, Chip, CopyButton, Empty, Spinner, toast } from '@/components/ui';
 import { TerminalPane } from '../terminal/pane';
 import { Launcher, type LaunchBody } from './launcher';
+import { NewPlanWizardButton } from './wizard';
 
 export default function AgentView({ route }: { route: Route }) {
   const client = useQueryClient();
@@ -181,6 +183,8 @@ export default function AgentView({ route }: { route: Route }) {
           <Plus size={14} aria-hidden /> New
         </Button>
 
+        <span className="shrink-0"><NewPlanWizardButton allowAgent={allowed} /></span>
+
         {open && (
           <Chip mono className="ml-auto hidden shrink-0 md:inline-flex" title={open.cwd}>
             {(size ?? open).cols}×{(size ?? open).rows}
@@ -190,6 +194,7 @@ export default function AgentView({ route }: { route: Route }) {
 
       {open ? (
         <>
+          {open.meta?.intent === 'plan' && <PlanWatcher key={open.id} />}
           {resumeId && (
             <div className="flex flex-wrap items-center gap-2 border-b border-rule bg-surface px-3 py-2 text-sm text-ink-muted">
               <span>The CLI exited — its conversation is resumable.</span>
@@ -224,4 +229,51 @@ export default function AgentView({ route }: { route: Route }) {
 /** Same frame as the terminal: the pane scrolls itself, the page never does. */
 function Frame({ children }: { children: React.ReactNode }) {
   return <div className="flex h-full min-h-0 flex-col">{children}</div>;
+}
+
+/**
+ * Watches the plans list while a plan-authoring session runs, and says so the
+ * moment a NEW slug appears.
+ *
+ * The mechanism is the console's ordinary plumbing: `new-plan.sh` writes the
+ * file → the docs watcher emits `changed` → `EVENT_EFFECTS` invalidates
+ * `keys.plans()` → this refetch diffs against the baseline taken on mount.
+ * Keyed by session id, so each authoring session gets its own baseline.
+ *
+ * Known limit, accepted: the baseline is per-mount — open the page for the
+ * first time AFTER the plan was written and there is no banner, because the
+ * plan is already on the Plans page by then.
+ */
+function PlanWatcher() {
+  const { data: plans } = usePlans(true);
+  const baseline = useRef<Set<string> | null>(null);
+  const [created, setCreated] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    if (!plans) return;
+    const seen = baseline.current;
+    if (!seen) { baseline.current = new Set(plans.map((plan) => plan.slug)); return; }
+    const fresh = plans.find((plan) => !seen.has(plan.slug));
+    if (fresh) setCreated((current) => current ?? fresh.slug);
+  }, [plans]);
+
+  if (!created || dismissed) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-rule bg-surface px-3 py-2 text-sm">
+      <Sparkles size={14} className="shrink-0 text-action" aria-hidden />
+      <span>
+        Plan <code className="rounded bg-surface-raised px-1 font-mono">{created}</code> was created —{' '}
+        <a className="text-action underline underline-offset-2" href={planHref(created)}>open it</a>
+      </span>
+      <button
+        type="button"
+        aria-label="Dismiss"
+        onClick={() => setDismissed(true)}
+        className="ml-auto flex size-(--tap-min) shrink-0 items-center justify-center text-ink-faint hover:text-ink"
+      >
+        <X size={14} aria-hidden />
+      </button>
+    </div>
+  );
 }

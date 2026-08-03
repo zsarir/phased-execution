@@ -36,6 +36,10 @@ import {
   Banner, Button, Card, Empty, Skeleton, StatusStack, type StatusNote,
 } from '@/components/ui';
 import { NewPlanButton } from '@/components/write-menu';
+// The AI wizard, NOT gated on allowWrites: the claude session writes the plan,
+// not the console — `allowAgent` is its capability. It never imports the pane,
+// so mounting it here costs the plans chunk no xterm.
+import { NewPlanWizardButton } from '../agent/wizard';
 import { planHref } from '@shared/routes.js';
 import type { PlanSummaryFull } from '@/lib/api';
 import { Page } from '../_page';
@@ -97,7 +101,12 @@ export default function PlansView() {
     setPrefs({ showDocuments: NO_FILTERS.showDocuments, showComplete: NO_FILTERS.showComplete });
   };
 
-  const newPlan = <NewPlanButton allowWrites={Boolean(state?.allowWrites)} />;
+  const newPlan = (
+    <div className="flex items-center gap-2">
+      <NewPlanWizardButton allowAgent={state?.allowAgent === true} />
+      <NewPlanButton allowWrites={Boolean(state?.allowWrites)} />
+    </div>
+  );
 
   if (error) {
     return (
