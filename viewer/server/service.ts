@@ -11,7 +11,7 @@ import { basename } from 'node:path';
 import { execFile } from 'node:child_process';
 
 import {
-  checkRoot, rememberRoot, loadPrefs, savePrefs, serverIsStale, staticRoot,
+  agentEnabled, checkRoot, rememberRoot, loadPrefs, savePrefs, serverIsStale, staticRoot,
   type Flags, type Prefs, type RootCheck,
 } from './config.ts';
 import { Store, handoffFor, lockFor, qaFor, type PlanRecord } from './store.ts';
@@ -306,6 +306,7 @@ export class Service {
     // directory is what every command you were about to type is relative to.
     this.terminals = new Terminals({
       allowed: flags.allowTerminal,
+      agentAllowed: agentEnabled(flags),
       cwd: () => this.root?.path,
     });
     this.push = new Push(flags.remoteUsers);
@@ -1241,6 +1242,9 @@ export class Service {
       // actually loaded, and what is open); this is the one bit the shell needs
       // on every page.
       allowTerminal: this.flags.allowTerminal,
+      // The agent gate, same shape — the nav-level fact; the richer answer
+      // still lives on `/api/terminal` (`agentAllowed` beside `allowed`).
+      allowAgent: agentEnabled(this.flags),
       run: this.runner.current(),
       scriptsDir: this.flags.scriptsDir,
       sizing: this.sizing,

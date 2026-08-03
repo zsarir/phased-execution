@@ -1,10 +1,19 @@
 /**
- * A real shell, in the browser — off unless someone asked for it.
+ * A real shell — or an interactive `claude` session — in the browser. Off
+ * unless someone asked for it.
  *
  * The console already spawns `claude` sessions that edit repositories for
  * hours; a terminal is not a new class of power on this machine. What it *is*
  * is a new way in, so it gets its own flag (`--allow-terminal`), its own
  * handshake, and a gate that runs on the upgrade request itself.
+ *
+ * Sessions come in two kinds. A `shell` is exactly what it always was:
+ * `$SHELL -l`, no policy but the person typing. A `claude` session runs the
+ * interactive CLI from a `LaunchSpec` composed and validated in `agent.ts` —
+ * this registry never builds claude argv itself, it only spawns what that
+ * module resolved. The two kinds are gated separately (`--allow-terminal` vs
+ * `--allow-agent`), and a reattach is gated by the kind of the session it
+ * names, not by whichever flag let the caller in.
  *
  * ## Why the token exists
  *
@@ -163,16 +172,46 @@ export class Scrollback {
  * Sessions
  * ------------------------------------------------------------------ */
 
+/** What a session is running. The wire protocol is identical for both. */
+export type SessionKind = 'shell' | 'claude';
+
+/** Facts about a claude session the UI needs back, none of them secret. */
+export type SessionMeta = {
+  model?: string;
+  effort?: string;
+  permissionMode?: string;
+  /** The uuid handed to `--session-id` — what `claude --resume <id>` takes later. */
+  claudeSessionId?: string;
+  /** `plan` marks a session booted by the New-plan wizard. */
+  intent?: 'plan';
+};
+
+/**
+ * A fully resolved thing to spawn. Composed outside this module (`agent.ts`
+ * for claude sessions), so the registry stays what it was: a lifecycle for
+ * ptys, never a place that decides argv.
+ */
+export type LaunchSpec = {
+  kind: SessionKind;
+  file: string;
+  args: string[];
+  label?: string;
+  meta?: SessionMeta;
+};
+
 export interface SessionInfo {
   id: string;
   label: string;
+  kind: SessionKind;
   cwd: string;
+  /** The spawned file — `$SHELL` for shells, `claude` for agent sessions. */
   shell: string;
   cols: number;
   rows: number;
   pid: number;
   clients: number;
   createdAt: number;
+  meta?: SessionMeta;
   /** Set once the process is gone; the record survives briefly so the UI can say why. */
   exited?: { code: number; signal?: number };
 }
@@ -182,6 +221,8 @@ interface Session extends SessionInfo {
   scrollback: Scrollback;
   wires: Set<Wire>;
   idleSince: number;
+  /** Stamped on every pty chunk — how the sweeper tells "working" from "parked". */
+  lastOutputAt: number;
   paused: boolean;
 }
 
@@ -194,8 +235,11 @@ interface Minted {
 export type Availability = 'yes' | 'no' | 'unknown';
 
 export interface TerminalOptions {
+  /** The shell gate — `--allow-terminal`. */
   allowed: boolean;
-  /** Where a new shell starts — the open source directory, when there is one. */
+  /** The agent gate — `--allow-agent` (via `agentEnabled()`), for `claude` sessions. */
+  agentAllowed?: boolean;
+  /** Where a new session starts — the open source directory, when there is one. */
   cwd?: () => string | undefined;
   /** Tests inject a fake; production takes the lazily-imported real one. */
   spawn?: PtySpawn;
@@ -209,6 +253,7 @@ export class Terminals {
   private readonly sessions = new Map<string, Session>();
   private readonly tokens = new Map<string, Minted>();
   private counter = 0;
+  private claudeCounter = 0;
   private sweeper: NodeJS.Timeout | undefined;
   private ptyModule: Promise<PtySpawn | null> | undefined;
   private wsModule: Promise<WsServerLike | null> | undefined;
@@ -234,9 +279,10 @@ export class Terminals {
   }
 
   /** What `/api/terminal` reports. Never includes a token. */
-  state(): { allowed: boolean; available: Availability; sessions: SessionInfo[]; limit: number } {
+  state(): { allowed: boolean; agentAllowed: boolean; available: Availability; sessions: SessionInfo[]; limit: number } {
     return {
       allowed: this.options.allowed,
+      agentAllowed: this.options.agentAllowed === true,
       available: this.probed,
       limit: MAX_SESSIONS,
       sessions: [...this.sessions.values()].map(describe),
@@ -253,11 +299,13 @@ export class Terminals {
    * client which never manages to connect leaves something the sweeper can
    * reap, instead of a token that quietly means nothing.
    */
-  async mint(sessionId?: string, size?: { cols?: number; rows?: number }): Promise<
+  async mint(sessionId?: string, size?: { cols?: number; rows?: number }, launch?: LaunchSpec): Promise<
     { ok: true; sessionId: string; token: string; expiresAt: number; session: SessionInfo }
     | { ok: false; status: number; error: string }
   > {
-    if (!this.options.allowed) {
+    // With both capabilities off, refuse before looking anything up — whether
+    // a session id exists is not discoverable through a disabled feature.
+    if (!this.options.allowed && this.options.agentAllowed !== true) {
       return { ok: false, status: 403, error: 'The terminal is disabled. Restart with --allow-terminal to enable it.' };
     }
 
@@ -266,7 +314,17 @@ export class Terminals {
       return { ok: false, status: 404, error: 'That terminal session has ended.' };
     }
 
+    // A reattach is gated by what the SESSION is, not by which flag admitted
+    // the caller: an agent-only console must not hand out a live shell.
+    if (session) {
+      const refusal = this.kindRefusal(session.kind);
+      if (refusal) return refusal;
+    }
+
     if (!session) {
+      const kind: SessionKind = launch?.kind ?? 'shell';
+      const refusal = this.kindRefusal(kind);
+      if (refusal) return refusal;
       if (this.sessions.size >= MAX_SESSIONS) {
         return { ok: false, status: 409, error: `Too many terminal sessions (${MAX_SESSIONS}). Close one first.` };
       }
@@ -280,10 +338,16 @@ export class Terminals {
         };
       }
       try {
-        session = this.create(spawn, size);
+        session = this.create(spawn, size, launch);
       } catch (error) {
-        log.error('terminal.spawn-failed', { error });
-        return { ok: false, status: 500, error: `Could not start a shell: ${message(error)}` };
+        log.error('terminal.spawn-failed', { error, kind });
+        // node-pty's own words here are `posix_spawnp failed.`, which says
+        // nothing — for a claude session the overwhelmingly likely cause is
+        // worth naming.
+        const hint = kind === 'claude'
+          ? `Could not start claude — is the \`claude\` CLI on this console's PATH? (${message(error)})`
+          : `Could not start a shell: ${message(error)}`;
+        return { ok: false, status: 500, error: hint };
       }
     }
 
@@ -301,6 +365,18 @@ export class Terminals {
       expiresAt: Date.now() + TOKEN_TTL_MS,
       session: describe(session),
     };
+  }
+
+  /** The per-kind gate, phrased once so mint's two call sites cannot drift. */
+  private kindRefusal(kind: SessionKind): { ok: false; status: number; error: string } | null {
+    if (kind === 'claude') {
+      return this.options.agentAllowed === true
+        ? null
+        : { ok: false, status: 403, error: 'Agent sessions are disabled. Restart with --allow-agent to enable them.' };
+    }
+    return this.options.allowed
+      ? null
+      : { ok: false, status: 403, error: 'The terminal is disabled. Restart with --allow-terminal to enable it.' };
   }
 
   /**
@@ -337,7 +413,9 @@ export class Terminals {
   async handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): Promise<boolean> {
     if (url.pathname !== TERMINAL_PATH) return false;
 
-    if (!this.options.allowed) {
+    // Either capability makes the socket path exist; the per-kind decision was
+    // already made when the ticket was minted, and a ticket names its session.
+    if (!this.options.allowed && this.options.agentAllowed !== true) {
       refuse(socket, 403, 'terminal disabled');
       log.warn('terminal.upgrade-refused', { reason: 'disabled' });
       return true;
@@ -441,29 +519,36 @@ export class Terminals {
     this.tokens.clear();
   }
 
-  private create(spawn: PtySpawn, size?: { cols?: number; rows?: number }): Session {
-    const shell = process.env.SHELL || '/bin/sh';
+  private create(spawn: PtySpawn, size?: { cols?: number; rows?: number }, launch?: LaunchSpec): Session {
+    const kind: SessionKind = launch?.kind ?? 'shell';
+    const file = launch?.file ?? (process.env.SHELL || '/bin/sh');
+    const args = launch?.args ?? ['-l'];
     const cwd = firstDir([this.options.cwd?.(), process.env.HOME, homedir()]);
     const cols = clampSize(size?.cols, 20, 500) ?? 80;
     const rows = clampSize(size?.rows, 5, 200) ?? 24;
 
-    const pty = spawn(shell, ['-l'], {
+    const pty = spawn(file, args, {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
       // A login shell that does not know it is on a terminal prints a
       // different prompt and disables colour, so TERM is set here rather than
-      // inherited from whatever launchd handed the console.
+      // inherited from whatever launchd handed the console. The claude TUI
+      // needs the same answer for the same reason. `CLAUDE_CONFIG_DIR` rides
+      // along in process.env — the child runs in the home this console did,
+      // which is also the home `/api/skills` enumerated.
       env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     });
 
     const id = randomBytes(6).toString('hex');
     const session: Session = {
       id,
-      label: `Terminal ${++this.counter}`,
+      label: launch?.label ?? (kind === 'claude' ? `Claude ${++this.claudeCounter}` : `Terminal ${++this.counter}`),
+      kind,
+      ...(launch?.meta ? { meta: launch.meta } : {}),
       cwd,
-      shell,
+      shell: file,
       cols,
       rows,
       pid: pty.pid,
@@ -473,10 +558,12 @@ export class Terminals {
       scrollback: new Scrollback(),
       wires: new Set(),
       idleSince: Date.now(),
+      lastOutputAt: Date.now(),
       paused: false,
     };
 
     pty.onData((data) => {
+      session.lastOutputAt = Date.now();
       session.scrollback.push(data);
       const frame = Buffer.from(data, 'utf8');
       let queued = 0;
@@ -505,7 +592,7 @@ export class Terminals {
     });
 
     this.sessions.set(id, session);
-    log.info('terminal.opened', { id, shell, cwd, pid: pty.pid });
+    log.info('terminal.opened', { id, kind, shell: file, cwd, pid: pty.pid });
     return session;
   }
 
@@ -514,8 +601,14 @@ export class Terminals {
     this.sweeper = setInterval(() => {
       const now = Date.now();
       for (const session of [...this.sessions.values()]) {
-        if (session.wires.size) continue;
-        if (session.idleSince && now - session.idleSince > IDLE_MS) this.kill(session.id);
+        const reap = shouldReap({
+          wires: session.wires.size,
+          idleSince: session.idleSince,
+          kind: session.kind,
+          exited: session.exited,
+          lastOutputAt: session.lastOutputAt,
+        }, now);
+        if (reap) this.kill(session.id);
       }
       for (const [key, minted] of this.tokens) {
         if (minted.expiresAt <= now) this.tokens.delete(key);
@@ -580,6 +673,7 @@ function describe(session: Session): SessionInfo {
   return {
     id: session.id,
     label: session.label,
+    kind: session.kind,
     cwd: session.cwd,
     shell: session.shell,
     cols: session.cols,
@@ -587,8 +681,32 @@ function describe(session: Session): SessionInfo {
     pid: session.pid,
     clients: session.wires.size,
     createdAt: session.createdAt,
+    ...(session.meta ? { meta: session.meta } : {}),
     ...(session.exited ? { exited: session.exited } : {}),
   };
+}
+
+/**
+ * Whether the sweeper may kill a detached session — pure, so the rule is
+ * testable without timers.
+ *
+ * The shell rule is what it always was: no clients for `idleMs` means
+ * abandoned. A live claude session gets one more consideration: if the pty
+ * produced output within the window it is *working* unattended (a long
+ * generation, a build it kicked off), and killing it mid-thought because
+ * nobody happened to be watching is exactly the wrong moment. Once the
+ * process exits, `onExit` back-dates `idleSince` and the `exited` guard here
+ * lets the ~30-second grace collect it like any dead shell.
+ */
+export function shouldReap(
+  session: { wires: number; idleSince: number; kind: SessionKind; exited?: unknown; lastOutputAt: number },
+  now: number,
+  idleMs: number = IDLE_MS,
+): boolean {
+  if (session.wires) return false;
+  if (!session.idleSince || now - session.idleSince <= idleMs) return false;
+  if (session.kind === 'claude' && !session.exited && now - session.lastOutputAt <= idleMs) return false;
+  return true;
 }
 
 function send(wire: Wire, data: string | Uint8Array): void {

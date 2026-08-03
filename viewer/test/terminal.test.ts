@@ -26,7 +26,9 @@ import { statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { VIEWER_DIR, parseFlags } from '../server/config.ts';
-import { Scrollback, Terminals, TERMINAL_PATH, healSpawnHelper } from '../server/terminal.ts';
+import {
+  Scrollback, Terminals, TERMINAL_PATH, healSpawnHelper, shouldReap, type LaunchSpec,
+} from '../server/terminal.ts';
 
 /* ------------------------------------------------------------------ *
  * Fakes
@@ -559,10 +561,170 @@ test('a real shell runs and reattaches — or says why it cannot, leaving the co
   assert.equal(JSON.parse((await http(port, '/api/terminal')).body).sessions.length, 0);
 });
 
+/* ------------------------------------------------------------------ *
+ * Agent sessions (kind: 'claude')
+ * ------------------------------------------------------------------ */
+
+/** A resolved claude launch — the shape `agent.ts` produces. */
+function claudeLaunch(overrides: Partial<LaunchSpec> = {}): LaunchSpec {
+  return {
+    kind: 'claude',
+    file: 'claude',
+    args: ['--session-id', '00000000-0000-4000-8000-000000000000', '--model', 'opus', 'hello'],
+    meta: { model: 'opus', claudeSessionId: '00000000-0000-4000-8000-000000000000' },
+    ...overrides,
+  };
+}
+
+test('an agent session needs its own flag, and a shell still needs its own', async () => {
+  // The shell capability alone does not admit a claude session…
+  const shellOnly = registry({ agentAllowed: false });
+  const refusedClaude = await shellOnly.terminals.mint(undefined, undefined, claudeLaunch());
+  assert.equal(refusedClaude.ok, false);
+  assert.equal(refusedClaude.ok === false && refusedClaude.status, 403);
+  assert.match(refusedClaude.ok === false ? refusedClaude.error : '', /--allow-agent/);
+  assert.equal(shellOnly.terminals.state().sessions.length, 0, 'and nothing was spawned');
+  shellOnly.terminals.close();
+
+  // …and the agent capability alone does not admit a shell.
+  const agentOnly = registry({ allowed: false, agentAllowed: true });
+  const refusedShell = await agentOnly.terminals.mint();
+  assert.equal(refusedShell.ok, false);
+  assert.match(refusedShell.ok === false ? refusedShell.error : '', /--allow-terminal/);
+
+  // A claude session works there, and a reattach names it rather than
+  // opening another — the reattach is judged by the SESSION's kind.
+  const claude = await agentOnly.terminals.mint(undefined, undefined, claudeLaunch());
+  assert.equal(claude.ok, true);
+  const again = await agentOnly.terminals.mint(claude.ok ? claude.sessionId : '');
+  assert.equal(again.ok, true);
+  assert.equal(agentOnly.terminals.state().sessions.length, 1);
+  agentOnly.terminals.close();
+});
+
+test('a claude session spawns exactly what the launch spec resolved, in the shell env', async () => {
+  const spawns: { file: string; args: string[]; options: { cwd: string; env: Record<string, string | undefined> } }[] = [];
+  const { terminals } = registry({
+    agentAllowed: true,
+    spawn: (file: string, args: string[], options: { cwd: string; env: Record<string, string | undefined> }) => {
+      spawns.push({ file, args, options });
+      return fakePty() as never;
+    },
+  });
+
+  const spec = claudeLaunch({ label: 'Claude: hello' });
+  const minted = await terminals.mint(undefined, { cols: 100, rows: 31 }, spec);
+  assert.equal(minted.ok, true);
+
+  assert.equal(spawns.length, 1);
+  assert.equal(spawns[0].file, 'claude');
+  assert.deepEqual(spawns[0].args, spec.args, 'argv is the spec — nothing added, nothing lost');
+  assert.equal(spawns[0].options.cwd, VIEWER_DIR);
+  assert.equal(spawns[0].options.env.TERM, 'xterm-256color');
+  assert.equal(
+    spawns[0].options.env.CLAUDE_CODE_RETRY_WATCHDOG,
+    process.env.CLAUDE_CODE_RETRY_WATCHDOG,
+    'the runner’s unattended-retry env is inherited at most, never added',
+  );
+
+  const session = terminals.state().sessions[0];
+  assert.equal(session.kind, 'claude');
+  assert.equal(session.label, 'Claude: hello');
+  assert.equal(session.shell, 'claude');
+  assert.equal(session.meta?.claudeSessionId, '00000000-0000-4000-8000-000000000000');
+  terminals.close();
+});
+
+test('claude sessions and shells count on separate label counters', async () => {
+  const { terminals } = registry({ agentAllowed: true });
+  const c1 = await terminals.mint(undefined, undefined, claudeLaunch({ label: undefined }));
+  const s1 = await terminals.mint();
+  const c2 = await terminals.mint(undefined, undefined, claudeLaunch({ label: undefined }));
+  assert.equal(c1.ok && c1.session.label, 'Claude 1');
+  assert.equal(s1.ok && s1.session.label, 'Terminal 1');
+  assert.equal(c2.ok && c2.session.label, 'Claude 2');
+  terminals.close();
+});
+
+test('the sweeper spares a working claude session, and only that', () => {
+  const MIN = 60_000;
+  const idleMs = 30 * MIN;
+  const now = 100 * MIN;
+  const idle = now - 31 * MIN; // detached 31 minutes ago
+  const base = { wires: 0, idleSince: idle, lastOutputAt: idle };
+
+  // A shell detached past the window is reaped, output or no output.
+  assert.equal(shouldReap({ ...base, kind: 'shell', lastOutputAt: now - MIN }, now, idleMs), true);
+  // A live claude that printed a minute ago is working unattended — spared.
+  assert.equal(shouldReap({ ...base, kind: 'claude', lastOutputAt: now - MIN }, now, idleMs), false);
+  // A claude silent past the window is parked — reaped like a shell.
+  assert.equal(shouldReap({ ...base, kind: 'claude' }, now, idleMs), true);
+  // An exited claude gets no output consideration — the grace period rules.
+  assert.equal(shouldReap({ ...base, kind: 'claude', lastOutputAt: now - MIN, exited: { code: 0 } }, now, idleMs), true);
+  // Anyone attached keeps any session alive…
+  assert.equal(shouldReap({ ...base, kind: 'claude', wires: 1 }, now, idleMs), false);
+  assert.equal(shouldReap({ ...base, kind: 'shell', wires: 1 }, now, idleMs), false);
+  // …and a session someone never left (idleSince 0) is never a candidate.
+  assert.equal(shouldReap({ wires: 0, idleSince: 0, lastOutputAt: 0, kind: 'shell' }, now, idleMs), false);
+});
+
+test('a claude ticket is gated by --allow-agent, and refusals spawn nothing', async (t) => {
+  const port = await console_(t, '--allow-agent');
+  if (!await waitFor(port)) assert.fail('the console did not come up');
+
+  // The shell flag is still its own decision…
+  const shell = await http(port, '/api/terminal', { method: 'POST', headers: CONSOLE_HEADERS, body: '{}' });
+  assert.equal(shell.status, 403);
+  assert.match(shell.body, /--allow-terminal/);
+
+  // …and both capabilities are reported, each under its own name.
+  const state = JSON.parse((await http(port, '/api/state')).body) as Record<string, unknown>;
+  assert.equal(state.allowAgent, true);
+  assert.equal(state.allowTerminal, false);
+  const listed = JSON.parse((await http(port, '/api/terminal')).body) as Record<string, unknown>;
+  assert.equal(listed.agentAllowed, true);
+  assert.equal(listed.allowed, false);
+
+  // Refusals that must not spawn: an unknown kind, an off-list model, a plan
+  // brief with no source directory open.
+  const kind = await http(port, '/api/terminal', {
+    method: 'POST', headers: CONSOLE_HEADERS, body: JSON.stringify({ kind: 'root-shell' }),
+  });
+  assert.equal(kind.status, 400);
+  const model = await http(port, '/api/terminal', {
+    method: 'POST', headers: CONSOLE_HEADERS, body: JSON.stringify({ kind: 'claude', model: 'gpt-4' }),
+  });
+  assert.equal(model.status, 400);
+  assert.match(model.body, /model must be one of/);
+  const plan = await http(port, '/api/terminal', {
+    method: 'POST', headers: CONSOLE_HEADERS, body: JSON.stringify({ kind: 'claude', intent: 'plan', brief: 'a thing' }),
+  });
+  assert.equal(plan.status, 409, plan.body);
+  assert.match(plan.body, /No source directory/);
+
+  assert.equal(
+    (JSON.parse((await http(port, '/api/terminal')).body) as { sessions: unknown[] }).sessions.length,
+    0,
+    'no refusal left a session behind',
+  );
+});
+
+test('without --allow-agent a claude ticket is refused by name', async (t) => {
+  const port = await console_(t, '--allow-terminal');
+  if (!await waitFor(port)) assert.fail('the console did not come up');
+  const refused = await http(port, '/api/terminal', {
+    method: 'POST', headers: CONSOLE_HEADERS, body: JSON.stringify({ kind: 'claude' }),
+  });
+  assert.equal(refused.status, 403);
+  assert.match(refused.body, /--allow-agent/);
+});
+
 test('the flag is reported to the client so the nav can offer what exists', async (t) => {
   const off = await console_(t);
   if (!await waitFor(off)) assert.fail('the console did not come up');
-  assert.equal(JSON.parse((await http(off, '/api/state')).body).allowTerminal, false);
+  const offState = JSON.parse((await http(off, '/api/state')).body);
+  assert.equal(offState.allowTerminal, false);
+  assert.equal(offState.allowAgent, false);
 
   const on = await console_(t, '--allow-terminal');
   if (!await waitFor(on)) assert.fail('the console did not come up');
@@ -575,4 +737,15 @@ test('--allow-terminal is off unless asked for, and is its own decision', () => 
   assert.equal(parseFlags(['--allow-writes']).allowTerminal, false, 'a write is not a shell');
   assert.equal(parseFlags(['--allow-terminal']).allowTerminal, true);
   assert.equal(parseFlags(['--allow-terminal']).allowRun, false, 'and a shell is not a run');
+});
+
+test('--allow-agent is off unless asked for, and is a fourth decision', () => {
+  assert.equal(parseFlags([]).allowAgent, false);
+  assert.equal(parseFlags(['--allow-terminal']).allowAgent, false, 'a shell is not an agent session');
+  assert.equal(parseFlags(['--allow-run']).allowAgent, false, 'the autopilot is not an agent session');
+  const agent = parseFlags(['--allow-agent']);
+  assert.equal(agent.allowAgent, true);
+  assert.equal(agent.allowTerminal, false, 'and an agent session is not a shell');
+  assert.equal(agent.allowRun, false, 'nor a run');
+  assert.equal(agent.allowWrites, false, 'nor a write');
 });

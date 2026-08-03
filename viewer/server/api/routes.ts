@@ -10,13 +10,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { Service } from '../service.ts';
-import { checkRoot, listDirs } from '../config.ts';
+import { agentEnabled, checkRoot, listDirs } from '../config.ts';
+import { buildAgentLaunch } from '../agent.ts';
 import { isClientDisconnect, log } from '../log.ts';
 import { isEffort, PERMISSION_MODES } from '../runner/spawn.ts';
 import { isPermissionProfile, type PolicyScope } from '../runner/approvals.ts';
 import { MODEL_FALLBACK as MODELS } from '../runner/errors.ts';
 import { planWrite, runWrite, openInEditor, WriteError, type WriteRequest } from '../writes.ts';
-import { TERMINAL_PATH } from '../terminal.ts';
+import { TERMINAL_PATH, type LaunchSpec } from '../terminal.ts';
 import type { PhaseOptions } from '../runner/state.ts';
 
 export type ApiContext = { service: Service };
@@ -80,6 +81,31 @@ function guardRun(req: IncomingMessage, service: Service): string | null {
  */
 function guardTerminal(req: IncomingMessage, service: Service): string | null {
   return guardMutation(req, service.flags.allowTerminal
+    ? null
+    : 'The terminal is disabled. Restart with --allow-terminal to enable it.');
+}
+
+/**
+ * The agent gate — a fourth capability, again not a wider reading of any
+ * other. An agent session is an interactive `claude` under the person's own
+ * eyes: its argv is server-built from allowlisted fields (`agent.ts`) and the
+ * CLI asks before it acts, which is less than a raw shell hands over and more
+ * than the autopilot's policy allows. `agentEnabled()` rather than the flag,
+ * so folding the capability into `--allow-terminal` stays a one-line change.
+ */
+function guardAgent(req: IncomingMessage, service: Service): string | null {
+  return guardMutation(req, agentEnabled(service.flags)
+    ? null
+    : 'Agent sessions are disabled. Restart with --allow-agent to enable them.');
+}
+
+/**
+ * For verbs on an EXISTING session of either kind — reattach, close. Either
+ * capability opens the door; `mint()` still gates by the session's own kind,
+ * so an agent-only console can never be talked into handing out a live shell.
+ */
+function guardAnySession(req: IncomingMessage, service: Service): string | null {
+  return guardMutation(req, (service.flags.allowTerminal || agentEnabled(service.flags))
     ? null
     : 'The terminal is disabled. Restart with --allow-terminal to enable it.');
 }
@@ -410,13 +436,36 @@ export async function handleApi(
       if (req.method === 'GET') { json(res, 200, service.terminals.state()); return true; }
 
       if (req.method === 'POST') {
-        const refusal = guardTerminal(req, service);
-        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        // The body decides which gate applies, so it is read first; the
+        // guards still run before anything is created or looked up.
         const body = await readBody(req);
         const sessionId = typeof body.sessionId === 'string' ? body.sessionId.slice(0, 64) : undefined;
+        const kind = body.kind === 'claude' ? 'claude'
+          : body.kind == null || body.kind === 'shell' ? 'shell'
+          : null;
+        if (kind === null) { json(res, 400, { error: "unknown session kind — 'shell' or 'claude'." }); return true; }
+
+        // Reattach goes by the session's own kind (mint checks it); a fresh
+        // session goes by the kind being asked for.
+        const refusal = sessionId ? guardAnySession(req, service)
+          : kind === 'claude' ? guardAgent(req, service)
+          : guardTerminal(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+
+        let launch: LaunchSpec | undefined;
+        if (!sessionId && kind === 'claude') {
+          const built = buildAgentLaunch(body, {
+            skills: () => service.skills(),
+            scriptsDir: service.flags.scriptsDir,
+            rootOpen: Boolean(service.store),
+          });
+          if (!built.ok) { json(res, built.status, { error: built.error }); return true; }
+          launch = built.launch;
+        }
+
         const minted = await service.terminals.mint(sessionId, {
           cols: Number(body.cols), rows: Number(body.rows),
-        });
+        }, launch);
         if (!minted.ok) { json(res, minted.status, { error: minted.error }); return true; }
         // The socket path travels with the ticket so the client never has to
         // hard-code it — one source of truth for where the terminal lives.
@@ -425,7 +474,7 @@ export async function handleApi(
       }
 
       if (req.method === 'DELETE') {
-        const refusal = guardTerminal(req, service);
+        const refusal = guardAnySession(req, service);
         if (refusal) { json(res, 403, { error: refusal }); return true; }
         const id = url.searchParams.get('id') ?? rest[0] ?? '';
         json(res, 200, { closed: service.terminals.kill(id), state: service.terminals.state() });

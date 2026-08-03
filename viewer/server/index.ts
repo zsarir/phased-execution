@@ -330,6 +330,7 @@ server.listen(flags.port, flags.host, () => {
   process.stdout.write(`  writes        ${flags.allowWrites ? 'enabled (--allow-writes)' : 'read-only'}\n`);
   process.stdout.write(`  autopilot     ${flags.allowRun ? 'enabled (--allow-run) — this console can spawn agent sessions' : 'off'}\n`);
   process.stdout.write(`  terminal      ${flags.allowTerminal ? 'enabled (--allow-terminal) — this console can open a shell' : 'off'}\n`);
+  process.stdout.write(`  agent         ${flags.allowAgent ? 'enabled (--allow-agent) — interactive claude sessions in the terminal' : 'off'}\n`);
   if (flags.remoteHosts.length) {
     process.stdout.write(`  remote        ${flags.remoteHosts.join(', ')} — only ${flags.remoteUsers.join(', ')}\n`);
   }

@@ -34,6 +34,15 @@ export type Flags = {
    */
   allowTerminal: boolean;
   /**
+   * A fourth decision. An agent session is an interactive `claude` in the
+   * browser terminal: supervised by the person watching it, not by this
+   * console's policy. It is less than `--allow-terminal` (the argv is built
+   * server-side from allowlisted fields, and the CLI asks before it acts) but
+   * more than `--allow-run` (no deny-list settings file, no approval hook in
+   * front of it) — so it is its own flag, not a reading of either.
+   */
+  allowAgent: boolean;
+  /**
    * Hostnames this console answers to besides localhost, reached through an
    * authenticating proxy that puts the caller's identity in a header.
    *
@@ -74,6 +83,7 @@ export function parseFlags(argv: string[]): Flags {
     allowWrites: false,
     allowRun: false,
     allowTerminal: false,
+    allowAgent: false,
     remoteHosts: [],
     remoteUsers: splitList(process.env.PHASE_CONSOLE_REMOTE_USERS),
     scriptsDir: join(SKILL_DIR, 'scripts'),
@@ -90,6 +100,7 @@ export function parseFlags(argv: string[]): Flags {
     else if (arg === '--allow-writes') flags.allowWrites = true;
     else if (arg === '--allow-run') flags.allowRun = true;
     else if (arg === '--allow-terminal') flags.allowTerminal = true;
+    else if (arg === '--allow-agent') flags.allowAgent = true;
     else if (arg === '--remote') flags.remoteHosts.push(...splitList(next()));
     else if (arg === '--remote-user') flags.remoteUsers.push(...splitList(next()));
     else if (arg === '--scripts') flags.scriptsDir = resolve(expandHome(next() ?? ''));
@@ -102,6 +113,18 @@ export function parseFlags(argv: string[]): Flags {
   flags.remoteHosts = unique(flags.remoteHosts.map((h) => h.toLowerCase().replace(/\.$/, '')));
   flags.remoteUsers = unique(flags.remoteUsers.map((u) => u.toLowerCase()));
   return flags;
+}
+
+/**
+ * Whether agent sessions are enabled.
+ *
+ * Every consumer (the Terminals registry, `/api/state`, the route guard) asks
+ * this function rather than reading the flag, so folding the capability into
+ * `--allow-terminal` — if an operator ever prefers three flags to four — is
+ * this one return expression: `flags.allowAgent || flags.allowTerminal`.
+ */
+export function agentEnabled(flags: Flags): boolean {
+  return flags.allowAgent;
 }
 
 /** `a,b, c` and `a` both mean the same thing, and neither may contain blanks. */
@@ -149,6 +172,8 @@ function printHelp(): void {
   --allow-run       enable the autopilot: spawn \`claude -p\` sessions per phase
   --allow-terminal  enable the Terminal page: a real shell over a WebSocket,
                     running as you, with no policy in front of it
+  --allow-agent     enable the Agent page: interactive \`claude\` sessions in the
+                    browser terminal, and the "New plan with AI" wizard
   --remote <host>   also answer to this hostname, fronted by an authenticating
                     proxy (e.g. \`tailscale serve\`). Repeatable. Turns on strict
                     Host checking, so any other Host is refused.
