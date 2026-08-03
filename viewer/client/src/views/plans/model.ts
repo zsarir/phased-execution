@@ -309,7 +309,7 @@ export const NO_FILTERS: Filters = {
 };
 
 /**
- * `trade market` finds `trade-marketplace`.
+ * `cart api` finds `cart-api-endpoint`.
  *
  * Words rather than a substring, because slugs are hyphenated and titles are
  * prose, so the thing you remember is rarely contiguous in either.

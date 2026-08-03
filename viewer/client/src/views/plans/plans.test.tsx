@@ -207,39 +207,39 @@ describe('the five orders', () => {
 
 describe('filtering', () => {
   const rows = toRows([
-    plan({ slug: 'trade-marketplace', title: 'Trade marketplace', repos: ['trade'] }),
+    plan({ slug: 'cart-api-endpoint', title: 'Cart API endpoint', repos: ['shop'] }),
     plan({ slug: 'notes', title: 'Notes', kind: 'document', phases: 0, ready: [] }),
     plan({ slug: 'shipped', title: 'Shipped', status: 'complete', phases: 3, done: 3, ready: [] }),
   ], [], NOW);
 
   it('hides documents by default and brings them back on request', () => {
-    expect(applyFilters(rows, NO_FILTERS).map((r) => r.slug)).toEqual(['trade-marketplace', 'shipped']);
+    expect(applyFilters(rows, NO_FILTERS).map((r) => r.slug)).toEqual(['cart-api-endpoint', 'shipped']);
     expect(applyFilters(rows, { ...NO_FILTERS, showDocuments: true })).toHaveLength(3);
   });
 
   it('drops finished plans when asked', () => {
     expect(applyFilters(rows, { ...NO_FILTERS, showComplete: false }).map((r) => r.slug))
-      .toEqual(['trade-marketplace']);
+      .toEqual(['cart-api-endpoint']);
   });
 
   it('matches words in any order, across the slug and the title', () => {
     const [row] = rows;
-    expect(matches(row, 'trade market')).toBe(true);   // hyphenated slug, split query
-    expect(matches(row, 'marketplace trade')).toBe(true);
-    expect(matches(row, 'Marketplace')).toBe(true);    // case-insensitive
-    expect(matches(row, 'trade cart')).toBe(false);    // every word must match
+    expect(matches(row, 'cart api')).toBe(true);       // hyphenated slug, split query
+    expect(matches(row, 'endpoint cart')).toBe(true);
+    expect(matches(row, 'Endpoint')).toBe(true);       // case-insensitive
+    expect(matches(row, 'cart checkout')).toBe(false); // every word must match
     expect(matches(row, '   ')).toBe(true);            // blank is not a filter
   });
 
   it('offers only the repos and statuses the data actually has', () => {
-    expect(repoOptions(rows)).toEqual(['hub', 'trade']);
+    expect(repoOptions(rows)).toEqual(['hub', 'shop']);
     expect(statusOptions(rows)).toEqual(['active', 'complete']);
   });
 });
 
 describe('grouping', () => {
   const rows = toRows([
-    plan({ slug: 'a', title: 'A', repos: ['hub', 'trade'] }),
+    plan({ slug: 'a', title: 'A', repos: ['hub', 'shop'] }),
     plan({ slug: 'b', title: 'B', repos: [] }),
   ], [], NOW);
 
@@ -266,16 +266,16 @@ describe('grouping', () => {
 
 describe('a row that has to fit', () => {
   it('caps a long repo list and keeps the whole of it in the tooltip', async () => {
-    // `trade-audit-mt5-product` names fourteen repos — 178 characters. As one
-    // truncated line that reads `all · aws · customer-app · doc…`, which says
+    // A monorepo-wide plan can name a dozen repos — 178 characters of them. As
+    // one truncated line that reads `all · api · billing · doc…`, which says
     // nothing the first name did not, and it was wide enough to push the card
     // 700px past the viewport before the wrapper was allowed to shrink.
     const { repoLabel } = await import('./row');
-    const many = ['all', 'aws', 'customer-app', 'docs', 'front-admin', 'hetzner'];
-    expect(repoLabel(many).text).toBe('all · aws +4');
+    const many = ['all', 'api', 'billing', 'docs', 'mobile-app', 'web-admin'];
+    expect(repoLabel(many).text).toBe('all · api +4');
     expect(repoLabel(many).title).toBe(many.join(' · '));
     // A short list is not worth abbreviating.
-    expect(repoLabel(['hub', 'trade']).text).toBe('hub · trade');
+    expect(repoLabel(['hub', 'shop']).text).toBe('hub · shop');
     expect(repoLabel([]).text).toBe('');
   });
 });
