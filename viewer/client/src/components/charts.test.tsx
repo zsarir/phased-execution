@@ -17,7 +17,7 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import {
-  BarList, Bars, CHART_TONES, Calendar, LoadMeter, RouteStrip, StackBar, toneVar,
+  BarList, Bars, CHART_TONES, Calendar, LoadMeter, RouteStrip, RunStrip, StackBar, toneVar,
 } from './charts';
 
 /** Anything that is a colour but not a token reference. */
@@ -183,6 +183,55 @@ describe('the charts as charts', () => {
     const strip = container.querySelector('[role="img"]')!;
     expect(strip.getAttribute('aria-label')).toBe('3 phases, 2 done');
     expect(strip.children).toHaveLength(3);
+  });
+
+  it('paints a run strip with tokens only, including a status it has not been taught', () => {
+    const { container } = render(
+      <RunStrip phases={[
+        { phase: 1, status: 'done' },
+        { phase: 2, status: 'failed' },
+        { phase: 3, status: 'quantum-superposition' },
+      ]} />,
+    );
+    for (const value of paints(container)) expect(value, value).not.toMatch(LITERAL_COLOUR);
+    // Same fallback the route strip makes: grey says "we do not know what this
+    // is", where an interpolated `var(--line-<new word>)` would say nothing at
+    // all by painting the segment invisible.
+    expect(container.querySelector<HTMLElement>('[title^="P3"]')!.style.background)
+      .toBe(toneVar('waiting'));
+  });
+
+  it('reads a run phase with the runner vocabulary, not the plan one', () => {
+    // The two strips share exactly one word — `done`. A single table covering
+    // both would have to answer what a `blocked` run phase is, and there is no
+    // such thing.
+    const { container } = render(
+      <RunStrip phases={[
+        { phase: 1, status: 'failed' },
+        { phase: 2, status: 'parked' },
+        { phase: 3, status: 'awaiting-verification' },
+        { phase: 4, status: 'skipped' },
+      ]} />,
+    );
+    const fills = [...container.querySelector('[role="img"]')!.children]
+      .map((c) => (c as HTMLElement).style.background);
+    // `parked` is a queue of questions, not a failure — gated, never blocked.
+    expect(fills).toEqual([
+      toneVar('blocked'), toneVar('gated'), toneVar('ready'), toneVar('waiting'),
+    ]);
+  });
+
+  it('counts a run strip by what actually finished', () => {
+    const { container } = render(
+      <RunStrip phases={[
+        { phase: 1, status: 'done' },
+        { phase: 2, status: 'skipped' },
+        { phase: 3, status: 'failed' },
+      ]} />,
+    );
+    // A skipped phase is not a done one, however the run ended.
+    expect(container.querySelector('[role="img"]')!.getAttribute('aria-label'))
+      .toBe('3 phases, 1 done');
   });
 
   it('gives every chart an accessible name — they are img roles, not decoration', () => {

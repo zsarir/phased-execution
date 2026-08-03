@@ -29,6 +29,9 @@ export const RUN_TONE: Record<RunStatus, 'ok' | 'busy' | 'bad' | 'warn' | undefi
   finished: 'ok',
   halted: 'bad',
   waiting: 'warn',
+  // Not `bad`: parked is not a failure, it is a queue of questions. The run did
+  // everything it could without someone.
+  parked: 'warn',
   paused: undefined,
   pausing: 'warn',
   stopping: 'warn',

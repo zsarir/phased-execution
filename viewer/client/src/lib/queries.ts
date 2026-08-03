@@ -355,8 +355,22 @@ export function useRun(slug: string | undefined, enabled = true) {
   });
 }
 
+/**
+ * Every run of every plan, newest first.
+ *
+ * `keepPreviousData` for the same reason `useRun` has it, and it matters more
+ * here: a live run emits `run:phase` every few seconds and `EVENT_EFFECTS`
+ * invalidates this key on each one. Without a placeholder the fleet table — and
+ * the dashboard's live strip — would drop to a skeleton every few seconds
+ * precisely while there is something to watch.
+ */
 export function useRuns(enabled = true) {
-  return useQuery({ queryKey: keys.runs(), queryFn: api.runs, enabled });
+  return useQuery({
+    queryKey: keys.runs(),
+    queryFn: api.runs,
+    enabled,
+    placeholderData: keepPreviousData,
+  });
 }
 
 /**

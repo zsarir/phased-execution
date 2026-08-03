@@ -1,5 +1,5 @@
 /**
- * Six hand-drawn charts. One accent hue per meaning, tabular figures, no
+ * Seven hand-drawn charts. One accent hue per meaning, tabular figures, no
  * decoration that does not carry data.
  *
  * Ported from `web/components/charts.js` — restyled, not redesigned. The
@@ -10,7 +10,7 @@
  * component resolves them, so a chart cannot be painted a colour the design
  * system does not have. `charts.test.tsx` asserts that.
  *
- * No chart library. These are six shapes totalling ~250 lines; the smallest
+ * No chart library. These are seven shapes totalling ~300 lines; the smallest
  * charting dependency is larger than the whole plan surface's chunk, and it
  * would arrive with its own colour vocabulary to fight.
  */
@@ -416,6 +416,91 @@ export function RouteStrip({ phases, className }: { phases: StripPhase[]; classN
             )}
             style={{ background: toneVar(STRIP_TONE[p.state] ?? 'waiting') }}
             title={`P${p.phase} · ${p.state}${p.title ? ` · ${p.title}` : ''}`}
+          />
+        );
+      })}
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * RunStrip — what a run actually did to a plan
+ * ------------------------------------------------------------------ */
+
+export interface RunPhase {
+  phase: number;
+  /** A `PhaseStatus` from the runner — a different vocabulary to a plan's. */
+  status: string;
+  /** The caller's one-line reading, for the tooltip. Cost and attempts belong here. */
+  detail?: string;
+}
+
+/**
+ * A run's phases → this palette.
+ *
+ * Deliberately a second table rather than a widening of `STRIP_TONE`: a plan's
+ * phase is in one of seven *states* the engine derives from the board, while a
+ * run's phase has one of ten *outcomes* the runner recorded. `done` is the only
+ * word they share, and it means the same thing in both — everything else here
+ * (`failed`, `skipped`, `parked`, `awaiting-verification`) has no plan-side
+ * equivalent at all. One table covering both would have to answer what a
+ * `blocked` run phase is, and there is no such thing.
+ *
+ * The mapping people get wrong: `parked` is `gated`, not `blocked`. A parked
+ * phase is not broken, it is waiting for a person — the same shape of fact as a
+ * gate, and painting it red would send someone looking for a failure that never
+ * happened.
+ */
+const RUN_TONE: Record<string, ChartTone> = {
+  done: 'done',
+  running: 'progress',
+  verifying: 'progress',
+  // Machine-checked as far as it can be; the rest is a question for a person.
+  // That makes it the one segment on the strip anybody can act on.
+  'awaiting-verification': 'ready',
+  failed: 'blocked',
+  interrupted: 'stuck',
+  parked: 'gated',
+  gated: 'gated',
+  skipped: 'waiting',
+  pending: 'waiting',
+};
+
+/**
+ * One run as a line of track.
+ *
+ * `/api/runs` already carries a full `PhaseRecord` for every phase of every run,
+ * and until now no page read any of it — a run was six columns, of which one was
+ * a status word for the run as a whole. This is that record made legible in the
+ * width of a table cell: eight phases done and one red is a different run from
+ * one phase done and eight pending, and the status word `halted` cannot tell
+ * them apart.
+ *
+ * The running phase is drawn full-height for the same reason `RouteStrip` does
+ * that to a ready one: it is the segment you are looking for, and on a 6px
+ * segment a hue change alone is not a difference.
+ */
+export function RunStrip({ phases, className }: { phases: RunPhase[]; className?: string }) {
+  if (!phases.length) return null;
+  const done = phases.filter((p) => p.status === 'done').length;
+
+  return (
+    <span
+      className={cn('flex h-3 w-full min-w-0 items-stretch gap-px', className)}
+      role="img"
+      aria-label={`${phases.length} phases, ${done} done`}
+    >
+      {phases.map((p) => {
+        const active = p.status === 'running' || p.status === 'verifying';
+        return (
+          <span
+            key={p.phase}
+            className={cn(
+              'block min-w-0 flex-1 rounded-[1px] first:rounded-l-sm last:rounded-r-sm',
+              active ? 'self-stretch' : 'my-[3px]',
+            )}
+            style={{ background: toneVar(RUN_TONE[p.status] ?? 'waiting') }}
+            title={`P${p.phase} · ${p.status}${p.detail ? ` · ${p.detail}` : ''}`}
           />
         );
       })}

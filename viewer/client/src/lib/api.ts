@@ -409,6 +409,13 @@ export interface GateStatus {
 
 export type RunStatus =
   | 'running' | 'waiting' | 'paused' | 'pausing' | 'frozen'
+  // `parked` — every remaining phase needs a person. Written by `reconcileRun`
+  // when a run's child is alive but nothing is driving it, and by an approval
+  // that timed out. It was missing from this union while the server emitted it
+  // all along, so the tone tables the note above promises would catch an
+  // unknown status simply had no entry for it: the one status meaning "waiting
+  // on you" was drawn as the one meaning nothing in particular.
+  | 'parked'
   | 'halted' | 'finished' | 'stopping' | 'interrupted';
 
 export type PhaseStatus =
