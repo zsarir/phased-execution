@@ -16,11 +16,27 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 import { log } from '../log.ts';
-import { CATEGORIES, categoryOf, defaultCategories, sanitiseCategories, type CategoryId } from './catalogue.ts';
+import {
+  CATEGORIES, categoryOf, defaultCategories, routeFor, sanitiseCategories, type CategoryId,
+} from './catalogue.ts';
 import { deliver, origin, type PushMessage, type Subscription } from './send.ts';
 import { loadVapid, vapidSubject, PUSH_DIR, type Vapid } from './vapid.ts';
 
-export { CATEGORIES, type CategoryId } from './catalogue.ts';
+export { CATEGORIES, routeFor, type CategoryId } from './catalogue.ts';
+
+/**
+ * What one device did with one announcement, told to whoever asked.
+ *
+ * `label` travels with it because a device can be dropped from the register the
+ * moment it answers `gone` — and a history row reading "device
+ * 4f3a…: gone" with nothing to name it is a row nobody can act on.
+ */
+export type DeliveryReport = {
+  device: string;
+  label: string;
+  outcome: 'sent' | 'throttled' | 'failed' | 'gone';
+  detail?: string;
+};
 
 const FILE = join(PUSH_DIR, 'subscriptions.json');
 
@@ -135,8 +151,19 @@ export class Push {
    * Deliberately not awaited by callers: this is called from the middle of a
    * run's event handling, and a slow push service must not be able to stall a
    * phase. Everything that can go wrong is handled here and logged.
+   *
+   * `onDelivery` is how that stops being invisible. Because nothing awaits
+   * this, a throttled, refused or undeliverable push reached no further than a
+   * log line — so the outcome is now reported back per device, and the
+   * notification store keeps it against the record. Called after the fact and
+   * never awaited either: it annotates history, it does not gate it.
    */
-  announce(category: CategoryId, message: Omit<PushMessage, 'category'>, now = Date.now()): void {
+  announce(
+    category: CategoryId,
+    message: Omit<PushMessage, 'category'>,
+    now = Date.now(),
+    onDelivery?: (report: DeliveryReport) => void,
+  ): void {
     const targets = this.devices.filter((d) => d.categories[category]);
     if (!targets.length) return;
 
@@ -150,7 +177,19 @@ export class Push {
       if (last && now - last < 5_000) continue;
       this.recent.set(key, now);
 
-      void this.sendOne(device, { ...message, category }, urgent);
+      void this.sendOne(device, { ...message, category }, urgent).then((result) => {
+        if (!onDelivery) return;
+        try {
+          onDelivery({
+            device: device.id,
+            label: device.label,
+            outcome: result.kind,
+            detail: result.kind === 'failed' ? result.detail
+              : result.kind === 'throttled' ? `retry after ${result.retryAfter ?? 'unknown'}s`
+                : undefined,
+          });
+        } catch { /* annotating a record must never affect a run */ }
+      });
     }
     this.prune(now);
   }
@@ -163,7 +202,7 @@ export class Push {
       title: 'Phase Console',
       body: `Notifications are working on ${device.label}.`,
       tag: 'push-test',
-      url: '/#/settings',
+      url: routeFor('health'),
       category: 'approval',
     }, false);
     return result.kind === 'sent'

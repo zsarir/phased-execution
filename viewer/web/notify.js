@@ -22,6 +22,10 @@
  * apple-mobile-web-app tags in index.html are for.
  */
 
+// From `routes.js` rather than `router.js`: this module is imported by the
+// shell before anything is rendered, and the rules do not need the hook.
+import { navigate } from './routes.js';
+
 const SUPPORTED = typeof Notification !== 'undefined';
 
 /**
@@ -55,7 +59,7 @@ export async function askToNotify() {
  * should be one line on the lock screen, not three. Anything that throws is
  * swallowed — a notification failing must never break the page that raised it.
  */
-export function notify(title, body, tag) {
+export function notify(title, body, tag, url) {
   if (!SUPPORTED || Notification.permission !== 'granted') return false;
   if (pushHandlesIt) return false;
   if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
@@ -65,7 +69,16 @@ export function notify(title, body, tag) {
   }
   try {
     const shown = new Notification(title, { body, tag, renotify: false });
-    shown.onclick = () => { try { window.focus(); shown.close(); } catch { /* nothing to focus */ } };
+    shown.onclick = () => {
+      try {
+        window.focus();
+        // Where it goes was decided by the server's `routeFor`, so this leg
+        // cannot drift from the push payload and the inbox row the way three
+        // hand-written URLs did.
+        if (url) navigate(url);
+        shown.close();
+      } catch { /* nothing to focus */ }
+    };
     return true;
   } catch {
     return false;
@@ -73,25 +86,19 @@ export function notify(title, body, tag) {
 }
 
 /**
- * Announce the states where nothing further happens until a person acts.
+ * Raise one notification from a record the server already decided to announce.
  *
- * Deliberately only these. A notification per phase would train the habit of
- * ignoring them, which costs exactly the halt that mattered.
+ * There used to be three ways a notification came into being — the page's own
+ * reading of run state, the push payload, and the out-of-band notifier — each
+ * with its own idea of what was worth saying and its own hand-built URL. This
+ * is now the only in-tab one, and it says exactly what the store says, so an
+ * event you were told about is the same event you find in the inbox.
+ *
+ * Restraint still lives on the server: a record exists for everything, but only
+ * the categories a person opted into ever reach a device, and this leg is
+ * suppressed entirely while the tab is in front of you.
  */
-export function announceRun(run) {
-  if (!run) return;
-  if (run.status === 'halted' || run.status === 'parked') {
-    notify(`${run.slug} ${run.status}`, run.halt?.reason ?? 'the run stopped and needs you', `run-${run.id}-${run.status}`);
-  } else if (run.status === 'finished') {
-    notify(`${run.slug} finished`, `$${(run.spentUsd ?? 0).toFixed(2)} spent`, `run-${run.id}-finished`);
-  }
-}
-
-export function announceApproval(approval) {
-  if (!approval || approval.status !== 'pending') return;
-  notify(
-    approval.kind === 'verify' ? 'A check only you can make' : 'Waiting on you',
-    `${approval.slug}${approval.phase != null ? ` phase ${approval.phase}` : ''} — ${approval.title}`,
-    `approval-${approval.id}`,
-  );
+export function announce(record) {
+  if (!record?.title) return false;
+  return notify(record.title, record.body ?? '', record.id, record.url);
 }

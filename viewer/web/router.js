@@ -1,27 +1,19 @@
 /**
- * Hash routing, so every view is a link you can paste to someone:
- *   #/plans                    #/plan/<slug>/route
- *   #/plan/<slug>/phase/8      #/plan/<slug>/handoff/7
- *   #/ready  #/stats  #/search?q=…  #/settings  #/source
+ * Hash routing for the app: the rules from `routes.js`, plus the hook that
+ * re-renders when they change.
+ *
+ * The split is deliberate — this module pulls in the rendering runtime, which
+ * is a bare specifier only a browser's import map can resolve, so anything that
+ * lives here is unreachable from a Node test. The routing rules themselves are
+ * next door and dependency-free, because a server-built notification URL has to
+ * agree with them and "it agrees" is a claim worth being able to check.
  */
 
 import { useState, useEffect } from './html.js';
 
-export function parseHash(hash = location.hash) {
-  const raw = hash.replace(/^#\/?/, '');
-  const [pathPart, queryPart] = raw.split('?');
-  const segments = pathPart.split('/').filter(Boolean).map(decodeURIComponent);
-  const query = Object.fromEntries(new URLSearchParams(queryPart ?? ''));
-  return { segments, query, path: pathPart };
-}
+export { parseHash, toHash, navigate, planHref, phaseHref, handoffHref } from './routes.js';
 
-export function navigate(path, { replace = false } = {}) {
-  const target = `#/${String(path).replace(/^#?\/?/, '')}`;
-  if (location.hash === target) return;
-  if (replace) history.replaceState(null, '', target);
-  else location.hash = target;
-  if (replace) window.dispatchEvent(new HashChangeEvent('hashchange'));
-}
+import { parseHash } from './routes.js';
 
 export function useRoute() {
   const [route, setRoute] = useState(() => parseHash());
@@ -31,16 +23,4 @@ export function useRoute() {
     return () => window.removeEventListener('hashchange', update);
   }, []);
   return route;
-}
-
-export function planHref(slug, tab = 'route') {
-  return `#/plan/${encodeURIComponent(slug)}/${tab}`;
-}
-
-export function phaseHref(slug, phase) {
-  return `#/plan/${encodeURIComponent(slug)}/phase/${phase}`;
-}
-
-export function handoffHref(slug, phase) {
-  return `#/plan/${encodeURIComponent(slug)}/handoff/${phase}`;
 }

@@ -1,11 +1,13 @@
 /** Phase Console — client entry: shell, rail, routing and live refresh. */
 
 import { html, render, useState, useEffect, useCallback } from './html.js';
-import { api, subscribe, subscribeRun, clearCache } from './api.js';
+import { api, subscribe, subscribeRun, subscribeNotifications, clearCache } from './api.js';
 import { useRoute, navigate } from './router.js';
 import { usePrefs, useToasts, applyTheme, getPrefs } from './store.js';
 import { syncSuppression } from './push.js';
+import { announce } from './notify.js';
 import { Spinner, Banner } from './components/ui.js';
+import { RestartButton } from './components/restart.js';
 
 import { SourceView } from './views/source.js';
 import { PlansView } from './views/plans.js';
@@ -17,6 +19,7 @@ import { SettingsView } from './views/settings.js';
 import { RunsView } from './views/run.js';
 import { GuideView } from './views/guide.js';
 import { DashboardView } from './views/dashboard.js';
+import { NotificationsView } from './views/notifications.js';
 
 function RouteGlyph() {
   return html`
@@ -56,6 +59,7 @@ function Rail({ state, counts, route, onPickSource }) {
         ${item('ready', 'Ready now', counts.ready, counts.ready > 0)}
         ${item('plans', 'Plans', counts.plans)}
         ${item('runs', 'Runs', counts.approvals || null, counts.approvals > 0)}
+        ${item('notifications', 'Notifications', counts.unread || null, counts.unread > 0)}
         ${item('stats', 'Statistics')}
         ${item('search', 'Search')}
       </div>
@@ -114,6 +118,7 @@ function App() {
   const [error, setError] = useState(null);
   const [tick, setTick] = useState(0);
   const [pendingApprovals, setPendingApprovals] = useState(0);
+  const [unread, setUnread] = useState(0);
 
   const reload = useCallback(async () => {
     try {
@@ -150,9 +155,30 @@ function App() {
       } catch { /* transient — the badge is not worth a toast */ }
     };
     void count();
-    const unsubscribe = subscribeRun({ approval: count, run: count });
+    // `approval:resolved` matters as much as `approval` here: a card answered
+    // on a phone has to take the badge down on the laptop, and creation was the
+    // only event that ever fired.
+    const unsubscribe = subscribeRun({ approval: count, approvalResolved: count, run: count });
     return () => { alive = false; unsubscribe(); };
   }, [state?.autopilot]);
+
+  /**
+   * The in-tab notification leg — the only one, and it lives in the shell.
+   *
+   * It used to be wired inside the run view alone, so the console could raise a
+   * notification about a run exactly when you were already looking at that run.
+   * Every other page — and every closed tab — got nothing. Here it follows the
+   * server's own announcements, so what you are told, what a subscribed device
+   * is told, and what the inbox holds are the same three facts with the same
+   * wording and the same destination.
+   */
+  useEffect(() => subscribeNotifications({
+    notification: (record) => { announce(record); setUnread((n) => n + 1); },
+    read: (data) => setUnread(data?.unread ?? 0),
+    cleared: (data) => setUnread(data?.unread ?? 0),
+  }), []);
+
+  useEffect(() => { setUnread(state?.unread ?? 0); }, [state?.unread]);
 
   useEffect(() => {
     const onKey = (event) => {
@@ -194,6 +220,7 @@ function App() {
     // A run parked on an approval is the one thing worth interrupting someone
     // for, so it gets a badge on the rail rather than waiting to be discovered.
     approvals: pendingApprovals,
+    unread,
   };
 
   const [head, ...rest] = route.segments;
@@ -204,6 +231,7 @@ function App() {
   else if (head === 'ready') view = html`<${ReadyView} plans=${plans} state=${state} />`;
   else if (head === 'stats') view = html`<${StatsView} state=${state} />`;
   else if (head === 'search') view = html`<${SearchView} query=${route.query.q ?? ''} />`;
+  else if (head === 'notifications') view = html`<${NotificationsView} route=${route} />`;
   else if (head === 'settings') view = html`<${SettingsView} state=${state} onChanged=${() => setTick((n) => n + 1)} />`;
   else if (head === 'plans') view = html`<${PlansView} plans=${plans} state=${state} />`;
   else view = html`<${DashboardView} plans=${plans} state=${state} />`;
@@ -218,6 +246,7 @@ function App() {
               <strong>This console is running older code than is on disk.</strong>
               Node loads the server once, at startup — the page reloads from disk but the process
               cannot. Restart it, or a fix you already have will look like it did not work.
+              <div style="margin-top:8px"><${RestartButton} state=${state} /></div>
             </${Banner}>
           </div>` : null}
         ${error ? html`<div class="page"><${Banner} kind="error">${error}</${Banner}></div>` : view}

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Phase Console as a launchd agent.
 #
-#   agent.sh install [--root DIR] [--port N] [extra console flags…]
+#   agent.sh install [--root DIR] [--port N] [--notify CMD] [extra console flags…]
 #   agent.sh uninstall
 #   agent.sh status
 #   agent.sh restart
@@ -31,16 +31,30 @@ current_path="$PATH"
 xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 cmd_install() {
-  local node_bin root="" port="4123" extra=()
+  local node_bin root="" port="4123" notify="" notify_given=0 extra=()
   node_bin="$(command -v node)" || die "node is not on PATH"
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --root) root="$2"; shift 2 ;;
       --port) port="$2"; shift 2 ;;
+      --notify) notify="$2"; notify_given=1; shift 2 ;;
       *) extra+=("$1"); shift ;;
     esac
   done
+
+  # The out-of-band leg. launchd hands a job a near-empty environment, so a
+  # PHASE_CONSOLE_NOTIFY exported in a shell reaches the console started from
+  # that shell and NOT the one launchd starts at login — which is the one that
+  # matters, because it is the one running while you are asleep. That is why it
+  # has never fired here: the variable was real and the plist never carried it.
+  # Baked in, it is armed for every restart.
+  #
+  # Inherited from the installing shell unless --notify says otherwise, so an
+  # existing setup keeps working; `--notify ''` clears it deliberately.
+  if [ "$notify_given" -eq 0 ] && [ -n "${PHASE_CONSOLE_NOTIFY:-}" ]; then
+    notify="$PHASE_CONSOLE_NOTIFY"
+  fi
   [ -n "$root" ] || die "install needs --root <dir> (the repo holding docs/plans)"
   [ -d "$root/docs/plans" ] || die "no docs/plans under $root"
 
@@ -56,6 +70,11 @@ cmd_install() {
   for a in "${args[@]}"; do
     arg_xml+="    <string>$(xml_escape "$a")</string>"$'\n'
   done
+
+  local notify_xml=""
+  if [ -n "$notify" ]; then
+    notify_xml="    <key>PHASE_CONSOLE_NOTIFY</key><string>$(xml_escape "$notify")</string>"$'\n'
+  fi
 
   cat > "$PLIST" <<PLIST_END
 <?xml version="1.0" encoding="UTF-8"?>
@@ -86,7 +105,7 @@ $arg_xml  </array>
     <key>PATH</key><string>$(xml_escape "$current_path")</string>
     <key>HOME</key><string>$(xml_escape "$HOME")</string>
     <key>PHASE_CONSOLE_NO_OPEN</key><string>1</string>
-  </dict>
+$notify_xml  </dict>
 </dict>
 </plist>
 PLIST_END
@@ -100,6 +119,7 @@ PLIST_END
   echo "root       $root"
   echo "url        http://127.0.0.1:$port"
   echo "logs       $STATE_DIR/console.{out,err}.log"
+  echo "notify     ${notify:-not set — pass --notify '<command>' for out-of-band alerts}"
   echo
   echo "It is running now and will start at login. Stop it with: agent.sh uninstall"
 }

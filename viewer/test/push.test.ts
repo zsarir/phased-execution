@@ -299,7 +299,12 @@ test('the noisy categories are off and the blocking ones are on', () => {
 
 test('only what blocks a run is marked urgent', () => {
   const urgent = catalogue.CATEGORIES.filter((c) => c.urgent).map((c) => c.id);
-  assert.deepEqual(urgent.sort(), ['approval', 'halted']);
+  // `needs-you` earns it on exactly the test the other two pass: the phase has
+  // stopped and nothing further happens until a person acts. `parked` and
+  // `finished` do not — a run asleep until a usage window reopens moves again
+  // on its own, and a finished one is not waiting for anybody.
+  assert.deepEqual(urgent.sort(), ['approval', 'halted', 'needs-you'],
+    'urgency is reserved for "nothing proceeds without you" — widening it is how a channel gets muted');
 });
 
 test('unknown categories are dropped and missing ones take their default', () => {

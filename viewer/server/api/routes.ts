@@ -327,6 +327,65 @@ export async function handleApi(
       }
     }
 
+    /* ---------------- the notification inbox ---------------- */
+    if (head === 'notifications') {
+      // Reads are unguarded like the rest of the read API. Mutations take the
+      // cross-site check but NOT `--allow-writes`: marking a notification read
+      // writes nothing in a repository, and a read-only console is exactly
+      // where you would want to clear an inbox.
+      if (req.method === 'GET') {
+        json(res, 200, service.inbox({
+          category: url.searchParams.get('category'),
+          unreadOnly: url.searchParams.get('unread') === '1',
+          limit: Number(url.searchParams.get('limit') ?? 50),
+          before: url.searchParams.get('before'),
+        }));
+        return true;
+      }
+
+      if (req.method === 'POST' && rest[0] === 'read') {
+        const refusal = guardCsrf(req);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        // No `ids` means every unread one — "mark all read" is the common case
+        // and does not deserve the client enumerating an inbox to express it.
+        const ids = Array.isArray(body.ids)
+          ? body.ids.filter((v): v is string => typeof v === 'string').slice(0, 1_000)
+          : null;
+        json(res, 200, service.markNotificationsRead(ids));
+        return true;
+      }
+
+      if (req.method === 'DELETE') {
+        const refusal = guardCsrf(req);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const id = url.searchParams.get('id');
+        const scope = url.searchParams.get('scope');
+        // Explicit or nothing: an unrecognised scope clears nothing rather than
+        // falling through to the most destructive reading of it.
+        if (id) { json(res, 200, service.clearNotifications({ id })); return true; }
+        if (scope === 'read' || scope === 'all') { json(res, 200, service.clearNotifications(scope)); return true; }
+        json(res, 400, { error: 'pass ?id=<id>, ?scope=read or ?scope=all' });
+        return true;
+      }
+    }
+
+    /* ---------------- restarting the console itself ---------------- */
+    if (head === 'restart') {
+      if (req.method === 'GET') { json(res, 200, service.restartReadiness()); return true; }
+      if (req.method === 'POST') {
+        // Run-class, not write-class: this ends a process that may be
+        // supervising agent sessions.
+        const refusal = guardRun(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const by = typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console';
+        const outcome = service.restart(by, body.force === true);
+        json(res, outcome.ok ? 200 : 409, outcome);
+        return true;
+      }
+    }
+
     if (!service.store) { json(res, 409, { error: 'No source directory is open.' }); return true; }
 
     /* ---------------- portfolio ---------------- */

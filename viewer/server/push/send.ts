@@ -47,9 +47,19 @@ export type PushMessage = {
   body: string;
   /** Collapses repeats: the same tag replaces rather than stacks. */
   tag: string;
-  /** Where clicking it should land. */
+  /** Where clicking it should land. Built by `routeFor`, never by hand. */
   url: string;
   category: string;
+  /**
+   * The card this notification is about, when it is about one.
+   *
+   * It is what lets the service worker put Allow and Deny on the notification
+   * itself, so answering from a lock screen is one tap rather than unlock →
+   * open → find the queue. Nothing else in the payload identifies a card.
+   */
+  approvalId?: string;
+  /** The record in the inbox, so a tap can mark exactly that row read. */
+  notificationId?: string;
 };
 
 /**

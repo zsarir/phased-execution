@@ -1372,6 +1372,63 @@
 .chip.is-clickable { cursor: pointer; border: 1px solid var(--rule); background: transparent; }
 .chip.is-clickable:disabled { cursor: not-allowed; opacity: 0.5; }
 
+/* ------------------------------------------------------------------ *
+ * The notification inbox
+ * ------------------------------------------------------------------ *
+ *
+ * A list read the way a lock screen is read: newest first, unread visibly
+ * different, and the whole row a target — the point of an inbox row is that it
+ * takes you to the thing it is about, so making you find a link inside it would
+ * be the wrong shape.
+ */
+
+.inbox-controls { gap: var(--s2); margin-bottom: var(--s2); }
+.inbox-controls .chip { cursor: pointer; border: 1px solid var(--rule); background: transparent; }
+.inbox-controls .chip.on { border-color: var(--line-progress); color: var(--ink); }
+
+.inbox-day { display: block; }
+.inbox-day + .inbox-day { margin-top: var(--s4); }
+
+.inbox-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s2);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.inbox-row.unread { border-color: color-mix(in oklab, var(--line-progress) 45%, var(--rule)); }
+/* Urgency is a left edge rather than a colour wash: it has to read at a glance
+   in a list of twenty without making the other nineteen harder to read. */
+.inbox-row.unread.urgent { box-shadow: inset 3px 0 0 var(--line-blocked); }
+
+.inbox-open {
+  flex: 1;
+  display: block;
+  text-align: left;
+  padding: var(--s2) var(--s3);
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 8px;
+}
+.inbox-open:hover { background: var(--surface-raised); }
+.inbox-row.unread .inbox-open strong { color: var(--ink); }
+.inbox-row:not(.unread) .inbox-open strong { color: var(--ink-muted); font-weight: 500; }
+
+.inbox-drop { align-self: center; margin-right: var(--s2); opacity: 0.5; }
+.inbox-drop:hover { opacity: 1; }
+
+@media (max-width: 640px) {
+  /* Every control on this page is a thumb target, and the filter chips wrap
+     rather than scroll sideways — a horizontal scroller hides its own tail. */
+  .inbox-controls .btn { min-height: 40px; }
+  .inbox-open { padding: var(--s3); }
+  .inbox-drop { min-width: 40px; min-height: 40px; }
+}
+
 @media (max-width: 640px) {
   /* Half the screen is too much to give a log when the controls underneath it
      are what you came for. The component sets its height inline, and a cap is

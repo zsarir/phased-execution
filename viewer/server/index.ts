@@ -20,7 +20,7 @@ import { flagsRefusal, parseFlags, VIEWER_DIR } from './config.ts';
 import {
   configureLog, installExitLogging, isClientDisconnect, log, noteExit, previousRunEndedCleanly,
 } from './log.ts';
-import { markDegraded, runShutdownHandlers } from './lifecycle.ts';
+import { markDegraded, onRestartRequest, runShutdownHandlers } from './lifecycle.ts';
 import { Service } from './service.ts';
 import { handleApi } from './api/routes.ts';
 import { classify } from './api/access.ts';
@@ -242,6 +242,22 @@ async function shutdown(reason: string): Promise<void> {
   log.info('shutdown.end', { reason });
   process.exit(0);
 }
+
+/**
+ * The Restart button's other half.
+ *
+ * Registered rather than exported because `shutdown` closes over the server
+ * handle and the drain budget, both of which live here. The API decides
+ * *whether* a restart is allowed (a run in flight refuses it, and so does an
+ * unsupervised process); this is only how it is carried out.
+ *
+ * The delay is not decoration: the HTTP response has to reach the browser
+ * before the socket it arrived on is closed, or the page sees a network error
+ * for a restart that is working exactly as asked.
+ */
+onRestartRequest((reason) => {
+  setTimeout(() => void shutdown(reason), 250).unref();
+});
 
 process.on('SIGINT', () => void shutdown('SIGINT'));
 process.on('SIGTERM', () => void shutdown('SIGTERM'));

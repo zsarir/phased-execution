@@ -22,9 +22,10 @@ import {
 import { SearchIndex, type SearchResult } from './search.ts';
 import { listSkills, type SkillInfo } from './skills.ts';
 import { DocsWatcher } from './watch.ts';
-import { degradedState, onDegraded } from './lifecycle.ts';
+import { degradedState, hasShutdownWork, onDegraded, requestRestart, supervisor } from './lifecycle.ts';
 import { log } from './log.ts';
-import { Push, tagFor } from './push/index.ts';
+import { CATEGORIES, Push, routeFor, tagFor, type CategoryId } from './push/index.ts';
+import { Notifications, type NotificationQuery, type NotificationRecord } from './notifications.ts';
 import { repoInfo, lastCommit, type GitRepoInfo, type GitFileInfo } from './git.ts';
 import { findMemory, memoryIndexLines } from './memory.ts';
 import {
@@ -201,26 +202,42 @@ export class Service {
   readonly runner: Runner;
   readonly approvals: Approvals;
   readonly push: Push;
+  readonly notifications: Notifications;
 
   constructor(flags: Flags) {
     this.flags = flags;
     this.prefs = loadPrefs();
     this.sizing = loadSizing(flags.scriptsDir);
     this.push = new Push(flags.remoteUsers);
+    this.notifications = new Notifications();
     this.watcher = new DocsWatcher((paths) => this.onChange(paths));
-    this.approvals = new Approvals((approval) => {
-      this.emit('approval', approval);
-      const where = `${approval.slug}${approval.phase != null ? ` phase ${approval.phase}` : ''}`;
-      // The browser can only be told if a browser is open. These are the paths
-      // that reach an operator who is asleep, which is the case the whole
-      // unattended design exists for.
-      notifyOutOfBand(`Phase Console: ${approval.title}`, `${where} — ${approval.detail}`);
-      this.push.announce('approval', {
-        title: approval.kind === 'verify' ? 'A check only you can make' : 'Permission needed',
-        body: `${where} — ${approval.title}`,
-        tag: tagFor('approval', approval.id),
-        url: `/#/plan/${approval.slug}/autopilot`,
-      });
+    this.approvals = new Approvals({
+      notify: (approval) => {
+        this.emit('approval', approval);
+        const where = `${approval.slug}${approval.phase != null ? ` phase ${approval.phase}` : ''}`;
+        this.announce('approval', {
+          title: approval.kind === 'verify' ? 'A check only you can make' : 'Permission needed',
+          body: `${where} — ${approval.title}`,
+          tag: tagFor('approval', approval.id),
+          detail: approval.detail,
+        }, { slug: approval.slug, phase: approval.phase, runId: approval.runId, approvalId: approval.id });
+      },
+      // A decision made anywhere is now true everywhere. Every ending arrives
+      // here — a click, a tap on a phone, the timeout, `disarm()` when the run
+      // ends — because the hook is inside the settle closure itself.
+      resolved: (approval) => {
+        this.emit('approval:resolved', {
+          id: approval.id,
+          status: approval.status,
+          decidedBy: approval.decidedBy,
+          decidedAt: approval.decidedAt,
+          reason: approval.reason,
+          runId: approval.runId,
+          slug: approval.slug,
+          phase: approval.phase,
+          title: approval.title,
+        });
+      },
     });
     this.runner = new Runner({
       scriptsDir: flags.scriptsDir,
@@ -244,13 +261,74 @@ export class Service {
       this.emit('health', { ...state, watcher: this.watcher.status() });
       // The supervisor failing quietly is the worst case here: every other
       // surface still looks exactly like a console that is working.
-      this.push.announce('health', {
+      this.announce('health', {
         title: 'Phase Console is degraded',
         body: `${state.kind}: ${state.message}`,
         tag: tagFor('health', state.kind, state.message),
-        url: '/#/settings',
       });
     });
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Announcing — the one choke point
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Say something, once, through every leg — and write it down first.
+   *
+   * Everything that wants to tell the operator anything goes through here, and
+   * the order matters. The record is written **before** delivery is attempted,
+   * so it exists in the cases that used to lose the event entirely: no tab
+   * open, no device subscribed, `Push.announce()` returning at its first line
+   * because the register is empty. The inbox is therefore complete by
+   * construction — if it is not in the store, it was not announced.
+   *
+   * Three legs leave from here and they fail independently: the SSE event (a
+   * tab, if one is open), the operator's own notifier (`PHASE_CONSOLE_NOTIFY`,
+   * if one is set), and web push (each subscribed device, reporting back what
+   * became of it). None of them can throw into a run.
+   */
+  private announce(
+    category: CategoryId,
+    message: { title: string; body: string; tag: string; detail?: string },
+    context: { slug?: string | null; phase?: number | null; runId?: string; approvalId?: string } = {},
+  ): NotificationRecord {
+    const url = routeFor(category, context);
+    const record = this.notifications.record({
+      category,
+      title: message.title,
+      body: message.body,
+      url,
+      slug: context.slug ?? undefined,
+      phase: context.phase ?? undefined,
+      runId: context.runId,
+    });
+
+    // The inbox badge and any open inbox follow the store live rather than
+    // polling it.
+    this.emit('notification', record);
+
+    // The path that reaches an operator who is asleep with no browser in the
+    // picture at all — which is the case the whole unattended design exists for.
+    notifyOutOfBand(`Phase Console: ${message.title}`, message.detail ?? message.body);
+
+    this.push.announce(
+      category,
+      {
+        title: message.title,
+        body: message.body,
+        tag: message.tag,
+        url,
+        ...(context.approvalId ? { approvalId: context.approvalId } : {}),
+        notificationId: record.id,
+      },
+      Date.now(),
+      (report) => {
+        this.notifications.delivery(record.id, { ...report, at: new Date().toISOString() });
+        this.emit('notification:delivery', { id: record.id, ...report });
+      },
+    );
+    return record;
   }
 
   /* ---------------------------------------------------------------- *
@@ -280,7 +358,115 @@ export class Service {
     return check;
   }
 
-  close(): void { this.watcher.stop(); }
+  close(): void {
+    this.watcher.stop();
+    // Read markers and delivery outcomes are collapsed behind a debounce; this
+    // is the one moment they would otherwise be lost.
+    this.notifications.flush();
+  }
+
+  /* ---------------------------------------------------------------- *
+   * The inbox
+   * ---------------------------------------------------------------- */
+
+  /**
+   * History, plus the two facts that explain a notification you never got.
+   *
+   * `devices` being empty means nothing can arrive out of band no matter how
+   * many categories are on, and `outOfBand` being unconfigured means the same
+   * for a machine with no browser at all. Both were previously discoverable
+   * only by reading source.
+   */
+  inbox(query: NotificationQuery = {}) {
+    return {
+      ...this.notifications.list(query),
+      categories: CATEGORIES,
+      devices: this.push.list().length,
+      outOfBand: { configured: Boolean(process.env.PHASE_CONSOLE_NOTIFY) },
+    };
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Restarting the console from the console
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Everything the button needs to render itself honestly, before it is
+   * pressed. Two independent reasons it may refuse, and they read differently:
+   * a run in flight is "not now", an unsupervised process is "not from here".
+   */
+  restartReadiness(): {
+    ok: boolean; reason?: string; supervisor: ReturnType<typeof supervisor>;
+    busy: boolean; run: { slug: string; status: string; phase?: number } | null;
+  } {
+    const state = this.runner.current();
+    // `hasShutdownWork()` is the real test rather than a status on disk: the
+    // runner registers its handler exactly while it is driving, and drops it
+    // the moment the loop returns. A `running` row left by a killed process
+    // does not register anything, and must not block a restart forever.
+    const busy = hasShutdownWork();
+    const supervision = supervisor();
+    if (busy) {
+      return {
+        ok: false,
+        reason: state
+          ? `${state.slug} is mid-run (${state.status}) — restarting would abort the session it is driving `
+            + 'and expire every card it is waiting on, unanswerably'
+          : 'a run is checkpointing — restarting now would cut it in half',
+        supervisor: supervision, busy, run: state ? { slug: state.slug, status: state.status } : null,
+      };
+    }
+    if (!supervision.supervised) {
+      return {
+        ok: false,
+        reason: `${supervision.detail}. Stopping it here would leave nothing serving this page — `
+          + 'start it again from a terminal, or install it as an agent (deploy/agent.sh install).',
+        supervisor: supervision, busy, run: null,
+      };
+    }
+    return { ok: true, supervisor: supervision, busy, run: null };
+  }
+
+  /**
+   * Exit cleanly and let the supervisor bring it back.
+   *
+   * There is no other way to load new server code: Node reads `server/` once,
+   * at startup, so a fix on disk is invisible to the running process however
+   * many times the page is reloaded. That is what the stale banner has always
+   * said and what it has never been able to do anything about.
+   *
+   * `force` skips only the supervision check — never the in-flight one. A
+   * restart that aborts a live child and expires its cards unanswerably is not
+   * something a flag should be able to talk you into.
+   */
+  restart(by: string, force = false): { ok: boolean; reason?: string; supervisor?: ReturnType<typeof supervisor> } {
+    const readiness = this.restartReadiness();
+    if (!readiness.ok && (readiness.busy || !force)) {
+      return { ok: false, reason: readiness.reason, supervisor: readiness.supervisor };
+    }
+    log.warn('restart.requested', { by, supervisor: readiness.supervisor.kind, force });
+    this.announce('health', {
+      title: 'Phase Console is restarting',
+      body: `asked for by ${by} · ${readiness.supervisor.detail}`,
+      tag: tagFor('health', 'restart', String(Date.now())),
+    });
+    if (!requestRestart(`restart (${by})`)) {
+      return { ok: false, reason: 'this build has no restart verb registered — restart it by hand' };
+    }
+    return { ok: true, supervisor: readiness.supervisor };
+  }
+
+  markNotificationsRead(ids?: string[] | null): { changed: number; unread: number } {
+    const changed = this.notifications.markRead(ids);
+    if (changed) this.emit('notification:read', { ids: ids ?? null, unread: this.notifications.unread() });
+    return { changed, unread: this.notifications.unread() };
+  }
+
+  clearNotifications(what: 'all' | 'read' | { id: string }): { removed: number; unread: number } {
+    const removed = this.notifications.clear(what);
+    if (removed) this.emit('notification:cleared', { removed, unread: this.notifications.unread() });
+    return { removed, unread: this.notifications.unread() };
+  }
 
   private async refreshRepoInfo(): Promise<void> {
     if (!this.root) return;
@@ -344,10 +530,9 @@ export class Service {
 
     const push = (category: 'halted' | 'parked' | 'finished', title: string, body: string) => {
       this.notifiedRun = { id: state.id, status: state.status };
-      notifyOutOfBand(`Phase Console: ${title}`, body);
-      this.push.announce(category, {
-        title, body, tag: tagFor('run', state.id, state.status), url: `/#/plan/${state.slug}/autopilot`,
-      });
+      this.announce(category, {
+        title, body, tag: tagFor('run', state.id, state.status),
+      }, { slug: state.slug, runId: state.id });
     };
 
     switch (state.status) {
@@ -376,24 +561,44 @@ export class Service {
     }
   }
 
-  /** Each phase as it lands. The steady pulse of a run nobody is watching. */
+  /**
+   * Each phase as it lands — and the one that lands on a question.
+   *
+   * `awaiting-verification` reached neither announcer before: `announcePhase`
+   * returned early on anything but `done|failed`, and `announceRun` only ever
+   * looks at the run. So the single state where a phase has done its work and
+   * stopped dead on a check nobody but a person can make was the one state that
+   * told nobody. It is not a failure and not a success, so it gets its own
+   * category rather than being smuggled into either.
+   */
   private announcePhase(data: unknown): void {
-    const event = data as { slug?: string; phase?: number; status?: string } | undefined;
+    const event = data as { slug?: string; phase?: number; status?: string; notRun?: number } | undefined;
     const { slug, phase, status } = event ?? {};
     if (!slug || typeof phase !== 'number') return;
-    if (status !== 'done' && status !== 'failed') return;
+    if (status !== 'done' && status !== 'failed' && status !== 'awaiting-verification') return;
 
     const key = `${slug}:${phase}`;
     if (this.notifiedPhase.get(key) === status) return;
     this.notifiedPhase.set(key, status);
 
     const title = this.store?.get(slug)?.plan?.phases[phase]?.title;
-    this.push.announce('phase', {
+    if (status === 'awaiting-verification') {
+      const checks = Number(event?.notRun) || 0;
+      this.announce('needs-you', {
+        title: `${slug} · phase ${phase} needs you`,
+        body: checks
+          ? `${checks} check${checks === 1 ? '' : 's'} the runner will not make for you — ${title ?? 'the phase is waiting'}`
+          : `${title ?? 'the phase'} is waiting to be verified`,
+        tag: tagFor('needs-you', slug, phase),
+      }, { slug, phase });
+      return;
+    }
+
+    this.announce('phase', {
       title: `${slug} · phase ${phase} ${status}`,
       body: title ?? (status === 'done' ? 'the phase landed' : 'the phase did not land'),
       tag: tagFor('phase', slug, phase, status),
-      url: `/#/plan/${slug}/phase/${phase}`,
-    });
+    }, { slug, phase });
   }
 
   private onChange(paths: string[]): void {
@@ -414,12 +619,12 @@ export class Service {
     this.emit('changed', { slugs, generation: this.generation });
 
     if (!slugs.length) return;
-    this.push.announce('changed', {
+    this.announce('changed', {
       title: 'Plans changed',
       body: slugs.length === 1 ? `${slugs[0]} was written` : `${slugs.length} plans were written`,
       tag: tagFor('changed', ...slugs),
-      url: '/#/plans',
-    });
+      // One plan lands on that plan; several have nowhere better than the list.
+    }, slugs.length === 1 ? { slug: slugs[0] } : {});
     void this.announceReady(slugs);
   }
 
@@ -457,14 +662,13 @@ export class Service {
 
       const [first] = fresh;
       const [slug, phase] = first.split(':');
-      this.push.announce('ready', {
+      this.announce('ready', {
         title: fresh.length === 1 ? `${slug} · phase ${phase} is ready` : `${fresh.length} phases became ready`,
         body: fresh.length === 1
           ? (this.store.get(slug)?.plan?.phases[Number(phase)]?.title ?? 'nothing is blocking it now')
           : fresh.join(', '),
         tag: tagFor('ready', ...fresh),
-        url: '/#/ready',
-      });
+      }, fresh.length === 1 ? { slug, phase: Number(phase) } : {});
     } catch (error) {
       log.warn('push.ready-failed', { error });
     }
@@ -918,6 +1122,11 @@ export class Service {
       // True once the server files on disk are newer than this process. The
       // browser reloads from disk; this process cannot.
       serverStale: serverIsStale(),
+      // Whether a clean exit comes back. The Restart button is only honest if
+      // it knows this before it is pressed — under `./run` there is nothing to
+      // restart it, and a button that ends the console is not a Restart button.
+      supervisor: supervisor(),
+      unread: this.notifications.unread(),
       allowRun: this.flags.allowRun,
       run: this.runner.current(),
       scriptsDir: this.flags.scriptsDir,

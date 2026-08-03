@@ -5,7 +5,7 @@ import { navigate } from '../router.js';
 import { api } from '../api.js';
 import { usePrefs, toast } from '../store.js';
 import { KeyValue, Banner, weight } from '../components/ui.js';
-import { NotificationsCard } from './notifications.js';
+import { RestartButton } from '../components/restart.js';
 
 const MODELS = ['', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-haiku-4-5'];
 
@@ -387,7 +387,43 @@ export function SettingsView({ state }) {
       </div>
 
       <div class="grid cols-2">
-        <${NotificationsCard} />
+        <div class="card">
+          <div class="card-head">
+            <h3>Notifications</h3>
+            <button class="btn small" onClick=${() => navigate('notifications/settings')}>Open</button>
+          </div>
+          <div class="card-body stack">
+            <p class="muted small" style="margin:0">
+              Devices, categories and the delivery test now live on their own page, beside the
+              inbox of everything the console has announced — including the ones that arrived
+              while nothing was open to hear them.
+            </p>
+            <p class="muted small" style="margin:0">
+              <code>${'PHASE_CONSOLE_NOTIFY=<command>'}</code> is run with the title and body of
+              every one of them, for a machine with no browser in the picture at all.
+            </p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>This process</h3>
+          </div>
+          <div class="card-body stack">
+            <${KeyValue} items=${[
+              ['Server code', state.serverStale
+                ? html`<span style="color:var(--line-ready)">older than what is on disk</span>`
+                : 'current with what is on disk'],
+              ['Supervisor', state.supervisor?.detail ?? 'unknown'],
+            ]} />
+            <${RestartButton} state=${state} verbose=${false} />
+            <p class="faint" style="font-size:var(--text-xs);margin:0">
+              Node reads <code>server/</code> once, at startup. Reloading the page reloads the
+              client and nothing else, so a server fix you already have looks like it did not
+              work until this process is replaced.
+            </p>
+          </div>
+        </div>
 
         <div class="card">
           <div class="card-head">

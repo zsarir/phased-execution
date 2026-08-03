@@ -31,7 +31,19 @@ self.addEventListener('push', (event) => {
     // is one line on a lock screen, not three.
     tag: data.tag || 'phase-console',
     renotify: false,
-    data: { url: data.url || '/', category: data.category || null },
+    data: {
+      url: data.url || '/',
+      category: data.category || null,
+      approvalId: data.approvalId || null,
+      notificationId: data.notificationId || null,
+    },
+    // Answering from the lock screen, without unlocking and finding the queue.
+    // A card is the only thing here with a yes and a no, so it is the only
+    // thing that gets buttons. (Android and desktop honour these; iOS ignores
+    // the array and shows the notification, which is the correct degradation.)
+    actions: data.approvalId
+      ? [{ action: 'allow', title: 'Allow' }, { action: 'deny', title: 'Deny' }]
+      : undefined,
     icon: '/icons/icon-192.png',
     badge: '/icons/icon-192.png',
   };
@@ -39,11 +51,54 @@ self.addEventListener('push', (event) => {
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
+/** Same header the app sends: the server refuses a mutation without it. */
+const CONSOLE_HEADERS = { 'content-type': 'application/json', 'x-phase-console': '1' };
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || '/', self.location.origin).href;
+  const info = event.notification.data ?? {};
+  const target = new URL(info.url || '/', self.location.origin).href;
+  const decision = event.action === 'allow' ? 'allow' : event.action === 'deny' ? 'deny' : null;
 
   event.waitUntil((async () => {
+    // Marking it read here rather than on arrival: a notification you never saw
+    // must still be waiting in the inbox when you do look.
+    if (info.notificationId) {
+      try {
+        await fetch('/api/notifications/read', {
+          method: 'POST', headers: CONSOLE_HEADERS, body: JSON.stringify({ ids: [info.notificationId] }),
+        });
+      } catch { /* the row simply stays unread */ }
+    }
+
+    if (decision && info.approvalId) {
+      let answered = false;
+      try {
+        const response = await fetch(`/api/approvals/${encodeURIComponent(info.approvalId)}`, {
+          method: 'POST',
+          headers: CONSOLE_HEADERS,
+          body: JSON.stringify({ decision, by: 'notification' }),
+        });
+        answered = response.ok;
+      } catch { /* fall through to opening the queue */ }
+
+      if (answered) {
+        // The decision landed and is already broadcast to every open client.
+        // Opening a window on top of that would be the console interrupting you
+        // a second time for something you have finished with.
+        await self.registration.showNotification('Phase Console', {
+          body: decision === 'allow' ? 'Allowed. The session is carrying on.' : 'Denied. The session was told.',
+          tag: `answered-${info.approvalId}`,
+          data: { url: info.url },
+          icon: '/icons/icon-192.png',
+          badge: '/icons/icon-192.png',
+        });
+        return;
+      }
+      // It did not land — the run may have ended, or this console may have been
+      // started without --allow-run. Open the queue so it can be seen.
+    }
+
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     // Reuse a window that is already here rather than opening a third console.
     for (const client of windows) {

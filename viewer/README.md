@@ -108,18 +108,35 @@ asked to stop, its session id is written into the run, and Continue picks it up 
 stopped process holds its memory and a prompt cache that expires anyway, so an overnight freeze is
 not the cheap option it looks like.
 
-**Being told.** Three paths, in increasing order of how far they reach.
+**Being told.** Four paths, in increasing order of how far they reach — and one of them keeps a copy.
+
+The **inbox** (`#/notifications`) is the copy. Every announcement is written to an append-only log
+before any of it is delivered, so it is complete by construction: an event that arrived with the
+phone asleep, no tab open and no device subscribed is still there in the morning. Grouped by day,
+unread first, filterable by category, and each row opens the thing it was about. It survives a
+restart, holds 500 records or 30 days, and is cleared only when you say so. Every row also carries
+what became of it per device — `sent`, `throttled`, `failed`, `gone` — because a push that quietly
+went nowhere is otherwise indistinguishable from one that worked.
 
 *In this tab* is the Notification API: free, instant, and gone with the tab. *On this device* is a
 push subscription — a service worker and a VAPID keypair, so the notification arrives with the
-console closed and the phone locked. Both are in **Settings → Notifications**, per device, across
-eight categories: permission needed, halted, parked, phase finished, plan finished, work became
-ready, plans changed, console problems. Only the first two are sent urgent. A **Send a test** button
-goes out through the real push service and back, so it proves the chain rather than the last hop.
+console closed and the phone locked. Both are in **Notifications → Settings**, per device, across
+nine categories: permission needed, a phase needs you, halted, parked, phase finished, plan
+finished, work became ready, plans changed, console problems. Only the first three are sent urgent.
+A **Send a test** button goes out through the real push service and back, so it proves the chain
+rather than the last hop. An approval notification carries **Allow** and **Deny** as notification
+actions, so answering from a lock screen is one tap.
 
 `PHASE_CONSOLE_NOTIFY=<command>` covers what neither can: a machine with no browser in the picture at
 all. It is run as `cmd "<title>" "<body>"`, and is an environment variable rather than a setting
-because it runs a command on this machine.
+because it runs a command on this machine. Under launchd it has to be in the plist — a variable
+exported in your shell does not reach the job launchd starts at login, which is the one running
+while you are asleep — so `deploy/agent.sh install --notify '<command>'` bakes it in.
+
+Every destination is decided by one function (`routeFor`), used by the SSE announce, the push
+payload, the service worker and the inbox row alike, and a test walks the catalogue against the
+client's own router. Before it there were two hand-written URLs and both named a tab that does not
+exist, so every approval notification for the life of the feature opened the wrong page.
 
 Payloads are encrypted to the subscribing browser ([RFC 8291](https://datatracker.ietf.org/doc/html/rfc8291)),
 so a push service relays a notification about your plans without being able to read one. As with the
@@ -302,8 +319,11 @@ npm i -D typescript@5 @types/node@22 && npx tsc --noEmit
 server/   index.ts (http) · service.ts (the model) · engine.ts (script wrapper) · store.ts (files)
           parse/ (front matter, plan, handoff, folder artefacts) · analysis/ (graph, stats)
           search.ts · git.ts · memory.ts · watch.ts · writes.ts · api/routes.ts
-          log.ts (structured log + exit record) · lifecycle.ts (degraded state, ordered shutdown)
-web/      app.js · router.js · store.js · api.js · views/ · components/ · styles/ · vendor/ · fonts/
+          notifications.ts (the durable inbox) · push/ (register, catalogue + routeFor, RFC 8291)
+          log.ts (structured log + exit record)
+          lifecycle.ts (degraded state, ordered shutdown, supervisor detection)
+web/      app.js · routes.js (rules) + router.js (hook) · store.js · api.js
+          views/ · components/ · styles/ · vendor/ · fonts/
 deploy/   agent.sh (launchd install/uninstall/status/restart/log)
 ```
 

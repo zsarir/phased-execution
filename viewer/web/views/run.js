@@ -19,7 +19,9 @@ import { LiveConsole, useLiveLines, toLine } from '../components/live-console.js
 import { SkillPicker } from '../components/skill-picker.js';
 import { mergePhases, boardCounts, phaseActions, fellOverToAnotherModel, BOARD_ORDER }
   from '../components/phase-model.js';
-import { announceRun, announceApproval, notifyState, askToNotify } from '../notify.js';
+// Raising the notification itself is the shell's job now (`app.js`), off the
+// server's `notification` event — one leg, one wording, one destination.
+import { notifyState, askToNotify } from '../notify.js';
 
 const PHASE_TONE = {
   done: 'ok', running: 'busy', verifying: 'busy', failed: 'bad',
@@ -108,21 +110,35 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
   }, [stale]);
 
   useEffect(() => stale ? undefined : subscribeRun({
-    run: (data) => { announceRun(data?.state); void refresh(); },
+    run: () => { void refresh(); },
     // Actions taken against a run no loop is driving — a pause or a stop from
     // another tab, or from a phone — arrive on this channel and nowhere else.
-    state: (data) => { announceRun(data?.state); void refresh(); },
-    approval: (data) => { announceApproval(data); void refresh(); },
+    state: () => { void refresh(); },
+    approval: () => { void refresh(); },
+    // Somebody else answered it — another tab, a phone, the timeout, or the run
+    // ending underneath it. The card has to leave this screen without a reload,
+    // or two people looking at one queue disagree about what is still waiting
+    // and the second to press a button gets a 404 for a decision already made.
+    approvalResolved: () => { void refresh(); },
     phase: (data) => { push(toLine('phase', data)); void refresh(); },
     verify: (data) => push(toLine('verify', data)),
     stream: (data) => push(toLine('stream', data)),
   }), [refresh, push, stale]);
 
+  /**
+   * The refresh is in `finally`, not in `try`, and that is the whole fix.
+   *
+   * A card answered on a phone leaves this tab holding one that no longer
+   * exists; pressing it 404s, the error is toasted — and with the refresh
+   * inside the `try` it was skipped, so the phantom stayed on screen and the
+   * next press 404'd again. The failure is exactly the case where re-reading
+   * the queue matters most.
+   */
   const act = async (label, fn) => {
     setBusy(label);
-    try { await fn(); await refresh(); }
+    try { await fn(); }
     catch (error) { toast(error.message, 'error'); }
-    finally { setBusy(''); }
+    finally { setBusy(''); await refresh(); }
   };
 
   if (stale) {
@@ -1217,9 +1233,14 @@ export function RunsView({ state }) {
   }, []);
   useEffect(() => { if (!state || state.autopilot) void checkAuth(false); }, [state?.autopilot, checkAuth]);
   useEffect(() => (state && !state.autopilot) ? undefined : subscribeRun({
-    run: (data) => { announceRun(data?.state); void refresh(); },
-    state: (data) => { announceRun(data?.state); void refresh(); },
-    approval: (data) => { announceApproval(data); void refresh(); },
+    run: () => { void refresh(); },
+    state: () => { void refresh(); },
+    approval: () => { void refresh(); },
+    // Somebody else answered it — another tab, a phone, the timeout, or the run
+    // ending underneath it. The card has to leave this screen without a reload,
+    // or two people looking at one queue disagree about what is still waiting
+    // and the second to press a button gets a 404 for a decision already made.
+    approvalResolved: () => { void refresh(); },
     phase: (data) => { push(toLine('phase', data)); void refresh(); },
     verify: (data) => push(toLine('verify', data)),
     stream: (data) => push(toLine('stream', data)),
@@ -1264,8 +1285,11 @@ export function RunsView({ state }) {
             if (result?.error) toast(result.error, 'warn');
             else if (result?.wrote) toast(`Answered · wrote ${result.wrote} (${result.scope})`, 'ok');
             else toast(decision === 'allow' ? 'Approved' : 'Denied', decision === 'allow' ? 'ok' : 'warn');
-            await refresh();
           } catch (error) { toast(error.message, 'error'); }
+          // In `finally` territory for the same reason as `act` above: a card
+          // answered somewhere else 404s here, and that is precisely when the
+          // queue needs re-reading rather than leaving the phantom on screen.
+          finally { await refresh(); }
         }} />
 
       <${LiveConsole}

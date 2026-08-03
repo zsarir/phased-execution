@@ -132,6 +132,27 @@ export const api = {
   auth: (force) => request(`/api/auth${force ? '?force=1' : ''}`),
   authLogin: () => post('/api/auth/login'),
 
+  /* ---- the notification inbox ---- */
+  /**
+   * History, never a live feed: everything the console announced, whether or
+   * not anything was listening at the time.
+   */
+  notifications: (query = {}) => request(`/api/notifications?${new URLSearchParams(
+    Object.entries(query).filter(([, v]) => v != null && v !== '' && v !== false)
+      .map(([k, v]) => [k, v === true ? '1' : String(v)]),
+  )}`),
+  /** No ids means every unread one. */
+  markNotificationsRead: (ids) => post('/api/notifications/read', ids?.length ? { ids } : {}),
+  clearNotifications: (what) => request(
+    `/api/notifications?${typeof what === 'string' ? `scope=${what}` : `id=${encodeURIComponent(what.id)}`}`,
+    { method: 'DELETE' },
+  ),
+
+  /* ---- restarting the console itself ---- */
+  /** Whether it can be restarted from here, and why not. Safe to poll. */
+  restartReadiness: () => request('/api/restart'),
+  restart: () => post('/api/restart', { by: 'console' }),
+
   approvals: () => request('/api/approvals'),
   /**
    * Answer a card. `remember` ('plan' | 'global') also writes `rule`, so the
@@ -177,7 +198,8 @@ function ensureStream() {
   });
 
   for (const name of [
-    'changed', 'warm', 'health', 'approval',
+    'changed', 'warm', 'health', 'approval', 'approval:resolved',
+    'notification', 'notification:delivery', 'notification:read', 'notification:cleared',
     'run:run', 'run:phase', 'run:stream', 'run:journal', 'run:verify', 'run:state',
   ]) relay(name);
 
@@ -224,6 +246,29 @@ export function subscribeRun(handlers = {}) {
     if (handlers[name]) offs.push(on(`run:${name}`, handlers[name]));
   }
   if (handlers.approval) offs.push(on('approval', handlers.approval));
+  // A card answered anywhere — another tab, a phone, the timeout, or the run
+  // ending underneath it — arrives here. Without it a decision was true only in
+  // the browser that made it, and every other client kept a phantom card that
+  // 404s when pressed.
+  if (handlers.approvalResolved) offs.push(on('approval:resolved', handlers.approvalResolved));
   if (handlers.health) offs.push(on('health', handlers.health));
+  return () => { for (const off of offs) off(); };
+}
+
+/**
+ * The inbox channel: a new record, a delivery outcome landing against one, and
+ * the two ways the list changes underneath you.
+ */
+export function subscribeNotifications(handlers = {}) {
+  const offs = [];
+  const map = {
+    notification: 'notification',
+    delivery: 'notification:delivery',
+    read: 'notification:read',
+    cleared: 'notification:cleared',
+  };
+  for (const [key, event] of Object.entries(map)) {
+    if (handlers[key]) offs.push(on(event, handlers[key]));
+  }
   return () => { for (const off of offs) off(); };
 }

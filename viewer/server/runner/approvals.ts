@@ -850,6 +850,25 @@ export function readPending(file = PENDING_FILE): Approval[] {
   }
 }
 
+/**
+ * The two moments worth telling somebody about, and they are not the same one.
+ *
+ * `notify` fires when a card is **raised** — before any decision exists, which
+ * is exactly what makes it useful and what `test/approvals.test.ts` pins.
+ * `resolved` fires when the question is **answered**, by whatever answered it:
+ * a click here, a tap on a phone, the timeout, or the run ending underneath it.
+ *
+ * Without the second one a decision was true only in the browser that made it.
+ * Every other client kept showing a card that had already been settled, and
+ * pressing it produced a 404 — a phantom that outlived the thing it referred
+ * to. Broadcasting resolution is what makes one queue seen from three places
+ * one queue.
+ */
+export type ApprovalHooks = {
+  notify?: (approval: Approval) => void;
+  resolved?: (approval: Approval) => void;
+};
+
 export class Approvals {
   private waiting = new Map<string, Waiting>();
   private history: Approval[] = [];
@@ -858,10 +877,17 @@ export class Approvals {
   private runId: string | null = null;
   private counter = 0;
   private notify: (approval: Approval) => void;
+  private resolved: (approval: Approval) => void;
   private file: string;
 
-  constructor(notify: (approval: Approval) => void = () => {}, file = PENDING_FILE) {
-    this.notify = notify;
+  /**
+   * The bare-function form is the original contract and still means "notify on
+   * creation", so every existing caller and test reads unchanged.
+   */
+  constructor(hooks: ((approval: Approval) => void) | ApprovalHooks = {}, file = PENDING_FILE) {
+    const resolved = typeof hooks === 'function' ? {} : hooks;
+    this.notify = (typeof hooks === 'function' ? hooks : hooks.notify) ?? (() => {});
+    this.resolved = resolved.resolved ?? (() => {});
     this.file = file;
     // Anything an earlier console was still asking about, recovered as record.
     for (const approval of readPending(file)) {
@@ -963,6 +989,12 @@ export class Approvals {
         approval.reason = reason;
         this.remember(approval);
         this.flush();
+        // Inside the settle closure on purpose: this is the ONE place every
+        // ending passes through — a click, a tap on another device, the
+        // timeout, and `disarm()` when a run ends with cards still up. Hanging
+        // it off `settle(id, …)` instead would silently miss the last two,
+        // which are precisely the endings nobody is watching for.
+        try { this.resolved(approval); } catch { /* a listener must never block a decision */ }
         resolve({ decision, by, reason });
       };
       // Unreferenced: the listening socket is what keeps this process alive, and

@@ -17,7 +17,7 @@
  */
 
 export type CategoryId =
-  | 'approval' | 'halted' | 'parked' | 'phase' | 'finished' | 'ready' | 'changed' | 'health';
+  | 'approval' | 'needs-you' | 'halted' | 'parked' | 'phase' | 'finished' | 'ready' | 'changed' | 'health';
 
 export type Category = {
   id: CategoryId;
@@ -35,6 +35,15 @@ export const CATEGORIES: readonly Category[] = [
     label: 'Permission needed',
     detail: 'A session is blocked on a decision only you can make — a command outside its rules, '
       + 'a gate, or a check it cannot make itself. Nothing proceeds until you answer.',
+    byDefault: true,
+    urgent: true,
+  },
+  {
+    id: 'needs-you',
+    label: 'A phase needs you',
+    detail: 'A phase did its work and stopped at something no automation may sign off — a check '
+      + 'written as prose, a verification only a person can make. It is not failed and not finished; '
+      + 'it is waiting, and it will keep waiting.',
     byDefault: true,
     urgent: true,
   },
@@ -125,4 +134,60 @@ export function sanitiseCategories(value: unknown): Record<CategoryId, boolean> 
     if (isCategory(key) && typeof on === 'boolean') out[key] = on;
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Where a notification goes when you tap it
+ * ------------------------------------------------------------------ */
+
+/** What a notification knows about itself, in as much as decides where it lands. */
+export type RouteContext = { slug?: string | null; phase?: number | null };
+
+/**
+ * The ONLY place a notification URL is constructed.
+ *
+ * It was written by hand at two call sites and was wrong at both: they built
+ * `/#/plan/<slug>/autopilot`, while the tab is registered as `run`
+ * (`web/views/plan.js`). An unknown tab is not an error the router reports — it
+ * silently falls back — so every approval notification for the life of the
+ * feature opened the Route tab, and the queue you were woken for was one more
+ * tap away with nothing saying so.
+ *
+ * One builder does not make that impossible; it makes it a single line to fix
+ * and a single line to test, which is why `test/notifications.test.ts` walks
+ * this table against the client's own router rather than trusting it.
+ *
+ * A category whose payload is missing the slug it needs degrades upwards — to
+ * the runs list, or the plan list — rather than producing `#/plan/undefined`.
+ */
+export function routeFor(category: CategoryId, context: RouteContext = {}): string {
+  const slug = context.slug ? encodeURIComponent(context.slug) : null;
+  const phase = typeof context.phase === 'number' && Number.isInteger(context.phase) && context.phase > 0
+    ? context.phase : null;
+
+  switch (category) {
+    // Everything about a run in flight lands on the run itself, because that is
+    // where the queue, the console and the controls are.
+    case 'approval':
+    case 'needs-you':
+    case 'halted':
+    case 'parked':
+    case 'finished':
+      return slug ? `/#/plan/${slug}/run` : '/#/runs';
+    case 'phase':
+      return slug && phase ? `/#/plan/${slug}/phase/${phase}` : slug ? `/#/plan/${slug}/run` : '/#/plans';
+    case 'ready':
+      return '/#/ready';
+    case 'changed':
+      return slug ? `/#/plan/${slug}/route` : '/#/plans';
+    case 'health':
+      return '/#/settings';
+    default: {
+      // Exhaustiveness: a new category added to CATEGORIES without a route here
+      // is a compile error, not a notification that silently opens the
+      // dashboard.
+      const unreachable: never = category;
+      return String(unreachable);
+    }
+  }
 }
