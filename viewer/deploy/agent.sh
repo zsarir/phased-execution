@@ -2,6 +2,7 @@
 # Phase Console as a launchd agent.
 #
 #   agent.sh install [--root DIR] [--port N] [--notify CMD] [extra console flags…]
+#   agent.sh update              # npm ci + npm run build, then restart
 #   agent.sh uninstall
 #   agent.sh status
 #   agent.sh restart
@@ -14,6 +15,12 @@
 #
 # The plist is generated rather than templated, so the node path, the working
 # directory and the flags are whatever they actually are on this machine.
+#
+# The client is built output (`client/dist`, gitignored). `install` and
+# `update` build it deliberately, and the launchd boot path never does: a
+# restart must serve exactly what was verified, and a crash loop must not be
+# able to spend its throttle interval rebuilding. After a `git pull`, run
+# `agent.sh update`.
 set -euo pipefail
 
 LABEL="com.phase-console"
@@ -57,6 +64,8 @@ cmd_install() {
   fi
   [ -n "$root" ] || die "install needs --root <dir> (the repo holding docs/plans)"
   [ -d "$root/docs/plans" ] || die "no docs/plans under $root"
+
+  build_client
 
   mkdir -p "$HOME/Library/LaunchAgents" "$STATE_DIR"
 
@@ -124,6 +133,25 @@ PLIST_END
   echo "It is running now and will start at login. Stop it with: agent.sh uninstall"
 }
 
+# One implementation for install and update. `npm run build` stamps
+# `dist/.build-rev` itself, so what launchd serves is always attributable to a
+# commit. The build happens while any running console keeps serving — the
+# static root is picked per request, so the seconds where dist is empty degrade
+# to the not-built page and the fallback worker, never to a hang.
+build_client() {
+  command -v npm >/dev/null 2>&1 || die "npm is not on PATH — the client is built output"
+  echo "building the client (npm ci && npm run build in $VIEWER_DIR)…"
+  ( cd "$VIEWER_DIR" && npm ci --no-audit --no-fund && npm run build ) \
+    || die "the client build failed — nothing was installed or restarted"
+}
+
+cmd_update() {
+  [ -f "$PLIST" ] || die "not installed — use: agent.sh install --root <dir>"
+  build_client
+  launchctl kickstart -k "gui/$UID/$LABEL"
+  echo "rebuilt and restarted $LABEL"
+}
+
 cmd_uninstall() {
   launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
   rm -f "$PLIST"
@@ -155,9 +183,10 @@ cmd_log() {
 
 case "${1:-}" in
   install)   shift; cmd_install "$@" ;;
+  update)    cmd_update ;;
   uninstall) cmd_uninstall ;;
   status)    cmd_status ;;
   restart)   cmd_restart ;;
   log)       shift; cmd_log "$@" ;;
-  *) sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

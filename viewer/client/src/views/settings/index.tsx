@@ -70,14 +70,14 @@ export default function SettingsView() {
                 ['Server code', state.serverStale
                   ? <span className="text-action">older than what is on disk</span>
                   : 'current with what is on disk'],
-                // The migration seam, reported rather than inferred. `dist`
-                // means a build exists and this server is serving it; removing
-                // `client/dist` rolls back to the legacy client on the very next
-                // request, with no restart.
+                // Reported rather than inferred — the pick is per request, so
+                // a build cuts a live console over with no restart. `not-built`
+                // is reachable from here: a precached shell keeps running after
+                // `client/dist` is deleted, and this row is how it says so.
                 ['Serving', state.staticRoot === 'dist'
                   ? <span>the built client (<code>client/dist</code>)</span>
-                  : state.staticRoot === 'legacy'
-                    ? <span>the legacy client (<code>web/</code>)</span>
+                  : state.staticRoot === 'not-built'
+                    ? <span>nothing — <code>client/dist</code> is missing; run <code>npm run build</code></span>
                     : 'unknown — this server predates the static-root report'],
                 ['Supervisor', state.supervisor?.detail ?? 'unknown'],
               ]}

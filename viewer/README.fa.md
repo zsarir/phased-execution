@@ -12,14 +12,18 @@
 <div dir="ltr">
 
 ```bash
-./start                      # from the skill directory — opens your browser
+cd viewer && npm ci && npm run build && cd ..   # once per machine, and after an update
+./start                                         # from the skill directory — opens your browser
 ```
 
 </div>
 
-کلِ نصب همین است. چیزی برای `install` کردن و چیزی برای `build` کردن وجود ندارد: سرور، Node خالی است
-(نسخه‌ی ‎22.6 به بالا، که TypeScript را مستقیم اجرا می‌کند) و سمتِ کلاینت، ES module بومی است با preact و
-htm و marked و سه فونت که همه داخل همین مخزن قرار دارند — پس آفلاین هم کار می‌کند.
+سرور، Node خالی است (نسخه‌ی ‎22.6 به بالا، که TypeScript را مستقیم اجرا می‌کند — آن‌جا چیزی برای ساختن
+نیست). اما کلاینت **خروجیِ build است**: یک اپِ Vite/React که پوشه‌ی `client/dist` آن gitignore شده، پس
+هر ماشین یک بار کپیِ خودش را می‌سازد. اگر build نکنید، کنسول باز هم جواب می‌دهد — با صفحه‌ای که همان دو
+دستور و مسیرِ دقیقِ اجرایشان را نام می‌برد — و `npm start` هر وقت buildِ موجود از کد عقب‌تر باشد هشدار
+می‌دهد. هیچ‌چیز هرگز به‌طورِ ضمنی build نمی‌شود: آنچه سرو می‌شود همیشه همان است که آخرین بار عامدانه
+ساخته‌اید. بعد از ساخت، آفلاین هم کار می‌کند و روی Home Screen گوشی هم نصب می‌شود.
 
 اولین صفحه می‌پرسد کدام پوشه را بخواند: هر مخزنی که `docs/plans` داشته باشد. انتخاب‌های قبلی را به یاد
 می‌سپارد و هر وقت خواستید می‌توانید از پنل **Source** در ستون سمتِ چپ یا از **Settings → Source** عوض
@@ -47,10 +51,15 @@ htm و marked و سه فونت که همه داخل همین مخزن قرار �
 ./start --agent-status      # is it up, and as which pid
 ./start --agent-log -f      # follow the structured log
 ./start --agent-restart
+./start --agent-update      # after a git pull: npm ci + npm run build, then restart
 ./start --uninstall-agent
 ```
 
 </div>
+
+دستورهای `--install-agent` و `--agent-update` ساختِ کلاینت را هم خودشان انجام می‌دهند؛ مسیرِ بوتِ
+launchd هرگز build نمی‌کند — تا یک ری‌استارت دقیقاً همان چیزی را سرو کند که راستی‌آزمایی شده، و یک
+crash loop نتواند وقتش را صرفِ buildهای پیاپی کند.
 
 از طرف دیگر، تلاش می‌کند اصلاً زمین نخورد. یک خطای مدیریت‌نشده، یک file watch که ارور می‌دهد، مرورگری که
 وسطِ استریم ناپدید می‌شود — هرکدام به‌عنوان وضعیتِ **degraded** ثبت می‌شود و از `/api/state` سرو می‌شود،
@@ -75,10 +84,13 @@ htm و marked و سه فونت که همه داخل همین مخزن قرار �
 | **Ready now** | هر فازِ آماده در سراسر همه‌ی طرح‌ها، مرتب‌شده بر اساسِ اینکه چقدر کار را باز می‌کند، هرکدام با پرامپتِ قابل‌کپی. |
 | **Statistics** | جمع کلِ سبد، سرعت پیشرفت، تقویمِ اتمام‌ها، ترکیبِ اندازه‌ها، مخازن، اسکیل‌ها، مدل‌ها، قفل‌ها و همه‌ی مشکلاتِ سلامت. |
 | **Autopilot** | راندنِ یک طرح بدون حضور شما: یک `claude -p` برای هر فاز، با مدل و effort و اسکیل‌ها و مجموعه‌ی ابزار که برای هر اجرا یا هر فاز انتخاب می‌شود؛ کنسولِ زنده‌ی نشست؛ صفِ تأییدها؛ و کنترل‌های pause، stop، retry، skip یا اجرای فقط یک فاز. |
+| **Terminal** | یک شلِ واقعی داخلِ مرورگر — خاموش است مگر کنسول با `--allow-terminal` اجرا شده باشد؛ WebSocket با توکنِ یک‌بارمصرف، نشست‌هایی که بعد از reload زنده می‌مانند، و یک نوارِ کلید برای کیبوردِ گوشی. |
 | **Search** | جست‌وجوی تمام‌متن در همه‌ی طرح‌ها و هندآف‌ها، گروه‌بندی‌شده بر اساس طرح. |
 
 صفحه خودش را به‌روز می‌کند: یک watch روی `docs/` تغییرات را با server-sent events می‌فرستد، پس هندآفی که
-یک نشستِ ایجنت می‌نویسد بدون رفرش ظاهر می‌شود.
+یک نشستِ ایجنت می‌نویسد بدون رفرش ظاهر می‌شود. ضمناً یک PWAی قابل‌نصب است: پوسته‌ی اپ precache می‌شود تا
+فوری باز شود (و آفلاین همین را صریح می‌گوید، به‌جای نشان‌دادنِ تابلویی کهنه — داده‌ی زنده هرگز کش
+نمی‌شود)، و هر build تازه به‌شکلِ یک toastِ به‌روزرسانی پیشنهاد می‌شود که فقط با پذیرشِ شما اعمال می‌شود.
 
 ## اتوپایلوت
 
@@ -209,36 +221,44 @@ tailscale serve --bg --https=443 http://127.0.0.1:4123
 <div dir="ltr">
 
 ```bash
-node --test "test/*.test.ts"                                            # unit tests
-PHASE_CONSOLE_TEST_ROOT=~/code/your-repo node --test "test/*.test.ts"   # + integration & engine parity
+npm ci                        # once — the toolchain and the client's dependencies
+npm run dev                   # Vite on :5173, proxying the live console on :4123
+                              #   (PHASE_CONSOLE_ORIGIN=http://127.0.0.1:4199 targets another)
+npm test                      # server + shared contracts (node --test — needs no build)
+PHASE_CONSOLE_TEST_ROOT=~/code/your-repo npm test    # + integration & engine parity
+npm run test:client           # the client suite (Vitest + jsdom)
+npm run typecheck:client      # two programs: the app (DOM libs) and the worker (WebWorker libs)
+npm run build                 # emit client/dist and stamp .build-rev with the commit
+npm run check:dist            # the build gate: budget, precache sanity, sw.js at the root
 ```
 
 </div>
 
-این مجموعه‌ی تست به هیچ نصبی نیاز ندارد. تست‌های یکپارچگی رد می‌شوند مگر اینکه
-`PHASE_CONSOLE_TEST_ROOT` به یک کتابخانه‌ی واقعیِ طرح‌ها اشاره کند. اما تایپ‌چک به تایپ‌ها نیاز دارد —
-`tsc` بدونِ `@types/node` نمی‌تواند `node:*` را resolve کند، پس آن را در یک کپیِ موقت اجرا کنید نه اینکه
-یک `node_modules` داخلِ اسکیل بگذارید:
+مجموعه‌ی تستِ Node عمداً بدونِ build پاس می‌شود — یک کلونِ تازه باید بتواند سرور را پیش از اولین build
+راستی‌آزمایی کند (`test/static.test.ts` جواب‌های حالتِ not-built را نگه می‌دارد، از جمله fallbackِ
+`/sw.js` که تا وقتی `dist` غایب است، subscriptionهای push را زنده نگه می‌دارد). تست‌های یکپارچگی رد
+می‌شوند مگر اینکه `PHASE_CONSOLE_TEST_ROOT` به یک کتابخانه‌ی واقعیِ طرح‌ها اشاره کند.
 
 <div dir="ltr">
-
-```bash
-cp -R server test tsconfig.json package.json /tmp/pc-tc && cd /tmp/pc-tc
-npm i -D typescript@5 @types/node@22 && npx tsc --noEmit
-```
 
 ```
 server/   index.ts (http) · service.ts (the model) · engine.ts (script wrapper) · store.ts (files)
           parse/ (front matter, plan, handoff, folder artefacts) · analysis/ (graph, stats)
           search.ts · git.ts · memory.ts · watch.ts · writes.ts · api/routes.ts
-          log.ts (structured log + exit record) · lifecycle.ts (degraded state, ordered shutdown)
-web/      app.js · router.js · store.js · api.js · views/ · components/ · styles/ · vendor/ · fonts/
-deploy/   agent.sh (launchd install/uninstall/status/restart/log)
+          terminal.ts (pty sessions + the WS upgrade) · runner/ (the autopilot)
+          notifications.ts (the durable inbox) · push/ (register, catalogue + routeFor, RFC 8291)
+          log.ts (structured log + exit record) · fallback-sw.js (what /sw.js serves un-built)
+          lifecycle.ts (degraded state, ordered shutdown, supervisor detection)
+client/   src/ (the React app: shell/ · views/ · components/ · lib/ · styles/ · sw.ts)
+          public/ (icons, manifest) → dist/ (built output + .build-rev — gitignored)
+shared/   routes.js · route-meta.js · console-model.js · phase-model.js · sw-push.js
+scripts/  check-dist.mjs (build gate) · stamp-build.mjs · check-stamp.mjs
+deploy/   agent.sh (launchd install/update/uninstall/status/restart/log)
 ```
 
 </div>
 
-فونت‌ها Archivo Narrow و Public Sans و JetBrains Mono هستند (با مجوزِ SIL Open Font License) که به‌صورت
-WOFF2 داخلِ مخزن قرار دارند.
+فونت‌ها Archivo Narrow و Public Sans و JetBrains Mono هستند (با مجوزِ SIL Open Font License) که build
+آن‌ها را باندل می‌کند.
 
 </div>

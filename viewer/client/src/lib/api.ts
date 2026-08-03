@@ -116,7 +116,7 @@ export interface ConsoleState {
   /** True once `server/` on disk is newer than the process serving this page. */
   serverStale?: boolean;
   /** Which static root answered — the migration seam, surfaced in Settings. */
-  staticRoot?: 'dist' | 'legacy';
+  staticRoot?: 'dist' | 'not-built';
   supervisor?: { ok?: boolean; kind?: string; detail?: string };
   unread?: number;
   scriptsDir?: string;

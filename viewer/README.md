@@ -8,12 +8,16 @@ copy the boot prompt for any ready phase, and read statistics across the whole p
 ## Start it
 
 ```bash
-./start                      # from the skill directory — opens your browser
+cd viewer && npm ci && npm run build && cd ..   # once per machine, and after an update
+./start                                         # from the skill directory — opens your browser
 ```
 
-That's the whole setup. There is nothing to install and nothing to build: the server is plain Node
-(22.6+, which runs TypeScript directly) and the client is native ES modules with preact, htm, marked
-and three fonts vendored in this repo, so it also works offline.
+The server is plain Node (22.6+, which runs TypeScript directly — nothing to compile there). The
+client is **built output**: a Vite/React app whose `client/dist` is gitignored, so every machine
+builds its own copy once. Skip the build and the console still answers — with a page naming the two
+commands and the exact directory — and `npm start` warns when the built client is older than the
+code. Nothing ever builds implicitly: what serves is always what you last deliberately built. Once
+built, it works offline and installs to a phone's home screen.
 
 The first screen asks which directory to read — any repository containing `docs/plans`. It remembers
 the ones you pick, and you can switch at any time from the **Source** panel in the left rail or from
@@ -35,8 +39,13 @@ Install it as a launchd agent instead and it starts at login and comes back on i
 ./start --agent-status      # is it up, and as which pid
 ./start --agent-log -f      # follow the structured log
 ./start --agent-restart
+./start --agent-update      # after a git pull: npm ci + npm run build, then restart
 ./start --uninstall-agent
 ```
+
+`--install-agent` and `--agent-update` build the client as part of the job; the launchd boot path
+never builds, so a restart serves exactly what was verified and a crash loop cannot spend its
+throttle interval rebuilding.
 
 It also tries not to fall over in the first place. An unhandled fault, a file watch that
 errors, a browser that vanishes mid-stream — each is recorded as **degraded** state and
@@ -62,10 +71,13 @@ answer.
 | **Ready now** | Every ready phase across every plan, ranked by how much it unblocks, each with a copyable prompt. |
 | **Statistics** | Portfolio totals, velocity, completions calendar, size mix, repos, skills, models, locks and every health issue. |
 | **Autopilot** | Drive a plan unattended: one `claude -p` per phase, with the model, effort, skills and tool set chosen per run or per phase; the live session console; the approval queue; and the controls to pause, stop, retry, skip or run a single phase. A **status header** carries a clock that advances on its own and an estimate of how much is left, and **What it is doing** shows the session's task list, its tool calls with durations and outcomes, and one lane per subagent. |
+| **Terminal** | A real shell in the browser — off unless the console was started with `--allow-terminal`. Token-handshaked WebSocket, persistent sessions that survive a reload, a key bar for phone keyboards. |
 | **Search** | Full text across all plans and handoffs, grouped by plan. |
 
 The page updates itself: a watch on `docs/` pushes changes over server-sent events, so a handoff
-written by an agent session appears without a reload.
+written by an agent session appears without a reload. It is also an installable PWA: the app shell
+is precached so it opens instantly (and offline it says so, rather than showing a stale board — live
+data is never cached), and a new build is offered as an update toast, applied only when you accept.
 
 ## The autopilot
 
@@ -317,29 +329,36 @@ notifications require, out-of-band alerts, access rules and a troubleshooting ta
 ## Development
 
 ```bash
-node --test "test/*.test.ts"                                            # unit tests
-PHASE_CONSOLE_TEST_ROOT=~/code/your-repo node --test "test/*.test.ts"   # + integration & engine parity
+npm ci                        # once — the toolchain and the client's dependencies
+npm run dev                   # Vite on :5173, proxying the live console on :4123
+                              #   (PHASE_CONSOLE_ORIGIN=http://127.0.0.1:4199 targets another)
+npm test                      # server + shared contracts (node --test — needs no build)
+PHASE_CONSOLE_TEST_ROOT=~/code/your-repo npm test    # + integration & engine parity
+npm run test:client           # the client suite (Vitest + jsdom)
+npm run typecheck:client      # two programs: the app (DOM libs) and the worker (WebWorker libs)
+npm run build                 # emit client/dist and stamp .build-rev with the commit
+npm run check:dist            # the build gate: budget, precache sanity, sw.js at the root
 ```
 
-The suite needs nothing installed. The integration tests skip unless `PHASE_CONSOLE_TEST_ROOT` points
-at a real plan library. Type checking does need types — `tsc` cannot resolve `node:*` without
-`@types/node`, so run it in a scratch copy rather than putting a `node_modules` inside the skill:
-
-```bash
-cp -R server test tsconfig.json package.json /tmp/pc-tc && cd /tmp/pc-tc
-npm i -D typescript@5 @types/node@22 && npx tsc --noEmit
-```
+The node suite passes without a build on purpose — a fresh clone must be able to verify the server
+before it has ever built the client (`test/static.test.ts` holds the not-built answers, including
+the `/sw.js` fallback that keeps push subscriptions alive while `dist` is absent). The integration
+tests skip unless `PHASE_CONSOLE_TEST_ROOT` points at a real plan library.
 
 ```
 server/   index.ts (http) · service.ts (the model) · engine.ts (script wrapper) · store.ts (files)
           parse/ (front matter, plan, handoff, folder artefacts) · analysis/ (graph, stats)
           search.ts · git.ts · memory.ts · watch.ts · writes.ts · api/routes.ts
+          terminal.ts (pty sessions + the WS upgrade) · runner/ (the autopilot)
           notifications.ts (the durable inbox) · push/ (register, catalogue + routeFor, RFC 8291)
-          log.ts (structured log + exit record)
+          log.ts (structured log + exit record) · fallback-sw.js (what /sw.js serves un-built)
           lifecycle.ts (degraded state, ordered shutdown, supervisor detection)
-web/      app.js · routes.js (rules) + router.js (hook) · store.js · api.js
-          views/ · components/ · styles/ · vendor/ · fonts/
-deploy/   agent.sh (launchd install/uninstall/status/restart/log)
+client/   src/ (the React app: shell/ · views/ · components/ · lib/ · styles/ · sw.ts)
+          public/ (icons, manifest) → dist/ (built output + .build-rev — gitignored)
+shared/   routes.js · route-meta.js · console-model.js · phase-model.js · sw-push.js
+          — dependency-free ESM, imported by the Node tests and the client alike
+scripts/  check-dist.mjs (build gate) · stamp-build.mjs · check-stamp.mjs
+deploy/   agent.sh (launchd install/update/uninstall/status/restart/log)
 ```
 
-Fonts are Archivo Narrow, Public Sans and JetBrains Mono (SIL Open Font License), vendored as WOFF2.
+Fonts are Archivo Narrow, Public Sans and JetBrains Mono (SIL Open Font License), bundled by the build.

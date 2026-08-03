@@ -1,9 +1,9 @@
 /**
  * Phase Console — the server.
  *
- * Serves the single-page client from `web/` and the API from `server/api`.
- * Binds to localhost only; there is no build step and no dependency to
- * install, so a fresh clone of the skill runs it straight away.
+ * Serves the built single-page client from `client/dist` and the API from
+ * `server/api`. Binds to localhost only. A clone that has not built the client
+ * yet still gets an answer — a page naming the two commands — never a blank one.
  *
  * It is also expected to stay up for hours while it supervises agent sessions,
  * so nothing here is allowed to end the process by accident: faults are
@@ -58,18 +58,17 @@ if (cleanLastTime === false) {
 
 const service = new Service(flags);
 
-// The client is served from the built Vite output (`client/dist`) when it exists,
-// else the legacy no-build client (`web/`). The choice is made PER REQUEST, not at
-// startup, so `npm run build` cuts the live console over and `rm -rf client/dist`
-// rolls it straight back — both without a restart, which matters because the server
-// lives for hours under launchd. One extra `existsSync` per navigation is nothing at
-// this traffic. During the rewrite `dist` is gitignored, so `main` keeps serving the
-// legacy client until a deliberate build.
+// The client is the built Vite output (`client/dist`), and the check is made PER
+// REQUEST, not at startup, so `npm run build` cuts a live console over without a
+// restart — the server lives for hours under launchd. One extra `existsSync` per
+// navigation is nothing at this traffic. Until a build exists the console still
+// answers rather than hanging: navigations get a page naming the two commands,
+// and `/sw.js` gets a real worker (see `sendNotBuilt` for why that one matters).
 //
 // `staticRoot`/`staticRootDir` live in `config.ts` so this pick has exactly one
 // implementation: `/api/state` reports the same answer this handler acts on.
 const webRoot = staticRootDir;
-log.info('client-root', { serving: staticRoot(), dir: webRoot() });
+log.info('client-root', { serving: staticRoot(), dir: webRoot() ?? 'not built yet' });
 
 /**
  * The console outliving its faults is the whole point: a watcher that throws,
@@ -143,9 +142,10 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // Static: everything under the chosen client root, with index.html as the SPA
-  // entry. `webRoot()` is re-checked per request so a build/rollback takes effect live.
+  // Static: everything under `client/dist`, with index.html as the SPA entry.
+  // `webRoot()` is re-checked per request so a fresh build takes effect live.
   const root = webRoot();
+  if (root === null) { sendNotBuilt(res, url.pathname); return; }
   const requested = url.pathname === '/' ? '/index.html' : url.pathname;
   const target = resolve(join(root, normalize(requested).replace(/^(\.\.[/\\])+/, '')));
   if (!target.startsWith(root) || !existsSync(target) || !statSync(target).isFile()) {
@@ -199,6 +199,70 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
   });
 });
+
+/** Served for any navigation until `client/dist` exists. */
+const NOT_BUILT_PAGE = `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phase Console — not built yet</title>
+<style>
+  body { font: 16px/1.6 system-ui, sans-serif; background: #16181d; color: #e8e6e1;
+         display: grid; place-items: center; min-height: 100dvh; margin: 0; }
+  main { max-width: 34rem; padding: 2rem; }
+  h1 { font-size: 1.25rem; font-weight: 600; }
+  code, pre { font-family: ui-monospace, monospace; background: #23262d; border-radius: 4px; }
+  code { padding: 0.1em 0.35em; }
+  pre { padding: 0.75rem 1rem; overflow-x: auto; }
+  a { color: #eab308; }
+</style>
+<main>
+  <h1>The console is running — the client is not built yet</h1>
+  <p>The server serves built output from <code>client/dist</code>, and there is none here.
+  In <code>${VIEWER_DIR}</code>:</p>
+  <pre>npm ci
+npm run build</pre>
+  <p>Then reload this page. <code>deploy/agent.sh install</code> and
+  <code>deploy/agent.sh update</code> run the build for you.</p>
+</main>
+</html>`;
+
+/**
+ * What a console with no build answers with.
+ *
+ * `/sw.js` is the one path that must NOT fall through to the page or to a 404:
+ * a registered service worker whose script URL returns 404 on update is
+ * UNREGISTERED by the browser, and the push subscriptions bound to it die
+ * silently with it. So it gets a real worker — `fallback-sw.js`, the retired
+ * legacy client's worker, verbatim — which installs over the built one, keeps
+ * the push handlers alive, and has no fetch handler, so the next navigation
+ * reaches the network again. The moment a build exists, the boot-time
+ * `registration.update()` swaps registered devices back onto the real worker.
+ * That covers the deliberate "deleted dist" state and the few seconds mid-build
+ * when `dist/` has been emptied and not yet rewritten.
+ *
+ * Navigations get a 200 page naming the two commands (the old SPA fallback
+ * would stream a file that does not exist and hang up); asset paths stay 404s.
+ */
+function sendNotBuilt(res: import('node:http').ServerResponse, pathname: string): void {
+  if (pathname === '/sw.js') {
+    sendFile(res, join(VIEWER_DIR, 'server', 'fallback-sw.js'));
+    return;
+  }
+  if (extname(pathname)) {
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('not found');
+    return;
+  }
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+    'content-security-policy': "frame-ancestors 'none'",
+  });
+  res.end(NOT_BUILT_PAGE);
+}
 
 function sendFile(res: import('node:http').ServerResponse, path: string): void {
   const type = MIME[extname(path)] ?? 'application/octet-stream';

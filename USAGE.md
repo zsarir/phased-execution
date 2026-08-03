@@ -29,7 +29,8 @@ across plans and handoffs. It updates itself as agent sessions write files, and 
 claim from `scripts/phase-graph.sh` rather than recomputing it. Read-only unless you pass
 `--allow-writes` (guarded scaffold / QA / lock verbs) or `--allow-run` (the **autopilot** — one
 `claude -p` per phase, driving a plan unattended, with approvals for anything reaching outside the
-working tree); it never commits or pushes. No install step — see `viewer/README.md`.
+working tree); it never commits or pushes. One-time setup per machine: `cd viewer && npm ci &&
+npm run build` — see `viewer/README.md`.
 
 ## Where things live (two places)
 

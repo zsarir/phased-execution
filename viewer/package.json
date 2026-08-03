@@ -8,12 +8,12 @@
     "node": ">=22.6"
   },
   "scripts": {
-    "start": "node server/index.ts",
+    "start": "node scripts/check-stamp.mjs && node server/index.ts",
     "test": "node --test \"test/*.test.ts\"",
-    "typecheck": "echo 'tsc needs @types/node — see README.md (Development)' && exit 1",
     "typecheck:client": "tsc -p client/tsconfig.json --noEmit && tsc -p client/tsconfig.sw.json --noEmit",
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/stamp-build.mjs",
+    "check:dist": "node scripts/check-dist.mjs",
     "preview": "vite preview",
     "test:client": "vitest run",
     "test:client:watch": "vitest"

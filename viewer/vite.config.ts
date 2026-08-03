@@ -8,9 +8,9 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 // The Vite project lives in `client/`; its build output goes to `client/dist`,
-// which the server serves in preference to the legacy `web/` client (see
-// `server/index.ts` webRoot()). One npm package, one lockfile — the server stays
-// zero-dependency plain Node; only the client is built.
+// the only client the server serves (see `server/index.ts` webRoot() — until a
+// build exists it answers with a page naming the build commands). One npm
+// package, one lockfile — the server stays plain Node; only the client is built.
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 // The real server. In dev, the React app runs on :5173 and proxies API + SSE to

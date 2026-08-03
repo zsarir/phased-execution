@@ -164,27 +164,27 @@ function printHelp(): void {
  * Which client is being served
  * ------------------------------------------------------------------ */
 
-export const WEB_DIR = join(VIEWER_DIR, 'web');
 export const DIST_DIR = join(VIEWER_DIR, 'client', 'dist');
 
 /**
- * The rewrite's migration seam, as a live fact rather than a startup one.
+ * Which client this console can serve, as a live fact rather than a startup one.
  *
- * The static root is picked per request — `client/dist/` when a build exists,
- * else the legacy `web/` — so `npm run build` cuts the console over and
- * `rm -rf client/dist` rolls it back, neither needing a restart. That is
- * exactly why it has to be reportable: with the choice moving underneath a
- * long-lived process, "which client am I actually looking at" was otherwise
- * only answerable by reading the startup log, and the startup log records the
- * answer from hours ago.
+ * The built client (`client/dist/`) is the only client — the legacy `web/`
+ * retired with the rewrite. `dist` is gitignored, so every machine builds its
+ * own copy (`npm ci && npm run build`; `deploy/agent.sh install|update` does it
+ * for you). The check stays per request, so a build cuts a running console over
+ * without a restart — which is exactly why it has to be reportable: with the
+ * answer moving underneath a long-lived process, "which client am I actually
+ * looking at" was otherwise only answerable by reading the startup log, and the
+ * startup log records the answer from hours ago.
  */
-export function staticRoot(): 'dist' | 'legacy' {
-  return existsSync(join(DIST_DIR, 'index.html')) ? 'dist' : 'legacy';
+export function staticRoot(): 'dist' | 'not-built' {
+  return existsSync(join(DIST_DIR, 'index.html')) ? 'dist' : 'not-built';
 }
 
-/** The directory `staticRoot()` names. One implementation, two callers. */
-export function staticRootDir(): string {
-  return staticRoot() === 'dist' ? DIST_DIR : WEB_DIR;
+/** The directory `staticRoot()` names — `null` until a build exists. */
+export function staticRootDir(): string | null {
+  return staticRoot() === 'dist' ? DIST_DIR : null;
 }
 
 /* ------------------------------------------------------------------ *

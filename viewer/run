@@ -11,8 +11,10 @@
 #   ./run --install-agent --root ~/code/your-repo
 #   ./run --agent-status | --agent-restart | --agent-log [-f] | --uninstall-agent
 #
-# No install step: the server is plain Node (>= 22.6, which runs TypeScript
-# directly) and the client is native ES modules.
+# The server is plain Node (>= 22.6, which runs TypeScript directly). The
+# client is BUILT output: on a fresh clone run `cd viewer && npm ci && npm run
+# build` first — until then the console serves a page saying exactly that.
+# `deploy/agent.sh install|update` runs the build for you.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,6 +26,7 @@ case "${1:-}" in
   --uninstall-agent) exec bash "$here/deploy/agent.sh" uninstall ;;
   --agent-status)    exec bash "$here/deploy/agent.sh" status ;;
   --agent-restart)   exec bash "$here/deploy/agent.sh" restart ;;
+  --agent-update)    exec bash "$here/deploy/agent.sh" update ;;
   --agent-log)       shift; exec bash "$here/deploy/agent.sh" log "$@" ;;
 esac
 
@@ -38,5 +41,8 @@ if [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -lt 6 ]; }; then
   echo "phase-console: node $(node -v) is too old — 22.6+ runs TypeScript directly" >&2
   exit 1
 fi
+
+# Warn — never build — when the built client is missing or older than the code.
+node "$here/scripts/check-stamp.mjs" || true
 
 exec node "$here/server/index.ts" "$@"

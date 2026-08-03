@@ -65,7 +65,7 @@ const BASE_STATE: ConsoleState = {
   autopilot: true,
   allowRun: true,
   allowWrites: false,
-  staticRoot: 'legacy',
+  staticRoot: 'not-built',
   root: { path: '/repo', ok: true, planCount: 3, handoffCount: 2 },
   scriptsDir: '/scripts',
   sizing: { S: 15_000, M: 40_000, L: 90_000, budgetBig: 200_000, budgetHaiku: 40_000 },
@@ -170,10 +170,10 @@ describe('search', () => {
  * ------------------------------------------------------------------ */
 
 describe('settings', () => {
-  it('reports the legacy static root as the legacy client', async () => {
+  it('says the client is not built when there is no dist', async () => {
     const { default: SettingsView } = await import('./settings');
     mount(<SettingsView />);
-    expect(await screen.findByText(/the legacy client/i)).toBeTruthy();
+    expect(await screen.findByText(/is missing; run/i)).toBeTruthy();
   });
 
   it('reports a built client when the server is serving dist', async () => {
@@ -193,7 +193,7 @@ describe('settings', () => {
   it('offers no rule editor on a read-only console', async () => {
     const { default: SettingsView } = await import('./settings');
     mount(<SettingsView />);
-    await screen.findByText(/the legacy client/i);
+    await screen.findByText(/is missing; run/i);
     expect(screen.queryByText(/Add a rule/i)).toBeNull();
   });
 });

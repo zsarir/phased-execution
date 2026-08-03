@@ -56,8 +56,10 @@ every time, from your plan's dependency table and the handoff files on disk.*
 
 ## Install
 
-You need [Claude Code](https://claude.com/claude-code) and **Node 22.6 or newer** (only for the
-console; the skill itself needs just Bash). Nothing else — no `npm install`, no build step.
+You need [Claude Code](https://claude.com/claude-code); the skill itself needs just Bash. The
+**console** additionally needs **Node 22.6 or newer with npm** — its client is built output, one
+`npm ci && npm run build` inside `viewer/` per machine. You do not have to remember that: an unbuilt
+console serves a page naming the two commands and the exact directory to run them in.
 
 Pick **one** of these two routes. They give you the same skill and the same console.
 
@@ -97,11 +99,15 @@ Or just restart Claude Code. Type `/plugin` to confirm it is listed — that scr
 plugin's skills under the plugin's name so two plugins can both ship a `review` skill without
 clashing. Type `/phased` and let autocomplete finish it. You will rarely type it at all: the skill
 describes itself well enough that Claude reaches for it on its own when work is phased. You also get
-`phase-console`, a command that starts the web app from any directory.
+`phase-console`, a command that starts the web app from any directory — the first run serves a page
+naming the client's one-time build (`npm ci && npm run build`, with the exact path printed, since a
+plugin lives in a cache directory you would otherwise have to hunt for).
 
 **Keeping it current.** `/plugin update phased-execution`. This plugin sets no version number on
 purpose, which puts it on the *commit channel*: every push to `main` counts as a new release, and
-Claude Code also refreshes in the background. Restart to apply an update.
+Claude Code also refreshes in the background. Restart to apply an update. An update moves the plugin
+to a fresh directory, so the console will ask for its build once more — same two commands, same
+printed path.
 
 **Removing it.** `/plugin uninstall phased-execution@mobin`, then optionally
 `/plugin marketplace remove mobin`.
@@ -113,7 +119,9 @@ git clone https://github.com/zsarir/phased-execution.git ~/.claude/skills/phased
 ```
 
 Restart Claude Code. The skill is `/phased-execution` — no prefix, because it is not inside a plugin.
-Start the console with `~/.claude/skills/phased-execution/start`. Update it with `git pull`.
+Build the console's client once (`cd ~/.claude/skills/phased-execution/viewer && npm ci && npm run
+build`), then start it with `~/.claude/skills/phased-execution/start`. Update with `git pull`, then
+rebuild — `./start --agent-update` does both build and restart if it runs as a launchd agent.
 
 ### Which route?
 
@@ -645,6 +653,10 @@ phase-console                      # installed as a plugin — from anywhere
 ./start --allow-run                # plus the autopilot
 ```
 
+*(First time on a machine: the client is built output — `cd viewer && npm ci && npm run build`, or
+let the console's own page tell you. As a launchd agent, `deploy/agent.sh install|update` builds it
+for you.)*
+
 A plan library outgrows a terminal: dozens of plans, hundreds of phases, hundreds of handoff files —
 and the engine answers for exactly one plan at a time. The console is the portfolio view: what is
 ready **right now** across every plan, which lock is holding what, which plan has stalled, how much
@@ -663,6 +675,7 @@ work is left, and whether a plan's graph even lints.
 | **Ready now** | Every ready phase across every plan, ranked by how much it unblocks. |
 | **Statistics** | Portfolio totals, velocity, completions calendar, size mix, repos, skills, target models, locks and every health issue. |
 | **Autopilot** | Drive a plan unattended: one `claude -p` per phase, the live session console, the approval queue, and the controls to pause, stop, retry, skip or run a single phase. |
+| **Terminal** | A real shell in the browser — off unless started with `--allow-terminal`; token-handshaked WebSocket, sessions that survive a reload, a phone key bar. |
 | **Search** | Full text across all plans and handoffs, grouped by plan. |
 
 It **updates itself**: a watch on `docs/` pushes changes over server-sent events, so a handoff written
@@ -1077,16 +1090,19 @@ paths, neither getting in the other's way.
 
 ## Requirements
 
-**Node 22.6 or newer** (for the console — it runs TypeScript directly, no build step) and **Bash**
-(for the scripts). Nothing else. No `npm install`, no service, no configuration file. The console
-vendors its own fonts and JavaScript runtime, so it works offline.
+**Bash** for the scripts — that is the whole skill. The console additionally needs **Node 22.6 or
+newer with npm**: its server runs TypeScript directly, and its client is built once per machine
+(`npm ci && npm run build` in `viewer/`; the console names those commands itself until they have
+run). Once built it bundles everything — fonts included — so it works offline and installs to a
+phone's home screen. No service, no configuration file.
 
 ## Tests
 
 ```bash
-tests/run-tests.sh                                                      # the scripts (bats)
-cd viewer && node --test "test/*.test.ts"                               # the console
-PHASE_CONSOLE_TEST_ROOT=~/code/your-repo node --test "test/*.test.ts"   # + engine parity, against a real plan library
+tests/run-tests.sh                                        # the scripts (bats)
+cd viewer && npm ci && npm test                           # the console (no build needed)
+PHASE_CONSOLE_TEST_ROOT=~/code/your-repo npm test         # + engine parity, against a real plan library
+npm run test:client                                       # the client suite (Vitest)
 ```
 
 The parity test re-derives every plan's board from the console's own parser and asserts it matches the
