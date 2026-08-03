@@ -74,6 +74,8 @@ export interface Sizing {
 export interface TerminalSession {
   id: string;
   label: string;
+  /** What the session runs. Absent (an older server) means a shell. */
+  kind?: 'shell' | 'claude';
   cwd: string;
   shell: string;
   cols: number;
@@ -81,6 +83,15 @@ export interface TerminalSession {
   pid: number;
   clients: number;
   createdAt: number;
+  /** Claude-session facts the UI shows back — never secret. */
+  meta?: {
+    model?: string;
+    effort?: string;
+    permissionMode?: string;
+    /** What `claude --resume <id>` takes after this pty is gone. */
+    claudeSessionId?: string;
+    intent?: 'plan';
+  };
   /** Present once the shell has gone; the page says so rather than "disconnected". */
   exited?: { code: number; signal?: number; closedByOperator?: boolean };
 }
@@ -88,6 +99,8 @@ export interface TerminalSession {
 export interface TerminalState {
   /** `--allow-terminal` was given. */
   allowed: boolean;
+  /** `--allow-agent` was given — claude sessions may be minted. */
+  agentAllowed?: boolean;
   /** Whether `node-pty` actually loaded — `unknown` until something has tried. */
   available: 'yes' | 'no' | 'unknown';
   limit: number;
@@ -112,6 +125,8 @@ export interface ConsoleState {
   allowRun?: boolean;
   /** `--allow-terminal`: the shell gate the nav reads on every page. */
   allowTerminal?: boolean;
+  /** `--allow-agent`: interactive claude sessions in the browser terminal. */
+  allowAgent?: boolean;
   autopilot?: boolean;
   /** True once `server/` on disk is newer than the process serving this page. */
   serverStale?: boolean;
@@ -963,6 +978,16 @@ export const api = {
   terminal: () => request<TerminalState>('/api/terminal'),
   terminalTicket: (body: { sessionId?: string; cols?: number; rows?: number }) =>
     post<TerminalTicket>('/api/terminal', body),
+  /**
+   * Mint a claude-kind session. The server composes and validates the argv —
+   * this body is enum choices, a bounded prompt, and nothing executable.
+   */
+  agentTicket: (body: {
+    cols?: number; rows?: number;
+    model?: string; effort?: string; permissionMode?: string;
+    prompt?: string; skills?: string[]; resume?: string;
+    intent?: 'plan'; brief?: string;
+  }) => post<TerminalTicket>('/api/terminal', { kind: 'claude', ...body }),
   terminalClose: (id: string) =>
     request<{ closed: boolean; state: TerminalState }>(`/api/terminal?id=${q(id)}`, { method: 'DELETE' }),
 

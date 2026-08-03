@@ -1,0 +1,227 @@
+/**
+ * The Agent page — interactive `claude` sessions in the browser terminal.
+ *
+ * Same bones as the Terminal page (explicit sessions, the id in the URL, the
+ * isFetching-gated fallback, cache seeded from the ticket) with one deliberate
+ * difference: `#/agent` with no id is a LAUNCHER, not an empty state — model,
+ * effort, permission mode and the first prompt are choices that must exist
+ * before the pty does, so the page collects them first. The server composes
+ * and validates everything (`server/agent.ts`); this page never builds argv.
+ *
+ * The session list is shared with the shell page (one registry, one cap of 8
+ * across both kinds) — each page shows only its own kind, and the New buttons
+ * disable on the unfiltered total, or the cap would look like a bug on
+ * whichever page had fewer tabs.
+ */
+
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Bot, Plus, RotateCcw, X } from 'lucide-react';
+import { api, type TerminalTicket } from '@/lib/api';
+import { keys, useConsoleState, useTerminals } from '@/lib/queries';
+import { cn } from '@/lib/cn';
+import { navigate, type Route } from '@/router';
+import { Button, Chip, CopyButton, Empty, Spinner, toast } from '@/components/ui';
+import { TerminalPane } from '../terminal/pane';
+import { Launcher, type LaunchBody } from './launcher';
+
+export default function AgentView({ route }: { route: Route }) {
+  const client = useQueryClient();
+  const [size, setSize] = useState<{ cols: number; rows: number }>();
+  const { data: state } = useConsoleState();
+  const allowed = state?.allowAgent === true;
+  const { data: terminals, isPending, isFetching } = useTerminals(allowed);
+
+  const all = terminals?.sessions ?? [];
+  const sessions = all.filter((session) => session.kind === 'claude');
+  const atCap = all.length >= (terminals?.limit ?? 8);
+  const wanted = route.segments[1];
+  const open = sessions.find((session) => session.id === wanted);
+
+  // `void`, never `await` — the terminal page's rule, for the same deadlock.
+  const refresh = () => { void client.invalidateQueries({ queryKey: keys.terminal() }); };
+
+  /**
+   * A URL naming a session that has ended falls back to whatever is still
+   * open, or to the launcher. ⚠️ `isFetching` is load-bearing here exactly as
+   * on the terminal page: without it this fires against an invalidated,
+   * not-yet-refetched list and bounces off the session that was just created.
+   */
+  useEffect(() => {
+    if (!allowed || isPending || isFetching) return;
+    if (wanted && !open) navigate(sessions.length ? `agent/${sessions[0].id}` : 'agent');
+  }, [allowed, isPending, isFetching, wanted, open, sessions]);
+
+  async function launch(body: LaunchBody) {
+    try {
+      const ticket = await api.agentTicket(body);
+      seed(ticket);
+      refresh();
+      navigate(`agent/${ticket.sessionId}`);
+    } catch (error) {
+      toast((error as Error).message, 'error');
+    }
+  }
+
+  function seed(ticket: TerminalTicket) {
+    // Seeded from the response rather than waited for, so the tab and the
+    // pane are right on the very next render — the ticket carries the record.
+    if (!ticket.session) return;
+    client.setQueryData(keys.terminal(), (prev: typeof terminals) => (prev
+      ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session] }
+      : prev));
+  }
+
+  async function close(id: string) {
+    try {
+      const result = await api.terminalClose(id);
+      if (result.state) client.setQueryData(keys.terminal(), result.state);
+      const rest = sessions.filter((session) => session.id !== id);
+      navigate(rest.length ? `agent/${rest[0].id}` : 'agent');
+    } catch (error) {
+      toast((error as Error).message, 'error');
+    }
+  }
+
+  /* ---------------- the two ways there is no agent ---------------- */
+
+  if (!allowed) {
+    return (
+      <Frame>
+        <Empty
+          icon={<Bot size={28} className="text-ink-faint" aria-hidden />}
+          title="Agent sessions are off"
+          body={
+            <>
+              An agent session is an interactive Claude Code CLI in a terminal on this machine —
+              it acts only with your approval, in the terminal itself, but starting one is still
+              its own decision. Restart the console with{' '}
+              <code className="rounded bg-surface-raised px-1 font-mono">--allow-agent</code>{' '}
+              to turn it on.
+            </>
+          }
+        />
+      </Frame>
+    );
+  }
+
+  if (terminals?.available === 'no') {
+    return (
+      <Frame>
+        <Empty
+          icon={<Bot size={28} className="text-ink-faint" aria-hidden />}
+          title="No terminal available"
+          body={
+            <>
+              <code className="rounded bg-surface-raised px-1 font-mono">node-pty</code> did not
+              load, so this console cannot open a pty for the session to run in. Run{' '}
+              <code className="rounded bg-surface-raised px-1 font-mono">npm install</code> in the
+              viewer directory and restart. Everything else on the console is unaffected.
+            </>
+          }
+        />
+      </Frame>
+    );
+  }
+
+  if (isPending) {
+    return <Frame><div className="grid flex-1 place-items-center"><Spinner /></div></Frame>;
+  }
+
+  /* ---------------- the page ---------------- */
+
+  const resumeId = open?.exited ? open.meta?.claudeSessionId : undefined;
+
+  return (
+    <Frame>
+      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-rule bg-ground-deep px-2 py-1.5">
+        {sessions.map((session) => {
+          const active = session.id === open?.id;
+          return (
+            <span
+              key={session.id}
+              className={cn(
+                'flex shrink-0 items-center rounded border',
+                active ? 'border-rule-strong bg-surface-raised' : 'border-rule bg-surface',
+              )}
+            >
+              <button
+                type="button"
+                aria-current={active ? 'page' : undefined}
+                onClick={() => navigate(`agent/${session.id}`)}
+                className={cn(
+                  'min-h-(--tap-min) max-w-56 truncate px-3 text-sm',
+                  active ? 'text-ink' : 'text-ink-muted hover:text-ink',
+                )}
+              >
+                {session.label}
+                {session.exited && <span className="ml-1.5 text-2xs text-ink-faint">ended</span>}
+              </button>
+              <button
+                type="button"
+                aria-label={`Close ${session.label}`}
+                onClick={() => void close(session.id)}
+                className="flex size-(--tap-min) items-center justify-center text-ink-faint hover:text-ink"
+              >
+                <X size={14} aria-hidden />
+              </button>
+            </span>
+          );
+        })}
+
+        <Button
+          size="sm"
+          className="ml-1 min-h-(--tap-min) shrink-0"
+          disabled={atCap}
+          title={atCap
+            ? `The limit is ${terminals?.limit ?? 8} sessions across shells and agents — close one first`
+            : 'Configure and start a new Claude session'}
+          onClick={() => navigate('agent')}
+        >
+          <Plus size={14} aria-hidden /> New
+        </Button>
+
+        {open && (
+          <Chip mono className="ml-auto hidden shrink-0 md:inline-flex" title={open.cwd}>
+            {(size ?? open).cols}×{(size ?? open).rows}
+          </Chip>
+        )}
+      </div>
+
+      {open ? (
+        <>
+          {resumeId && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-rule bg-surface px-3 py-2 text-sm text-ink-muted">
+              <span>The CLI exited — its conversation is resumable.</span>
+              <Button size="sm" disabled={atCap} onClick={() => void launch({ resume: resumeId })}>
+                <RotateCcw size={14} aria-hidden /> Resume here
+              </Button>
+              <CopyButton text={`claude --resume ${resumeId}`} label="Copy resume command" />
+            </div>
+          )}
+          {/* Keyed by session — a tab switch builds a fresh xterm, never replays
+              another session's scrollback into a reused one. */}
+          <TerminalPane
+            key={open.id}
+            sessionId={open.id}
+            onSession={refresh}
+            onSize={setSize}
+            onEnded={refresh}
+          />
+        </>
+      ) : (
+        <Launcher
+          root={state?.root?.path}
+          disabled={atCap}
+          skillsEnabled={Boolean(state?.root?.path)}
+          onLaunch={launch}
+        />
+      )}
+    </Frame>
+  );
+}
+
+/** Same frame as the terminal: the pane scrolls itself, the page never does. */
+function Frame({ children }: { children: React.ReactNode }) {
+  return <div className="flex h-full min-h-0 flex-col">{children}</div>;
+}

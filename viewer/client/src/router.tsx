@@ -58,6 +58,10 @@ export const VIEWS: Record<string, View> = {
   // Lazy is not an optimisation here — it is why a phone opening the ready
   // queue does not download a terminal emulator.
   terminal: lazy(() => import('./views/terminal')),
+  // Same reasoning: the agent page shares the terminal pane (and with it the
+  // lazy pane-* chunk xterm lives in — see vite.config.ts globIgnores) and
+  // stays off every other route.
+  agent: lazy(() => import('./views/agent')),
 };
 
 /** `''` and anything unregistered land on the dashboard rather than nowhere. */

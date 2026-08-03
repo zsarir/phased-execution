@@ -24,6 +24,8 @@
  * `terminal` takes an optional session id (`#/terminal/<id>`) so a shell survives
  * a reload; it is a route whether or not `--allow-terminal` was given, because a
  * route that explains why it is off is better than one that vanishes.
+ * `agent` is the same shape for interactive claude sessions (`#/agent/<id>`,
+ * gated by `--allow-agent`) — with no id it renders the launcher.
  * NOTE: the route-registry guard asserts every head here resolves to a real
  * component AND that no component exists without a head — adding one means
  * adding both sides.
@@ -42,6 +44,7 @@ export const ROUTE_HEADS = Object.freeze([
   'notifications',
   'guide',
   'terminal',
+  'agent',
 ]);
 
 /**

@@ -89,7 +89,23 @@ export default defineConfig({
         // and precaching is exactly the wrong place to spend that: it is
         // downloaded on install, by everyone, before anyone asks for a shell.
         // It stays a lazy chunk fetched from the network on demand.
-        globIgnores: ['**/terminal-*.js', '**/terminal-*.css'],
+        //
+        // `pane-*` is where xterm actually lives now that TWO routes (terminal
+        // and agent) share the pane: the bundler hoists pane+keybar+palette+
+        // xterm into one lazy chunk named after the facade module. The name is
+        // gated by scripts/check-dist.mjs, so a bundler that renames it fails
+        // the build loudly instead of silently precaching 89 KB.
+        //
+        // ⚠️ Do NOT reach for rollupOptions manualChunks/advancedChunks to pin
+        // a prettier name: measured on this tree (Vite 8 / Rolldown), both
+        // forms pulled the captured modules' dependency subtree — React
+        // itself — into the named chunk, which made index.html modulepreload
+        // xterm for every visitor.
+        globIgnores: [
+          '**/terminal-*.js', '**/terminal-*.css',
+          '**/pane-*.js', '**/pane-*.css',
+          '**/agent-*.js', '**/agent-*.css',
+        ],
       },
       // No worker in dev. See the `/sw.js` proxy note above.
       devOptions: { enabled: false },

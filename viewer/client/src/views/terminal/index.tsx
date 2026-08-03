@@ -38,7 +38,12 @@ export default function TerminalView({ route }: { route: Route }) {
   const allowed = state?.allowTerminal === true;
   const { data: terminals, isPending, isFetching } = useTerminals(allowed);
 
-  const sessions = terminals?.sessions ?? [];
+  // One registry serves two pages: this one shows shells, `#/agent` shows
+  // claude sessions. `?? 'shell'` keeps an older server's kind-less records
+  // here. The cap check stays on the UNFILTERED total — 8 across both kinds.
+  const all = terminals?.sessions ?? [];
+  const sessions = all.filter((session) => (session.kind ?? 'shell') === 'shell');
+  const atCap = all.length >= (terminals?.limit ?? 8);
   const wanted = route.segments[1];
   const open = sessions.find((session) => session.id === wanted);
 
@@ -179,9 +184,9 @@ export default function TerminalView({ route }: { route: Route }) {
         <Button
           size="sm"
           className="ml-1 min-h-(--tap-min) shrink-0"
-          disabled={sessions.length >= (terminals?.limit ?? 8)}
-          title={sessions.length >= (terminals?.limit ?? 8)
-            ? `The limit is ${terminals?.limit} sessions — close one first`
+          disabled={atCap}
+          title={atCap
+            ? `The limit is ${terminals?.limit ?? 8} sessions across shells and agents — close one first`
             : 'Open a new shell in the source directory'}
           onClick={() => void openShell()}
         >

@@ -208,6 +208,30 @@ describe('sessions', () => {
     expect(button).toBeDisabled();
   });
 
+  it('shows shells only — claude sessions live on the agent page', async () => {
+    const claude = {
+      ...SESSION, id: 'c1', label: 'Claude: hello', kind: 'claude' as const, shell: 'claude',
+    };
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [SESSION, claude] });
+    await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
+
+    expect(await screen.findByText('Terminal 1')).toBeInTheDocument();
+    expect(screen.queryByText('Claude: hello')).not.toBeInTheDocument();
+  });
+
+  it('counts the cap across BOTH kinds, not just the tabs it shows', async () => {
+    // Seven claude sessions and one shell: one visible tab, but the registry
+    // is full — a New button that read only its own tabs would offer a shell
+    // the server must refuse.
+    const many = Array.from({ length: 7 }, (_, i) => ({
+      ...SESSION, id: `c${i}`, label: `Claude ${i}`, kind: 'claude' as const,
+    }));
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [SESSION, ...many] });
+    await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
+
+    expect(await screen.findByRole('button', { name: /new/i })).toBeDisabled();
+  });
+
   it('closes a session and moves off it', async () => {
     await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
     fireEvent.click(await screen.findByRole('button', { name: /close terminal 1/i }));
@@ -227,10 +251,13 @@ describe('the key bar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /escape/i }));
     fireEvent.click(screen.getByRole('button', { name: /^tab/i }));
+    fireEvent.click(screen.getByRole('button', { name: /shift-tab/i }));
     fireEvent.click(screen.getByRole('button', { name: /interrupt/i }));
     fireEvent.click(screen.getByRole('button', { name: /up — previous command/i }));
 
-    expect(sent).toEqual(['\x1b', '\t', '\x03', '\x1b[A']);
+    // ⇧Tab is CSI Z, the backtab — in a claude session it cycles permission
+    // modes, which a phone keyboard cannot otherwise type.
+    expect(sent).toEqual(['\x1b', '\t', '\x1b[Z', '\x03', '\x1b[A']);
   });
 
   it('holds focus rather than dismissing the keyboard', () => {
@@ -312,9 +339,28 @@ describe('the nav entry', () => {
     expect(ids(undefined)).not.toContain('terminal');
   });
 
+  it('gates the agent entry on its own capability, independently', () => {
+    const ids = (state?: ConsoleState) => visibleNav(state).map((item) => item.id);
+    expect(ids({ ...BASE_STATE, allowAgent: true })).toContain('agent');
+    expect(ids({ ...BASE_STATE, allowAgent: false })).not.toContain('agent');
+    expect(ids({ ...BASE_STATE, allowAgent: undefined })).not.toContain('agent');
+    // Each flag opens only its own door.
+    expect(ids({ ...BASE_STATE, allowTerminal: false, allowAgent: true })).toEqual(
+      expect.arrayContaining(['agent']),
+    );
+    expect(ids({ ...BASE_STATE, allowTerminal: false, allowAgent: true })).not.toContain('terminal');
+    expect(ids({ ...BASE_STATE, allowTerminal: true, allowAgent: false })).not.toContain('agent');
+  });
+
   it('hides nothing else', () => {
     expect(visibleNav({ ...BASE_STATE, allowTerminal: false }).map((i) => i.id)).toEqual([
       'dashboard', 'ready', 'plans', 'runs', 'notifications', 'stats', 'search', 'guide', 'settings',
+    ]);
+    // With both capabilities on, the two gated entries appear in NAV order —
+    // Agent, then Terminal — and everything else stays put.
+    expect(visibleNav({ ...BASE_STATE, allowTerminal: true, allowAgent: true }).map((i) => i.id)).toEqual([
+      'dashboard', 'ready', 'plans', 'runs', 'notifications', 'stats', 'search',
+      'agent', 'terminal', 'guide', 'settings',
     ]);
   });
 });

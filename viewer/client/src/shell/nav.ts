@@ -1,5 +1,5 @@
 import {
-  Bell, Compass, LayoutGrid, LineChart, ListChecks, Search, Settings, FileText,
+  Bell, Bot, Compass, LayoutGrid, LineChart, ListChecks, Search, Settings, FileText,
   TerminalSquare, Zap,
   type LucideIcon,
 } from 'lucide-react';
@@ -39,7 +39,7 @@ export interface NavItem {
    * *nav entry*, because a permanent dead link in a nine-item list is noise on
    * every machine that never turns the feature on.
    */
-  requires?: 'allowTerminal';
+  requires?: 'allowTerminal' | 'allowAgent';
 }
 
 export const NAV: readonly NavItem[] = [
@@ -50,6 +50,13 @@ export const NAV: readonly NavItem[] = [
   { id: 'notifications', label: 'Notifications', icon: Bell, note: 'Everything the console has announced', badge: 'unread', primary: true },
   { id: 'stats', label: 'Statistics', icon: ListChecks, note: 'Throughput, cost and the shape of the portfolio', primary: true },
   { id: 'search', label: 'Search', icon: Search, note: 'Every plan, handoff and phase at once', primary: true },
+  {
+    id: 'agent',
+    label: 'Agent',
+    icon: Bot,
+    note: 'Interactive Claude sessions, in a terminal',
+    requires: 'allowAgent',
+  },
   {
     id: 'terminal',
     label: 'Terminal',

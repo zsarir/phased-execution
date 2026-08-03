@@ -24,6 +24,9 @@ export interface KeyBarProps {
 const KEYS: readonly { label: string; icon?: typeof ArrowUp; data: string; title: string }[] = [
   { label: 'Esc', data: '\x1b', title: 'Escape' },
   { label: 'Tab', data: '\t', title: 'Tab — completion' },
+  // CSI Z, the backtab. Harmless in a shell, and in a claude session it is
+  // Shift+Tab — the permission-mode cycle a phone keyboard cannot type.
+  { label: '⇧Tab', data: '\x1b[Z', title: 'Shift-Tab — cycle Claude permission modes' },
   { label: '^C', data: '\x03', title: 'Interrupt (Ctrl-C)' },
   { label: '↑', icon: ArrowUp, data: '\x1b[A', title: 'Up — previous command' },
   { label: '↓', icon: ArrowDown, data: '\x1b[B', title: 'Down' },

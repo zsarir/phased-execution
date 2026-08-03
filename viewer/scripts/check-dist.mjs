@@ -66,6 +66,10 @@ check('the worker still handles push', /addEventListener\((["'`])push\1/.test(sw
 check('the precache includes index.html (the offline shell)', sw.includes('index.html'));
 check('the precache does NOT include the terminal chunk', !sw.includes('terminal-'),
   'xterm is no use to someone who cannot open a shell, and it is 89 KB');
+check('the precache does NOT include the pane chunk (where xterm lives)', !sw.includes('pane-'),
+  'the shared emulator chunk both terminal routes lazy-load — same reasoning, same 89 KB');
+check('the precache does NOT include the agent chunk', !sw.includes('agent-'),
+  'the agent route is no use to someone whose console has no --allow-agent');
 
 /* The entry — parsed from the document, not guessed from filenames. */
 const entryMatch = /<script[^>]+type="module"[^>]+src="\/assets\/(index-[^"]+\.js)"/.exec(html);
@@ -82,8 +86,15 @@ if (entryMatch) {
 
 const assets = existsSync(join(DIST, 'assets')) ? readdirSync(join(DIST, 'assets')) : [];
 check('the terminal is its own lazy chunk', assets.some((name) => /^terminal-.*\.js$/.test(name)));
+check('the agent page is its own lazy chunk', assets.some((name) => /^agent-.*\.js$/.test(name)));
+check('xterm rides in one shared lazy pane-* chunk (the name the globIgnores exclude)',
+  assets.some((name) => /^pane-.*\.js$/.test(name)),
+  'if the bundler renamed the shared chunk, update vite.config.ts globIgnores AND this check together');
 check('index.html never references the terminal chunk', !html.includes('terminal-'),
   'referenced from the document, it would load for every reader of a route map');
+check('index.html never references the pane or agent chunks',
+  !html.includes('pane-') && !html.includes('agent-'),
+  'referenced from the document, they would load for every reader of a route map');
 
 check('dist/.build-rev exists (npm run build stamps what it built)',
   existsSync(join(DIST, '.build-rev')));
