@@ -16,7 +16,9 @@
 
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { BarList, Bars, CHART_TONES, Calendar, StackBar, toneVar } from './charts';
+import {
+  BarList, Bars, CHART_TONES, Calendar, LoadMeter, RouteStrip, StackBar, toneVar,
+} from './charts';
 
 /** Anything that is a colour but not a token reference. */
 const LITERAL_COLOUR = /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(|\boklab\(/i;
@@ -134,6 +136,53 @@ describe('the charts as charts', () => {
       <StackBar segments={[{ label: 'done', value: 0, tone: 'done' }]} />,
     );
     expect(container.querySelector<HTMLElement>('span[style*="width"]')!.style.width).toBe('0%');
+  });
+
+  it('paints the LoadMeter and the RouteStrip with tokens only', () => {
+    const { container } = render(
+      <>
+        <LoadMeter fraction={0.4} label="40%" description="40% of a session" />
+        <RouteStrip phases={[{ phase: 1, state: 'done' }, { phase: 2, state: 'ready' }]} />
+      </>,
+    );
+    for (const value of paints(container)) expect(value, value).not.toMatch(LITERAL_COLOUR);
+  });
+
+  it('draws a load as a share of the bar, clamped for anything over budget', () => {
+    const { container, rerender } = render(<LoadMeter fraction={0.4} label="40%" />);
+    expect(container.querySelector<HTMLElement>('span[style*="width"]')!.style.width).toBe('40%');
+    rerender(<LoadMeter fraction={1} label="over" />);
+    expect(container.querySelector<HTMLElement>('span[style*="width"]')!.style.width).toBe('100%');
+  });
+
+  it('says so rather than drawing an empty meter when there is nothing to measure', () => {
+    const { container } = render(<LoadMeter fraction={null} label="unsized" />);
+    expect(container.querySelector('span[style*="width"]')).toBeNull();
+    expect(container.textContent).toBe('unsized');
+  });
+
+  it('paints a state the engine has not taught it grey, never transparent', () => {
+    // `var(--line-${state})` would interpolate an undeclared property for a new
+    // engine word and paint the segment invisible — which reads as "this phase
+    // does not exist" rather than "we do not know what this is".
+    const { container } = render(
+      <RouteStrip phases={[{ phase: 1, state: 'quantum-superposition' }]} />,
+    );
+    const segment = container.querySelector<HTMLElement>('[title^="P1"]')!;
+    expect(segment.style.background).toBe(toneVar('waiting'));
+  });
+
+  it('gives a strip one segment per phase and names the progress', () => {
+    const { container } = render(
+      <RouteStrip phases={[
+        { phase: 1, state: 'done' },
+        { phase: 2, state: 'done' },
+        { phase: 3, state: 'ready' },
+      ]} />,
+    );
+    const strip = container.querySelector('[role="img"]')!;
+    expect(strip.getAttribute('aria-label')).toBe('3 phases, 2 done');
+    expect(strip.children).toHaveLength(3);
   });
 
   it('gives every chart an accessible name — they are img roles, not decoration', () => {

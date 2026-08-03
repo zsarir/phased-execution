@@ -94,4 +94,5 @@ export function SheetContent({
 }
 
 export const Sheet = DialogPrimitive.Root;
+export const SheetTrigger = DialogPrimitive.Trigger;
 export const SheetClose = DialogPrimitive.Close;

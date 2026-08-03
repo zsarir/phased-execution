@@ -20,8 +20,15 @@ export interface Prefs {
   showDocuments: boolean;
   showComplete: boolean;
   model: string;
+  /** How the ready board is ordered — see `views/ready/model.ts` `RANKS`. */
+  readyRank: string;
+  /** Ready board: one flat queue, or grouped under each plan. */
+  readyGroup: boolean;
 }
 
+// A key added here is safe for a browser carrying the old client's settings:
+// `load()` spreads these under whatever was stored, so an absent key takes the
+// default rather than reading `undefined`.
 const DEFAULTS: Prefs = {
   theme: 'system',
   density: 'comfortable',
@@ -29,6 +36,8 @@ const DEFAULTS: Prefs = {
   showDocuments: false,
   showComplete: true,
   model: '',
+  readyRank: 'leverage',
+  readyGroup: false,
 };
 
 function load(): Prefs {

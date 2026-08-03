@@ -14,15 +14,16 @@
  * top of it is a second, slower, wronger answer to the same question.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import {
   QueryClient,
   keepPreviousData,
+  useQueries,
   useQuery,
   useQueryClient,
   type QueryClientConfig,
 } from '@tanstack/react-query';
-import { api, type ConsoleState, type InboxQuery, type PlanSummary } from './api';
+import { api, type ConsoleState, type InboxQuery, type PlanDetail, type PlanSummary } from './api';
 import { SSE_EVENTS, onSse, type SseEvent } from './sse';
 
 /* ---------------- keys ---------------- */
@@ -248,6 +249,55 @@ export function usePlan(slug: string | undefined) {
     enabled: Boolean(slug),
     placeholderData: keepPreviousData,
   });
+}
+
+/**
+ * Several plans at once, under the same `['plan', slug]` keys as `usePlan`.
+ *
+ * The ready queue and the dashboard both need facts `/api/plans` does not carry
+ * — a phase's title, its size, whether it is gated, how much it unblocks — and
+ * those live in the per-plan detail. Fetching them here rather than adding a
+ * server endpoint keeps the frozen API frozen, and because the keys are shared,
+ * the board warms the cache for exactly the plans you are most likely to open
+ * next: clicking through to one is then instant.
+ *
+ * The cost is bounded by the caller passing a short list, and by the server's
+ * own cache — a cold plan costs an engine invocation, a warm one costs nothing.
+ * Callers render from the summary first and let each row upgrade as its detail
+ * lands, so a slow plan delays a title, never the page.
+ *
+ * ⚠️ **The map is built in a `useMemo`, not in `useQueries`' `combine`.** A
+ * `combine` that returns a `Map` returns a value TanStack's structural sharing
+ * cannot compare, so every render produces a new snapshot for the
+ * `useSyncExternalStore` behind `useQueries` — which re-renders, which combines
+ * again. The symptom is not a slow page: React blows the update-depth limit and
+ * throws during render, so the *whole app* goes blank and the console only says
+ * "an error occurred in <ReadyView>". Keep the derived shape out of `combine`.
+ */
+export function usePlanDetails(slugs: readonly string[], enabled = true) {
+  const results = useQueries({
+    queries: slugs.map((slug) => ({
+      queryKey: keys.plan(slug),
+      queryFn: () => api.plan(slug),
+      enabled,
+      // A plan whose engine run fails should leave a row un-enriched, not retry
+      // a shell-out at somebody several times over.
+      retry: false,
+    })),
+  });
+
+  const bySlug = useMemo(() => {
+    const map = new Map<string, PlanDetail>();
+    results.forEach((result, i) => {
+      if (result.data) map.set(slugs[i], result.data);
+    });
+    return map;
+    // `results` is a fresh array each render, so this recomputes each time. That
+    // is a dozen map writes, and it is the price of not handing React a value it
+    // has to diff. It cannot loop: nothing here feeds a store.
+  }, [results, slugs]);
+
+  return { bySlug, loading: results.some((r) => r.isPending) };
 }
 
 export function useHandoff(slug: string | undefined, phase: number | string | undefined) {

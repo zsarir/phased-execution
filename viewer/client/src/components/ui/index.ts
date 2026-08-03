@@ -10,7 +10,7 @@ export {
 } from './status-stack';
 export {
   Dialog, DialogTrigger, DialogClose, DialogContent, DialogFooter,
-  Sheet, SheetClose, SheetContent,
+  Sheet, SheetTrigger, SheetClose, SheetContent,
 } from './dialog';
 export { AlertDialog, AlertDialogTrigger, AlertDialogContent } from './alert-dialog';
 export { Tabs, TabsList, TabsTrigger, TabsContent } from './tabs';

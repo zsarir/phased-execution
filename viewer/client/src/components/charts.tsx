@@ -1,5 +1,5 @@
 /**
- * Four hand-drawn SVG charts. One accent hue per meaning, tabular figures, no
+ * Six hand-drawn charts. One accent hue per meaning, tabular figures, no
  * decoration that does not carry data.
  *
  * Ported from `web/components/charts.js` — restyled, not redesigned. The
@@ -10,7 +10,7 @@
  * component resolves them, so a chart cannot be painted a colour the design
  * system does not have. `charts.test.tsx` asserts that.
  *
- * No chart library. These are four shapes totalling ~150 lines; the smallest
+ * No chart library. These are six shapes totalling ~250 lines; the smallest
  * charting dependency is larger than the whole plan surface's chunk, and it
  * would arrive with its own colour vocabulary to fight.
  */
@@ -280,5 +280,145 @@ export function StackBar({ segments }: { segments: StackSegment[] }) {
         ))}
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * LoadMeter — one phase against one session
+ * ------------------------------------------------------------------ */
+
+/**
+ * How much of a session a phase would take.
+ *
+ * This is the number the whole skill is organised around: phases are sized so a
+ * session's working set stays inside a fraction of the model's window, and the
+ * plan declares the budget that fraction is of. A weight alone ("40K") is a fact
+ * nobody can act on; the same weight drawn against the budget is the answer to
+ * "can I start this before the meeting".
+ *
+ * The quarter ticks are not decoration — they are what makes the bar readable
+ * without a number beside it, which is what a phone needs.
+ */
+export function LoadMeter({
+  fraction,
+  label,
+  description,
+  tone = 'progress',
+  className,
+}: {
+  /** 0–1, or null when the phase has no weight or the plan no budget. */
+  fraction: number | null;
+  /** Kept to a few characters — the bar is the message, this is the check. */
+  label: string;
+  /** The exact reading, for the accessible name and the tooltip. */
+  description?: string;
+  tone?: ChartTone;
+  className?: string;
+}) {
+  if (fraction == null) {
+    return <span className={cn('text-2xs text-ink-faint', className)}>{label}</span>;
+  }
+  return (
+    <span
+      className={cn('flex min-w-0 items-center gap-2', className)}
+      role="img"
+      aria-label={`session load: ${description ?? label}`}
+      title={description ?? label}
+    >
+      <span className="relative block h-1.5 min-w-12 flex-1 overflow-hidden rounded-full bg-track">
+        <span
+          className="block h-full rounded-full"
+          style={{ width: `${Math.round(fraction * 100)}%`, background: toneVar(tone) }}
+        />
+        {[0.25, 0.5, 0.75].map((tick) => (
+          <span
+            key={tick}
+            className="absolute inset-y-0 w-px bg-ground/70"
+            style={{ left: `${tick * 100}%` }}
+            aria-hidden
+          />
+        ))}
+      </span>
+      {/* A fixed width so a column of meters has its bars start and end on the
+          same pixel — a ragged right edge reads as noise, not as data. */}
+      <span className="w-9 shrink-0 text-right font-mono text-2xs tabular-nums text-ink-faint">
+        {label}
+      </span>
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * RouteStrip — a whole plan, at a glance
+ * ------------------------------------------------------------------ */
+
+export interface StripPhase {
+  phase: number;
+  state: string;
+  title?: string;
+}
+
+/**
+ * The engine's state vocabulary → this palette's.
+ *
+ * A closed table rather than `var(--line-${state})`: an engine that learns a new
+ * word would otherwise interpolate an undeclared custom property and paint the
+ * segment *transparent*, which reads as "this phase does not exist". Grey —
+ * "we do not know that this can start" — is the honest fallback, and it is the
+ * same one `asPhaseState` makes for chips.
+ */
+const STRIP_TONE: Record<string, ChartTone> = {
+  done: 'done',
+  ready: 'ready',
+  'in-progress': 'progress',
+  waiting: 'waiting',
+  blocked: 'blocked',
+  stuck: 'stuck',
+  gated: 'gated',
+};
+
+/**
+ * A plan's phases as one line of track.
+ *
+ * The route map answers "what depends on what"; this answers "how far along is
+ * this, and where is the work" in the width of a list row. Every phase is one
+ * segment in plan order, painted by state, so the shape of a plan — a solid run
+ * of green with an amber notch two thirds along — is legible before any of the
+ * words are.
+ *
+ * Segments flex rather than taking a fixed width, so a 31-phase plan and a
+ * 4-phase plan both fill the row and neither can push a phone sideways. Like
+ * `Calendar`, it is a display and not a control: 31 tappable 44px targets do not
+ * fit on a phone, so the strip as a whole is the link and the ready phases get
+ * their own targets in the row beside it.
+ */
+export function RouteStrip({ phases, className }: { phases: StripPhase[]; className?: string }) {
+  if (!phases.length) return null;
+  const done = phases.filter((p) => p.state === 'done').length;
+
+  return (
+    <span
+      className={cn('flex h-3 w-full min-w-0 items-stretch gap-px', className)}
+      role="img"
+      aria-label={`${phases.length} phases, ${done} done`}
+    >
+      {phases.map((p) => {
+        const ready = p.state === 'ready';
+        return (
+          <span
+            key={p.phase}
+            className={cn(
+              'block min-w-0 flex-1 rounded-[1px] first:rounded-l-sm last:rounded-r-sm',
+              // The one state you can act on is drawn full-height; everything
+              // else is a band. Amber alone would be a colour difference on a
+              // 6px segment, which is not a difference on a phone in daylight.
+              ready ? 'self-stretch' : 'my-[3px]',
+            )}
+            style={{ background: toneVar(STRIP_TONE[p.state] ?? 'waiting') }}
+            title={`P${p.phase} · ${p.state}${p.title ? ` · ${p.title}` : ''}`}
+          />
+        );
+      })}
+    </span>
   );
 }

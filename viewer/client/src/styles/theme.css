@@ -238,10 +238,19 @@
   --duration-medium: 260ms;
   --duration-draw: 620ms;
 
-  /* The two motions the app has. `tailwindcss-animate` is not installed — these
-     are the whole vocabulary, so a component cannot invent a third. */
+  /* The motions the app has. `tailwindcss-animate` is not installed — these are
+     the whole vocabulary, so a component cannot invent another.
+
+     `fade` and `rise` are entrances: they play once, when something arrives.
+     `pulse-soft` is the only *continuing* one, and it exists because the board
+     has exactly one fact that changes while you are looking at it — a run that
+     is running. A static dot cannot distinguish "a session is thinking" from "a
+     session died and this page is stale", which is the single most common
+     reason someone reloads a console that was working. It is reserved for that;
+     nothing decorative may breathe. The global reduced-motion rule stops it. */
   --animate-fade: fade 120ms cubic-bezier(0.2, 0.7, 0.3, 1);
   --animate-rise: rise 260ms cubic-bezier(0.2, 0.7, 0.3, 1);
+  --animate-pulse-soft: pulse-soft 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 @keyframes fade {
@@ -252,6 +261,11 @@
 @keyframes rise {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 /* ------------------------------------------------------------------ *
