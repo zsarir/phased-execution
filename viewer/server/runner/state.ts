@@ -115,6 +115,19 @@ export type PhaseRecord = {
   gate?: { clear: boolean; kind: string; detail: string };
   verification?: VerifySummary;
   lint?: { ok: boolean; summary: string };
+  /**
+   * The one continuation this phase is allowed when its session exits without
+   * writing a handoff — recorded so a second attempt cannot happen by accident,
+   * and so the panel can say a closeout was tried and what came of it.
+   */
+  closeout?: { at: string; ok: boolean; sessionId?: string; note?: string };
+  /**
+   * The session's own closing words. When a phase exits clean and changes
+   * nothing this is the only account of why, and it used to live solely in the
+   * journal — so the halt said "no handoff was written" and the reason it was
+   * not written took a manual dig through NDJSON to recover.
+   */
+  said?: string;
 };
 
 export type Autonomy = 'halt-on-everything' | 'keep-going';
@@ -390,6 +403,11 @@ export function reconcileRun(state: RunState, liveRunId?: string | null): boolea
     record.note ??= `the console stopped while phase ${record.phase} was `
       + (was === 'awaiting-verification' ? 'waiting to be verified' : 'running');
     record.endedAt ??= at;
+    // The session survives the console that was watching it. Keeping its id
+    // here is what makes the difference between offering to CONTINUE this phase
+    // and offering only to start it over: an interrupted phase may be twenty
+    // minutes of work from done, and a restart throws all of it away.
+    record.resumeSessionId ??= record.sessionId;
   }
   return true;
 }

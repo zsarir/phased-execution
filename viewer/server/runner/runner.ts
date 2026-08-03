@@ -23,6 +23,7 @@
  * working tree is not parallelism, it is a merge conflict with extra steps.
  */
 
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -101,6 +102,21 @@ export type StartOptions = {
   permissionProfile?: PermissionProfile;
 };
 
+/** The three ways to move a stuck phase forward without starting it over. */
+export type RecoverMode = 'recheck' | 'closeout' | 'resume';
+
+export type RecoverOptions = {
+  slug: string;
+  root: string;
+  /** The stored run holding the phase. Recovery never invents a new run. */
+  runId: string;
+  phase: number;
+  mode: RecoverMode;
+  /** `resume` only: what the operator wants the session to do differently. */
+  instruction?: string;
+  by?: string;
+};
+
 /** Per phase: one first try, plus room for a model switch, a resume and a retry. */
 const MAX_ATTEMPTS = 4;
 /** Give a stopped session time to run its own SessionEnd hooks before SIGKILL. */
@@ -112,6 +128,51 @@ const SIGTERM_GRACE_MS = 15_000;
  * prompt gets.
  */
 const VERIFY_ANSWER_MS = 12 * 60 * 60 * 1_000;
+
+/**
+ * A closeout is paperwork: verify, commit, write the handoff, update the index.
+ * Generous enough for a phase whose verification is a full suite, tight enough
+ * that a session which misreads the ask and starts coding again runs out.
+ */
+const CLOSEOUT_MAX_TURNS = 60;
+
+/**
+ * What the runner says to a session that finished its work and stopped short of
+ * recording it.
+ *
+ * This is `SKILL.md` §Mode 3 steps 1–4 and nothing else. The two constraints
+ * that matter are both about honesty: it must not start new work (it is being
+ * resumed to write down what happened, not to have second thoughts), and it must
+ * hand off `blocked` rather than `complete` when verification is red — otherwise
+ * the closeout becomes a machine for turning failures into green boards, which
+ * is worse than the halt it replaces.
+ */
+function closeoutPrompt(slug: string, phase: number, boardState: string): string {
+  return [
+    `You exited without closing phase ${phase} of \`${slug}\`. The board still reads `
+      + `"${boardState}", which means the handoff was never written or is not marked complete.`,
+    '',
+    'Finish the closeout, and nothing else:',
+    '',
+    `1. Run the plan's §Phase ${phase} Verification commands.`,
+    '2. If any of them is red, write the handoff with status `blocked` and record the failure in it.',
+    '   Never write a `complete` handoff on red verification.',
+    '3. Commit the changed files with explicit paths (never `git add -A`), in the relevant submodule(s).',
+    `4. Run \`scripts/new-handoff.sh ${slug} ${phase} <title> [status]\`, then fill in the frontmatter`,
+    '   and the body. Review the generated "Start next phase(s)" section rather than rewriting it.',
+    '5. Update `INDEX.md`.',
+    '',
+    'Do not start new work, do not refactor anything, and do not revisit decisions the phase already',
+    'made. If you cannot close it — the work genuinely is not finished, or something blocks you —',
+    'write the handoff `blocked` saying exactly what, and stop.',
+  ].join('\n');
+}
+
+/** A session's closing words, short enough to sit inside a halt reason. */
+function condenseSaid(said: string): string {
+  const line = said.replace(/\s+/g, ' ').trim();
+  return line.length > 400 ? `${line.slice(0, 400)}…` : line;
+}
 
 /**
  * How long a frozen phase may stay frozen before it is checkpointed instead.
@@ -298,6 +359,148 @@ export class Runner {
       offShutdown('runner');
     });
     return this.state;
+  }
+
+  /**
+   * Drive one stuck phase forward, without re-running it.
+   *
+   * The console had exactly two verbs for a phase that stopped: Retry, which
+   * starts it again from its boot prompt and throws away however long the
+   * session had been working, and Skip, which marks it abandoned. Neither fits
+   * the common case — a phase that did the work and stopped short of recording
+   * it — so the operator's only honest option was to open a terminal.
+   *
+   * The three modes here are the missing middle:
+   *
+   *   `recheck`  re-runs the three checks and spawns nothing. For "I fixed it
+   *              by hand, look again".
+   *   `closeout` asks the phase's own session to finish its closeout — the same
+   *              continuation the runner attempts by itself, on demand and
+   *              without the "only once" guard, because a person asking for it
+   *              is a new fact.
+   *   `resume`   the same, carrying an instruction the operator typed. This is
+   *              `/btw` for a session that has already exited.
+   *
+   * All three end in `confirm()`, so nothing here can mark a phase done that the
+   * board, the verification and `validate.sh` do not all agree about.
+   */
+  async recover(options: RecoverOptions): Promise<RunState> {
+    if (this.driving) throw new Error('A run is already in progress. Pause or stop it first.');
+
+    const state = loadRun(options.root, options.slug, options.runId, null);
+    if (!state) throw new Error(`No run ${options.runId} for ${options.slug}.`);
+    const record = state.phases[String(options.phase)];
+    if (!record) throw new Error(`Run ${options.runId} never reached phase ${options.phase}.`);
+
+    this.state = state;
+    // A forward action supersedes the halt that was showing. The reason stays in
+    // the journal; what it must not do is keep the run looking stopped while
+    // this works.
+    state.halt = null;
+    delete state.finishedReason;
+    state.status = 'running';
+    state.activePhase = options.phase;
+
+    this.journal = new Journal(state.root, state.slug, state.id);
+    this.transcript = new Transcript(state.root, state.slug, state.id);
+    this.abort = new AbortController();
+    this.stopRequested = false;
+    this.settingsPath = this.armSettings(state.id);
+    this.record('run.recover', { mode: options.mode, phase: options.phase, by: options.by ?? 'console' }, options.phase);
+    this.persist();
+
+    onShutdown('runner', () => this.checkpointForShutdown());
+    this.driving = this.runRecovery(options).finally(() => {
+      this.driving = null;
+      offShutdown('runner');
+      this.deps.approvals?.disarm();
+      this.persist();
+      this.emit('run', { state });
+    });
+    return state;
+  }
+
+  private async runRecovery(options: RecoverOptions): Promise<void> {
+    const state = this.state!;
+    const record = phaseRecord(state, options.phase);
+    const owner = `autopilot/${state.id}`;
+
+    try {
+      if (options.mode !== 'recheck') {
+        // An operator asking again is a new fact, not a repeat of the automatic
+        // attempt — so the once-only guard is cleared rather than honoured.
+        record.closeout = undefined;
+      }
+
+      if (options.mode === 'resume') {
+        const said = await this.resumeWithInstruction(options.phase, options.instruction ?? '');
+        if (said) { this.halt(said, options.phase); return; }
+      }
+
+      const ok = await this.confirm(options.phase);
+      if (!ok) return; // confirm() halted and said why
+
+      state.status = 'parked';
+      state.finishedReason = `phase ${options.phase} was closed by ${options.by ?? 'console'}. `
+        + 'Continue to carry on through the rest of the plan.';
+      this.record('run.recovered', { phase: options.phase, mode: options.mode }, options.phase);
+    } catch (error) {
+      log.error('runner.recover.crashed', { error });
+      this.halt(`the recovery of phase ${options.phase} failed: ${(error as Error)?.message ?? error}`, options.phase);
+    } finally {
+      await this.release(options.phase, owner);
+      this.childPid = null;
+      this.handle = null;
+      state.child = null;
+    }
+  }
+
+  /** Resume the phase's session with the operator's own words. Returns a refusal. */
+  private async resumeWithInstruction(phase: number, instruction: string): Promise<string | null> {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+    const sessionId = record.sessionId ?? record.resumeSessionId;
+    if (!sessionId) {
+      return `phase ${phase} has no session left to resume — retry it instead, or close it by hand`;
+    }
+
+    const spawn = this.deps.spawn ?? spawnClaude;
+    const board = await this.board();
+    const prompt = instruction.trim()
+      ? `${instruction.trim()}\n\n---\n\n${closeoutPrompt(state.slug, phase, board.states[phase] ?? 'unknown')}`
+      : closeoutPrompt(state.slug, phase, board.states[phase] ?? 'unknown');
+
+    this.record('phase.resume-instruction', { sessionId, instruction: instruction.slice(0, 2_000) }, phase);
+    const outcome = await spawn({
+      prompt,
+      cwd: state.root,
+      model: record.model ?? state.model,
+      effort: record.effort ?? state.effort,
+      name: `${state.slug} p${phase} recover`,
+      resume: sessionId,
+      budgetUsd: state.phaseBudgetUsd,
+      maxTurns: CLOSEOUT_MAX_TURNS,
+      settings: this.settingsPath ?? undefined,
+      permissionProfile: this.profile(),
+      partialMessages: this.deps.stream?.partialMessages ?? true,
+      subagentText: this.deps.stream?.subagentText ?? true,
+      hookEvents: this.deps.stream?.hookEvents ?? true,
+      onHandle: (handle) => { this.handle = handle; },
+      env: { ...process.env, PE_OWNER: `autopilot/${state.id}` },
+      signal: this.abort?.signal,
+      onPid: (pid) => { this.childPid = pid; },
+      onEvent: (event) => this.onStream(phase, event),
+    });
+
+    state.spentUsd += outcome.costUsd;
+    record.costUsd += outcome.costUsd;
+    record.turns = (record.turns ?? 0) + outcome.turns;
+    if (outcome.sessionId) record.sessionId = outcome.sessionId;
+    if (outcome.resultText) record.said = outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200);
+    // Mark it attempted so `confirm()` does not immediately spawn a second one.
+    record.closeout = { at: new Date().toISOString(), ok: true, sessionId, note: 'resumed with an operator instruction' };
+    this.record('phase.resume-done', { costUsd: outcome.costUsd, turns: outcome.turns, said: record.said }, phase);
+    return null;
   }
 
   /**
@@ -895,6 +1098,12 @@ export class Runner {
       // The token dies with the loop. Anything still waiting on a decision is
       // answered rather than left holding a socket nobody is watching.
       this.deps.approvals?.disarm();
+      // …and neither does the question it was asking. A phase left reading
+      // `awaiting-verification` on a run that has stopped goes on presenting as
+      // "Waiting on you" — a card whose broker is disarmed, whose run is over,
+      // and which no answer can reach. The state file for the halted 02:55 run
+      // still said this hours later.
+      this.settleAwaitingVerification();
       this.persist();
       this.emit('run', { state });
     }
@@ -970,12 +1179,19 @@ export class Runner {
 
     /* ---- the session, with the error policy driving retries ---- */
     const settled = await this.attempt(phase, prompt, record.model!, owner, chosen);
-    await this.release(phase, owner);
-    if (!settled.carryOn) return false;
-    if (!settled.completed) return true;
+    if (!settled.carryOn) { await this.release(phase, owner); return false; }
+    if (!settled.completed) { await this.release(phase, owner); return true; }
 
-    /* ---- independent verification ---- */
-    return this.confirm(phase);
+    /* ---- independent verification ----
+     * The lock is held across this, and released after. It used to be released
+     * first, which meant a phase sitting in `awaiting-verification` — up to
+     * twelve hours — was unlocked and read `ready` to every other session that
+     * looked. Closeout needs it held too: it resumes the session that owns it. */
+    try {
+      return await this.confirm(phase);
+    } finally {
+      await this.release(phase, owner);
+    }
   }
 
   /**
@@ -1097,6 +1313,10 @@ export class Runner {
       if (frozenNow) record.frozenMs = (record.frozenMs ?? 0) + frozenNow;
       record.durationMs = (record.durationMs ?? 0) + Math.max(0, outcome.durationMs - frozenNow);
       if (outcome.sessionId) record.sessionId = outcome.sessionId;
+      // Kept on the record, not only in the journal. When a phase exits clean
+      // and changes nothing this is the only account of why, and the halt that
+      // reports it needs to be able to quote it without re-reading NDJSON.
+      record.said = outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200);
       this.record('phase.session', {
         attempt, model: currentModel, effort: record.effort ?? state.effort ?? null,
         costUsd: outcome.costUsd, turns: outcome.turns,
@@ -1218,6 +1438,16 @@ export class Runner {
     record.status = 'verifying';
     this.emit('phase', { phase, status: 'verifying' });
 
+    /* 0. the board, re-read from disk — never the session's word for it.
+     *
+     * First, because it is free and it is decisive. It used to run last, after
+     * the verification commands and after up to twelve hours of waiting for a
+     * person to hand-confirm the fragments the runner would not execute — and
+     * then threw their answer away, because the phase had never written a
+     * handoff at all. Nobody should be asked to vouch for a phase that produced
+     * nothing, and no test suite should be run to prove one. */
+    if (!await this.closed(phase)) return false;
+
     /* 1. the plan's own verification commands */
     const text = await this.deps.verificationText(state.slug, phase);
     const verify = this.deps.verify ?? verifyPhase;
@@ -1252,19 +1482,6 @@ export class Runner {
       return false;
     }
 
-    // Anything the runner would not or could not execute goes to a person, with
-    // the plan's own words attached. Under `keep-going` a verification that
-    // otherwise passed does not stop for this; under the cautious default it
-    // always does, which is what that setting means.
-    if (verification.notRun.length && (!verification.ok || state.autonomy === 'halt-on-everything')) {
-      if (!await this.askHuman(phase, verification)) return false;
-    } else if (!verification.ok) {
-      record.status = 'failed';
-      state.consecutiveFailures++;
-      this.halt(`phase ${phase} did not verify: ${verification.reason}`, phase);
-      return false;
-    }
-
     /* 2. the plan still lints */
     const lint = readLint(await this.script('validate.sh', [state.slug]));
     record.lint = { ok: lint.ok, summary: lint.summary };
@@ -1275,16 +1492,20 @@ export class Runner {
       return false;
     }
 
-    /* 3. the board, re-read from disk — never the session's word for it */
-    const board = await this.board();
-    if (board.states[phase] !== 'done') {
+    /* 3. and only now, a person — for whatever no machine could settle.
+     *
+     * Last on purpose. Every check above is free or cheap and answers on its
+     * own; a question to a human costs the one resource that does not scale, and
+     * an operator asked to confirm things the runner could have checked itself
+     * learns to answer without reading. Under `keep-going` a verification that
+     * otherwise passed does not stop for this; under the cautious default it
+     * always does, which is what that setting means. */
+    if (verification.notRun.length && (!verification.ok || state.autonomy === 'halt-on-everything')) {
+      if (!await this.askHuman(phase, verification)) return false;
+    } else if (!verification.ok) {
       record.status = 'failed';
       state.consecutiveFailures++;
-      this.halt(
-        `the session for phase ${phase} ended cleanly but the board still reads `
-        + `"${board.states[phase] ?? 'unknown'}" — no handoff was written, or it is not marked complete`,
-        phase,
-      );
+      this.halt(`phase ${phase} did not verify: ${verification.reason}`, phase);
       return false;
     }
 
@@ -1295,6 +1516,192 @@ export class Runner {
     this.record('phase.done', { costUsd: record.costUsd, attempts: record.attempts }, phase);
     this.emit('phase', { phase, status: 'done' });
     return true;
+  }
+
+  /**
+   * Is this phase closed on disk — and if not, can the session that ran it be
+   * made to close it?
+   *
+   * `phase-graph.sh` reads one thing: `status:` in the phase's handoff. So "the
+   * board still reads ready" always means the same thing — the handoff was never
+   * written, or not marked complete. That is a fact about paperwork, and a
+   * session that did the work and stopped one step short of recording it should
+   * be asked to finish rather than have the run halted under it.
+   */
+  private async closed(phase: number): Promise<boolean> {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+
+    let board = await this.board();
+    if (board.states[phase] === 'done') return true;
+
+    const attempt = await this.closeout(phase, board.states[phase] ?? 'unknown');
+    if (attempt.ran) {
+      board = await this.board();
+      if (board.states[phase] === 'done') return true;
+    }
+
+    record.status = 'failed';
+    state.consecutiveFailures++;
+    this.halt(
+      `the session for phase ${phase} ended cleanly but the board still reads `
+      + `"${board.states[phase] ?? 'unknown'}" — no handoff was written, or it is not marked complete`
+      + (attempt.note ? `. ${attempt.note}` : '')
+      // The session's own account of why. Without it the halt names the symptom
+      // and buries the cause in NDJSON: the run this was written for died on a
+      // refusal to write into its own config directory, and said so, and the
+      // console repeated only "no handoff was written".
+      + (record.said ? `. It signed off: "${condenseSaid(record.said)}"` : ''),
+      phase,
+    );
+    return false;
+  }
+
+  /**
+   * The one continuation a phase gets when it did the work and did not record it.
+   *
+   * Deliberately narrow. It resumes the phase's OWN session — the console never
+   * writes the repo itself (`engine.ts` and `writes.ts` both refuse `--git`), and
+   * a handoff invented by the supervisor would be a document nobody wrote
+   * describing work it did not do. And it only runs when there is something to
+   * record: a session that produced nothing is a session that failed, and
+   * spending another one on it buys a second identical failure. That is the case
+   * this was written for — a phase blocked before its first edit, which no amount
+   * of resuming would have closed.
+   */
+  private async closeout(phase: number, boardState: string): Promise<{ ran: boolean; note?: string }> {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+
+    if (record.closeout) return { ran: false, note: 'a closeout was already attempted for this phase' };
+    if (!record.sessionId) {
+      return { ran: false, note: 'there is no session left to resume, so the runner could not ask it to finish' };
+    }
+
+    const worked = await this.producedWork(phase, boardState);
+    if (!worked.did) {
+      return { ran: false, note: `${worked.why}, so there was nothing to close out` };
+    }
+
+    const spawn = this.deps.spawn ?? spawnClaude;
+    const started = new Date().toISOString();
+    this.record('phase.closeout', { sessionId: record.sessionId, boardState, because: worked.why }, phase);
+    this.emit('phase', { phase, status: 'verifying', closeout: true });
+
+    let outcome;
+    try {
+      outcome = await spawn({
+        prompt: closeoutPrompt(state.slug, phase, boardState),
+        cwd: state.root,
+        model: record.model ?? state.model,
+        effort: record.effort ?? state.effort,
+        name: `${state.slug} p${phase} closeout`,
+        resume: record.sessionId,
+        // A closeout is paperwork, not the phase. Capping it keeps a confused
+        // session from re-opening the work it was asked only to record.
+        budgetUsd: state.phaseBudgetUsd === null ? null : Math.max(1, state.phaseBudgetUsd / 4),
+        maxTurns: CLOSEOUT_MAX_TURNS,
+        settings: this.settingsPath ?? undefined,
+        permissionProfile: this.profile(),
+        partialMessages: this.deps.stream?.partialMessages ?? true,
+        subagentText: this.deps.stream?.subagentText ?? true,
+        hookEvents: this.deps.stream?.hookEvents ?? true,
+        onHandle: (handle) => { this.handle = handle; },
+        env: { ...process.env, PE_OWNER: `autopilot/${state.id}` },
+        signal: this.abort?.signal,
+        onPid: (pid) => { this.childPid = pid; },
+        onEvent: (event) => this.onStream(phase, event),
+      });
+    } catch (error) {
+      return { ran: false, note: `the closeout session could not be started: ${(error as Error)?.message ?? error}` };
+    } finally {
+      this.childPid = null;
+      this.handle = null;
+    }
+
+    state.spentUsd += outcome.costUsd;
+    record.costUsd += outcome.costUsd;
+    record.turns = (record.turns ?? 0) + outcome.turns;
+    if (outcome.resultText) record.said = outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200);
+    record.closeout = {
+      at: started,
+      ok: classify(outcome.signal).kind === 'ok',
+      sessionId: record.sessionId,
+      note: worked.why,
+    };
+    this.record('phase.closeout-done', {
+      ok: record.closeout.ok, costUsd: outcome.costUsd, turns: outcome.turns,
+      said: record.said,
+    }, phase);
+
+    return { ran: true, note: 'the runner asked its session to finish the closeout' };
+  }
+
+  /**
+   * Did this session leave anything worth recording?
+   *
+   * Two signals, either of which is enough: the board says a handoff exists but
+   * is not complete, or the working tree moved. Neither is a guess about intent —
+   * both are things on disk that were not there when the phase started.
+   */
+  private async producedWork(phase: number, boardState: string): Promise<{ did: boolean; why: string }> {
+    const state = this.state!;
+
+    // `in-progress` and `stuck` both mean a handoff file is there, saying
+    // something other than complete.
+    if (boardState === 'in-progress' || boardState === 'stuck') {
+      return { did: true, why: `a handoff exists for phase ${phase} but reads "${boardState}"` };
+    }
+
+    if (await this.git(['status', '--porcelain'])) {
+      return { did: true, why: 'the working tree has uncommitted changes' };
+    }
+
+    const record = phaseRecord(state, phase);
+    if (record.startedAt && await this.git(['log', '--oneline', `--since=${record.startedAt}`])) {
+      return { did: true, why: 'the phase committed but wrote no handoff' };
+    }
+
+    return { did: false, why: 'the session changed nothing on disk' };
+  }
+
+  /** Read-only git against the run's root. Empty string on any failure. */
+  private git(args: string[]): Promise<string> {
+    const state = this.state!;
+    return new Promise((resolve) => {
+      execFile('git', args, {
+        cwd: state.root,
+        timeout: 15_000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
+      }, (error, stdout) => resolve(error ? '' : String(stdout).trim()));
+    });
+  }
+
+  /**
+   * A question nobody can answer any more is not a question — it is a phantom.
+   *
+   * When the loop ends, the approval broker is disarmed, so any card still up is
+   * unanswerable. The phase record kept saying `awaiting-verification` anyway,
+   * and the dashboard kept rendering it as "Waiting on you" against a run that
+   * had halted hours earlier.
+   */
+  private settleAwaitingVerification(): void {
+    const state = this.state;
+    if (!state) return;
+    // Only where there was a broker to disarm. A console configured without one
+    // never raised a card, so its `awaiting-verification` is not a phantom — it
+    // is the honest statement that this phase needs a person and there was no
+    // way to ask. Rewriting that would erase the reason the run stopped.
+    if (!this.deps.approvals) return;
+    for (const record of Object.values(state.phases)) {
+      if (record.status !== 'awaiting-verification') continue;
+      record.status = 'interrupted';
+      record.note ??= 'the run ended while this was waiting to be verified, so the question went away with it';
+      record.endedAt ??= new Date().toISOString();
+      record.resumeSessionId ??= record.sessionId;
+      this.emit('phase', { phase: record.phase, status: record.status });
+    }
   }
 
   /**
