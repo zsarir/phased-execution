@@ -233,6 +233,97 @@ export function supervisor(): Supervisor {
   return detectSupervisor();
 }
 
+/* ------------------------------------------------------------------ *
+ * Stopping on purpose
+ * ------------------------------------------------------------------ */
+
+/**
+ * How this process is actually stopped — which is not the same question as how
+ * it is restarted, and is the reason there was no off switch for so long.
+ *
+ * Under launchd `KeepAlive` an exit is a *restart*: the one mechanism the
+ * Restart button depends on is the one that makes "stop" impossible to express
+ * as an exit. Ending the job means telling launchd, and `launchctl bootout
+ * gui/<uid>/<label>` is that sentence — the same one `deploy/agent.sh` uses to
+ * uninstall. Anywhere else, exiting IS stopping.
+ *
+ * Pure, so the decision can be asserted without spawning anything.
+ */
+export type StopPlan =
+  | { via: 'launchctl'; file: string; args: string[]; label: string; detail: string }
+  | { via: 'exit'; detail: string };
+
+export function stopPlan(
+  sup: Supervisor = detectSupervisor(),
+  env: NodeJS.ProcessEnv = process.env,
+  // `null` rather than `undefined` for "this platform has no uid": passing
+  // `undefined` to a defaulted parameter re-triggers the default, so the
+  // no-uid case would be untestable — and it is a real case (Windows).
+  uid: number | null = process.getuid?.() ?? null,
+): StopPlan {
+  const label = env.XPC_SERVICE_NAME;
+  if (sup.kind === 'launchd' && label && label !== '0' && uid != null) {
+    return {
+      via: 'launchctl',
+      file: 'launchctl',
+      // `bootout` on the service target, not `stop` — `stop` under KeepAlive is
+      // a restart with extra steps, which is exactly the trap being avoided.
+      args: ['bootout', `gui/${uid}/${label}`],
+      label,
+      detail: `launchd · ${label} · the job is unloaded, so it stays off until you install or start it again`,
+    };
+  }
+  return {
+    via: 'exit',
+    detail: sup.supervised
+      ? `${sup.detail} — this console cannot unload that supervisor, so it exits and may be brought back`
+      : 'nothing is supervising this process, so exiting stops it',
+  };
+}
+
+/** The narrow slice of `child_process.spawn` this needs, so a test can pass a fake. */
+export type Spawner = (
+  file: string,
+  args: string[],
+  options: { detached: boolean; stdio: 'ignore' },
+) => { unref(): void };
+
+/**
+ * Hand the stop order to launchd and walk away.
+ *
+ * Detached with no stdio on purpose: the command outlives this process by
+ * design — it is the thing that ends it — so it must not be a child whose
+ * parent dying takes it with it.
+ */
+export function bootout(plan: StopPlan, spawn: Spawner): boolean {
+  if (plan.via !== 'launchctl') return false;
+  try {
+    spawn(plan.file, plan.args, { detached: true, stdio: 'ignore' }).unref();
+    log.warn('shutdown.bootout', { label: plan.label, args: plan.args });
+    return true;
+  } catch (error) {
+    log.error('shutdown.bootout.failed', { label: plan.label, error });
+    return false;
+  }
+}
+
+/**
+ * The Shut-down button's other half, registered by `index.ts` for the same
+ * reason `onRestartRequest` is: `shutdown()` closes over the server handle and
+ * the drain budget.
+ */
+let stopper: ((reason: string) => void) | null = null;
+
+export function onShutdownRequest(handler: (reason: string) => void): void {
+  stopper = handler;
+}
+
+export function requestShutdown(reason: string): boolean {
+  if (!stopper) return false;
+  try { stopper(reason); } catch (error) { log.error('shutdown.failed', { reason, error }); return false; }
+  return true;
+}
+
 export async function runShutdownHandlers(perHandlerMs: number): Promise<void> {
   const pending = [...handlers.entries()];
   handlers.clear();

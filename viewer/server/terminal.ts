@@ -62,8 +62,22 @@ export const TERMINAL_PATH = '/ws/terminal';
  */
 const TOKEN_TTL_MS = 60_000;
 
-/** A detached session is kept this long, then reaped. */
-const IDLE_MS = 30 * 60_000;
+/**
+ * How long an **ended** session's record is kept when nobody dismisses it.
+ *
+ * There used to be an idle rule instead, and it was the wrong rule: a detached
+ * session — shell or claude — was killed 30 minutes after the last client went
+ * away. Closing a laptop lid for lunch was enough to lose a session that was
+ * running perfectly well, and the record of one that had finished vanished ~30
+ * seconds after it exited, taking its `claude --resume` id with it. A session
+ * now stops for exactly two reasons: someone killed it, or the console did.
+ *
+ * What is left for the sweeper is a ceiling on *records of dead processes*, so
+ * a console left running for a month does not hold every shell it ever opened.
+ * A day is long enough that "until you dismiss it" is true in every session a
+ * person actually comes back to, and short enough to bound the memory.
+ */
+const EXITED_RETAIN_MS = 24 * 60 * 60_000;
 
 const SWEEP_MS = 30_000;
 
@@ -77,8 +91,20 @@ const SCROLLBACK_BYTES = 200 * 1024;
 /**
  * A person has one pair of hands. The cap is not about resources — it is so a
  * bug that mints a session per render cannot fork-bomb the machine.
+ *
+ * Counted over **live** processes only. An ended session that is still listed
+ * so you can read what it said is not holding a pty, and letting it occupy a
+ * slot would mean the console refused to open a shell because of eight
+ * terminals that all exited yesterday.
  */
 const MAX_SESSIONS = 8;
+
+/**
+ * How many ended-but-undismissed records are kept at once, oldest evicted
+ * first. The retention window above bounds them in time; this bounds them in
+ * count, because each carries up to `SCROLLBACK_BYTES` of text.
+ */
+const MAX_EXITED = 16;
 
 /**
  * Above this much unflushed output the pty is paused until the socket drains.
@@ -175,6 +201,22 @@ export class Scrollback {
 /** What a session is running. The wire protocol is identical for both. */
 export type SessionKind = 'shell' | 'claude';
 
+/**
+ * What a recovery session was launched to put right.
+ *
+ * Composed by the server (`agent.ts`) and never accepted from a browser, like
+ * every other field on `SessionMeta` — this is what links a session back to the
+ * thing on the board that needed it, so its exit can be checked against that
+ * thing rather than merely reported.
+ */
+export type RecoveryLink = {
+  /** The failure class the action was offered for — `runner/errors.ts` names these. */
+  kind: string;
+  slug?: string;
+  phase?: number;
+  runId?: string;
+};
+
 /** Facts about a claude session the UI needs back, none of them secret. */
 export type SessionMeta = {
   model?: string;
@@ -183,7 +225,9 @@ export type SessionMeta = {
   /** The uuid handed to `--session-id` — what `claude --resume <id>` takes later. */
   claudeSessionId?: string;
   /** `plan` marks a session booted by the New-plan wizard. */
-  intent?: 'plan';
+  intent?: 'plan' | 'recovery';
+  /** Set on a session minted by a recovery action; absent on every other session. */
+  recovery?: RecoveryLink;
 };
 
 /**
@@ -211,9 +255,23 @@ export interface SessionInfo {
   pid: number;
   clients: number;
   createdAt: number;
+  /**
+   * When the pty last produced output. Now that nothing is reaped for being
+   * quiet this is no longer a policy input — it is what a list of sessions
+   * shows to tell "working" from "waiting at a prompt".
+   */
+  lastOutputAt: number;
+  /** When the last client detached, while none is attached. */
+  detachedSince?: number;
   meta?: SessionMeta;
-  /** Set once the process is gone; the record survives briefly so the UI can say why. */
-  exited?: { code: number; signal?: number };
+  /**
+   * Set once the process is gone. The record OUTLIVES the process until it is
+   * dismissed, so the page can say what happened — and, for a claude session,
+   * still offer the `--resume` id that is otherwise lost with it.
+   */
+  exited?: { code: number; signal?: number; closedByOperator?: boolean };
+  /** When it ended, so the UI can age it and the sweeper can retire it. */
+  exitedAt?: number;
 }
 
 interface Session extends SessionInfo {
@@ -221,10 +279,25 @@ interface Session extends SessionInfo {
   scrollback: Scrollback;
   wires: Set<Wire>;
   idleSince: number;
-  /** Stamped on every pty chunk — how the sweeper tells "working" from "parked". */
+  /** Stamped on every pty chunk — "working" vs "parked", shown rather than acted on. */
   lastOutputAt: number;
   paused: boolean;
 }
+
+/** What just happened to a session. The service turns these into SSE + notifications. */
+export type SessionEventType =
+  | 'created' | 'attached' | 'detached' | 'exited' | 'killed' | 'dismissed';
+
+export type SessionEvent = {
+  type: SessionEventType;
+  session: SessionInfo;
+  /**
+   * On `exited` only: whether the last client had already gone. An exit nobody
+   * was watching is the one worth a notification; one you were looking at is
+   * not news.
+   */
+  detached?: boolean;
+};
 
 interface Minted {
   token: string;
@@ -243,6 +316,13 @@ export interface TerminalOptions {
   cwd?: () => string | undefined;
   /** Tests inject a fake; production takes the lazily-imported real one. */
   spawn?: PtySpawn;
+  /**
+   * Every lifecycle moment, for the one subscriber that turns them into an SSE
+   * event and — where they are worth waking someone for — a notification. A
+   * callback rather than an import, so the registry still knows nothing about
+   * the service.
+   */
+  onSession?: (event: SessionEvent) => void;
 }
 
 /* ------------------------------------------------------------------ *
@@ -279,14 +359,41 @@ export class Terminals {
   }
 
   /** What `/api/terminal` reports. Never includes a token. */
-  state(): { allowed: boolean; agentAllowed: boolean; available: Availability; sessions: SessionInfo[]; limit: number } {
+  state(): {
+    allowed: boolean; agentAllowed: boolean; available: Availability;
+    sessions: SessionInfo[]; limit: number; live: number;
+  } {
     return {
       allowed: this.options.allowed,
       agentAllowed: this.options.agentAllowed === true,
       available: this.probed,
       limit: MAX_SESSIONS,
+      // Reported beside the cap because the cap is now about live processes
+      // only: `sessions.length` and "how many slots are taken" are different
+      // numbers the moment anything has ended.
+      live: this.live(),
       sessions: [...this.sessions.values()].map(describe),
     };
+  }
+
+  /** Processes still running — what `MAX_SESSIONS` is a cap on. */
+  live(): number {
+    let n = 0;
+    for (const session of this.sessions.values()) if (!session.exited) n++;
+    return n;
+  }
+
+  /** One place to raise a lifecycle event; a bad listener never reaches a pty. */
+  private say(type: SessionEventType, session: Session, detached?: boolean): void {
+    try {
+      this.options.onSession?.({
+        type,
+        session: describe(session),
+        ...(detached === undefined ? {} : { detached }),
+      });
+    } catch (error) {
+      log.warn('terminal.listener', { id: session.id, type, error: message(error) });
+    }
   }
 
   /* ---------------- the handshake ---------------- */
@@ -325,8 +432,15 @@ export class Terminals {
       const kind: SessionKind = launch?.kind ?? 'shell';
       const refusal = this.kindRefusal(kind);
       if (refusal) return refusal;
-      if (this.sessions.size >= MAX_SESSIONS) {
-        return { ok: false, status: 409, error: `Too many terminal sessions (${MAX_SESSIONS}). Close one first.` };
+      // Live processes only: an ended session listed for its exit status is not
+      // occupying anything, and refusing a new shell because of it would be a
+      // cap on the operator's memory rather than on this machine.
+      if (this.live() >= MAX_SESSIONS) {
+        return {
+          ok: false,
+          status: 409,
+          error: `Too many live sessions (${MAX_SESSIONS} across shells and agents). Close one first.`,
+        };
       }
       const spawn = await this.loadPty();
       if (!spawn) {
@@ -470,7 +584,10 @@ export class Terminals {
       session.wires.delete(wire);
       if (!session.wires.size) session.idleSince = Date.now();
       if (session.paused && !session.wires.size) { session.paused = false; session.pty.resume?.(); }
+      this.say('detached', session);
     });
+
+    this.say('attached', session);
   }
 
   private onClientMessage(session: Session, parsed: unknown): void {
@@ -499,9 +616,22 @@ export class Terminals {
 
   /* ---------------- lifecycle ---------------- */
 
+  /**
+   * Stop a session because someone said so — the tab strip's ✕, the dashboard's
+   * Kill, or the console going down.
+   *
+   * The record goes with it. That is the difference between this and an exit
+   * the operator did not ask for: a session you closed is not news, and leaving
+   * its corpse in the list would mean every deliberate close needed a second
+   * click to tidy up. `closedByOperator` is stamped before the kill so the
+   * `onExit` that follows a moment later knows not to announce it.
+   */
   kill(id: string): boolean {
     const session = this.sessions.get(id);
     if (!session) return false;
+    session.exited ??= { code: 0, closedByOperator: true };
+    session.exited.closedByOperator = true;
+    session.exitedAt ??= Date.now();
     try { session.pty.kill(); } catch { /* already gone */ }
     for (const wire of session.wires) {
       send(wire, JSON.stringify({ t: 'exit', code: 0, closedByOperator: true }));
@@ -509,7 +639,26 @@ export class Terminals {
     }
     this.sessions.delete(id);
     log.info('terminal.closed', { id });
+    this.say('killed', session);
     return true;
+  }
+
+  /**
+   * Drop the record of a session that has already ended.
+   *
+   * Refuses on a live one: "dismiss" is a UI verb for tidying a list, and a
+   * button that quietly killed a working session because it was in the wrong
+   * column would be the worst kind of surprise. Killing is `kill()`, and the
+   * client asks for it by name.
+   */
+  dismiss(id: string): { ok: boolean; reason?: string } {
+    const session = this.sessions.get(id);
+    if (!session) return { ok: false, reason: 'no such session' };
+    if (!session.exited) return { ok: false, reason: 'that session is still running — close it instead' };
+    this.sessions.delete(id);
+    log.info('terminal.dismissed', { id });
+    this.say('dismissed', session);
+    return { ok: true };
   }
 
   /** Shutdown: every pty is a child process, and none may outlive the console. */
@@ -581,19 +730,39 @@ export class Terminals {
     });
 
     pty.onExit(({ exitCode, signal }) => {
-      session.exited = { code: exitCode, signal };
+      // A kill() already stamped this and removed the record; the pty telling
+      // us a moment later is not a second event, and must not re-announce a
+      // session the operator closed on purpose.
+      const closedByOperator = session.exited?.closedByOperator === true;
+      session.exited = { code: exitCode, signal, ...(closedByOperator ? { closedByOperator } : {}) };
+      session.exitedAt ??= Date.now();
       for (const wire of session.wires) {
         send(wire, JSON.stringify({ t: 'exit', code: exitCode, signal }));
       }
-      // The record outlives the process for a moment so the page can say "the
-      // shell exited" instead of "the connection dropped", then the sweeper
-      // takes it: `idleSince` in the past means the next sweep collects it.
-      session.idleSince = Date.now() - IDLE_MS + 30_000;
+      if (closedByOperator) return;
+      // The record now OUTLIVES the process — until it is dismissed, the
+      // retention window closes, or the ceiling evicts it. That is what keeps
+      // `claude --resume <uuid>` reachable after the CLI has gone.
+      this.retire();
+      this.say('exited', session, session.wires.size === 0);
     });
 
     this.sessions.set(id, session);
     log.info('terminal.opened', { id, kind, shell: file, cwd, pid: pty.pid });
+    this.say('created', session);
     return session;
+  }
+
+  /** Keep at most `MAX_EXITED` dead records, oldest first out. */
+  private retire(): void {
+    const dead = [...this.sessions.values()]
+      .filter((session) => session.exited)
+      .sort((a, b) => (a.exitedAt ?? 0) - (b.exitedAt ?? 0));
+    for (const session of dead.slice(0, Math.max(0, dead.length - MAX_EXITED))) {
+      this.sessions.delete(session.id);
+      log.info('terminal.evicted', { id: session.id, kept: MAX_EXITED });
+      this.say('dismissed', session);
+    }
   }
 
   private start(): void {
@@ -601,14 +770,10 @@ export class Terminals {
     this.sweeper = setInterval(() => {
       const now = Date.now();
       for (const session of [...this.sessions.values()]) {
-        const reap = shouldReap({
-          wires: session.wires.size,
-          idleSince: session.idleSince,
-          kind: session.kind,
-          exited: session.exited,
-          lastOutputAt: session.lastOutputAt,
-        }, now);
-        if (reap) this.kill(session.id);
+        if (!shouldReap({ wires: session.wires.size, exited: session.exited, exitedAt: session.exitedAt }, now)) continue;
+        this.sessions.delete(session.id);
+        log.info('terminal.retired', { id: session.id });
+        this.say('dismissed', session);
       }
       for (const [key, minted] of this.tokens) {
         if (minted.expiresAt <= now) this.tokens.delete(key);
@@ -681,32 +846,43 @@ function describe(session: Session): SessionInfo {
     pid: session.pid,
     clients: session.wires.size,
     createdAt: session.createdAt,
+    lastOutputAt: session.lastOutputAt,
+    ...(!session.wires.size && session.idleSince ? { detachedSince: session.idleSince } : {}),
     ...(session.meta ? { meta: session.meta } : {}),
     ...(session.exited ? { exited: session.exited } : {}),
+    ...(session.exitedAt ? { exitedAt: session.exitedAt } : {}),
   };
 }
 
 /**
- * Whether the sweeper may kill a detached session — pure, so the rule is
+ * Whether the sweeper may drop a session record — pure, so the rule is
  * testable without timers.
  *
- * The shell rule is what it always was: no clients for `idleMs` means
- * abandoned. A live claude session gets one more consideration: if the pty
- * produced output within the window it is *working* unattended (a long
- * generation, a build it kicked off), and killing it mid-thought because
- * nobody happened to be watching is exactly the wrong moment. Once the
- * process exits, `onExit` back-dates `idleSince` and the `exited` guard here
- * lets the ~30-second grace collect it like any dead shell.
+ * **A living process is never reaped.** Not a shell, not a claude session, not
+ * one nobody is attached to. The old rule killed a detached session after 30
+ * idle minutes with a special case that spared a claude which had printed
+ * recently, and both halves were wrong for the same reason: whether anyone is
+ * *watching* a session says nothing about whether it is still wanted. A phone
+ * that went to sleep, a laptop lid closed over lunch, a tab closed on purpose
+ * because the thing takes an hour — every one of those looked identical to
+ * abandonment, and the session died for it. Sessions now end when someone kills
+ * them or when the console goes down, and nothing else.
+ *
+ * What remains is retention of the DEAD: a record kept so the page can say what
+ * happened and hand back a `--resume` id. It is kept until dismissed, and this
+ * is the backstop for the ones nobody ever dismisses — with no one attached and
+ * the window long past.
  */
 export function shouldReap(
-  session: { wires: number; idleSince: number; kind: SessionKind; exited?: unknown; lastOutputAt: number },
+  session: { wires: number; exited?: unknown; exitedAt?: number },
   now: number,
-  idleMs: number = IDLE_MS,
+  retainMs: number = EXITED_RETAIN_MS,
 ): boolean {
+  if (!session.exited) return false;
+  // Someone is reading the ended session's scrollback — the one case where a
+  // dead record is actively in use.
   if (session.wires) return false;
-  if (!session.idleSince || now - session.idleSince <= idleMs) return false;
-  if (session.kind === 'claude' && !session.exited && now - session.lastOutputAt <= idleMs) return false;
-  return true;
+  return now - (session.exitedAt ?? now) > retainMs;
 }
 
 function send(wire: Wire, data: string | Uint8Array): void {

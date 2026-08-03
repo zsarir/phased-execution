@@ -80,5 +80,10 @@ keyboard. An agent session sits in between: the console builds the `claude` comm
 allowlisted choices (model, effort, permission mode — never the bypass mode), but once the session
 is up, approvals happen **in the terminal**, not in the console's queue. Neither capability
 weakens the autopilot's rules — they are different doors into the same machine, each behind its
-own flag, and a session parked unattended is reaped only once it has been silent for half an hour
-(a working one is left to work).
+own flag.
+
+Sessions of both kinds are **durable**: closing the tab, navigating away or putting the phone to
+sleep detaches the socket and leaves the process running, and it stops only when you close it or
+when the console itself goes down. A session that has ended stays in the list with its exit status
+— and, for an agent session, the `claude --resume <id>` it can be picked up with — until you
+dismiss it. The cap of 8 counts live processes only.

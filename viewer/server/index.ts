@@ -14,13 +14,15 @@
 import { createServer } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn as spawnChild } from 'node:child_process';
 
 import { flagsRefusal, parseFlags, staticRoot, staticRootDir, VIEWER_DIR } from './config.ts';
 import {
   configureLog, installExitLogging, isClientDisconnect, log, noteExit, previousRunEndedCleanly,
 } from './log.ts';
-import { markDegraded, onRestartRequest, runShutdownHandlers } from './lifecycle.ts';
+import {
+  bootout, markDegraded, onRestartRequest, onShutdownRequest, runShutdownHandlers, stopPlan,
+} from './lifecycle.ts';
 import { Service } from './service.ts';
 import { handleApi } from './api/routes.ts';
 import { classify } from './api/access.ts';
@@ -383,6 +385,39 @@ async function shutdown(reason: string): Promise<void> {
  */
 onRestartRequest((reason) => {
   setTimeout(() => void shutdown(reason), 250).unref();
+});
+
+/**
+ * How long to wait for `launchctl bootout` to land before stopping anyway.
+ *
+ * Bootout ends the job by sending this process SIGTERM, which the handler below
+ * turns into the ordinary graceful shutdown — so on the happy path this timer
+ * never fires. It exists for the unhappy one: a `launchctl` that is missing, or
+ * refuses, or names a job that is not there. A Shut-down button that leaves the
+ * console running because a supervisor did not answer is the same broken
+ * promise as no button at all.
+ */
+const BOOTOUT_GRACE_MS = 8_000;
+
+/**
+ * The Shut-down button's other half — stop, and stay stopped.
+ *
+ * The asymmetry with Restart is the whole point. Under launchd `KeepAlive` an
+ * exit is a *restart*, so a console that stopped by exiting would be back
+ * within seconds; the job has to be unloaded instead. Where nothing is
+ * supervising, exiting IS stopping and the same drain applies — the runner
+ * checkpoints, every pty is killed (`service.close()` → `Terminals.close()`),
+ * and the process ends 0.
+ */
+onShutdownRequest((reason) => {
+  setTimeout(() => {
+    const plan = stopPlan();
+    if (plan.via !== 'launchctl' || !bootout(plan, spawnChild as never)) {
+      void shutdown(reason);
+      return;
+    }
+    setTimeout(() => void shutdown(`${reason} (bootout did not land)`), BOOTOUT_GRACE_MS).unref();
+  }, 250).unref();
 });
 
 process.on('SIGINT', () => void shutdown('SIGINT'));

@@ -83,6 +83,10 @@ export interface TerminalSession {
   pid: number;
   clients: number;
   createdAt: number;
+  /** When the pty last printed — how a list tells "working" from "waiting". */
+  lastOutputAt?: number;
+  /** When the last client detached, while none is attached. */
+  detachedSince?: number;
   /** Claude-session facts the UI shows back — never secret. */
   meta?: {
     model?: string;
@@ -90,10 +94,18 @@ export interface TerminalSession {
     permissionMode?: string;
     /** What `claude --resume <id>` takes after this pty is gone. */
     claudeSessionId?: string;
-    intent?: 'plan';
+    intent?: 'plan' | 'recovery';
+    /** Set by the server on a recovery session — what it was launched to fix. */
+    recovery?: { kind: string; slug?: string; phase?: number; runId?: string };
   };
-  /** Present once the shell has gone; the page says so rather than "disconnected". */
+  /**
+   * Present once the process has gone. The record now OUTLIVES it until it is
+   * dismissed, so this is a state the page renders rather than a moment it
+   * catches.
+   */
   exited?: { code: number; signal?: number; closedByOperator?: boolean };
+  /** When it ended. */
+  exitedAt?: number;
 }
 
 export interface TerminalState {
@@ -104,7 +116,29 @@ export interface TerminalState {
   /** Whether `node-pty` actually loaded — `unknown` until something has tried. */
   available: 'yes' | 'no' | 'unknown';
   limit: number;
+  /** Live processes — what `limit` caps. `sessions` also carries ended records. */
+  live?: number;
   sessions: TerminalSession[];
+}
+
+/** What a shutdown or a restart is about to stop. Both dialogs render it. */
+export interface SessionInventory {
+  live: number;
+  agent: number;
+  terminal: number;
+  ended: number;
+  sessions: { id: string; label: string; kind: 'shell' | 'claude' }[];
+}
+
+export interface ShutdownReadiness {
+  supervisor: { ok?: boolean; kind?: string; detail?: string };
+  /** How it will actually stop — `launchctl` unloads the job, `exit` just ends. */
+  stop: { via: 'launchctl' | 'exit'; label?: string; detail: string };
+  busy: boolean;
+  run: { slug: string; status: string } | null;
+  sessions: SessionInventory;
+  /** How to get it back — the last thing this console will tell you. */
+  restartHint: string;
 }
 
 /** A single-use ticket for one WebSocket upgrade. Never logged, never stored. */
@@ -860,6 +894,8 @@ export interface RestartReadiness {
   supervisor: { ok?: boolean; kind?: string; detail?: string };
   busy: boolean;
   run: { slug: string; status: string; phase?: number } | null;
+  /** A restart has always killed every pty. Now it says so before it does. */
+  sessions?: SessionInventory;
 }
 
 /* ---------------- the guarded write verbs ----------------
@@ -1001,10 +1037,20 @@ export const api = {
   }) => post<TerminalTicket>('/api/terminal', { kind: 'claude', ...body }),
   terminalClose: (id: string) =>
     request<{ closed: boolean; state: TerminalState }>(`/api/terminal?id=${q(id)}`, { method: 'DELETE' }),
+  /** Drop the record of a session that has already ended. Refused on a live one. */
+  sessionDismiss: (id: string) =>
+    request<{ ok: boolean; reason?: string; state: TerminalState }>(
+      `/api/terminal?id=${q(id)}&action=dismiss`, { method: 'DELETE' },
+    ),
 
   /* ---- signing in, and restarting the console itself ---- */
   auth: (force?: boolean) => request<AuthStatus>(`/api/auth${force ? '?force=1' : ''}`),
   authLogin: () => post<{ opened?: boolean; detail?: string }>('/api/auth/login'),
   restartReadiness: () => request<RestartReadiness>('/api/restart'),
   restart: () => post<unknown>('/api/restart', { by: 'console' }),
+
+  /* The off switch. `confirm` is required by the server so a replayed or stray
+   * POST cannot end a console; the dialog is what supplies it. */
+  shutdownReadiness: () => request<ShutdownReadiness>('/api/shutdown'),
+  shutdown: () => post<{ ok: boolean; reason?: string }>('/api/shutdown', { confirm: true, by: 'console' }),
 };

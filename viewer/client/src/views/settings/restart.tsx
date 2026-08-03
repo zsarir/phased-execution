@@ -21,6 +21,7 @@ import { useMutation } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useConsoleState, useRestartReadiness } from '@/lib/queries';
 import { AlertDialog, AlertDialogContent, AlertDialogTrigger, Button, toast } from '@/components/ui';
+import { StopInventory, stopList } from './shutdown';
 
 /** How long to wait before reloading. The server's own drain budget is 120s,
  *  but an idle console has nothing registered and comes back almost at once. */
@@ -75,7 +76,13 @@ export function RestartButton({ verbose = false }: { verbose?: boolean }) {
           description="It exits and its supervisor starts it again — a few seconds with no server. This page reloads itself afterwards."
           confirmLabel="Restart"
           onConfirm={() => restart.mutate()}
-        />
+        >
+          {/* A restart has always killed every pty on its way out — `shutdown()`
+              calls `service.close()`. It has never said so, which is the same
+              defect the Shut-down dialog was written to avoid, so both render
+              the same inventory from the same function. */}
+          <StopInventory items={stopList(readiness.sessions, readiness.run)} />
+        </AlertDialogContent>
       </AlertDialog>
       {verbose && (
         <span className="text-2xs text-ink-muted">{readiness.supervisor?.detail}</span>

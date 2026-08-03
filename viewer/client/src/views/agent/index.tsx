@@ -16,14 +16,16 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Bot, Plus, RotateCcw, Sparkles, X } from 'lucide-react';
+import { Bot, Plus, Sparkles, X } from 'lucide-react';
 import { planHref } from '@shared/routes.js';
 import { api, type TerminalTicket } from '@/lib/api';
 import { keys, useConsoleState, usePlans, useTerminals } from '@/lib/queries';
 import { cn } from '@/lib/cn';
 import { navigate, type Route } from '@/router';
-import { Button, Chip, CopyButton, Empty, Spinner, toast } from '@/components/ui';
-import { TerminalPane } from '../terminal/pane';
+import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
+// Through `pane`, deliberately — see the re-export note there: a second
+// importable module in this shared chunk renames it and precaches xterm.
+import { EndedBanner, SessionGone, TerminalPane } from '../terminal/pane';
 import { Launcher, type LaunchBody } from './launcher';
 import { NewPlanWizardButton } from './wizard';
 
@@ -36,7 +38,10 @@ export default function AgentView({ route }: { route: Route }) {
 
   const all = terminals?.sessions ?? [];
   const sessions = all.filter((session) => session.kind === 'claude');
-  const atCap = all.length >= (terminals?.limit ?? 8);
+  // Live processes only: ended records stay listed (that is where the `--resume`
+  // id lives) and must not hold a slot. See the same note on the terminal page.
+  const atCap = (terminals?.live ?? all.filter((session) => !session.exited).length)
+    >= (terminals?.limit ?? 8);
   const wanted = route.segments[1];
   const open = sessions.find((session) => session.id === wanted);
 
@@ -44,15 +49,18 @@ export default function AgentView({ route }: { route: Route }) {
   const refresh = () => { void client.invalidateQueries({ queryKey: keys.terminal() }); };
 
   /**
-   * A URL naming a session that has ended falls back to whatever is still
-   * open, or to the launcher. ⚠️ `isFetching` is load-bearing here exactly as
-   * on the terminal page: without it this fires against an invalidated,
-   * not-yet-refetched list and bounces off the session that was just created.
+   * A URL naming a session this console has never heard of no longer bounces —
+   * it says so (`SessionGone` below). The bounce existed because an ended
+   * session's record vanished within a minute, so the URL in your history was
+   * usually dead; records now survive until dismissed, and the case that is
+   * left deserves a sentence rather than a redirect.
+   *
+   * `isFetching` was load-bearing for that effect and stays load-bearing here:
+   * the "gone" panel must not render against a list that is invalidated but not
+   * yet refetched, or creating a session flashes it.
    */
-  useEffect(() => {
-    if (!allowed || isPending || isFetching) return;
-    if (wanted && !open) navigate(sessions.length ? `agent/${sessions[0].id}` : 'agent');
-  }, [allowed, isPending, isFetching, wanted, open, sessions]);
+  const settled = allowed && !isPending && !isFetching;
+  const gone = Boolean(settled && wanted && !open);
 
   async function launch(body: LaunchBody) {
     try {
@@ -77,6 +85,19 @@ export default function AgentView({ route }: { route: Route }) {
   async function close(id: string) {
     try {
       const result = await api.terminalClose(id);
+      if (result.state) client.setQueryData(keys.terminal(), result.state);
+      const rest = sessions.filter((session) => session.id !== id);
+      navigate(rest.length ? `agent/${rest[0].id}` : 'agent');
+    } catch (error) {
+      toast((error as Error).message, 'error');
+    }
+  }
+
+  /** Drop an ended record. The live ones are closed, never dismissed. */
+  async function dismiss(id: string) {
+    try {
+      const result = await api.sessionDismiss(id);
+      if (!result.ok) { toast(String(result.reason ?? 'refused'), 'error'); return; }
       if (result.state) client.setQueryData(keys.terminal(), result.state);
       const rest = sessions.filter((session) => session.id !== id);
       navigate(rest.length ? `agent/${rest[0].id}` : 'agent');
@@ -132,8 +153,6 @@ export default function AgentView({ route }: { route: Route }) {
 
   /* ---------------- the page ---------------- */
 
-  const resumeId = open?.exited ? open.meta?.claudeSessionId : undefined;
-
   return (
     <Frame>
       <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-rule bg-ground-deep px-2 py-1.5">
@@ -176,7 +195,8 @@ export default function AgentView({ route }: { route: Route }) {
           className="ml-1 min-h-(--tap-min) shrink-0"
           disabled={atCap}
           title={atCap
-            ? `The limit is ${terminals?.limit ?? 8} sessions across shells and agents — close one first`
+            ? `The limit is ${terminals?.limit ?? 8} running sessions across shells and agents — `
+              + 'close one first (ended ones do not count)'
             : 'Configure and start a new Claude session'}
           onClick={() => navigate('agent')}
         >
@@ -192,17 +212,18 @@ export default function AgentView({ route }: { route: Route }) {
         )}
       </div>
 
-      {open ? (
+      {gone ? (
+        <SessionGone kind="claude" />
+      ) : open ? (
         <>
           {open.meta?.intent === 'plan' && <PlanWatcher key={open.id} />}
-          {resumeId && (
-            <div className="flex flex-wrap items-center gap-2 border-b border-rule bg-surface px-3 py-2 text-sm text-ink-muted">
-              <span>The CLI exited — its conversation is resumable.</span>
-              <Button size="sm" disabled={atCap} onClick={() => void launch({ resume: resumeId })}>
-                <RotateCcw size={14} aria-hidden /> Resume here
-              </Button>
-              <CopyButton text={`claude --resume ${resumeId}`} label="Copy resume command" />
-            </div>
+          {open.exited && (
+            <EndedBanner
+              session={open}
+              atCap={atCap}
+              onResume={(resume) => void launch({ resume })}
+              onDismiss={(id) => void dismiss(id)}
+            />
           )}
           {/* Keyed by session — a tab switch builds a fresh xterm, never replays
               another session's scrollback into a reused one. */}

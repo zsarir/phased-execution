@@ -21,7 +21,7 @@
  * locking its screen, or a tab killed by iOS all come back to the same shell.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { TerminalSquare, Plus, X } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -29,7 +29,9 @@ import { keys, useConsoleState, useTerminals } from '@/lib/queries';
 import { cn } from '@/lib/cn';
 import { navigate, type Route } from '@/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
-import { TerminalPane } from './pane';
+// Through `./pane`, deliberately — see the re-export note there: a second
+// importable module in this shared chunk renames it and precaches xterm.
+import { EndedBanner, SessionGone, TerminalPane } from './pane';
 
 export default function TerminalView({ route }: { route: Route }) {
   const client = useQueryClient();
@@ -43,7 +45,12 @@ export default function TerminalView({ route }: { route: Route }) {
   // here. The cap check stays on the UNFILTERED total — 8 across both kinds.
   const all = terminals?.sessions ?? [];
   const sessions = all.filter((session) => (session.kind ?? 'shell') === 'shell');
-  const atCap = all.length >= (terminals?.limit ?? 8);
+  // Live processes only — the list now keeps ended records, and counting those
+  // toward the cap would refuse a new shell because of eight that exited
+  // yesterday. `live` is the server's own number; the filter is the fallback for
+  // a server that predates it.
+  const atCap = (terminals?.live ?? all.filter((session) => !session.exited).length)
+    >= (terminals?.limit ?? 8);
   const wanted = route.segments[1];
   const open = sessions.find((session) => session.id === wanted);
 
@@ -53,19 +60,18 @@ export default function TerminalView({ route }: { route: Route }) {
   const refresh = () => { void client.invalidateQueries({ queryKey: keys.terminal() }); };
 
   /**
-   * A URL naming a session that has ended is not an error to shout about — the
-   * session simply timed out while the phone was asleep. Fall back to whatever
-   * is still open, or to the empty state.
+   * A URL naming a session this console does not have used to bounce silently —
+   * defensible when sessions timed out while a phone slept, and the wrong answer
+   * now that they do not: a session ends when you close it or the console does,
+   * so a URL that names nothing means the record was dismissed or retired, and
+   * that is worth a sentence.
    *
-   * ⚠️ `isFetching` is load-bearing. Without it this fires against a list that
-   * has been invalidated but not yet refetched, decides the session it is
-   * looking at does not exist, and navigates off the page that was just opened
-   * — a bounce whose only symptom is that nothing happens.
+   * ⚠️ `isFetching` is still load-bearing. Without it this renders against a
+   * list that has been invalidated but not yet refetched and flashes "gone" over
+   * the session that was just created.
    */
-  useEffect(() => {
-    if (!allowed || isPending || isFetching) return;
-    if (wanted && !open) navigate(sessions.length ? `terminal/${sessions[0].id}` : 'terminal');
-  }, [allowed, isPending, isFetching, wanted, open, sessions]);
+  const settled = allowed && !isPending && !isFetching;
+  const gone = Boolean(settled && wanted && !open);
 
   async function openShell() {
     try {
@@ -90,6 +96,19 @@ export default function TerminalView({ route }: { route: Route }) {
       const result = await api.terminalClose(id);
       // The DELETE answers with the list as it now is — authoritative, so there
       // is nothing to race here either.
+      if (result.state) client.setQueryData(keys.terminal(), result.state);
+      const rest = sessions.filter((session) => session.id !== id);
+      navigate(rest.length ? `terminal/${rest[0].id}` : 'terminal');
+    } catch (error) {
+      toast((error as Error).message, 'error');
+    }
+  }
+
+  /** Drop an ended record. A live session is closed, never dismissed. */
+  async function dismiss(id: string) {
+    try {
+      const result = await api.sessionDismiss(id);
+      if (!result.ok) { toast(String(result.reason ?? 'refused'), 'error'); return; }
       if (result.state) client.setQueryData(keys.terminal(), result.state);
       const rest = sessions.filter((session) => session.id !== id);
       navigate(rest.length ? `terminal/${rest[0].id}` : 'terminal');
@@ -186,7 +205,8 @@ export default function TerminalView({ route }: { route: Route }) {
           className="ml-1 min-h-(--tap-min) shrink-0"
           disabled={atCap}
           title={atCap
-            ? `The limit is ${terminals?.limit ?? 8} sessions across shells and agents — close one first`
+            ? `The limit is ${terminals?.limit ?? 8} running sessions across shells and agents — `
+              + 'close one first (ended ones do not count)'
             : 'Open a new shell in the source directory'}
           onClick={() => void openShell()}
         >
@@ -200,16 +220,22 @@ export default function TerminalView({ route }: { route: Route }) {
         )}
       </div>
 
-      {open ? (
-        // Keyed by session: switching tabs must build a new xterm bound to the
-        // new pty, not reuse one and replay someone else's scrollback into it.
-        <TerminalPane
-          key={open.id}
-          sessionId={open.id}
-          onSession={refresh}
-          onSize={setSize}
-          onEnded={refresh}
-        />
+      {gone ? (
+        <SessionGone kind="shell" />
+      ) : open ? (
+        <>
+          {open.exited && <EndedBanner session={open} atCap={atCap} onDismiss={(id) => void dismiss(id)} />}
+          {/* Keyed by session: switching tabs must build a new xterm bound to
+              the new pty, not reuse one and replay someone else's scrollback
+              into it. */}
+          <TerminalPane
+            key={open.id}
+            sessionId={open.id}
+            onSession={refresh}
+            onSize={setSize}
+            onEnded={refresh}
+          />
+        </>
       ) : (
         <Empty
           icon={<TerminalSquare size={28} className="text-ink-faint" aria-hidden />}

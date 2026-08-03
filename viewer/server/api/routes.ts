@@ -428,6 +428,31 @@ export async function handleApi(
       }
     }
 
+    /* ---------------- stopping the console itself ---------------- */
+    if (head === 'shutdown') {
+      if (req.method === 'GET') { json(res, 200, service.shutdownReadiness()); return true; }
+      if (req.method === 'POST') {
+        // Deliberately `guardCsrf` and NOT `guardRun`, unlike restart. Turning
+        // a process off is the one verb every console must have: gating it on
+        // `--allow-run` would mean a read-only console — the common case — has
+        // no off switch at all, which is the bug. The cross-site check still
+        // applies, so another page cannot press it for you.
+        const refusal = guardCsrf(req);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        // An explicit confirmation in the body, so a bare POST — a stray curl, a
+        // replayed request — cannot end the console by accident.
+        if (body.confirm !== true) {
+          json(res, 400, { error: 'pass {"confirm":true} — shutting the console down is not a default.' });
+          return true;
+        }
+        const by = typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console';
+        const outcome = service.shutdown(by);
+        json(res, outcome.ok ? 200 : 409, outcome);
+        return true;
+      }
+    }
+
     /* ---------------- the terminal ---------------- */
     if (head === 'terminal') {
       // Deliberately above the "no source directory is open" wall below: a
@@ -477,6 +502,15 @@ export async function handleApi(
         const refusal = guardAnySession(req, service);
         if (refusal) { json(res, 403, { error: refusal }); return true; }
         const id = url.searchParams.get('id') ?? rest[0] ?? '';
+        // Two different verbs on the same record, and conflating them is how a
+        // "tidy the list" button ends up killing a working session. `dismiss`
+        // drops a record whose process is already gone and refuses on a live
+        // one; the default closes the session.
+        if (url.searchParams.get('action') === 'dismiss') {
+          const outcome = service.terminals.dismiss(id);
+          json(res, outcome.ok ? 200 : 409, { ...outcome, state: service.terminals.state() });
+          return true;
+        }
         json(res, 200, { closed: service.terminals.kill(id), state: service.terminals.state() });
         return true;
       }

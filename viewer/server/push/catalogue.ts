@@ -17,7 +17,8 @@
  */
 
 export type CategoryId =
-  | 'approval' | 'needs-you' | 'halted' | 'parked' | 'phase' | 'finished' | 'ready' | 'changed' | 'health';
+  | 'approval' | 'needs-you' | 'halted' | 'parked' | 'phase' | 'finished' | 'ready' | 'changed'
+  | 'session' | 'health';
 
 export type Category = {
   id: CategoryId;
@@ -95,6 +96,14 @@ export const CATEGORIES: readonly Category[] = [
     urgent: false,
   },
   {
+    id: 'session',
+    label: 'A session ended',
+    detail: 'An agent session or terminal finished while you were not watching it, or exited with '
+      + 'an error. Closing one yourself is not announced — you already know.',
+    byDefault: true,
+    urgent: false,
+  },
+  {
     id: 'health',
     label: 'Console problems',
     detail: 'The console degraded, its file watch went deaf, or it restarted after a crash. '
@@ -141,7 +150,14 @@ export function sanitiseCategories(value: unknown): Record<CategoryId, boolean> 
  * ------------------------------------------------------------------ */
 
 /** What a notification knows about itself, in as much as decides where it lands. */
-export type RouteContext = { slug?: string | null; phase?: number | null };
+export type RouteContext = {
+  slug?: string | null;
+  phase?: number | null;
+  /** A terminal/agent session id — `session` notifications deep-link to the one that ended. */
+  sessionId?: string | null;
+  /** Which page owns it. A claude session lives on `#/agent`, a shell on `#/terminal`. */
+  sessionKind?: 'shell' | 'claude' | null;
+};
 
 /**
  * The ONLY place a notification URL is constructed.
@@ -180,6 +196,15 @@ export function routeFor(category: CategoryId, context: RouteContext = {}): stri
       return '/#/ready';
     case 'changed':
       return slug ? `/#/plan/${slug}/route` : '/#/plans';
+    // The session that ended, on the page that owns its kind. Both pages keep
+    // the ended record until it is dismissed, so this link is still good when
+    // the notification is tapped an hour later — and if the record HAS gone,
+    // the page falls back to its own list rather than a dead end.
+    case 'session': {
+      const head = context.sessionKind === 'claude' ? 'agent' : 'terminal';
+      const id = context.sessionId ? encodeURIComponent(context.sessionId) : null;
+      return id ? `/#/${head}/${id}` : `/#/${head}`;
+    }
     case 'health':
       return '/#/settings';
     default: {

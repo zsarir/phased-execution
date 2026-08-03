@@ -48,7 +48,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
-vi.mock('../terminal/pane', () => ({
+// Only the emulator is stubbed — the ended/gone panels are re-exported from
+// `pane` (see the note there) and are under test, so they come through for real
+// from `../terminal/ended`, which pulls in no xterm.
+vi.mock('../terminal/pane', async () => ({
+  ...(await import('../terminal/ended')),
   TerminalPane: (props: { sessionId: string }) => {
     pane(props.sessionId);
     return <div data-testid="pane">{props.sessionId}</div>;
@@ -226,22 +230,39 @@ describe('sessions', () => {
   });
 
   it('an ended session offers resume, as a button and as a copyable command', async () => {
-    const ended = { ...CLAUDE, exited: { code: 0 } };
-    terminal.mockResolvedValue({ ...TERMINALS, sessions: [ended] });
+    const ended = { ...CLAUDE, exited: { code: 0 }, exitedAt: Date.now() - 60_000 };
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [ended], live: 0 });
     await openPage({ segments: ['agent', 'c1'], query: {}, path: 'agent/c1' });
 
-    expect(await screen.findByText(/its conversation is resumable/i)).toBeInTheDocument();
+    // The record outlives the CLI now, so this is a state the page renders
+    // rather than a moment it had ~30 seconds to catch.
+    expect(await screen.findByText(/exited cleanly/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /resume here/i }));
     await waitFor(() => expect(agentTicket).toHaveBeenCalledWith({
       resume: '00000000-0000-4000-8000-000000000000',
     }));
   });
 
-  it('falls back to the launcher instead of stranding a dead link', async () => {
+  it('reports a failed session as failed, and offers to clear the record', async () => {
+    const failed = { ...CLAUDE, exited: { code: 1, signal: 9 }, exitedAt: Date.now() - 1_000 };
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [failed], live: 0 });
+    await openPage({ segments: ['agent', 'c1'], query: {}, path: 'agent/c1' });
+
+    // A signal is the case a bare exit code loses: killed by 9 with code 1 is
+    // not "exited cleanly", and the panel must not say it was.
+    expect(await screen.findByText(/killed by signal 9/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument();
+  });
+
+  it('says a session is gone instead of stranding a dead link', async () => {
     terminal.mockResolvedValue({ ...TERMINALS, sessions: [] });
     await openPage({ segments: ['agent', 'long-gone'], query: {}, path: 'agent/long-gone' });
 
-    await waitFor(() => expect(window.location.hash).toBe('#/agent'));
+    expect(await screen.findByText(/not here any more/i)).toBeInTheDocument();
+    // The harness renders a route object without touching the URL, so any
+    // `navigate()` shows up here as a hash — which is exactly how the old test
+    // detected the bounce. Staying empty is the assertion that it is gone.
+    await waitFor(() => expect(window.location.hash).toBe(''));
   });
 });
 

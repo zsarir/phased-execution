@@ -55,7 +55,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 // The pane owns xterm and a live WebSocket. Both are the wrong thing to build
 // in jsdom, and neither is what this file is about.
-vi.mock('./pane', () => ({
+// Only the emulator is stubbed. The ended/gone panels are re-exported from
+// `pane` (see the note there — it keeps the shared chunk to one facade), and
+// they are under test here, so they come through for real from `./ended`, which
+// pulls in no xterm.
+vi.mock('./pane', async () => ({
+  ...(await import('./ended')),
   TerminalPane: (props: { sessionId: string }) => {
     pane(props.sessionId);
     return <div data-testid="pane">{props.sessionId}</div>;
@@ -192,11 +197,29 @@ describe('sessions', () => {
     expect(pane).toHaveBeenCalledWith('abc123');
   });
 
-  it('falls back instead of stranding a link to a session that has ended', async () => {
+  it('says a session is gone instead of bouncing off its own URL', async () => {
     await openPage({ segments: ['terminal', 'long-gone'], query: {}, path: 'terminal/long-gone' });
-    // The common case is a phone that slept past the idle timeout; the useful
-    // answer is the shell that IS open, not an error.
-    await waitFor(() => expect(window.location.hash).toBe('#/terminal/abc123'));
+    // This used to navigate away silently, which was defensible while sessions
+    // timed out on their own. They do not any more: a URL naming nothing means
+    // the record was dismissed or retired, and on a phone a redirect reads as a
+    // tap that did nothing.
+    expect(await screen.findByText(/not here any more/i)).toBeInTheDocument();
+    // The harness renders a route object without touching the URL, so a stray
+    // `navigate()` would show up here as a hash. Staying empty is the assertion.
+    await waitFor(() => expect(window.location.hash).toBe(''));
+  });
+
+  it('keeps an ended shell open, with its scrollback and a way to clear it', async () => {
+    const ended = { ...SESSION, exited: { code: 130 }, exitedAt: Date.now() - 5_000 };
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [ended], live: 0 });
+    await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
+
+    // The record outlives the process, so the page reports the exit rather than
+    // sending you somewhere else.
+    expect(await screen.findByText(/exited with code 130/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument();
+    // …and its slot is free, so New is still offered.
+    expect(screen.getByRole('button', { name: /new/i })).not.toBeDisabled();
   });
 
   it('refuses to go past the session cap', async () => {

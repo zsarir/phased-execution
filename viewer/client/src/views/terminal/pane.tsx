@@ -214,3 +214,17 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
     </div>
   );
 }
+
+/**
+ * The ended/gone panels, re-exported so the terminal and agent pages reach them
+ * through this module.
+ *
+ * Not tidiness — a build invariant. Both routes lazy-load one shared chunk, and
+ * the bundler names it after the module the routes import. A second such module
+ * makes a second facade and renames the chunk (`pane-*` → whatever), which slips
+ * past `globIgnores` in `vite.config.ts` and precaches 346 KB of xterm on every
+ * first visit. Keeping this file the only facade keeps the name stable, without
+ * reaching for `manualChunks` — which drags React into the chunk instead (see
+ * the warning in `vite.config.ts`). `scripts/check-dist.mjs` holds both ends.
+ */
+export { EndedBanner, SessionGone, exitSummary } from './ended';

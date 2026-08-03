@@ -646,26 +646,131 @@ test('claude sessions and shells count on separate label counters', async () => 
   terminals.close();
 });
 
-test('the sweeper spares a working claude session, and only that', () => {
+test('a living session is never reaped — shell or claude, watched or not', () => {
   const MIN = 60_000;
-  const idleMs = 30 * MIN;
-  const now = 100 * MIN;
-  const idle = now - 31 * MIN; // detached 31 minutes ago
-  const base = { wires: 0, idleSince: idle, lastOutputAt: idle };
+  const retainMs = 24 * 60 * MIN;
+  const now = 1_000 * MIN;
+  const longAgo = now - 400 * MIN; // detached, and silent, for most of a day
 
-  // A shell detached past the window is reaped, output or no output.
-  assert.equal(shouldReap({ ...base, kind: 'shell', lastOutputAt: now - MIN }, now, idleMs), true);
-  // A live claude that printed a minute ago is working unattended — spared.
-  assert.equal(shouldReap({ ...base, kind: 'claude', lastOutputAt: now - MIN }, now, idleMs), false);
-  // A claude silent past the window is parked — reaped like a shell.
-  assert.equal(shouldReap({ ...base, kind: 'claude' }, now, idleMs), true);
-  // An exited claude gets no output consideration — the grace period rules.
-  assert.equal(shouldReap({ ...base, kind: 'claude', lastOutputAt: now - MIN, exited: { code: 0 } }, now, idleMs), true);
-  // Anyone attached keeps any session alive…
-  assert.equal(shouldReap({ ...base, kind: 'claude', wires: 1 }, now, idleMs), false);
-  assert.equal(shouldReap({ ...base, kind: 'shell', wires: 1 }, now, idleMs), false);
-  // …and a session someone never left (idleSince 0) is never a candidate.
-  assert.equal(shouldReap({ wires: 0, idleSince: 0, lastOutputAt: 0, kind: 'shell' }, now, idleMs), false);
+  // The whole matrix of live sessions: both kinds, attached and detached,
+  // talkative and silent. Every one of these used to be reapable after 30
+  // idle minutes; none of them is now. This is the assertion the durability
+  // requirement rests on, so it is written out rather than parameterised away.
+  for (const wires of [0, 1]) {
+    for (const lastOutputAt of [longAgo, now - MIN]) {
+      assert.equal(
+        shouldReap({ wires, exitedAt: lastOutputAt }, now, retainMs), false,
+        `a live session (wires=${wires}) must never be reaped`,
+      );
+    }
+  }
+
+  // What IS collectable: a record whose process is gone, nobody is reading,
+  // and nobody dismissed within the retention window.
+  assert.equal(shouldReap({ wires: 0, exited: { code: 0 }, exitedAt: longAgo }, now, retainMs), false,
+    'inside the window it is kept — "until you dismiss it" means it is still there tomorrow morning');
+  assert.equal(shouldReap({ wires: 0, exited: { code: 0 }, exitedAt: now - retainMs - 1 }, now, retainMs), true);
+  // …unless someone is attached to it, reading what it said before it died.
+  assert.equal(shouldReap({ wires: 1, exited: { code: 0 }, exitedAt: now - retainMs - 1 }, now, retainMs), false);
+  // A missing timestamp is treated as "just now", never as 1970.
+  assert.equal(shouldReap({ wires: 0, exited: { code: 1 } }, now, retainMs), false);
+});
+
+test('the registry keeps ended sessions, frees their slot, and dismisses only the dead', async () => {
+  const { terminals, ptys } = registry({ agentAllowed: true });
+  const first = await terminals.mint();
+  assert.ok(first.ok);
+  const id = first.ok ? first.sessionId : '';
+
+  ptys[0].exit(3);
+
+  // The record survives its process, exit status and all — this is what used
+  // to disappear ~30 seconds after the shell died.
+  const after = terminals.state();
+  assert.equal(after.sessions.length, 1);
+  assert.deepEqual(after.sessions[0].exited, { code: 3, signal: undefined });
+  assert.ok(after.sessions[0].exitedAt);
+  // …and it no longer occupies one of the eight.
+  assert.equal(after.live, 0);
+
+  // Dismiss removes it; dismissing a live one is refused rather than obeyed.
+  const live = await terminals.mint();
+  assert.ok(live.ok);
+  const liveId = live.ok ? live.sessionId : '';
+  const refused = terminals.dismiss(liveId);
+  assert.equal(refused.ok, false);
+  assert.match(String(refused.reason), /still running/);
+  assert.equal(terminals.state().sessions.length, 2);
+
+  assert.deepEqual(terminals.dismiss(id), { ok: true });
+  assert.deepEqual(terminals.state().sessions.map((s) => s.id), [liveId]);
+  assert.deepEqual(terminals.dismiss('nope'), { ok: false, reason: 'no such session' });
+
+  terminals.close();
+});
+
+test('the live cap counts processes, not records', async () => {
+  const { terminals, ptys } = registry();
+  const ids: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const minted = await terminals.mint();
+    assert.ok(minted.ok, `session ${i} should mint`);
+    if (minted.ok) ids.push(minted.sessionId);
+  }
+  // Eight live: the ninth is refused.
+  const ninth = await terminals.mint();
+  assert.equal(ninth.ok, false);
+  if (!ninth.ok) assert.equal(ninth.status, 409);
+
+  // One exits. Its record stays, but the slot is free again.
+  ptys[0].exit(0);
+  assert.equal(terminals.state().sessions.length, 8);
+  assert.equal(terminals.state().live, 7);
+  const tenth = await terminals.mint();
+  assert.equal(tenth.ok, true);
+  assert.equal(terminals.state().sessions.length, 9);
+
+  terminals.close();
+});
+
+test('lifecycle events narrate every session moment, and a kill is not an exit', async () => {
+  const seen: { type: string; id: string; detached?: boolean }[] = [];
+  const { terminals, ptys } = registry({
+    onSession: (event: { type: string; session: { id: string }; detached?: boolean }) =>
+      seen.push({ type: event.type, id: event.session.id, detached: event.detached }),
+  });
+
+  const minted = await terminals.mint();
+  assert.ok(minted.ok);
+  const id = minted.ok ? minted.sessionId : '';
+  assert.deepEqual(seen.map((e) => e.type), ['created']);
+
+  // Attach, then let the socket go: both are events, and the detach is what
+  // makes the exit that follows worth announcing.
+  const wire = fakeWire();
+  const session = terminals.consume(minted.ok ? minted.token : '');
+  assert.ok(session);
+  terminals.attach(session!, wire as never);
+  assert.equal(seen.at(-1)?.type, 'attached');
+  wire.close();
+  assert.equal(seen.at(-1)?.type, 'detached');
+
+  ptys[0].exit(1);
+  assert.deepEqual(seen.at(-1), { type: 'exited', id, detached: true });
+
+  // A session the operator closes reports `killed` — and the pty's own exit,
+  // which arrives a moment later, must not turn it into a second, announceable
+  // event. That is what would notify you about a session you just closed.
+  const second = await terminals.mint();
+  const secondId = second.ok ? second.sessionId : '';
+  terminals.kill(secondId);
+  ptys[1].exit(0);
+  assert.deepEqual(
+    seen.filter((e) => e.id === secondId).map((e) => e.type),
+    ['created', 'killed'],
+  );
+
+  terminals.close();
 });
 
 test('a claude ticket is gated by --allow-agent, and refusals spawn nothing', async (t) => {

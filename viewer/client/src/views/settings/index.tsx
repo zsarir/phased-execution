@@ -19,6 +19,7 @@ import {
 import { Page } from '../_page';
 import { PolicyCard } from './policy';
 import { RestartButton } from './restart';
+import { ShutdownButton } from './shutdown';
 
 const MODELS = ['', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-haiku-4-5'];
 
@@ -90,6 +91,9 @@ export default function SettingsView() {
               client and nothing else, so a server fix you already have looks like it did not work
               until this process is replaced.
             </p>
+            <div className="border-t border-rule pt-3">
+              <ShutdownButton />
+            </div>
           </CardBody>
         </Card>
 

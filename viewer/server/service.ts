@@ -22,7 +22,9 @@ import {
 import { SearchIndex, type SearchResult } from './search.ts';
 import { listSkills, type SkillInfo } from './skills.ts';
 import { DocsWatcher } from './watch.ts';
-import { degradedState, hasShutdownWork, onDegraded, requestRestart, supervisor } from './lifecycle.ts';
+import {
+  degradedState, hasShutdownWork, onDegraded, requestRestart, requestShutdown, stopPlan, supervisor,
+} from './lifecycle.ts';
 import { log } from './log.ts';
 import { CATEGORIES, Push, routeFor, sanitiseCategories, tagFor, type CategoryId } from './push/index.ts';
 import { Notifications, type NotificationQuery, type NotificationRecord } from './notifications.ts';
@@ -41,7 +43,7 @@ import {
   Runner, applySettings,
   type AskResult, type RecoverMode, type RunSettingsPatch, type StartOptions,
 } from './runner/runner.ts';
-import { Terminals } from './terminal.ts';
+import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
 import {
   latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT,
@@ -246,6 +248,19 @@ export function effortOf(text?: string): string | undefined {
   return match ? match[1].toLowerCase() : undefined;
 }
 
+/**
+ * How a session ended, in the words a notification can carry.
+ *
+ * A signal is the interesting case and the one a bare exit code loses: a pty
+ * killed by the OOM killer reports code 0 with `signal: 9`, and "exited
+ * cleanly" would be a lie about the most important thing that happened.
+ */
+function describeExit(session: SessionInfo): string {
+  const { code = 0, signal } = session.exited ?? {};
+  if (signal) return `on signal ${signal}`;
+  return `with code ${code}`;
+}
+
 /** Read-only git, for approval evidence. Never fails the request it decorates. */
 function gitRead(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve) => {
@@ -308,6 +323,7 @@ export class Service {
       allowed: flags.allowTerminal,
       agentAllowed: agentEnabled(flags),
       cwd: () => this.root?.path,
+      onSession: (event) => this.onSessionEvent(event),
     });
     this.push = new Push(flags.remoteUsers);
     this.notifications = new Notifications();
@@ -404,7 +420,10 @@ export class Service {
   private announce(
     category: CategoryId,
     message: { title: string; body: string; tag: string; detail?: string },
-    context: { slug?: string | null; phase?: number | null; runId?: string; approvalId?: string } = {},
+    context: {
+      slug?: string | null; phase?: number | null; runId?: string; approvalId?: string;
+      sessionId?: string | null; sessionKind?: 'shell' | 'claude' | null;
+    } = {},
   ): NotificationRecord | null {
     // The one gate. `notify` is a complete map by construction (`loadPrefs`), so
     // a category missing from a stored config took its catalogue default on load
@@ -447,6 +466,91 @@ export class Service {
       },
     );
     return record;
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Sessions — the other thing this console is running
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Every lifecycle moment of every pty, turned into the two things the rest of
+   * the system needs: a live event, and — for the ones worth interrupting
+   * someone over — a notification.
+   *
+   * The stream first. A terminal deliberately had no SSE event: the socket IS
+   * its live channel, and a list that refetched on every unrelated `changed`
+   * would be noise. That reasoning holds for the *session's own page* and fails
+   * everywhere else — the dashboard's list of what is running, the nav badge,
+   * and the second browser you opened all need to know a session appeared or
+   * ended, and none of them is holding that socket. So one event, carrying the
+   * whole list, on the six moments the list can change.
+   *
+   * Then the notification, and the restraint is the design. Three cases earn
+   * one, and everything else is silence:
+   *
+   *  - **it ended while you were not attached** — the case the whole feature
+   *    exists for: you closed the tab, went to lunch, and something finished;
+   *  - **it ended badly** (a nonzero code), attached or not — a failure you
+   *    would otherwise find by scrolling back through a dead terminal;
+   *  - **it was a recovery session** (P4's linkage), always — you asked the
+   *    console to fix something and its outcome is the answer.
+   *
+   * A session you closed yourself is never announced. `kill()` reports `killed`
+   * rather than `exited` precisely so that stays true.
+   */
+  private onSessionEvent(event: SessionEvent): void {
+    const { type, session } = event;
+    this.emit('sessions', {
+      type,
+      session,
+      sessions: this.terminals.state().sessions,
+      live: this.terminals.live(),
+    });
+
+    if (type !== 'exited') return;
+    const code = session.exited?.code ?? 0;
+    const failed = code !== 0 || session.exited?.signal != null;
+    const recovery = session.meta?.recovery;
+    if (!event.detached && !failed && !recovery) return;
+
+    const what = session.kind === 'claude' ? 'Agent session' : 'Terminal';
+    this.announce('session', {
+      title: failed ? `${what} failed` : `${what} finished`,
+      body: `${session.label} — ${failed ? `exited ${describeExit(session)}` : 'exited cleanly'}`
+        + (recovery ? ` · recovery for ${recovery.slug ?? recovery.kind}` : '')
+        + (event.detached ? ' · nothing was attached' : ''),
+      tag: tagFor('session', session.id, String(code)),
+      detail: session.cwd,
+    }, {
+      sessionId: session.id,
+      sessionKind: session.kind,
+      ...(recovery?.slug ? { slug: recovery.slug } : {}),
+      ...(recovery?.phase != null ? { phase: recovery.phase } : {}),
+      ...(recovery?.runId ? { runId: recovery.runId } : {}),
+    });
+  }
+
+  /**
+   * What a shutdown or a restart is about to stop, as a fact rather than a
+   * warning in the abstract.
+   *
+   * Both dialogs render this: "stops 2 agent sessions and a terminal" is a
+   * different decision from "stops nothing", and until now neither button said
+   * which it was — Restart has always killed every pty and never mentioned it.
+   */
+  sessionInventory(): {
+    live: number; agent: number; terminal: number; ended: number;
+    sessions: { id: string; label: string; kind: SessionKind }[];
+  } {
+    const all = this.terminals.state().sessions;
+    const live = all.filter((session) => !session.exited);
+    return {
+      live: live.length,
+      agent: live.filter((session) => session.kind === 'claude').length,
+      terminal: live.filter((session) => session.kind !== 'claude').length,
+      ended: all.length - live.length,
+      sessions: live.map((session) => ({ id: session.id, label: session.label, kind: session.kind })),
+    };
   }
 
   /* ---------------------------------------------------------------- *
@@ -519,7 +623,11 @@ export class Service {
   restartReadiness(): {
     ok: boolean; reason?: string; supervisor: ReturnType<typeof supervisor>;
     busy: boolean; run: { slug: string; status: string; phase?: number } | null;
+    sessions: ReturnType<Service['sessionInventory']>;
   } {
+    // Restart has always killed every pty — `shutdown()` calls `service.close()`
+    // — and has never said so. The inventory rides along so its dialog can.
+    const sessions = this.sessionInventory();
     const state = this.runner.current();
     // `hasShutdownWork()` is the real test rather than a status on disk: the
     // runner registers its handler exactly while it is driving, and drops it
@@ -535,6 +643,7 @@ export class Service {
             + 'and expire every card it is waiting on, unanswerably'
           : 'a run is checkpointing — restarting now would cut it in half',
         supervisor: supervision, busy, run: state ? { slug: state.slug, status: state.status } : null,
+        sessions,
       };
     }
     if (!supervision.supervised) {
@@ -542,10 +651,79 @@ export class Service {
         ok: false,
         reason: `${supervision.detail}. Stopping it here would leave nothing serving this page — `
           + 'start it again from a terminal, or install it as an agent (deploy/agent.sh install).',
-        supervisor: supervision, busy, run: null,
+        supervisor: supervision, busy, run: null, sessions,
       };
     }
-    return { ok: true, supervisor: supervision, busy, run: null };
+    return { ok: true, supervisor: supervision, busy, run: null, sessions };
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Stopping the console from the console
+   * ---------------------------------------------------------------- */
+
+  /**
+   * What pressing Shut down will actually stop — everything the confirm dialog
+   * needs to be an inventory rather than a warning.
+   *
+   * Unlike `restartReadiness()` this never refuses. A restart while a run is
+   * driving is a mistake (it aborts the child and expires its cards
+   * unanswerably); a *shutdown* while a run is driving is a decision — the
+   * runner checkpoints on the way out and the run resumes when the console
+   * comes back. Refusing to turn something off because it is busy is how you
+   * get a machine with no off switch, which is the bug this is fixing.
+   */
+  shutdownReadiness(): {
+    supervisor: ReturnType<typeof supervisor>;
+    stop: ReturnType<typeof stopPlan>;
+    busy: boolean;
+    run: { slug: string; status: string } | null;
+    sessions: ReturnType<Service['sessionInventory']>;
+    restartHint: string;
+  } {
+    const state = this.runner.current();
+    const supervision = supervisor();
+    const stop = stopPlan(supervision);
+    return {
+      supervisor: supervision,
+      stop,
+      busy: hasShutdownWork(),
+      run: state ? { slug: state.slug, status: state.status } : null,
+      sessions: this.sessionInventory(),
+      // Where a person has to go to get it back. Under launchd the job is
+      // unloaded, so the page they are looking at is about to be the last thing
+      // this console says to them.
+      restartHint: stop.via === 'launchctl'
+        ? `launchctl kickstart -k gui/$(id -u)/${stop.label} — or reinstall it with viewer/run --install-agent`
+        : 'start it again with `bash <skill>/start` (or viewer/run)',
+    };
+  }
+
+  /**
+   * Stop this console and everything it owns.
+   *
+   * The order is the same as any other exit — `shutdown()` in `index.ts` closes
+   * the server, calls `service.close()` (which kills every pty), then drains the
+   * registered handlers so a run checkpoints. What differs is that under launchd
+   * the job is unloaded first, so nothing brings it back.
+   */
+  shutdown(by: string): { ok: boolean; reason?: string; stop?: ReturnType<typeof stopPlan> } {
+    const readiness = this.shutdownReadiness();
+    log.warn('shutdown.requested', {
+      by, supervisor: readiness.supervisor.kind, via: readiness.stop.via,
+      sessions: readiness.sessions.live, busy: readiness.busy,
+    });
+    // Announced before it happens, because afterwards there is nothing here to
+    // announce anything — and a push that arrives on a phone is the only record
+    // an operator elsewhere will get that the console went down on purpose.
+    this.announce('health', {
+      title: 'Phase Console is shutting down',
+      body: `asked for by ${by} · ${readiness.stop.detail}`,
+      tag: tagFor('health', 'shutdown', String(Date.now())),
+    });
+    if (!requestShutdown(`shutdown (${by})`)) {
+      return { ok: false, reason: 'this build has no shutdown verb registered — stop it by hand' };
+    }
+    return { ok: true, stop: readiness.stop };
   }
 
   /**

@@ -24,8 +24,11 @@ describe('SSE → Query bridge', () => {
     expect(extra, `phantom events: ${extra.join(', ')}`).toEqual([]);
   });
 
-  it('carries the 15 wire names, run events included', () => {
-    expect(SSE_EVENTS).toHaveLength(15);
+  it('carries the 16 wire names, run events included', () => {
+    expect(SSE_EVENTS).toHaveLength(16);
+    // Sessions are on the stream deliberately: the socket is a session's own
+    // live channel, but the dashboard card and the nav badges do not hold it.
+    expect(SSE_EVENTS).toContain('sessions');
     // The runner prefixes its own events (`server/runner/runner.ts` emits
     // `run:` + event). Listening for `phase` instead of `run:phase` is the
     // mistake this pins down.
@@ -65,11 +68,33 @@ describe('shellCounts', () => {
       [{ status: 'pending' }, { status: 'resolved' }],
       4,
     );
-    expect(counts).toEqual({ plans: 2, phases: 11, ready: 2, approvals: 1, unread: 4 });
+    expect(counts).toEqual({
+      plans: 2, phases: 11, ready: 2, approvals: 1, unread: 4,
+      agentSessions: 0, terminalSessions: 0,
+    });
+  });
+
+  it('badges each session page with its own live count, ignoring ended records', () => {
+    // One registry, two pages: a single number on both would read as
+    // double-counting, and an ended record is history rather than something
+    // running — a badge that counted it would never go back to zero.
+    const counts = shellCounts(undefined, undefined, 0, [
+      { kind: 'claude' },
+      { kind: 'claude', exited: { code: 0 } },
+      { kind: 'shell' },
+      { kind: 'shell' },
+      { kind: 'shell', exited: { code: 1 } },
+      // A record from a server that predates `kind` is a shell.
+      {},
+    ]);
+    expect(counts.agentSessions).toBe(1);
+    expect(counts.terminalSessions).toBe(3);
   });
 
   it('survives an empty cache', () => {
-    expect(shellCounts(undefined, undefined, 0))
-      .toEqual({ plans: 0, phases: 0, ready: 0, approvals: 0, unread: 0 });
+    expect(shellCounts(undefined, undefined, 0)).toEqual({
+      plans: 0, phases: 0, ready: 0, approvals: 0, unread: 0,
+      agentSessions: 0, terminalSessions: 0,
+    });
   });
 });

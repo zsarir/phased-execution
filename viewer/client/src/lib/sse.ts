@@ -37,6 +37,10 @@ export const SSE_EVENTS = [
   'notification:delivery',
   'notification:read',
   'notification:cleared',
+  // Terminal and agent sessions. Deliberately added after the fact: the socket
+  // is a session's own live channel, but the dashboard list and the nav badges
+  // are not holding it, and they were the surfaces that could not know.
+  'sessions',
   'run:run',
   'run:phase',
   'run:stream',

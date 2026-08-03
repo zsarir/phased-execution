@@ -1,10 +1,13 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
-import { WifiOff } from 'lucide-react';
+import { Power, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { usePhone } from '@/lib/media';
 import { useOnline, useServiceWorker } from '@/lib/pwa';
 import { useSseStatus } from '@/lib/sse';
-import { shellCounts, useApprovals, useConsoleState, useLiveData, usePlans } from '@/lib/queries';
+import { useConsoleStopped } from '@/lib/shutdown';
+import {
+  shellCounts, useApprovals, useConsoleState, useLiveData, usePlans, useSessions,
+} from '@/lib/queries';
 import { Banner, Spinner, Toaster, TooltipProvider } from '@/components/ui';
 import { CHROMELESS_HEADS, navigate, resolveView, useRoute } from '@/router';
 import { Disconnected } from '@/shell/disconnected';
@@ -22,6 +25,7 @@ export function App() {
   const phone = usePhone();
   const sse = useSseStatus();
   const online = useOnline();
+  const stopped = useConsoleStopped();
   const [moreOpen, setMoreOpen] = useState(false);
 
   // Every server event, wired to what it makes stale. Mounted once, here.
@@ -35,8 +39,11 @@ export function App() {
   // Nothing to poll on a server that predates the runner — asking anyway just
   // fills the browser console with 404s.
   const { data: approvals } = useApprovals(Boolean(state?.autopilot));
+  // Sessions outlive the page that opened them, so the badge has to be shell-wide
+  // rather than something the Agent/Terminal pages know while you are on them.
+  const { data: sessions } = useSessions(state);
 
-  const counts = shellCounts(plans, approvals, state?.unread ?? 0);
+  const counts = shellCounts(plans, approvals, state?.unread ?? 0, sessions?.sessions);
 
   // Going anywhere closes the sheet — including "back", which is the gesture a
   // sheet is most often dismissed with.
@@ -133,7 +140,7 @@ export function App() {
         )}
 
         <main className="min-w-0 overflow-y-auto overscroll-contain">
-          {(state.serverStale || !online || sse !== 'live') && (
+          {(state.serverStale || stopped || !online || sse !== 'live') && (
             <div className="flex flex-col gap-2 px-3 pt-3 md:px-5">
               {state.serverStale && (
                 <Banner severity="warn">
@@ -145,7 +152,23 @@ export function App() {
                   </div>
                 </Banner>
               )}
-              {(!online || sse !== 'live') && (
+              {/* A console you stopped on purpose outranks every other reading
+                  of a dead stream: "Reconnecting…" would be a promise nothing
+                  is going to keep. */}
+              {stopped ? (
+                <Banner severity="warn">
+                  <Power size={15} className="mt-0.5 shrink-0" aria-hidden />
+                  <div className="min-w-0">
+                    <strong>
+                      {sse === 'live' ? 'This console is shutting down.' : 'This console is off.'}
+                    </strong>{' '}
+                    {stopped.via === 'launchctl'
+                      ? 'Its launchd job was unloaded, so nothing will bring it back.'
+                      : 'The process has ended.'}{' '}
+                    Start it again with <code className="font-mono text-2xs">{stopped.hint}</code>.
+                  </div>
+                </Banner>
+              ) : (!online || sse !== 'live') && (
                 <Banner severity={!online || sse === 'offline' ? 'error' : 'info'}>
                   <WifiOff size={15} className="mt-0.5 shrink-0" aria-hidden />
                   <div className="min-w-0">

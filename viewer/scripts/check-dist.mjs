@@ -96,6 +96,31 @@ check('index.html never references the pane or agent chunks',
   !html.includes('pane-') && !html.includes('agent-'),
   'referenced from the document, they would load for every reader of a route map');
 
+/*
+ * The same promise as the three precache checks above, asserted against the
+ * BUILD rather than against three chunk names.
+ *
+ * Every check above pins a name, and a name is exactly what a bundler is free
+ * to change: adding one module that both terminal routes import made it a
+ * second facade of the shared chunk and renamed it `pane-*` → `ended-*`, which
+ * matched no `globIgnores` entry and put 346 KB of xterm in the precache. The
+ * named checks caught it here, but only because one of them happened to assert
+ * the old name still existed — update the name in `vite.config.ts` alone and
+ * every check would pass while the regression shipped.
+ *
+ * So: find whichever asset actually contains the emulator, and assert the
+ * worker does not precache that one. Rename-proof by construction.
+ */
+const xtermChunks = assets.filter((name) => name.endsWith('.js')
+  && readFileSync(join(DIST, 'assets', name), 'utf8').includes('xterm'));
+check('the terminal emulator is in a chunk at all (nothing to check otherwise)',
+  xtermChunks.length > 0);
+const precachedXterm = xtermChunks.filter((name) => sw.includes(name));
+check(`the precache excludes the emulator, whatever the chunk is called (${xtermChunks.join(', ') || 'none'})`,
+  precachedXterm.length === 0,
+  `precached: ${precachedXterm.join(', ')} — add it to globIgnores in vite.config.ts. `
+  + 'A renamed shared chunk is the usual cause; see the note in views/terminal/pane.tsx.');
+
 check('dist/.build-rev exists (npm run build stamps what it built)',
   existsSync(join(DIST, '.build-rev')));
 

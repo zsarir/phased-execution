@@ -39,6 +39,7 @@ import type { PlanSummaryFull } from '@/lib/api';
 import { Page } from '../_page';
 import { AllQuiet, AttentionRow, LiveStrip, demands } from './now';
 import { PlanStrips } from './plan-strips';
+import { SessionsCard } from './sessions';
 
 /** How many plans get a strip. Each one costs an engine read. */
 const STRIP_LIMIT = 6;
@@ -137,12 +138,17 @@ export default function DashboardView() {
           </section>
         )}
 
-        <section aria-label="Running now">
+        <section aria-label="Running now" className="flex flex-col gap-4">
           {isPending
             ? <Skeleton className="h-16" />
             : (runs ?? []).some((r) => ['running', 'waiting', 'pausing', 'stopping', 'frozen'].includes(r.status))
               ? <LiveStrip runs={runs ?? []} />
               : <AllQuiet next={nextWithTitle(next, bySlug)} allowRun={Boolean(state?.allowRun)} />}
+          {/* Directly under the run, because it answers the same question: an
+              agent session left working overnight is as much "what is running
+              now" as an autopilot phase, and nothing else on the console lists
+              one. Renders nothing when there are no sessions at all. */}
+          <SessionsCard state={state} />
         </section>
 
         {/* ---- the counters ---- */}

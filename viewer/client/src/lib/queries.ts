@@ -23,7 +23,10 @@ import {
   useQueryClient,
   type QueryClientConfig,
 } from '@tanstack/react-query';
-import { api, type ConsoleState, type InboxQuery, type PlanDetail, type PlanSummary } from './api';
+import {
+  api,
+  type ConsoleState, type InboxQuery, type PlanDetail, type PlanSummary, type TerminalState,
+} from './api';
 import { SSE_EVENTS, onSse, type SseEvent } from './sse';
 
 /* ---------------- keys ---------------- */
@@ -72,6 +75,7 @@ export const keys = {
   push: () => ['push'] as const,
   policy: (slug: string) => ['policy', slug] as const,
   restart: () => ['restart'] as const,
+  shutdown: () => ['shutdown'] as const,
   browse: (path: string) => ['browse', path] as const,
   rootCheck: (path: string) => ['root-check', path] as const,
 };
@@ -116,6 +120,18 @@ const patchUnread: Effect['patch'] = (client, data) => {
     prev ? { ...prev, unread: data.unread as number } : prev);
 };
 
+/** The session list travels on the event; writing it beats asking for it back. */
+const patchSessions: Effect['patch'] = (client, data) => {
+  if (!Array.isArray(data.sessions)) return;
+  client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) => (prev
+    ? {
+      ...prev,
+      sessions: data.sessions as TerminalState['sessions'],
+      ...(typeof data.live === 'number' ? { live: data.live as number } : {}),
+    }
+    : prev));
+};
+
 export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
   /* ---- the repo moved under us ---- */
   changed: { invalidate: [keys.plans(), keys.stats(), keys.state()], slugScoped: 'plan' },
@@ -134,6 +150,14 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
   'notification:delivery': { invalidate: [keys.notifications()] },
   'notification:read': { invalidate: [keys.notifications()], patch: patchUnread },
   'notification:cleared': { invalidate: [keys.notifications()], patch: patchUnread },
+
+  /* ---- sessions ----
+     The list rides on the event, so this is a cache write rather than a
+     refetch: a session appearing or ending must reach the dashboard card and
+     the nav badges in the same tick, and there is nothing to ask for that the
+     payload does not already carry. Invalidation stays as the belt to that
+     braces — `/api/terminal` also answers `available` and the flags. */
+  sessions: { invalidate: [keys.terminal()], patch: patchSessions },
 
   /* ---- autopilot ----
      A run starting, finishing, or having a phase land changes the board too:
@@ -206,16 +230,32 @@ export function usePlans(enabled = true) {
 }
 
 /**
- * Which shells are open.
+ * Which sessions exist — live and ended, shells and agents, one registry.
  *
- * Deliberately absent from `EVENT_EFFECTS`: the server emits no event for a
- * terminal, because the socket IS the live channel and a session list that
- * refreshed on every unrelated `changed` would be noise. The two moments it can
- * be wrong — a shell opened, a shell closed — are both things this client did,
- * so the view invalidates it itself.
+ * This used to be deliberately absent from `EVENT_EFFECTS`, on the reasoning
+ * that the socket IS a session's live channel and a list refreshed by unrelated
+ * events would be noise. That reasoning was sound for the session's own page and
+ * wrong everywhere else: the dashboard's list of what is running, the nav
+ * badges, and a second browser you opened all need to know, and none of them
+ * holds that socket. So the server emits `sessions` and this follows it.
  */
 export function useTerminals(enabled = true) {
   return useQuery({ queryKey: keys.terminal(), queryFn: api.terminal, enabled });
+}
+
+/**
+ * The same list, for the surfaces that want it regardless of which page they
+ * are on. Enabled whenever the console can have a session of either kind — the
+ * Agent page asks with `allowAgent`, the Terminal page with `allowTerminal`,
+ * and the shell wants the union.
+ */
+export function useSessions(state: ConsoleState | undefined) {
+  return useTerminals(state?.allowTerminal === true || state?.allowAgent === true);
+}
+
+/** What Shut down is about to stop. Read before the dialog opens, not after. */
+export function useShutdownReadiness(enabled = true) {
+  return useQuery({ queryKey: keys.shutdown(), queryFn: api.shutdownReadiness, enabled });
 }
 
 /**
@@ -528,6 +568,10 @@ export interface ShellCounts {
   ready: number;
   approvals: number;
   unread: number;
+  /** Live claude sessions — the Agent entry's badge. */
+  agentSessions: number;
+  /** Live shells — the Terminal entry's badge. */
+  terminalSessions: number;
 }
 
 export function shellCounts(
@@ -537,13 +581,20 @@ export function shellCounts(
   // not demand one to be tested.
   approvals: readonly { status: string }[] | undefined,
   unread: number,
+  // Both kinds arrive in one list from one registry; the nav shows each page
+  // its own, because a single number on two entries reads as double-counting.
+  // Ended records are excluded — a badge is "what is running", not history.
+  sessions?: readonly { kind?: string; exited?: unknown }[],
 ): ShellCounts {
   const list = plans ?? [];
+  const live = (sessions ?? []).filter((session) => !session.exited);
   return {
     plans: list.filter((p) => p.kind === 'plan').length,
     phases: list.reduce((n, p) => n + (p.phases ?? 0), 0),
     ready: list.reduce((n, p) => n + (p.ready?.length ?? 0), 0),
     approvals: (approvals ?? []).filter((a) => a.status === 'pending').length,
     unread,
+    agentSessions: live.filter((session) => session.kind === 'claude').length,
+    terminalSessions: live.filter((session) => (session.kind ?? 'shell') === 'shell').length,
   };
 }

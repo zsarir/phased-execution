@@ -26,8 +26,8 @@ export interface NavItem {
   icon: LucideIcon;
   /** What it is, shown in the More sheet. */
   note: string;
-  /** Which count decorates it, if any. */
-  badge?: 'ready' | 'approvals' | 'unread';
+  /** Which count decorates it, if any. Must be a `ShellCounts` key. */
+  badge?: 'ready' | 'approvals' | 'unread' | 'agentSessions' | 'terminalSessions';
   /** In the phone tab bar. */
   tab?: boolean;
   /** In the rail's main block (vs its footer). */
@@ -55,6 +55,10 @@ export const NAV: readonly NavItem[] = [
     label: 'Agent',
     icon: Bot,
     note: 'Interactive Claude sessions, in a terminal',
+    // Sessions outlive the tab that opened them, so "is one still running?" is
+    // no longer answerable by remembering. The badge is the answer, on every
+    // page — and it is not `hot`, because a session working away is not an alarm.
+    badge: 'agentSessions',
     requires: 'allowAgent',
   },
   {
@@ -62,6 +66,7 @@ export const NAV: readonly NavItem[] = [
     label: 'Terminal',
     icon: TerminalSquare,
     note: 'A shell on this machine, from here or from a phone',
+    badge: 'terminalSessions',
     requires: 'allowTerminal',
   },
   { id: 'guide', label: 'Guide', icon: Compass, note: 'How the runner works, and the phone setup' },
