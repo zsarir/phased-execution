@@ -50,6 +50,30 @@
  * inner command is unknowable — is refused rather than guessed at, and becomes a
  * card for a person. That direction is deliberate: an unparsed command must
  * never fall through to "looks fine".
+ *
+ * ## Reading the markdown well enough to find the command
+ *
+ * Two more ways a real plan defeated all of the above, both measured on run
+ * `dc3d6d25`, where phases 1 and 2 each advanced on a person clicking "verified"
+ * with `ran: 0`:
+ *
+ *   - **Verification:** `cd …/viewer && npm test && npm run test:client &&
+ *     npm run typecheck:client && npm run build`. Manual: enable `changed`, …
+ *
+ * That is ONE command. It is wrapped because the file is wrapped at 100 columns
+ * — markdown joins the lines back, and so does every reader of the rendered
+ * page. The extractor did not, and refused its own best command as "spans
+ * multiple lines". The same bullet then raised a second card for `changed`, a
+ * notification category being named in a sentence.
+ *
+ * So: a span's line breaks are wrapping, not statement separators (a newline
+ * separates statements in a *block*, and blocks are fenced — that path is
+ * unchanged), and **a backticked name is a citation, not an unmet check**.
+ * `test/terminal*.test.ts`, `changed` and `POST /api/prefs` name things the
+ * prose is talking about; asking a person to hand-confirm them, beside commands
+ * that did run, is exactly the "teaches them to click yes" failure again. Names
+ * are dropped only when something runnable was found — a bullet whose entire
+ * content is a name still says so, because then nothing was proven.
  */
 
 import { execFile } from 'node:child_process';
@@ -194,7 +218,10 @@ export function extractCommands(text: string | undefined): Extraction {
   });
 
   for (const match of prose.matchAll(/`([^`]+)`/g)) {
-    candidates.push(match[1].trim().replace(/^\$\s+/, ''));
+    // An inline span is one line however the source file wrapped it. Joining is
+    // what the renderer does; not joining refused whole commands for the crime
+    // of being longer than a hundred columns.
+    candidates.push(match[1].replace(/\s*\r?\n\s*/g, ' ').trim().replace(/^\$\s+/, ''));
   }
 
   // Prose with no code spans at all still states a requirement — say so rather
@@ -204,13 +231,51 @@ export function extractCommands(text: string | undefined): Extraction {
     return out;
   }
 
+  const refused: { text: string; reason: string; cited: boolean }[] = [];
   for (const candidate of candidates) {
     const reason = refuse(candidate);
-    if (reason) out.notRun.push({ text: condense(candidate), reason });
-    else out.commands.push(candidate);
+    if (!reason) out.commands.push(candidate);
+    else refused.push({ text: condense(candidate), reason, cited: namesAThing(candidate) });
+  }
+
+  // A name in backticks beside commands that ran is the prose talking about
+  // something, not a check somebody owes. With nothing runnable in the bullet it
+  // is reported like any other fragment — that phase really was not verified.
+  for (const item of refused) {
+    if (item.cited && out.commands.length) continue;
+    out.notRun.push({ text: item.text, reason: item.reason });
   }
 
   return out;
+}
+
+/** `GET /api/state` — a route being named, and never a command. */
+const HTTP_CALL = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\/\S*$/;
+
+/**
+ * Source files that need an interpreter, cited by name: `server/terminal.ts`,
+ * `test/agent.test.ts`. Written `./x.py` the author means "run this"; written
+ * bare with a slash in it they mean "that file". `.sh` is excluded on purpose —
+ * `scripts/check.sh` is a command in every plan that has one.
+ */
+const CITED_SOURCE = /^[\w.@-]+(\/[\w.@-]+)+\.(ts|tsx|js|jsx|mjs|cjs|py)$/;
+
+/**
+ * Does this span name a thing rather than state an action?
+ *
+ * One word is the test that carries it: an instruction has a verb and an object.
+ * `changed`, `test/terminal*.test.ts` and `SessionInfo` are things a sentence is
+ * about. Anything with a space in it is treated as an attempted command and
+ * still goes to a person — including `./deploy.sh`, which is one word but is
+ * unmistakably an instruction, and whose whole point is that a human runs it.
+ */
+function namesAThing(candidate: string): boolean {
+  const text = candidate.trim();
+  if (HTTP_CALL.test(text)) return true;
+  if (/\s/.test(text)) return false;
+  if (CITED_SOURCE.test(text)) return true;
+  if (SCRIPT_PATH.test(text)) return false;
+  return !VERBS.has(text.replace(/^.*\//, ''));
 }
 
 /**
@@ -293,6 +358,14 @@ function refuseSegment(segment: string, depth: number): string | null {
   if (verb === 'cd') {
     if (tokens.length > 2) return '`cd` with more than one argument is not a path this can check';
     return null;
+  }
+
+  // `test/agent.test.ts` alone is a file the prose is naming. Handing it to bash
+  // gets exit 126 and a phase halted for a plan that was only being descriptive;
+  // `./x.ts` and `node test/x.ts` are unaffected, being an instruction and a
+  // command respectively.
+  if (tokens.length === 1 && CITED_SOURCE.test(raw)) {
+    return `\`${verb.slice(0, 32)}\` names a file rather than a command`;
   }
 
   const isScript = SCRIPT_PATH.test(raw);

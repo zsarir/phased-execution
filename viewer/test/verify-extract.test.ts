@@ -100,6 +100,62 @@ test('tilde fences and CRLF are read like any other fence', () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * The second regression: a bullet nobody could run, written by a
+ * plan that had spelled its command out perfectly
+ * ------------------------------------------------------------------ */
+
+/**
+ * Verbatim shape of `console-operability` §Phase 1, which produced "2 checks
+ * only you can make" on run `dc3d6d25` — a wrapped command and a notification
+ * category being named in a sentence. A person confirmed both; `ran: 0`.
+ */
+const WRAPPED = [
+  '`cd ~/.local/skills/console/viewer && npm test && npm run test:client &&',
+  'npm run typecheck:client && npm run build && npm run check:dist`. Manual: run the console against a',
+  'scratch root, touch a plan file → no inbox row; enable `changed`, touch again → row appears.',
+].join('\n');
+
+test('a command wrapped by the markdown is one command, not a fragment', () => {
+  const { commands, notRun } = only(WRAPPED);
+  assert.equal(commands.length, 1, `expected 1 command, got: ${JSON.stringify(notRun)}`);
+  assert.equal(
+    commands[0],
+    'cd ~/.local/skills/console/viewer && npm test && npm run test:client && '
+    + 'npm run typecheck:client && npm run build && npm run check:dist',
+  );
+  // …and `changed` is the prose naming a thing, not a check anybody owes.
+  assert.deepEqual(notRun, []);
+});
+
+test('a backticked name beside real commands is a citation, not a check', () => {
+  const bullet = '`npm test` covers the new `test/terminal*.test.ts` suite and `POST /api/prefs`, '
+    + 'per `server/terminal.ts`.';
+  const { commands, notRun } = only(bullet);
+  assert.deepEqual(commands, ['npm test']);
+  assert.deepEqual(notRun, [], 'names are not unmet verification steps');
+});
+
+test('a bullet that is ONLY names still says nothing was proven', () => {
+  // The same spans with no command beside them: phase 2 of that plan. Dropping
+  // these silently would report an unverified phase as cleanly verified.
+  const { commands, notRun } = only('plus new node tests (`test/terminal*.test.ts`, route test).');
+  assert.deepEqual(commands, []);
+  assert.equal(notRun.length, 1);
+  assert.match(notRun[0].reason, /not a recognised command/);
+});
+
+test('a file being named is never handed to bash', () => {
+  // `bash -c 'test/agent.test.ts'` is exit 126 — a phase halted for a plan that
+  // was only being descriptive. The instruction forms still run.
+  assert.deepEqual(runs('test/agent.test.ts'), []);
+  assert.match(held('test/agent.test.ts')[0].reason, /names a file rather than a command/);
+  assert.deepEqual(runs('node --test test/agent.test.ts'), ['node --test test/agent.test.ts']);
+  assert.deepEqual(runs('scripts/check.sh'), ['scripts/check.sh']);
+  // One word, but unmistakably an instruction — and one only a person should run.
+  assert.match(held('./deploy.sh')[0].reason, /changes state/);
+});
+
+/* ------------------------------------------------------------------ *
  * Every segment must pass
  * ------------------------------------------------------------------ */
 
