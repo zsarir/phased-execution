@@ -132,16 +132,33 @@ function PhaseLine({ phase }: { phase: PhaseRecord }) {
   );
 }
 
+/** What a resolved run says about itself, wherever it is rendered. */
+function ResolvedNote({ row }: { row: RunRow }) {
+  if (!row.resolution) return null;
+  return (
+    <span className="block truncate text-2xs text-ink-faint" title={row.resolution.reason}>
+      resolved · {row.resolution.reason}
+      {row.resolution.note ? ` — ${row.resolution.note}` : ''}
+    </span>
+  );
+}
+
 function RunDetail({
   row,
   columns,
   onWatch,
   watching,
+  onResolve,
+  allowRun,
+  busy,
 }: {
   row: RunRow;
   columns: number;
   onWatch: (row: RunRow) => void;
   watching: boolean;
+  onResolve?: (row: RunRow, resolve: boolean) => void;
+  allowRun: boolean;
+  busy: boolean;
 }) {
   const settings = [
     `${row.model}${row.effort ? ` · ${row.effort}` : ''}`,
@@ -158,6 +175,20 @@ function RunDetail({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <span className="font-mono text-2xs text-ink-faint">{settings.join(' · ')}</span>
           <div className="ml-auto flex shrink-0 gap-1.5">
+            {/* Only a stopped run has a card to dismiss; a finished or running
+                one was never asking for anything. */}
+            {onResolve && (row.status === 'halted' || row.status === 'interrupted') && (
+              <Button
+                size="sm"
+                disabled={!allowRun || busy}
+                title={allowRun
+                  ? undefined
+                  : 'Runs are disabled. Restart the console with --allow-run to change a run record.'}
+                onClick={() => onResolve(row, !row.resolution)}
+              >
+                {row.resolution ? 'Put the card back' : 'Dismiss'}
+              </Button>
+            )}
             <Button size="sm" onClick={() => onWatch(row)} aria-pressed={watching}>
               <Radio size={13} aria-hidden />
               {watching ? 'In the console' : 'Show in console'}
@@ -167,6 +198,17 @@ function RunDetail({
             </Button>
           </div>
         </div>
+
+        {row.resolution && (
+          <p className="mt-1.5 text-2xs text-ink-muted">
+            This run stopped asking for anyone{' '}
+            {row.resolution.auto
+              ? 'because the board moved past it'
+              : `when ${row.resolution.by ?? 'someone'} dismissed it`}
+            {' '}— {row.resolution.reason}
+            {row.resolution.note ? ` (${row.resolution.note})` : ''}. Its record is untouched.
+          </p>
+        )}
 
         {row.phases.length
           ? <ul className="mt-2 flex flex-col gap-1">{row.phases.map((p) => <PhaseLine key={p.phase} phase={p} />)}</ul>
@@ -192,12 +234,18 @@ function FleetRows({
   onToggle,
   onWatch,
   watchingId,
+  onResolve,
+  allowRun,
+  busyId,
 }: {
   rows: RunRow[];
   open: Set<string>;
   onToggle: (id: string) => void;
   onWatch: (row: RunRow) => void;
   watchingId?: string;
+  onResolve?: (row: RunRow, resolve: boolean) => void;
+  allowRun: boolean;
+  busyId?: string;
 }) {
   return (
     <TBody>
@@ -272,11 +320,17 @@ function FleetRows({
             </TD>
             <TD className="max-w-56">
               <span
-                className={cn('block truncate text-2xs', row.outcome === 'halted' ? 'text-blocked' : 'text-ink-muted')}
+                className={cn(
+                  'block truncate text-2xs',
+                  // A resolved run's halt reason is history, not a warning — it
+                  // reads in the muted voice even when it says "halted".
+                  row.outcome === 'halted' && !row.resolution ? 'text-blocked' : 'text-ink-muted',
+                )}
                 title={row.reason}
               >
                 {row.reason}
               </span>
+              <ResolvedNote row={row} />
             </TD>
             <TD className="whitespace-nowrap text-2xs text-ink-faint">{relativeTime(row.updatedAt)}</TD>
           </TR>,
@@ -287,6 +341,9 @@ function FleetRows({
               columns={COLUMNS}
               onWatch={onWatch}
               watching={watchingId === row.id}
+              onResolve={onResolve}
+              allowRun={allowRun}
+              busy={busyId === row.id}
             />
           ),
         ];
@@ -300,11 +357,17 @@ export function Fleet({
   grouped,
   onWatch,
   watchingId,
+  onResolve,
+  allowRun = false,
+  busyId,
 }: {
   rows: RunRow[];
   grouped: boolean;
   onWatch: (row: RunRow) => void;
   watchingId?: string;
+  onResolve?: (row: RunRow, resolve: boolean) => void;
+  allowRun?: boolean;
+  busyId?: string;
 }) {
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [all, setAll] = useState(false);
@@ -356,6 +419,9 @@ export function Fleet({
                 onToggle={toggle}
                 onWatch={onWatch}
                 watchingId={watchingId}
+                onResolve={onResolve}
+                allowRun={allowRun}
+                busyId={busyId}
               />
             </Table>
           </TableWrap>

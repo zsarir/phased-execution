@@ -1403,13 +1403,28 @@ function call(
     stopRun: record('stopRun'),
     skipPhase: record('skipPhase'),
     retryPhase: record('retryPhase'),
-    runFor: () => ({ id: 'r1', status: 'finished' }),
-    runsFor: () => [{ id: 'r1' }],
+    // Async since the board resolver joined the read path — a stopped run whose
+    // phases the board has finished stops asking for a person (`state.ts`
+    // `autoResolveRun`). `runIdFor` is the sync half, for the journal and
+    // transcript routes, which address a run by id and do not need the board.
+    runFor: async () => ({ id: 'r1', status: 'finished' }),
+    runsFor: async () => [{ id: 'r1' }],
+    runIdFor: () => 'r1',
+    resolveRun: record('resolveRun'),
+    unresolveRun: record('unresolveRun'),
     // Null is the ordinary answer: no phase of this plan has finished, so
     // there is nothing to estimate from.
     runEta: async () => null,
-    allRuns: () => [{ id: 'r1' }],
+    allRuns: async () => [{ id: 'r1' }],
     runJournal: () => [{ seq: 1, event: 'run.start' }],
+    markNotificationsRead: (...args: unknown[]) => {
+      calls.push({ method: 'markNotificationsRead', args });
+      return { changed: 9, unread: 0 };
+    },
+    markNotificationsReadFor: (...args: unknown[]) => {
+      calls.push({ method: 'markNotificationsReadFor', args });
+      return { changed: 2, unread: 7 };
+    },
     ...(opts.overrides ?? {}),
   };
   const res = {
@@ -1657,6 +1672,68 @@ test('reading a run needs no flag — only changing one does', async () => {
   assert.ok('eta' in (one.payload as Record<string, unknown>));
   const journal = await call('/api/run/demo/journal');
   assert.equal(journal.status, 200);
+});
+
+test('dismissing a run card names the run, and refuses without one', async () => {
+  const headers = { 'x-phase-console': '1' };
+
+  // Run-class, like every other verb that edits a run record.
+  const refused = await call('/api/run/demo/resolve', {
+    method: 'POST', headers, body: { runId: 'r1' },
+  });
+  assert.equal(refused.status, 403);
+
+  // A dismissal without a run id is a request to resolve "whichever run" —
+  // which on a plan that has run since is not the one whose card was pressed.
+  const vague = await call('/api/run/demo/resolve', {
+    method: 'POST', headers, body: {}, allowRun: true,
+  });
+  assert.equal(vague.status, 400);
+
+  const done = await call('/api/run/demo/resolve', {
+    method: 'POST', headers, body: { runId: 'r1', note: 'handoff landed later' }, allowRun: true,
+  });
+  assert.equal(done.status, 200);
+  assert.deepEqual(done.calls.map((c) => c.method), ['resolveRun']);
+  assert.equal(done.calls[0].args[0], 'demo');
+  assert.equal(done.calls[0].args[1], 'r1');
+  assert.equal((done.calls[0].args[2] as { note: string }).note, 'handoff landed later');
+
+  const back = await call('/api/run/demo/unresolve', {
+    method: 'POST', headers, body: { runId: 'r1' }, allowRun: true,
+  });
+  assert.equal(back.status, 200);
+  assert.deepEqual(back.calls.map((c) => c.method), ['unresolveRun']);
+});
+
+test('a scoped read never falls through to marking the whole inbox', async () => {
+  const headers = { 'x-phase-console': '1' };
+  const post = (body: unknown) => call('/api/notifications/read', { method: 'POST', headers, body });
+
+  // A scope goes to the scoped verb, and only to it. If this fell through, the
+  // page that fires it on load would clear an inbox it was scoped away from.
+  const scoped = await post({ slug: 'alpha' });
+  assert.equal(scoped.status, 200);
+  assert.deepEqual(scoped.calls.map((c) => c.method), ['markNotificationsReadFor']);
+  assert.deepEqual(scoped.calls[0].args[0], { slug: 'alpha' });
+
+  const session = await post({ sessionId: '84c324dd3ef9', phase: 3 });
+  assert.deepEqual(session.calls[0].args[0], { sessionId: '84c324dd3ef9', phase: 3 });
+
+  // Blank strings are a route that has not parsed yet — and the branch is
+  // chosen by the KEY being present, not by the value being usable. Reading
+  // this as "no scope" sends it down the bulk path, where it clears the entire
+  // inbox; a scratch console was observed doing exactly that. It reaches the
+  // scoped verb with an empty scope instead, which matches nothing.
+  const blank = await post({ slug: '', category: '' });
+  assert.deepEqual(blank.calls.map((c) => c.method), ['markNotificationsReadFor']);
+  assert.deepEqual(blank.calls[0].args[0], {}, 'a blank scope must clear nothing, not everything');
+
+  // And the two long-standing shapes still mean exactly what they did.
+  const all = await post({});
+  assert.deepEqual(all.calls.map((c) => c.method), ['markNotificationsRead']);
+  const ids = await post({ ids: ['a', 'b'] });
+  assert.deepEqual(ids.calls[0].args[0], ['a', 'b']);
 });
 
 test.after(() => rmSync(STATE_HOME, { recursive: true, force: true }));

@@ -396,11 +396,12 @@ export function AuthCard({
   );
 }
 
-/** Does this run's halt reason look like a sign-in problem? */
-export function looksLikeAuthFailure(run: RunState | null, auth: AuthStatus | undefined): boolean {
-  if (auth && auth.loggedIn === false) return true;
-  return /sign(ed)? in|authenticat/i.test(run?.halt?.reason ?? '');
-}
+// Moved to `lib/failures.ts` — the dashboard asks the same question of the same
+// halt reason, and a classifier only the run page could reach is why its card
+// offered a link where this page offered the fix. Re-exported so the several
+// call sites here and in `views/runs` keep importing it from where they always
+// have.
+export { looksLikeAuthFailure } from '@/lib/failures';
 
 /** Narrow a console state to the two flags the run view gates on. */
 export function runFlags(state: ConsoleState | undefined): { allowRun: boolean; autopilot: boolean } {

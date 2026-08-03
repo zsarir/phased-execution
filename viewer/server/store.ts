@@ -196,6 +196,35 @@ export function lockFor(record: PlanRecord, phase: number): Lock | undefined {
   return record.locks.find((l) => l.phase === phase && !l.expired) ?? record.locks.find((l) => l.phase === phase);
 }
 
+/**
+ * Where `phase-lock.sh` puts a lock: `<handoffs>/<slug>/.locks/phase-NN.lock`,
+ * with the phase two-padded (`printf '%02d'`, so phase 100 is `phase-100`).
+ */
+export function lockPath(handoffsDir: string, slug: string, phase: number): string {
+  return join(handoffsDir, slug, '.locks', `phase-${String(phase).padStart(2, '0')}.lock`);
+}
+
+/**
+ * A phase's lock, read straight from disk rather than from the scan.
+ *
+ * Releasing acts on the file, so it has to *decide* on the file. The store's
+ * copy is refreshed by a watcher and is right almost always — and "almost
+ * always" is the wrong standard for a verb whose whole job is to take a phase
+ * away from whoever holds it. A lock re-claimed a second ago must not read as
+ * expired here.
+ */
+export function readLock(
+  handoffsDir: string, slug: string, phase: number, now = Date.now(),
+): Lock | null {
+  const file = lockPath(handoffsDir, slug, phase);
+  try {
+    return parseLock(readFileSync(file, 'utf8'), basename(file), now);
+  } catch {
+    // No file is the ordinary answer — the phase is not claimed.
+    return null;
+  }
+}
+
 export function qaFor(record: PlanRecord, phase: number): QaRow | undefined {
   return record.qa.find((q) => q.phase === phase);
 }

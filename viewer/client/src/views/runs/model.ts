@@ -28,7 +28,7 @@
  */
 
 import { OUTCOMES, isLive, outcomeOf, type OutcomeId } from '../run/defaults';
-import type { PhaseRecord, RunState } from '@/lib/api';
+import type { PhaseRecord, RunResolution, RunState } from '@/lib/api';
 
 export { OUTCOMES, type OutcomeId };
 
@@ -67,6 +67,17 @@ export interface RunRow {
 
   /** Why this run is where it is. Never empty. */
   reason: string;
+  /**
+   * Set once this run stopped asking for a person — by the board overtaking it
+   * or by someone dismissing it. The fleet is the one page that still shows
+   * resolved runs, in full: the dashboard drops them, and nothing deletes them.
+   */
+  resolution: RunResolution | null;
+}
+
+/** Has this stopped run stopped demanding attention? */
+export function isResolved(run: RunState): boolean {
+  return Boolean(run.resolved);
 }
 
 /** The phases of a run, in phase order. */
@@ -153,6 +164,7 @@ export function toRows(runs: readonly RunState[]): RunRow[] {
       maxFailures: run.maxConsecutiveFailures ?? 0,
 
       reason: stopReason(run),
+      resolution: run.resolved ?? null,
     };
   });
 }

@@ -25,7 +25,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { TerminalSquare, Plus, X } from 'lucide-react';
 import { api } from '@/lib/api';
-import { keys, useConsoleState, useTerminals } from '@/lib/queries';
+import { keys, useAutoReadNotifications, useConsoleState, useTerminals } from '@/lib/queries';
 import { cn } from '@/lib/cn';
 import { navigate, type Route } from '@/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
@@ -72,6 +72,10 @@ export default function TerminalView({ route }: { route: Route }) {
    */
   const settled = allowed && !isPending && !isFetching;
   const gone = Boolean(settled && wanted && !open);
+
+  // The same rule the agent page follows: opening the session a notification is
+  // about is reading it.
+  useAutoReadNotifications({ sessionId: wanted }, Boolean(wanted));
 
   async function openShell() {
     try {

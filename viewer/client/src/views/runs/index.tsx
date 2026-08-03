@@ -138,6 +138,29 @@ export default function RunsView() {
     setPrefs({ runsConsole: true });
   }, [setPrefs]);
 
+  /**
+   * Dismiss a stopped run's card, or put it back.
+   *
+   * The manual half of the resolver the read path applies automatically. Both
+   * write the same annotation; neither deletes anything, so this row stays
+   * exactly where it is — it just stops being counted as waiting on someone.
+   */
+  const [resolvingId, setResolvingId] = useState<string | undefined>();
+  const onResolve = useCallback((row: RunRow, resolve: boolean) => {
+    setResolvingId(row.id);
+    void (async () => {
+      try {
+        await (resolve ? api.runResolve(row.slug, row.id) : api.runUnresolve(row.slug, row.id));
+        toast(resolve ? 'Dismissed — it will stop asking' : 'Back on the dashboard', 'ok');
+      } catch (err) {
+        toast((err as Error).message, 'error');
+      } finally {
+        setResolvingId(undefined);
+        void client.invalidateQueries({ queryKey: keys.runs() });
+      }
+    })();
+  }, [client]);
+
   /* ---------------- the fleet ---------------- */
 
   const all = useMemo(() => toRows(runs ?? []), [runs]);
@@ -266,6 +289,9 @@ export default function RunsView() {
                   // reading "In the console" above a console that is folded
                   // away is a claim about something you cannot see.
                   watchingId={consoleOpen ? watching?.id : undefined}
+                  onResolve={onResolve}
+                  allowRun={allowRun}
+                  busyId={resolvingId}
                 />
               )
               : (

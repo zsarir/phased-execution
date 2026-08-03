@@ -14,7 +14,8 @@ import {
   agentEnabled, checkRoot, rememberRoot, loadPrefs, savePrefs, serverIsStale, staticRoot,
   type Flags, type Prefs, type RootCheck,
 } from './config.ts';
-import { Store, handoffFor, lockFor, qaFor, type PlanRecord } from './store.ts';
+import { Store, handoffFor, lockFor, qaFor, readLock, type PlanRecord } from './store.ts';
+import { planWrite, runWrite } from './writes.ts';
 import {
   run, invalidate, readMemoryBlock, readQaMode, readSessionPlan, readLint, readGateStatus,
   readText, readBoardText, type Board, type QaMode, type SessionPlan, type LintResult,
@@ -46,8 +47,8 @@ import {
 import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
 import {
-  latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT,
-  type RunState, type VerifySummary,
+  latestRun, listRuns, loadRun, phaseRecord, resolveRunsAgainst, saveRun, slugsNeedingBoard,
+  IN_FLIGHT, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
 import { checkAuth, forgetAuth, openLoginTerminal, type AuthStatus } from './runner/auth.ts';
@@ -131,6 +132,16 @@ export type PlanDetail = {
   locks: { phase: number; owner: string; expired: boolean; leaseUntil?: number; host?: string }[];
   git: GitFileInfo & { dirty?: boolean };
   memory: { key: string; path: string; text: string; indexLines: string[] } | null;
+};
+
+/** What became of one release attempt. Bulk releases return one per lock. */
+export type LockRelease = {
+  slug: string;
+  phase: number;
+  ok: boolean;
+  /** The owner read from the lock file — null when there was no lock to read. */
+  owner: string | null;
+  detail?: string;
 };
 
 /** A forward action the console can offer on a phase that is not done. */
@@ -439,6 +450,9 @@ export class Service {
       slug: context.slug ?? undefined,
       phase: context.phase ?? undefined,
       runId: context.runId,
+      // Carried onto the record, not only into the URL: this is what lets a
+      // page mark its own notifications read when you open it.
+      sessionId: context.sessionId ?? undefined,
     });
 
     // The inbox badge and any open inbox follow the store live rather than
@@ -761,6 +775,21 @@ export class Service {
     return { changed, unread: this.notifications.unread() };
   }
 
+  /**
+   * Mark read only what a scope matches — the verb behind auto-read-on-view.
+   *
+   * The event carries `ids: null` like the bulk read does; a client that has
+   * the inbox open refetches rather than trying to patch a list it cannot know
+   * the shape of.
+   */
+  markNotificationsReadFor(
+    scope: { slug?: string; category?: string; runId?: string; sessionId?: string; phase?: number },
+  ): { changed: number; unread: number } {
+    const changed = this.notifications.markReadWhere(scope);
+    if (changed) this.emit('notification:read', { ids: null, scope, unread: this.notifications.unread() });
+    return { changed, unread: this.notifications.unread() };
+  }
+
   clearNotifications(what: 'all' | 'read' | { id: string }): { removed: number; unread: number } {
     const removed = this.notifications.clear(what);
     if (removed) this.emit('notification:cleared', { removed, unread: this.notifications.unread() });
@@ -971,6 +1000,92 @@ export class Service {
     } catch (error) {
       log.warn('push.ready-failed', { error });
     }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Stale claims
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Release a claim, using the owner the lock file already records.
+   *
+   * The console has always *had* this verb — `writes.ts` `lock-release` — and
+   * has never been able to offer it usefully, because `phase-lock.sh release`
+   * refuses unless `--owner` matches, and the only place that owner was written
+   * down was the lock file the operator could not see. So the UI asked a person
+   * to retype `mobin.zarekar@gmail.com/opus-p2` from a dashboard card that did
+   * not show it, and offered "Claim phase" instead — which takes the phase
+   * rather than freeing it.
+   *
+   * Reading the owner from the file closes that, and it is not a weakening of
+   * the check: the owner still has to match at release time, so a phase
+   * re-claimed between the read and the write fails exactly as it should.
+   *
+   * A live lease is refused. A lease that has not run out is someone working,
+   * and no card on this dashboard is worth interrupting them for — `--force` is
+   * the operator's own decision to make at a terminal.
+   */
+  async releaseLock(slug: string, phase: number): Promise<LockRelease> {
+    if (!this.flags.allowWrites) throw new Error('Writes are disabled. Restart with --allow-writes to enable them.');
+    const handoffsDir = this.root?.handoffsDir;
+
+    // Already gone is a success, not an error — including a source with no
+    // handoff folder at all, which cannot be holding a claim. On a bulk release
+    // two clients can both be right about a lock only one of them removed.
+    const lock = handoffsDir ? readLock(handoffsDir, slug, phase) : null;
+    if (!lock) return { slug, phase, ok: true, owner: null, detail: 'already free' };
+    if (!lock.expired) {
+      return {
+        slug,
+        phase,
+        ok: false,
+        owner: lock.owner,
+        detail: `${lock.owner} is still working this phase — the lease runs until `
+          + `${lock.leaseUntil ? new Date(lock.leaseUntil).toISOString() : 'an unrecorded time'}. `
+          + 'Stop that session, or release it from a terminal with --force.',
+      };
+    }
+
+    const outcome = await runWrite(
+      planWrite({ action: 'lock-release', slug, phase, owner: lock.owner }, { root: this.root!.path }),
+      { scriptsDir: this.flags.scriptsDir, root: this.root!.path },
+    );
+    // Every release is audited. A claim vanishing with no record of who removed
+    // it is indistinguishable from a lock file that was never written.
+    log.info('lock.released', {
+      slug, phase, owner: lock.owner, ok: outcome.ok, code: outcome.code,
+      claimedAt: lock.claimedAt, leaseUntil: lock.leaseUntil,
+    });
+    if (outcome.ok) this.invalidateAll();
+    return {
+      slug,
+      phase,
+      ok: outcome.ok,
+      owner: lock.owner,
+      detail: (outcome.ok ? outcome.stdout : outcome.stderr).trim() || undefined,
+    };
+  }
+
+  /**
+   * Every expired claim, in one action, reporting each one separately.
+   *
+   * Serial rather than concurrent on purpose: each release shells out to a
+   * script that pulls, removes a file and may sync — and the whole point of the
+   * per-lock result is that one failure does not obscure the others.
+   */
+  async releaseExpiredLocks(): Promise<LockRelease[]> {
+    const expired = (this.store?.list() ?? []).flatMap((record) =>
+      record.locks.filter((lock) => lock.expired).map((lock) => ({ slug: record.slug, phase: lock.phase })));
+
+    const results: LockRelease[] = [];
+    for (const { slug, phase } of expired) {
+      try {
+        results.push(await this.releaseLock(slug, phase));
+      } catch (error) {
+        results.push({ slug, phase, ok: false, owner: null, detail: (error as Error).message });
+      }
+    }
+    return results;
   }
 
   /** Invalidate everything after a write the console itself performed. */
@@ -1487,14 +1602,102 @@ export class Service {
   }
 
   /** The live run if there is one, otherwise the last one recorded on disk. */
-  runFor(slug: string): RunState | null {
+  /**
+   * The run read paths, board-aware.
+   *
+   * `loadRun` already reconciles a run whose writer died (`reconcileRun`); this
+   * is the second half of the same idea — a stopped run whose phases the board
+   * has since finished stops asking for a person. Both corrections happen on
+   * read and are written back once, so nothing has to remember to do it later.
+   *
+   * The board read is why these are async: the classification comes from the
+   * engine, which is a process. It is cached per plan revision, so a fleet of
+   * two hundred runs across twelve plans costs twelve cache hits.
+   */
+  async runFor(slug: string): Promise<RunState | null> {
     const live = this.runner.current();
     if (live && live.slug === slug) return live;
-    return this.root ? latestRun(this.root.path, slug, this.liveRunId()) : null;
+    if (!this.root) return null;
+    const state = latestRun(this.root.path, slug, this.liveRunId());
+    return state ? (await this.resolveAgainstBoard([state]))[0] : null;
   }
 
-  runsFor(slug: string): RunState[] {
-    return this.root ? listRuns(this.root.path, slug, this.liveRunId()) : [];
+  async runsFor(slug: string): Promise<RunState[]> {
+    if (!this.root) return [];
+    return this.resolveAgainstBoard(listRuns(this.root.path, slug, this.liveRunId()));
+  }
+
+  /**
+   * The most recent run's id, without the board read.
+   *
+   * Journals and transcripts are addressed by run id and do not care whether
+   * the run still wants attention — spending an engine call to find out would
+   * be paying for an answer nobody asked for.
+   */
+  runIdFor(slug: string): string | undefined {
+    const live = this.runner.current();
+    if (live && live.slug === slug) return live.id;
+    return this.root ? latestRun(this.root.path, slug, this.liveRunId())?.id : undefined;
+  }
+
+  /**
+   * Apply the board resolver to a batch of runs, writing back what changed.
+   *
+   * One board read per plan, and only for runs that could actually be resolved
+   * by one — a fleet that is entirely `finished` costs nothing at all.
+   */
+  private async resolveAgainstBoard(runs: RunState[]): Promise<RunState[]> {
+    const slugs = slugsNeedingBoard(runs);
+    if (!slugs.length) return runs;
+
+    const boards = new Map<string, Record<number, string>>();
+    for (const slug of slugs) {
+      // An engine failure leaves the slug out of the map, so its runs keep
+      // their cards. Uncertainty must not resolve anything.
+      try { boards.set(slug, (await this.board(slug)).states); } catch { /* keep the card */ }
+    }
+
+    for (const state of resolveRunsAgainst(runs, boards)) {
+      // Same contract as `settle()`: the correction sticks, but a read must not
+      // fail because the disk did.
+      try { saveRun(state); } catch { /* the annotation is worth less than the read */ }
+      log.info('run.resolved', { slug: state.slug, runId: state.id, reason: state.resolved?.reason });
+    }
+    return runs;
+  }
+
+  /**
+   * Dismiss a stopped run by hand, or put it back.
+   *
+   * The manual half of the resolver, and the reason `RunResolution.auto`
+   * exists: this one is a person's judgement, so it survives a board that
+   * disagrees and it can be taken back. Goes through `editStoredRun`, so it
+   * works on a run no loop is driving — which is every run this is used on.
+   */
+  resolveRun(slug: string, runId: string, opts: { note?: string; by?: string } = {}): RunState | null {
+    return this.editStoredRunById(slug, runId, (state) => {
+      state.resolved = {
+        at: new Date().toISOString(),
+        auto: false,
+        reason: 'dismissed by the operator',
+        by: opts.by ?? 'console',
+        ...(opts.note ? { note: opts.note } : {}),
+      };
+      // A dismissal replaces an earlier "put it back" — otherwise the veto
+      // would outlive the decision it was vetoing.
+      state.reopenedAt = null;
+    });
+  }
+
+  unresolveRun(slug: string, runId: string): RunState | null {
+    return this.editStoredRunById(slug, runId, (state) => {
+      // Null rather than `delete`: the field is written out, so a re-read
+      // cannot resurrect the old annotation from a stale copy on disk.
+      state.resolved = null;
+      // And the board resolver is told to leave it alone — see `reopenedAt`.
+      // Without this the card comes back and vanishes again on the next read.
+      state.reopenedAt = new Date().toISOString();
+    });
   }
 
   /**
@@ -1521,13 +1724,13 @@ export class Service {
 
     // A scoped run is not going to do the rest of the plan, and saying it will
     // is the same defect as not showing the scope in the header at all.
-    const run = this.runFor(slug);
+    const run = await this.runFor(slug);
     const scope = run?.onlyPhases?.length ? new Set(run.onlyPhases) : null;
     const rows = scope ? plan.graph.filter((r) => scope.has(r.phase)) : plan.graph;
 
     const budget = resolveBudget(plan.sessionBudget.targetModel, this.sizing);
     const remaining = remainingWork(rows, board, sizes, this.sizing, budget);
-    return estimateEta(etaSamples(this.runsFor(slug), weights), remaining);
+    return estimateEta(etaSamples(await this.runsFor(slug), weights), remaining);
   }
 
   /**
@@ -1538,7 +1741,7 @@ export class Service {
    * console restart does not erase the only record of what a session did.
    */
   runTranscript(slug: string, id: string | undefined, limit = 400): TranscriptEntry[] {
-    const runId = id ?? this.runFor(slug)?.id;
+    const runId = id ?? this.runIdFor(slug);
     if (!runId || !this.root?.ok) return [];
     return readTranscript(transcriptFile(this.root.path, slug, runId), limit);
   }
@@ -1555,7 +1758,24 @@ export class Service {
    */
   private editStoredRun(slug: string, apply: (state: RunState) => void): RunState | null {
     if (!this.root?.ok) throw new Error('No source directory is open.');
-    const state = latestRun(this.root.path, slug, this.liveRunId());
+    return this.writeStoredRun(latestRun(this.root.path, slug, this.liveRunId()), apply);
+  }
+
+  /**
+   * The same, on a named run rather than the latest.
+   *
+   * Every control above acts on "the run of this plan", which is the newest one
+   * — but dismissing a card is about the run that raised it, and on a plan that
+   * has run since, that is not the newest. Addressing it by id is the whole
+   * difference between resolving the card you pressed and resolving a different
+   * run that happens to share its slug.
+   */
+  private editStoredRunById(slug: string, runId: string, apply: (state: RunState) => void): RunState | null {
+    if (!this.root?.ok) throw new Error('No source directory is open.');
+    return this.writeStoredRun(loadRun(this.root.path, slug, runId, this.liveRunId()), apply);
+  }
+
+  private writeStoredRun(state: RunState | null, apply: (state: RunState) => void): RunState | null {
     if (!state) return null;
     apply(state);
     saveRun(state);
@@ -1803,11 +2023,12 @@ export class Service {
   }
 
   /** Every run across every plan, for the runs list. */
-  allRuns(): RunState[] {
+  async allRuns(): Promise<RunState[]> {
     const slugs = this.store?.list().map((r) => r.slug) ?? [];
-    return slugs
-      .flatMap((slug) => this.runsFor(slug))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    if (!this.root) return [];
+    const runs = slugs.flatMap((slug) => listRuns(this.root!.path, slug, this.liveRunId()));
+    await this.resolveAgainstBoard(runs);
+    return runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   /**

@@ -130,6 +130,42 @@ export type PhaseRecord = {
   said?: string;
 };
 
+/**
+ * Why a stopped run has stopped demanding a person.
+ *
+ * A `halted` or `interrupted` run is a permanent claim: nothing ever revisits
+ * it, so the console goes on asking about a phase that was finished by hand
+ * three weeks ago. The oldest card on this dashboard said a plan had halted
+ * because phase 6 wrote no handoff — the handoff landed four hours later and
+ * the board has read 7/7 done ever since.
+ *
+ * Resolution is the correction, and it is *annotation, never deletion*: the run
+ * keeps its status, its halt reason and its whole record, and gains a note
+ * saying why it is no longer waiting on anyone. `auto` distinguishes the two
+ * ways that happens — the board overtook it, or a person dismissed it — because
+ * only one of those is something the console is allowed to decide by itself.
+ */
+export type RunResolution = {
+  at: string;
+  /** True when the board settled it; false when a person did. */
+  auto: boolean;
+  reason: string;
+  /** Who dismissed it, on a manual resolution. */
+  by?: string;
+  /** What they said about it, if anything. */
+  note?: string;
+};
+
+/**
+ * Stopped, with nothing driving it and nothing that will.
+ *
+ * These are the only statuses a run can be resolved out of. A `parked` run is
+ * excluded deliberately: `reconcileRun` uses `parked` for the one case where a
+ * child is *still alive* under a dead console, and a live session editing a
+ * working tree is the last thing that should quietly stop being mentioned.
+ */
+export const RESOLVABLE: readonly RunStatus[] = ['halted', 'interrupted'];
+
 export type Autonomy = 'halt-on-everything' | 'keep-going';
 
 /**
@@ -227,6 +263,23 @@ export type RunState = {
    * committing without asking.
    */
   permissionProfile?: PermissionProfile;
+  /**
+   * Set once this run stopped being something a person has to deal with — by
+   * the board overtaking it, or by someone dismissing it. Never a reason to
+   * hide or delete the run: see `RunResolution`.
+   */
+  resolved?: RunResolution | null;
+  /**
+   * A person put this run's card back, and the board resolver does not get to
+   * overrule that on the next read.
+   *
+   * Without it, un-dismissing an auto-resolved run is a no-op you can watch
+   * happen: the card returns, the next read finds the same settled board, and
+   * it resolves all over again. An operator saying "no, I still want to see
+   * this" is a stronger signal than the inference, so it sticks until they
+   * dismiss it themselves.
+   */
+  reopenedAt?: string | null;
   phases: Record<string, PhaseRecord>;
 };
 
@@ -432,6 +485,99 @@ export function reconcileRun(state: RunState, liveRunId?: string | null): boolea
     record.resumeSessionId ??= record.sessionId;
   }
   return true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Letting the board settle a run that stopped
+ * ------------------------------------------------------------------ */
+
+/**
+ * The phases whose fate decides whether a stopped run still needs a person.
+ *
+ * A halt is always *about* something: the phase it stopped on. A scoped run is
+ * about its scope as well — finishing the phase it halted on while three other
+ * requested phases never ran is not a run anybody is done with.
+ *
+ * Empty means the run stopped without recording what it stopped on, and that
+ * is deliberately not resolvable: there is no evidence to overtake, so a person
+ * decides. Same fail-safe shape as `reconcileRun` — derive from what can be
+ * checked, never from what can be assumed.
+ */
+export function decidingPhases(state: RunState): number[] {
+  const phases = new Set<number>();
+  for (const phase of state.onlyPhases ?? []) phases.add(phase);
+  const stoppedOn = state.halt?.phase ?? state.activePhase;
+  if (typeof stoppedOn === 'number') phases.add(stoppedOn);
+  return [...phases].sort((a, b) => a - b);
+}
+
+/**
+ * Resolve a stopped run the board has already moved past.
+ *
+ * The reconciliation above answers "is anything still driving this?"; this
+ * answers the question after it — "does what it stopped on still matter?" Both
+ * are derived at read time from evidence that cannot be faked, which is the
+ * only way a record written by a process that then died can ever be corrected.
+ *
+ * `board` is the engine's live classification (`phase-graph.sh --memory-block`,
+ * `states` in `Board`). Every deciding phase must read `done` on it: an empty
+ * or unreadable board therefore resolves nothing, which is the safe direction —
+ * a run that still wants attention and does not get it is the failure this
+ * whole surface exists to prevent, so uncertainty keeps the card.
+ *
+ * Returns whether anything changed, so callers only write when there is
+ * something to write.
+ */
+export function autoResolveRun(state: RunState, board: Record<number, string>): boolean {
+  if (state.resolved || state.reopenedAt) return false;
+  if (!RESOLVABLE.includes(state.status)) return false;
+
+  const phases = decidingPhases(state);
+  if (!phases.length) return false;
+  if (!phases.every((phase) => board[phase] === 'done')) return false;
+
+  state.resolved = {
+    at: new Date().toISOString(),
+    auto: true,
+    reason: `superseded — the board shows ${
+      phases.length === 1 ? `phase ${phases[0]}` : `phases ${phases.join(', ')}`
+    } done`,
+  };
+  return true;
+}
+
+/**
+ * Which plans a batch of runs would need a board for.
+ *
+ * Split out from the batch itself so the caller can pay for exactly the engine
+ * reads that could change something: a fleet of two hundred finished runs asks
+ * for no boards at all, and twelve stopped runs across three plans ask for
+ * three.
+ */
+export function slugsNeedingBoard(runs: readonly RunState[]): string[] {
+  return [...new Set(
+    runs
+      .filter((run) => !run.resolved && !run.reopenedAt && RESOLVABLE.includes(run.status))
+      .map((run) => run.slug),
+  )];
+}
+
+/**
+ * Apply the board resolver across a batch, and report what changed.
+ *
+ * A slug missing from `boards` — an engine failure, a plan that no longer
+ * exists — resolves nothing, which is the same fail-safe `autoResolveRun`
+ * takes on an empty board.
+ */
+export function resolveRunsAgainst(
+  runs: readonly RunState[], boards: ReadonlyMap<string, Record<number, string>>,
+): RunState[] {
+  const changed: RunState[] = [];
+  for (const run of runs) {
+    const board = boards.get(run.slug);
+    if (board && autoResolveRun(run, board)) changed.push(run);
+  }
+  return changed;
 }
 
 /** Reclaim on read, and make the correction stick so it is done once. */

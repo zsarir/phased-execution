@@ -19,7 +19,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Bot, Plus, Sparkles, X } from 'lucide-react';
 import { planHref } from '@shared/routes.js';
 import { api, type TerminalTicket } from '@/lib/api';
-import { keys, useConsoleState, usePlans, useTerminals } from '@/lib/queries';
+import { keys, useAutoReadNotifications, useConsoleState, usePlans, useTerminals } from '@/lib/queries';
 import { cn } from '@/lib/cn';
 import { navigate, type Route } from '@/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
@@ -61,6 +61,11 @@ export default function AgentView({ route }: { route: Route }) {
    */
   const settled = allowed && !isPending && !isFetching;
   const gone = Boolean(settled && wanted && !open);
+
+  // Opening the session a `session` notification is about counts as reading it.
+  // The record carries the id (`server/notifications.ts`), so the count drops
+  // by exactly the endings of this session.
+  useAutoReadNotifications({ sessionId: wanted }, Boolean(wanted));
 
   async function launch(body: LaunchBody) {
     try {

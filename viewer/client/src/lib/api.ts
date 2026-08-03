@@ -559,7 +559,23 @@ export interface RunState {
   phaseOptions?: Record<string, PhaseOptions>;
   skills?: string[];
   permissionProfile?: PermissionProfile;
+  /**
+   * Why this stopped run no longer wants a person — the board overtook it
+   * (`auto`), or someone dismissed it. Annotation, never deletion: the run is
+   * still here, still halted, still readable. See `server/runner/state.ts`.
+   */
+  resolved?: RunResolution | null;
+  /** A person put the card back; the board resolver leaves it alone from then on. */
+  reopenedAt?: string | null;
   phases: Record<string, PhaseRecord>;
+}
+
+export interface RunResolution {
+  at: string;
+  auto: boolean;
+  reason: string;
+  by?: string;
+  note?: string;
 }
 
 /** Always a range, always hedged — see `server/analysis/stats.ts`. */
@@ -790,12 +806,32 @@ export interface NotificationRecord {
   body: string;
   /** Built by the server's `routeFor` and never by hand. */
   url: string;
+  /** What it is about — the fields a scoped read matches on. */
   slug?: string;
   runId?: string;
   phase?: number;
+  sessionId?: string;
   urgent: boolean;
   read: boolean;
   delivery: DeliveryRecord[];
+}
+
+/**
+ * Which records a scoped read marks. Every field given must match, and an
+ * empty scope matches **nothing** — a page whose slug has not resolved yet must
+ * not clear the whole inbox.
+ */
+export interface NotificationScope {
+  slug?: string;
+  category?: string;
+  runId?: string;
+  sessionId?: string;
+  phase?: number;
+}
+
+export interface ReadResult {
+  changed: number;
+  unread: number;
 }
 
 export interface NotificationCategory {
@@ -910,6 +946,16 @@ export interface WriteRequest {
   [field: string]: unknown;
 }
 
+/** What became of one release attempt. A bulk release returns one per lock. */
+export interface LockRelease {
+  slug: string;
+  phase: number;
+  ok: boolean;
+  /** Read from the lock file; null when there was no lock to read. */
+  owner: string | null;
+  detail?: string;
+}
+
 export interface WriteResult {
   /** Absent on a dry run — a preview neither succeeded nor failed. */
   ok?: boolean;
@@ -959,6 +1005,15 @@ export const api = {
   editPolicy: (edit: PolicyEdit) => post<PolicyView>('/api/policy', { by: 'console', ...edit }),
   write: (body: WriteRequest, dry?: boolean) => post<WriteResult>(`/api/write${dry ? '?dry=1' : ''}`, body),
 
+  /* ---- stale claims ----
+     The owner comes off the lock file on the server, so nothing here asks a
+     person to retype `someone@example.com/opus-p2` from a card that never
+     showed it. A live lease answers 409 and stays claimed. */
+  releaseLock: (slug: string, phase: number) =>
+    post<LockRelease>('/api/locks/release', { slug, phase }),
+  releaseExpiredLocks: () =>
+    post<{ results: LockRelease[]; released: number }>('/api/locks/release', { expired: true }),
+
   /* ---- autopilot ---- */
   runs: () => request<RunState[]>('/api/runs'),
   run: (slug: string) => request<RunDetail>(`/api/run/${q(slug)}`),
@@ -981,6 +1036,13 @@ export const api = {
   runSettings: (slug: string, patch: RunSettings) => post<RunEnvelope>(`/api/run/${q(slug)}/settings`, patch),
   runFreeze: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/freeze`),
   runThaw: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/thaw`),
+  // Dismissing a stopped run's card, and putting it back. By run id, because
+  // the card belongs to the run that raised it — not to whichever run of that
+  // plan happens to be newest.
+  runResolve: (slug: string, runId: string, note?: string) =>
+    post<RunEnvelope>(`/api/run/${q(slug)}/resolve`, { runId, ...(note ? { note } : {}) }),
+  runUnresolve: (slug: string, runId: string) =>
+    post<RunEnvelope>(`/api/run/${q(slug)}/unresolve`, { runId }),
   runAsk: (slug: string, question: string, key: string) =>
     post<AskResult>(`/api/run/${q(slug)}/ask`, { question, key }),
   runSteer: (slug: string, instruction: string, key: string) =>
@@ -1001,7 +1063,12 @@ export const api = {
     )}`,
   ),
   markNotificationsRead: (ids?: string[]) =>
-    post<unknown>('/api/notifications/read', ids?.length ? { ids } : {}),
+    post<ReadResult>('/api/notifications/read', ids?.length ? { ids } : {}),
+  // Scoped: only the records that are *about* this thing. An empty scope
+  // matches nothing on the server, so a slug that has not resolved yet cannot
+  // clear the inbox by accident.
+  markNotificationsReadFor: (scope: NotificationScope) =>
+    post<ReadResult>('/api/notifications/read', scope),
   clearNotifications: (what: string | { id: string }) => request<unknown>(
     `/api/notifications?${typeof what === 'string' ? `scope=${what}` : `id=${q(what.id)}`}`,
     { method: 'DELETE' },

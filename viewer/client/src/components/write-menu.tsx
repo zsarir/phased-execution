@@ -31,6 +31,7 @@ import {
   Banner, Button, Card, CardBody, CardHeader, CardTitle,
   Dialog, DialogClose, DialogContent, DialogFooter, toast,
 } from '@/components/ui';
+import { ReleaseStaleButton } from '@/components/release-lock';
 
 const OWNER_KEY = 'phase-console.owner';
 
@@ -329,6 +330,13 @@ export function WriteMenu({
       {actions.map(([id, label]) => (
         <Button key={id} size="sm" onClick={() => setAction(id)}>{label}</Button>
       ))}
+      {/* An expired lock used to offer only "Claim phase", which takes the
+          phase rather than freeing it — so the one action that fixed a stale
+          claim was the one the menu did not have. Both are offered now, and
+          this one needs no owner typed: the server reads it from the file. */}
+      {phase?.lock?.expired && (
+        <ReleaseStaleButton slug={slug} phase={phase.phase} onDone={onChanged} />
+      )}
       {!phase && detail.plan?.path && (
         <Button size="sm" onClick={() => void openEditor(detail.plan!.path!)}>Open in editor</Button>
       )}

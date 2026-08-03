@@ -77,9 +77,24 @@ export type NotificationRecord = {
   body: string;
   /** Built by `routeFor` and never by hand. See `push/catalogue.ts`. */
   url: string;
+  /**
+   * What this notification is *about*, structured rather than only rendered
+   * into `title`/`body`/`url`.
+   *
+   * The inbox could always say what happened and link to it; nothing could ask
+   * "which of these are about the plan I am looking at". That is the whole
+   * difference between a mark-all-read button and an inbox that quietly clears
+   * the records for the page you just opened — and it is the other half of the
+   * 182-unread problem, because the half P1 fixed only stops new ones arriving.
+   *
+   * Additive JSONL fields: a record written before they existed simply has
+   * none, and scoped reads skip it rather than treating absent as a match.
+   */
   slug?: string;
   runId?: string;
   phase?: number;
+  /** The terminal/agent session an ending belongs to (`session` notifications). */
+  sessionId?: string;
   /** Interrupts a focus mode. Copied from the catalogue at write time. */
   urgent: boolean;
   read: boolean;
@@ -142,6 +157,7 @@ export class Notifications {
       ...(input.slug ? { slug: input.slug } : {}),
       ...(input.runId ? { runId: input.runId } : {}),
       ...(typeof input.phase === 'number' ? { phase: input.phase } : {}),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       urgent: safeUrgent(input.category),
       read: false,
       delivery: [],
@@ -214,6 +230,42 @@ export class Notifications {
     for (const item of this.items) {
       if (item.read) continue;
       if (wanted && !wanted.has(item.id)) continue;
+      item.read = true;
+      changed++;
+    }
+    if (changed) this.touch();
+    return changed;
+  }
+
+  /**
+   * Mark read everything a scope actually matches. Returns how many changed.
+   *
+   * This is what makes "opening the page counts as reading it" safe. Every
+   * field given must match, and **an empty scope matches nothing** — the
+   * opposite of `markRead()`, deliberately: this one is called automatically by
+   * a page that has just loaded, and a slug that arrived as `undefined` because
+   * a route had not parsed yet must clear zero records, not the whole inbox.
+   *
+   * A record missing the field being scoped on is not a match. Records written
+   * before the context fields existed therefore stay unread until someone
+   * clears them by hand, which is the honest outcome — nothing knows what they
+   * were about.
+   */
+  markReadWhere(scope: {
+    slug?: string; category?: string; runId?: string; sessionId?: string; phase?: number;
+  }): number {
+    const tests: ((item: NotificationRecord) => boolean)[] = [];
+    if (scope.slug) tests.push((item) => item.slug === scope.slug);
+    if (scope.category) tests.push((item) => item.category === scope.category);
+    if (scope.runId) tests.push((item) => item.runId === scope.runId);
+    if (scope.sessionId) tests.push((item) => item.sessionId === scope.sessionId);
+    if (typeof scope.phase === 'number') tests.push((item) => item.phase === scope.phase);
+    if (!tests.length) return 0;
+
+    let changed = 0;
+    for (const item of this.items) {
+      if (item.read) continue;
+      if (!tests.every((matches) => matches(item))) continue;
       item.read = true;
       changed++;
     }

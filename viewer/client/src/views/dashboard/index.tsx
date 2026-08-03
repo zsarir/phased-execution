@@ -26,7 +26,7 @@
 import { useMemo } from 'react';
 import { ArrowRight, GitBranch, HardDrive, Radio, ShieldCheck, TerminalSquare } from 'lucide-react';
 import {
-  useApprovals, useConsoleState, usePlanDetails, usePlans, useRuns, useStats,
+  useApprovals, useAuth, useConsoleState, usePlanDetails, usePlans, useRuns, useStats,
 } from '@/lib/queries';
 import { plural, weight } from '@/lib/format';
 import {
@@ -38,6 +38,7 @@ import { phaseHref, planHref } from '@shared/routes.js';
 import type { PlanSummaryFull } from '@/lib/api';
 import { Page } from '../_page';
 import { AllQuiet, AttentionRow, LiveStrip, demands } from './now';
+import { useDemandActions } from './actions';
 import { PlanStrips } from './plan-strips';
 import { SessionsCard } from './sessions';
 
@@ -81,16 +82,21 @@ export default function DashboardView() {
   );
   const readyCount = summaries.reduce((n, p) => n + (p.ready?.length ?? 0), 0);
   const inFlight = summaries.reduce((n, p) => n + (p.inProgress?.length ?? 0), 0);
-  const errors = stats?.issues.filter((i) => i.severity === 'error').length ?? 0;
-
+  // The issues themselves, not a count of them: the plan-error card names the
+  // real ones now instead of rendering one hard-coded sentence for all of them.
+  const { data: auth } = useAuth(runsEnabled);
   const pending = (approvals ?? []).filter((a) => a.status === 'pending').length;
   const attention = demands({
     approvals: pending,
     runs: runs ?? [],
     unread: state?.unread ?? 0,
     expiredLocks,
-    errors,
+    issues: stats?.issues ?? [],
+    allowRun: Boolean(state?.allowRun),
+    allowWrites: Boolean(state?.allowWrites),
+    signedOut: auth?.loggedIn === false,
   });
+  const { onAction, busy } = useDemandActions(runs ?? []);
 
   // The board's own recommendation, in one line — the same rule the ready view
   // leads with, so the two pages cannot suggest different things.
@@ -134,7 +140,7 @@ export default function DashboardView() {
             <h2 className="mb-2 text-2xs font-medium uppercase tracking-[0.14em] text-action">
               Waiting on you
             </h2>
-            <AttentionRow items={attention} />
+            <AttentionRow items={attention} onAction={onAction} busy={busy} />
           </section>
         )}
 

@@ -18,7 +18,7 @@
 
 import { Suspense, lazy } from 'react';
 import { Banner, Button, Skeleton, Spinner, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
-import { usePlan } from '@/lib/queries';
+import { useAutoReadNotifications, usePlan } from '@/lib/queries';
 import { navigate, planHref } from '@shared/routes.js';
 import { Page } from '../_page';
 import { PlanHeader } from './header';
@@ -84,6 +84,11 @@ export default function PlanView({ route }: ViewProps) {
   const detailKind = isDetailRoute(segment) ? segment : null;
 
   const { data, error, isPending } = usePlan(slug);
+
+  // Opening a plan — any tab of it, including the autopilot — counts as reading
+  // its notifications. Scoped to this slug, so the count drops by exactly the
+  // records this page is about and by nothing else.
+  useAutoReadNotifications({ slug }, Boolean(slug));
 
   if (error) {
     return (

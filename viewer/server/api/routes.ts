@@ -134,6 +134,15 @@ function guardMutation(req: IncomingMessage, disabled: string | null): string | 
   return null;
 }
 
+/**
+ * The keys that make a mark-read request *scoped*.
+ *
+ * Presence, not usefulness: see the note at the call site. A body carrying any
+ * of these is asking about something in particular, and must never be answered
+ * by clearing the whole inbox.
+ */
+const SCOPE_KEYS = ['slug', 'category', 'runId', 'sessionId', 'phase'] as const;
+
 function numberOrNull(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -389,6 +398,30 @@ export async function handleApi(
         const refusal = guardCsrf(req);
         if (refusal) { json(res, 403, { error: refusal }); return true; }
         const body = await readBody(req);
+
+        // A scope marks read only what it matches — this is the auto-read a
+        // run or plan page fires when you open it.
+        //
+        // The branch is chosen by which KEYS the body carries, never by whether
+        // their values are usable. `{slug: ""}` is a page whose route has not
+        // parsed yet, and reading it as "no scope" sends it down the bulk path,
+        // where it clears the entire inbox — observed doing exactly that on a
+        // scratch console. Asking to read *something* can never be answered by
+        // reading *everything*: a blank scope reaches `markReadWhere`, which
+        // matches nothing, and 0 records change.
+        const scoped = SCOPE_KEYS.some((key) => key in body);
+        if (scoped) {
+          const str = (value: unknown) => (typeof value === 'string' && value ? value.slice(0, 128) : undefined);
+          json(res, 200, service.markNotificationsReadFor({
+            ...(str(body.slug) ? { slug: str(body.slug) } : {}),
+            ...(str(body.category) ? { category: str(body.category) } : {}),
+            ...(str(body.runId) ? { runId: str(body.runId) } : {}),
+            ...(str(body.sessionId) ? { sessionId: str(body.sessionId) } : {}),
+            ...(Number.isInteger(body.phase) ? { phase: Number(body.phase) } : {}),
+          }));
+          return true;
+        }
+
         // No `ids` means every unread one — "mark all read" is the common case
         // and does not deserve the client enumerating an inbox to express it.
         const ids = Array.isArray(body.ids)
@@ -621,8 +654,40 @@ export async function handleApi(
       if (sub === 'work') { json(res, 200, await service.work(slug)); return true; }
     }
 
+    /* ---------------- stale claims ----------------
+     * Release reads the owner out of the lock file rather than asking a person
+     * to retype it — see `Service.releaseLock`. Write-class, because it removes
+     * a file inside the repository. */
+    if (head === 'locks' && req.method === 'POST' && rest[0] === 'release') {
+      const refusal = guardWrite(req, service);
+      if (refusal) { json(res, 403, { error: refusal }); return true; }
+      const body = await readBody(req);
+
+      // `{expired: true}` is the bulk verb: every stale claim in the source, one
+      // result per lock so a single refusal cannot hide the rest.
+      if (body.expired === true) {
+        const results = await service.releaseExpiredLocks();
+        json(res, 200, { results, released: results.filter((r) => r.ok).length });
+        return true;
+      }
+
+      const slug = typeof body.slug === 'string' ? body.slug : '';
+      const phase = Number(body.phase);
+      if (!slug || !Number.isInteger(phase)) {
+        json(res, 400, { error: 'pass {slug, phase} for one lock, or {expired: true} for every stale one' });
+        return true;
+      }
+      const result = await service.releaseLock(slug, phase);
+      // 409 rather than 400 on a live lease: the request is well formed, the
+      // phase is simply still being worked. `error` carries the explanation
+      // because that is the field `lib/api.ts` turns into the thrown message —
+      // without it a refusal reads as "Request failed (409)".
+      json(res, result.ok ? 200 : 409, result.ok ? result : { ...result, error: result.detail });
+      return true;
+    }
+
     /* ---------------- runs + approvals ---------------- */
-    if (head === 'runs' && req.method === 'GET') { json(res, 200, service.allRuns()); return true; }
+    if (head === 'runs' && req.method === 'GET') { json(res, 200, await service.allRuns()); return true; }
 
     // Signing in. The GET is a read of `claude auth status` — memoised, free,
     // and safe to poll. The POST opens a terminal, so it is a run-class action.
@@ -668,7 +733,7 @@ export async function handleApi(
 
       if (req.method === 'GET') {
         if (verb === 'journal') {
-          const id = rest[2] ?? service.runFor(slug)?.id;
+          const id = rest[2] ?? service.runIdFor(slug);
           json(res, 200, id ? service.runJournal(slug, id, Number(url.searchParams.get('limit') ?? 500)) : []);
           return true;
         }
@@ -691,8 +756,8 @@ export async function handleApi(
         // derived from exactly this run plus the plan's board, and a second
         // request could be answered against a board that had moved on.
         json(res, 200, {
-          run: service.runFor(slug),
-          history: service.runsFor(slug),
+          run: await service.runFor(slug),
+          history: await service.runsFor(slug),
           eta: await service.runEta(slug),
         });
         return true;
@@ -760,6 +825,23 @@ export async function handleApi(
             return true;
           }
           case 'stop': json(res, 200, { run: await service.stopRun(slug) }); return true;
+          // Dismissing a stopped run's card, and taking that back. Addressed by
+          // run id rather than "this plan's run": the card belongs to the run
+          // that raised it, which on a plan that has run since is not the
+          // latest one. Nothing is deleted — see `RunResolution`.
+          case 'resolve':
+          case 'unresolve': {
+            const runId = typeof body.runId === 'string' ? body.runId.slice(0, 64) : '';
+            if (!runId) { json(res, 400, { error: 'a runId is required' }); return true; }
+            const run = verb === 'resolve'
+              ? service.resolveRun(slug, runId, {
+                note: typeof body.note === 'string' ? body.note.slice(0, 500) : undefined,
+                by: typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
+              })
+              : service.unresolveRun(slug, runId);
+            json(res, run ? 200 : 404, run ? { run } : { error: `no run ${runId} of ${slug}` });
+            return true;
+          }
           case 'skip': json(res, 200, { run: service.skipPhase(slug, Number(body.phase)) }); return true;
           case 'retry': json(res, 200, { run: service.retryPhase(slug, Number(body.phase)) }); return true;
           // The middle ground between Retry and Skip: re-check what is on disk,

@@ -9,13 +9,14 @@
  */
 
 import { useMemo, useState } from 'react';
-import { useStats } from '@/lib/queries';
+import { useConsoleState, useStats } from '@/lib/queries';
 import { countdown, plural, weight } from '@/lib/format';
 import { phaseHref, planHref } from '@shared/routes.js';
 import {
   Banner, Button, ButtonGroup, Card, CardBody, CardHeader, CardTitle, Chip, Empty, Skeleton, Tile,
 } from '@/components/ui';
 import { BarList, Bars, Calendar, StackBar, type ChartTone } from '@/components/charts';
+import { ReleaseAllStaleButton, ReleaseStaleButton } from '@/components/release-lock';
 import type { HealthIssue } from '@/lib/api';
 import { Page } from './_page';
 
@@ -31,7 +32,10 @@ type Severity = 'all' | HealthIssue['severity'];
 
 export default function StatsView() {
   const { data: stats, isPending, error } = useStats();
+  const { data: state } = useConsoleState();
   const [severity, setSeverity] = useState<Severity>('all');
+  const allowWrites = Boolean(state?.allowWrites);
+  const expiredLocks = (stats?.activeLocks ?? []).filter((lock) => lock.expired).length;
 
   const counts = useMemo(() => {
     const out = { error: 0, warning: 0, info: 0 };
@@ -203,24 +207,44 @@ export default function StatsView() {
           </CardHeader>
           <CardBody>
             {stats.activeLocks.length ? (
-              <ul className="flex flex-col gap-1">
-                {stats.activeLocks.map((lock) => (
-                  <li key={`${lock.slug}-${lock.phase}`} className="flex items-center gap-2">
-                    <a
-                      href={phaseHref(lock.slug, lock.phase)}
-                      className="shrink-0 font-mono text-2xs text-ink hover:text-action"
-                    >
-                      {lock.slug} P{lock.phase}
-                    </a>
-                    <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint">
-                      {lock.owner}
+              <div className="flex flex-col gap-2">
+                <ul className="flex flex-col gap-1">
+                  {stats.activeLocks.map((lock) => (
+                    <li key={`${lock.slug}-${lock.phase}`} className="flex items-center gap-2">
+                      <a
+                        href={phaseHref(lock.slug, lock.phase)}
+                        className="shrink-0 font-mono text-2xs text-ink hover:text-action"
+                      >
+                        {lock.slug} P{lock.phase}
+                      </a>
+                      <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint">
+                        {lock.owner}
+                      </span>
+                      {lock.expired
+                        ? <Chip tone="bad">expired</Chip>
+                        : <Chip tone="busy">{countdown(lock.leaseUntil)}</Chip>}
+                      {/* The owner is right there in the row and the server
+                          reads it from the file — nobody retypes it. */}
+                      {lock.expired && (
+                        <ReleaseStaleButton
+                          slug={lock.slug}
+                          phase={lock.phase}
+                          allowWrites={allowWrites}
+                          label="Release"
+                        />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {expiredLocks > 1 && (
+                  <div className="flex items-center gap-2 border-t border-rule pt-2">
+                    <span className="flex-1 text-2xs text-ink-faint">
+                      {plural(expiredLocks, 'lease')} ran out — the phases read as taken and nobody is in them.
                     </span>
-                    {lock.expired
-                      ? <Chip tone="bad">expired</Chip>
-                      : <Chip tone="busy">{countdown(lock.leaseUntil)}</Chip>}
-                  </li>
-                ))}
-              </ul>
+                    <ReleaseAllStaleButton count={expiredLocks} allowWrites={allowWrites} />
+                  </div>
+                )}
+              </div>
             ) : (
               <span className="text-sm text-ink-faint">No phase is claimed.</span>
             )}

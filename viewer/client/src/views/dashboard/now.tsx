@@ -8,14 +8,15 @@
  * attention row is the only place on the page that may be amber.
  */
 
-import { AlertTriangle, Bell, CircleDot, Hand, Lock, Play } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { AlertTriangle, Bell, ChevronRight, CircleDot, Hand, Lock, Play } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 import { Button, Card, Chip } from '@/components/ui';
 import { useNow } from '@/lib/clock';
 import { elapsed, money, plural } from '@/lib/format';
 import { cn } from '@/lib/cn';
-import { planHref } from '@shared/routes.js';
-import type { RunState } from '@/lib/api';
+import { looksLikeAuthFailure } from '@/lib/failures';
+import { phaseHref, planHref } from '@shared/routes.js';
+import type { HealthIssue, RunState } from '@/lib/api';
 import { isLive } from '../run/defaults';
 
 /* ------------------------------------------------------------------ *
@@ -90,6 +91,36 @@ export function LiveStrip({ runs }: { runs: RunState[] }) {
  * Attention
  * ------------------------------------------------------------------ */
 
+/**
+ * What a card can *do* about the thing it is warning you about.
+ *
+ * Declarative on purpose. `demands()` decides which remedies exist and which
+ * are unavailable and why; the dashboard performs them. Keeping the decision
+ * pure is what makes "a halted run offers Continue and Dismiss, and Continue is
+ * disabled without --allow-run" a fact a test can assert without a server, a
+ * fetch mock or a click.
+ *
+ * `disabled` carries the *reason*, never a boolean: a greyed button with no
+ * explanation is the same dead end as no button at all, which is what these
+ * cards were.
+ */
+export type DemandActionId =
+  | 'continue' | 'dismiss'
+  | 'login' | 'recheck'
+  | 'release' | 'release-all'
+  | 'mark-read';
+
+export interface DemandAction {
+  id: DemandActionId;
+  label: string;
+  /** `action` is the one that resolves the card; the rest are `default`. */
+  kind?: 'action' | 'default';
+  /** Present means the remedy exists but cannot be taken — and says why. */
+  disabled?: string;
+  /** What it acts on, when the id alone does not say. */
+  target?: { slug?: string; runId?: string; phase?: number };
+}
+
 export interface Demand {
   id: string;
   icon: ReactNode;
@@ -97,7 +128,15 @@ export interface Demand {
   detail: string;
   href: string;
   tone: 'action' | 'bad';
+  /** The remedies. Empty is allowed — a link is still better than nothing. */
+  actions: DemandAction[];
+  /** The real issues behind a "plan error" card, expandable in place. */
+  issues?: HealthIssue[];
 }
+
+/** Why an action is unavailable, in the words that say how to get it. */
+const NEEDS_RUN = 'Runs are disabled. Restart the console with --allow-run.';
+const NEEDS_WRITES = 'Writes are disabled. Restart the console with --allow-writes.';
 
 /**
  * Everything that is blocked on a person, in the order it costs to ignore.
@@ -106,19 +145,32 @@ export interface Demand {
  * stopped and will stay stopped. An expired lock is a phase nobody is working
  * that still looks taken. Health errors are last: they are wrong, but nothing
  * is waiting on them.
+ *
+ * Every card now carries its own remedy. That is the whole point of this pass:
+ * five warnings, five plain links, and the fix for each one somewhere else in
+ * the console — a dashboard that can only *report* is a dashboard you learn to
+ * scroll past.
  */
 export function demands({
   approvals,
   runs,
   unread,
   expiredLocks,
-  errors,
+  issues = [],
+  allowRun = false,
+  allowWrites = false,
+  signedOut = false,
 }: {
   approvals: number;
   runs: RunState[];
   unread: number;
   expiredLocks: { slug: string; phase: number }[];
-  errors: number;
+  /** Every health issue; the error-severity ones become the plan-errors card. */
+  issues?: HealthIssue[];
+  allowRun?: boolean;
+  allowWrites?: boolean;
+  /** `claude auth status` says signed out — every run is auth-blocked. */
+  signedOut?: boolean;
 }): Demand[] {
   const out: Demand[] = [];
 
@@ -130,11 +182,19 @@ export function demands({
       detail: 'A session is parked until you answer.',
       href: '#/runs',
       tone: 'action',
+      actions: [],
     });
   }
 
-  const halted = runs.filter((r) => r.status === 'halted' || r.status === 'interrupted');
+  // A run the board has moved past — or that someone dismissed — is not waiting
+  // on anyone. It keeps its record and its place on the Runs page; it just
+  // stops being asked about here. See `server/runner/state.ts`.
+  const halted = runs.filter(
+    (r) => (r.status === 'halted' || r.status === 'interrupted') && !r.resolved,
+  );
   for (const run of halted) {
+    const auth = looksLikeAuthFailure(run, signedOut ? { loggedIn: false } as never : undefined);
+    const target = { slug: run.slug, runId: run.id };
     out.push({
       id: `halt-${run.id}`,
       icon: <AlertTriangle size={15} aria-hidden />,
@@ -142,6 +202,27 @@ export function demands({
       detail: run.halt?.reason ?? 'The run stopped before it finished.',
       href: planHref(run.slug, 'run'),
       tone: 'bad',
+      actions: [
+        // Signing in first, because continuing before it is a session that
+        // reports success, spends a turn and changes nothing.
+        ...(auth
+          ? [
+            { id: 'login', label: 'Open a sign-in terminal', kind: 'action',
+              disabled: allowRun ? undefined : NEEDS_RUN, target } as DemandAction,
+            { id: 'recheck', label: 'Check again', target } as DemandAction,
+          ]
+          : []),
+        {
+          id: 'continue',
+          label: 'Continue',
+          kind: auth ? 'default' : 'action',
+          disabled: allowRun ? undefined : NEEDS_RUN,
+          target,
+        },
+        // Never gated: dismissing a card is a judgement about what deserves
+        // attention, and a console that cannot even do that is the dead end.
+        { id: 'dismiss', label: 'Dismiss', target },
+      ],
     });
   }
 
@@ -153,6 +234,26 @@ export function demands({
       detail: `${expiredLocks.map((l) => `${l.slug} P${l.phase}`).join(', ')} — the lease ran out, so the phase reads as taken but nobody is in it.`,
       href: '#/stats',
       tone: 'bad',
+      actions: expiredLocks.length === 1
+        ? [{
+          id: 'release',
+          label: `Release ${expiredLocks[0].slug} P${expiredLocks[0].phase}`,
+          kind: 'action',
+          disabled: allowWrites ? undefined : NEEDS_WRITES,
+          target: expiredLocks[0],
+        }]
+        : [
+          { id: 'release-all', label: `Release all ${expiredLocks.length}`, kind: 'action',
+            disabled: allowWrites ? undefined : NEEDS_WRITES },
+          // Per-lock as well as bulk: one of several stale claims may be one
+          // you want to leave alone, and "all or nothing" is not triage.
+          ...expiredLocks.map((lock): DemandAction => ({
+            id: 'release',
+            label: `${lock.slug} P${lock.phase}`,
+            disabled: allowWrites ? undefined : NEEDS_WRITES,
+            target: lock,
+          })),
+        ],
     });
   }
 
@@ -164,38 +265,79 @@ export function demands({
       detail: 'Runs, gates and failures you have not looked at.',
       href: '#/notifications',
       tone: 'action',
+      actions: [{ id: 'mark-read', label: 'Mark all read', kind: 'action' }],
     });
   }
 
-  if (errors > 0) {
+  const errors = issues.filter((issue) => issue.severity === 'error');
+  if (errors.length) {
     out.push({
       id: 'errors',
       icon: <AlertTriangle size={15} aria-hidden />,
-      label: plural(errors, 'plan error'),
-      detail: 'A plan, handoff or index disagrees with the board.',
+      label: plural(errors.length, 'plan error'),
+      // The old copy was a hard-coded sentence — "A plan, handoff or index
+      // disagrees with the board" — which was not even true of the issue on
+      // this board (a recorded QA failure). The card names the real ones now.
+      detail: errors.length === 1
+        ? `${errors[0].slug}: ${errors[0].message}`
+        : `${[...new Set(errors.map((e) => e.slug))].join(', ')} — expand for what each one says.`,
       href: '#/stats',
       tone: 'bad',
+      actions: [],
+      issues: errors,
     });
   }
 
   return out;
 }
 
-export function AttentionRow({ items }: { items: Demand[] }) {
+/** Where an issue actually lives, so the card can link to it and not to a list. */
+export function issueHref(issue: HealthIssue): string {
+  switch (issue.kind) {
+    // A QA failure is recorded in `test-status.md` next to the handoff.
+    case 'qa-fail':
+    case 'stale-handoff':
+    case 'missing-handoff':
+    case 'depends-drift':
+    case 'index-drift':
+      return issue.phase != null ? phaseHref(issue.slug, issue.phase) : planHref(issue.slug, 'handoffs');
+    case 'phase-count':
+    case 'undefined-dep':
+    case 'engine':
+      return planHref(issue.slug, 'route');
+    default:
+      return issue.phase != null ? phaseHref(issue.slug, issue.phase) : planHref(issue.slug);
+  }
+}
+
+export function AttentionRow({
+  items,
+  onAction,
+  busy,
+}: {
+  items: Demand[];
+  /** Perform one. The dashboard owns the effects; this component owns nothing. */
+  onAction?: (demand: Demand, action: DemandAction) => void;
+  /** `${demand.id}:${action.id}` of whatever is in flight. */
+  busy?: string;
+}) {
   if (!items.length) return null;
   return (
     <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
       {items.map((item) => (
-        <li key={item.id}>
-          <a
-            href={item.href}
-            className={cn(
-              'flex h-full items-start gap-2.5 rounded-lg border px-3 py-2.5 transition-colors',
-              item.tone === 'action'
-                ? 'border-action/50 bg-action/8 hover:bg-action/14'
-                : 'border-blocked/45 bg-blocked/8 hover:bg-blocked/14',
-            )}
-          >
+        <li
+          key={item.id}
+          className={cn(
+            'flex h-full flex-col gap-2 rounded-lg border px-3 py-2.5',
+            item.tone === 'action'
+              ? 'border-action/50 bg-action/8'
+              : 'border-blocked/45 bg-blocked/8',
+          )}
+        >
+          {/* The heading is the link; the buttons are siblings of it. It used
+              to be one anchor wrapping the whole card, which is exactly why
+              nothing actionable could live inside one. */}
+          <a href={item.href} className="flex min-w-0 items-start gap-2.5 hover:opacity-80">
             <span className={cn('mt-0.5 shrink-0', item.tone === 'action' ? 'text-action' : 'text-blocked')}>
               {item.icon}
             </span>
@@ -209,9 +351,83 @@ export function AttentionRow({ items }: { items: Demand[] }) {
               </span>
             </span>
           </a>
+
+          {item.issues?.length ? <IssueList issues={item.issues} /> : null}
+
+          {item.actions.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {item.actions.map((action) => (
+                <Button
+                  key={`${action.id}:${action.target?.slug ?? ''}${action.target?.phase ?? ''}`}
+                  size="sm"
+                  variant={action.kind === 'action' ? 'action' : 'default'}
+                  disabled={Boolean(action.disabled) || busy === `${item.id}:${action.id}`}
+                  title={action.disabled}
+                  onClick={() => onAction?.(item, action)}
+                >
+                  {action.label}
+                </Button>
+              ))}
+            </div>
+          )}
+          {/* Said once per card rather than per button: three buttons each
+              repeating "--allow-run is off" is noise, and none of them says it
+              where a screen reader would reach it. */}
+          {item.actions.some((a) => a.disabled) && (
+            <p className="text-2xs text-ink-faint">
+              {[...new Set(item.actions.map((a) => a.disabled).filter(Boolean))].join(' ')}
+            </p>
+          )}
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * The real issues behind a "plan error" card.
+ *
+ * The card used to render one hard-coded sentence for any number of unrelated
+ * problems — an undefined dependency, a blocked handoff and a recorded QA
+ * failure all read as "a plan, handoff or index disagrees with the board", and
+ * only one of those is even about the board. Each one names itself and links
+ * where it actually lives.
+ */
+function IssueList({ issues }: { issues: HealthIssue[] }) {
+  const [open, setOpen] = useState(false);
+  if (issues.length === 1) return <IssueLine issue={issues[0]} />;
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex items-center gap-1 text-2xs text-ink-muted hover:text-ink [@media(hover:none)]:min-h-(--tap-min)"
+      >
+        <ChevronRight size={12} aria-hidden className={cn('transition-transform', open && 'rotate-90')} />
+        {open ? 'Hide' : `Show all ${issues.length}`}
+      </button>
+      {open && (
+        <ul className="mt-1 flex flex-col gap-1">
+          {issues.map((issue, at) => (
+            <li key={`${issue.slug}-${issue.kind}-${issue.phase ?? at}`}>
+              <IssueLine issue={issue} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function IssueLine({ issue }: { issue: HealthIssue }) {
+  return (
+    <a href={issueHref(issue)} className="block min-w-0 text-2xs text-ink-muted hover:text-action">
+      <span className="font-mono text-ink-faint">
+        {issue.slug}{issue.phase != null ? ` P${issue.phase}` : ''} · {issue.kind}
+      </span>{' '}
+      {issue.message}
+    </a>
   );
 }
 
