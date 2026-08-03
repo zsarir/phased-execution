@@ -35,18 +35,28 @@
 }
 .legend-dot.hatched { background: var(--hatch); }
 
+/* The frame is a fixed window and the SVG's viewBox is what moves inside it.
+   It used to be the other way round — the SVG grew taller as you zoomed and
+   the frame clipped whatever spilled — which meant zooming in made the map
+   *longer* rather than closer, and the page grew with it. */
 .route-frame {
   background:
     radial-gradient(circle at 1px 1px, color-mix(in oklab, var(--rule) 70%, transparent) 1px, transparent 0)
     0 0 / 24px 24px;
   cursor: grab;
   overflow: hidden;
+  block-size: clamp(300px, 56vh, 640px);
   touch-action: none;
   overscroll-behavior: contain;
 }
 .route-frame:active { cursor: grabbing; }
 
-.route-svg { display: block; user-select: none; }
+.route-svg { display: block; user-select: none; width: 100%; height: 100%; }
+
+/* The station's target, sized in plan units by `dag.js` so it lands at 44 CSS
+   px at any zoom. `transparent` and not `none`: `fill: none` is invisible to
+   pointer events, which is the difference between a hit area and a decoration. */
+.station-hit { fill: transparent; }
 
 .track {
   fill: none;
@@ -194,12 +204,21 @@
 
 .plan-when { font-size: var(--text-xs); color: var(--ink-faint); text-align: right; font-variant-numeric: tabular-nums; }
 
-@media (max-width: 1180px) {
-  .plan-row { grid-template-columns: minmax(0, 2fr) 150px 120px; }
+/* The Phases tab reuses the row with four cells instead of five. It used to set
+   its columns with an inline `style`, and an inline style beats every media
+   query below it — so on a phone the tab kept four fixed columns and left about
+   26px for the phase title. A class can be argued with; an attribute cannot. */
+.plan-row.phase-row { grid-template-columns: 56px minmax(0, 1fr) 120px 120px; }
+
+/* 1180 and 780 were two more breakpoints nobody else used; these are the
+   scale's own (tokens.css §Breakpoints). */
+@media (max-width: 1200px) {
+  /* Phase rows have one column fewer to start with and still fit here. */
+  .plan-row:not(.phase-row) { grid-template-columns: minmax(0, 2fr) 150px 120px; }
   .plan-row .col-hide-md { display: none; }
 }
-@media (max-width: 780px) {
-  .plan-row { grid-template-columns: 1fr; }
+@media (max-width: 640px) {
+  .plan-row, .plan-row.phase-row { grid-template-columns: 1fr; }
   .plan-row .col-hide-sm { display: none; }
 }
 
@@ -245,9 +264,14 @@
 .plan-head .facts b { font-weight: 600; color: var(--ink); font-family: var(--font-mono); }
 
 .detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: var(--s4); align-items: start; }
-@media (max-width: 1200px) { .detail-grid { grid-template-columns: 1fr; } }
+/* `1fr` is `minmax(auto, 1fr)`, and `auto` as a minimum means min-content — so
+   one wide thing inside the panel (a long unbroken line in a phase's steps) made
+   the track 896px wide inside a 390px page and took the whole column with it.
+   `minmax(0, 1fr)` is the same track with permission to be narrower than its
+   contents, which is what lets the contents scroll or wrap instead. */
+@media (max-width: 1200px) { .detail-grid { grid-template-columns: minmax(0, 1fr); } }
 
-.phase-panel { display: flex; flex-direction: column; gap: var(--s4); }
+.phase-panel { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
 .phase-field h4 {
   font-family: var(--font-display);
   font-size: var(--text-2xs);
@@ -345,7 +369,7 @@
   color: var(--line-done);
 }
 
-.recent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--s2); }
+.recent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); gap: var(--s2); }
 
 /* ------------------------------------------------------------------ *
  * Search
@@ -424,7 +448,7 @@
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: var(--s3);
   margin-bottom: var(--s4);
 }
@@ -481,7 +505,7 @@
 }
 .activity-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
   gap: var(--s4);
   align-items: start;
 }
@@ -835,7 +859,7 @@
 
 .guide .layers {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: var(--s4);
   margin-top: var(--s5);
 }
@@ -878,7 +902,7 @@
 
 .guide .states {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
   gap: var(--s3);
   margin-top: var(--s5);
 }
@@ -918,7 +942,7 @@
 
 .guide .ref-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: var(--s6);
   margin-top: var(--s5);
 }
@@ -1101,7 +1125,7 @@
 .phase-table thead th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-base);
   background: var(--surface);
 }
 .phase-table .col-num { width: 46px; }
@@ -1193,7 +1217,7 @@
 .skill-group {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-base);
   background: var(--surface);
   color: var(--ink-faint);
   font-size: var(--text-2xs);
@@ -1321,7 +1345,7 @@
 
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: var(--s3);
   margin-bottom: var(--s6);
 }
@@ -1382,7 +1406,7 @@
   margin-bottom: var(--s3);
 }
 
-.plan-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--s3); }
+.plan-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: var(--s3); }
 .plan-card {
   display: flex;
   flex-direction: column;
@@ -1410,7 +1434,7 @@
 .plan-card .tag.tone-blocked { color: var(--line-blocked); }
 .plan-card .tag.tone-gated { color: var(--line-gated); }
 
-.link-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--s2); }
+.link-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: var(--s2); }
 .link-card {
   display: flex;
   flex-direction: column;
@@ -1566,10 +1590,6 @@
   .live-line { grid-template-columns: 46px 1fr; gap: var(--s2); }
   .live-head { padding: var(--s2); }
   .live-sub { flex-basis: 100%; }
-
-  /* The map already pans and zooms under a finger; it should not also own the
-     whole screen before you can reach what is below it. */
-  .route-frame { max-height: 60vh; }
 
   .departures th, .departures td { padding: var(--s2); }
   .departures .phase-title { font-size: var(--text-sm); }

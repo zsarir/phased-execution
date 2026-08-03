@@ -6,7 +6,7 @@ import { useRoute, navigate } from './router.js';
 import { usePrefs, useToasts, applyTheme, getPrefs } from './store.js';
 import { syncSuppression } from './push.js';
 import { announce } from './notify.js';
-import { Spinner, Banner } from './components/ui.js';
+import { Spinner, Banner, useMediaQuery, useTouch, useTapTitles } from './components/ui.js';
 import { RestartButton } from './components/restart.js';
 
 import { SourceView } from './views/source.js';
@@ -98,6 +98,174 @@ function Rail({ state, counts, route, onPickSource }) {
     </nav>`;
 }
 
+/* ------------------------------------------------------------------ *
+ * The phone shell
+ *
+ * The rail did not fold onto a phone, it was *folded away*: below 900px it
+ * became a horizontally scrolling strip of links with `.rail-footer` set to
+ * `display: none` — and the footer is where Guide, Settings and the theme
+ * switcher lived. Notifications are turned on in Settings, so the one page you
+ * needed on the phone was the one page the phone could not reach.
+ *
+ * What replaces it is the shape a phone already knows: a bar along the bottom
+ * for the four places you go, the inbox where an app puts its bell, and a sheet
+ * for everything else. Nothing is hidden — every route in the app is one or two
+ * taps from anywhere.
+ * ------------------------------------------------------------------ */
+
+const GLYPH = {
+  dashboard: html`<path d="M4 4h7v7H4zM13 4h7v4h-7zM13 11h7v9h-7zM4 14h7v6H4z" />`,
+  ready: html`<path d="M13 3 5 14h6l-1 7 8-11h-6z" />`,
+  plans: html`<path d="M5 4h9l5 5v11H5z" /><path d="M14 4v5h5" />`,
+  runs: html`<path d="M3 12h4l3-8 4 16 3-8h4" />`,
+  more: html`<path d="M5 12h.01M12 12h.01M19 12h.01" />`,
+  bell: html`<path d="M18 15V10a6 6 0 0 0-12 0v5l-2 3h16z" /><path d="M10 21h4" />`,
+};
+
+function Glyph({ name }) {
+  return html`
+    <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"
+         fill="none" stroke="currentColor" stroke-width="1.7"
+         stroke-linecap="round" stroke-linejoin="round">${GLYPH[name]}</svg>`;
+}
+
+/** The four you go to; everything else is the bell or the sheet. */
+const TABS = [
+  ['dashboard', 'Home'],
+  ['ready', 'Ready'],
+  ['plans', 'Plans'],
+  ['runs', 'Runs'],
+];
+
+const SHEET_LINKS = [
+  ['notifications', 'Notifications', 'Everything the console has announced'],
+  ['stats', 'Statistics', 'Throughput, cost and the shape of the portfolio'],
+  ['search', 'Search', 'Every plan, handoff and phase at once'],
+  ['guide', 'Guide', 'How the runner works, and the phone setup'],
+  ['settings', 'Settings', 'Notifications, permission rules, devices'],
+];
+
+function TopBar({ state, counts, route, onPickSource }) {
+  const current = route.segments[0] || 'dashboard';
+  return html`
+    <header class="topbar">
+      <button class="topbar-brand" onClick=${() => navigate('dashboard')} aria-label="Phase Console — dashboard">
+        <${RouteGlyph} />
+        <span class="brand-name">Phase</span>
+      </button>
+
+      <button
+        class="topbar-source"
+        onClick=${onPickSource}
+        title=${`${state.root?.path ?? ''}\nTap to open a different directory`}>
+        <span class="truncate">${state.root?.label ?? 'Choose a directory'}</span>
+      </button>
+
+      <button
+        class="topbar-bell"
+        aria-current=${current === 'notifications' ? 'page' : null}
+        onClick=${() => navigate('notifications')}
+        aria-label=${counts.unread ? `Notifications, ${counts.unread} unread` : 'Notifications'}>
+        <${Glyph} name="bell" />
+        ${counts.unread ? html`<span class="badge">${counts.unread > 99 ? '99+' : counts.unread}</span>` : null}
+      </button>
+    </header>`;
+}
+
+function TabBar({ counts, route, moreOpen, onMore }) {
+  const head = route.segments[0] || 'dashboard';
+  // A plan page is somewhere you arrived from Plans, so Plans stays lit while
+  // you are on one — a tab bar that goes dark whenever you go deeper reads as
+  // though you have left the app.
+  const current = head === 'plan' ? 'plans' : head;
+  const badge = { ready: counts.ready, runs: counts.approvals };
+
+  return html`
+    <nav class="tabbar" aria-label="Main">
+      ${TABS.map(([id, label]) => html`
+        <button
+          key=${id}
+          class="tab-item"
+          aria-current=${current === id && !moreOpen ? 'page' : null}
+          onClick=${() => navigate(id)}>
+          <span class="tab-glyph"><${Glyph} name=${id} />
+            ${badge[id] ? html`<span class="badge">${badge[id] > 99 ? '99+' : badge[id]}</span>` : null}
+          </span>
+          <span class="tab-label">${label}</span>
+        </button>`)}
+      <button
+        class="tab-item"
+        aria-expanded=${String(moreOpen)}
+        aria-current=${moreOpen ? 'page' : null}
+        onClick=${onMore}>
+        <span class="tab-glyph"><${Glyph} name="more" /></span>
+        <span class="tab-label">More</span>
+      </button>
+    </nav>`;
+}
+
+function MoreSheet({ state, counts, route, onClose, onPickSource }) {
+  const [prefs, setPrefs] = usePrefs();
+  const current = route.segments[0];
+
+  useEffect(() => {
+    const onKey = (event) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return html`
+    <div class="scrim sheet-scrim" onClick=${(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div class="sheet" role="dialog" aria-modal="true" aria-label="More">
+        <div class="sheet-grip" aria-hidden="true"></div>
+
+        <div class="sheet-links">
+          ${SHEET_LINKS.map(([id, label, note]) => html`
+            <button
+              key=${id}
+              class="sheet-link"
+              aria-current=${current === id ? 'page' : null}
+              onClick=${() => { navigate(id); onClose(); }}>
+              <span class="row">
+                <strong>${label}</strong>
+                ${id === 'notifications' && counts.unread
+                  ? html`<span class="badge inline">${counts.unread}</span>` : null}
+              </span>
+              <span class="faint">${note}</span>
+            </button>`)}
+        </div>
+
+        <div class="sheet-row">
+          <span class="sheet-label">Source</span>
+          <button class="btn" onClick=${() => { onPickSource(); onClose(); }}>
+            <span class="truncate">${state.root?.label ?? 'Choose a directory'}</span>
+          </button>
+        </div>
+
+        <div class="sheet-row">
+          <span class="sheet-label">Theme</span>
+          <div class="btn-group" role="group" aria-label="Theme">
+            ${[['system', 'Auto'], ['dark', 'Night'], ['light', 'Paper']].map(([value, label]) => html`
+              <button
+                key=${value}
+                class="btn"
+                aria-pressed=${String(prefs.theme === value)}
+                onClick=${() => setPrefs({ theme: value })}>${label}</button>`)}
+          </div>
+        </div>
+
+        <div class="sheet-row">
+          <span class="sheet-label">Writes</span>
+          ${state.allowWrites
+            ? html`<span class="tag" style="color:var(--line-ready)">enabled</span>`
+            : html`<span class="tag" title="Start with --allow-writes to enable scaffolding, QA records and locks">read-only</span>`}
+        </div>
+
+        <button class="btn sheet-close" onClick=${onClose}>Close</button>
+      </div>
+    </div>`;
+}
+
 function Toasts() {
   const toasts = useToasts();
   if (!toasts.length) return null;
@@ -119,6 +287,17 @@ function App() {
   const [tick, setTick] = useState(0);
   const [pendingApprovals, setPendingApprovals] = useState(0);
   const [unread, setUnread] = useState(0);
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  // 900px is where the rail stops fitting beside the page. Below it the shell
+  // is a different component rather than the same one with things hidden.
+  const phone = useMediaQuery('(max-width: 900px)');
+  useTapTitles(useTouch());
+
+  // Going anywhere closes the sheet — including "back", which is the gesture a
+  // sheet is most often dismissed with.
+  useEffect(() => { setMoreOpen(false); }, [route.path]);
+  useEffect(() => { if (!phone) setMoreOpen(false); }, [phone]);
 
   const reload = useCallback(async () => {
     try {
@@ -236,9 +415,13 @@ function App() {
   else if (head === 'plans') view = html`<${PlansView} plans=${plans} state=${state} />`;
   else view = html`<${DashboardView} plans=${plans} state=${state} />`;
 
+  const pickSource = () => navigate('source');
+
   return html`
-    <div class="app">
-      <${Rail} state=${state} counts=${counts} route=${route} onPickSource=${() => navigate('source')} />
+    <div class=${`app ${phone ? 'is-phone' : ''}`}>
+      ${phone
+        ? html`<${TopBar} state=${state} counts=${counts} route=${route} onPickSource=${pickSource} />`
+        : html`<${Rail} state=${state} counts=${counts} route=${route} onPickSource=${pickSource} />`}
       <main class="main">
         ${state.serverStale ? html`
           <div class="page" style="padding-bottom:0">
@@ -251,7 +434,16 @@ function App() {
           </div>` : null}
         ${error ? html`<div class="page"><${Banner} kind="error">${error}</${Banner}></div>` : view}
       </main>
+      ${phone ? html`
+        <${TabBar} counts=${counts} route=${route} moreOpen=${moreOpen} onMore=${() => setMoreOpen((open) => !open)} />` : null}
     </div>
+    ${phone && moreOpen ? html`
+      <${MoreSheet}
+        state=${state}
+        counts=${counts}
+        route=${route}
+        onClose=${() => setMoreOpen(false)}
+        onPickSource=${pickSource} />` : null}
     <${Toasts} />`;
 }
 

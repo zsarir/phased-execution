@@ -33,10 +33,15 @@
   --font-body: 'Public Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
-  --text-3xl: 2.25rem;
-  --text-2xl: 1.6rem;
-  --text-xl: 1.25rem;
-  --text-lg: 1.05rem;
+  /* The display sizes are fluid: they are the ones that overflow a phone, and
+     a headline set for a 1560px page is a headline that wraps to four lines on
+     a 390px one. The reading sizes below them are NOT fluid — body text that
+     shrinks with the viewport is the opposite of what a small screen wants;
+     `--text-xs` / `--text-2xs` are instead nudged *up* on a phone (mobile.css). */
+  --text-3xl: clamp(1.75rem, 1.35rem + 1.9vw, 2.25rem);
+  --text-2xl: clamp(1.35rem, 1.16rem + 0.9vw, 1.6rem);
+  --text-xl: clamp(1.12rem, 1.02rem + 0.5vw, 1.25rem);
+  --text-lg: clamp(1rem, 0.97rem + 0.15vw, 1.05rem);
   --text-md: 0.925rem;
   --text-sm: 0.825rem;
   --text-xs: 0.75rem;
@@ -52,6 +57,36 @@
 
   --rail-width: 236px;
   --content-max: 1560px;
+
+  /* ---- Touch ----
+     44px is Apple's floor for a target you are expected to hit with a thumb,
+     and the number every `min-height` on a phone in this stylesheet refers to.
+     16px is iOS's floor for a text input: focus a smaller one and the browser
+     zooms the whole viewport to meet it, which on this app meant every filter
+     field threw the page sideways and left it there. */
+  --tap-min: 44px;
+  --text-input: 16px;
+
+  /* ---- Breakpoints ----
+     Three, and the only three in the stylesheet. There were five (640, 780,
+     900, 1180, 1200), no two of which agreed on what a "small" screen was.
+
+     A custom property cannot be interpolated into a media query — there is no
+     `@media (max-width: var(--bp-phone))` — so these are the canonical record
+     and the literals below repeat them. Changing one means changing its literal
+     in base.css, components.css, views.css and mobile.css. */
+  --bp-phone: 640px;  /* one thumb, one column */
+  --bp-shell: 900px;  /* the rail gives way to the mobile shell */
+  --bp-wide: 1200px;  /* the plan detail stops being two columns */
+
+  /* ---- Stacking order ----
+     Every z-index in the app, in the order they are allowed to cover each
+     other. They were six magic numbers scattered across three files. */
+  --z-base: 1;      /* sticky table headers, list group headings */
+  --z-sticky: 20;   /* the mobile top bar */
+  --z-shell: 40;    /* the mobile tab bar and the sheet it opens */
+  --z-scrim: 60;    /* modals */
+  --z-toast: 70;    /* toasts — above everything, including a modal */
 
   /* Motion */
   --ease: cubic-bezier(0.2, 0.7, 0.3, 1);

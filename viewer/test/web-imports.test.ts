@@ -123,6 +123,64 @@ test('bare specifiers are all declared in the import map', () => {
   assert.deepEqual(unresolved, [], `bare imports with no import-map entry:\n${unresolved.join('\n')}`);
 });
 
+/**
+ * The document was in quirks mode for the whole life of the app — there was no
+ * doctype at all — which changes box sizing, table layout and `vh` under you.
+ * It is one line, and one line is exactly what gets lost in a merge.
+ */
+test('index.html declares a doctype, so the document is in standards mode', () => {
+  const source = readFileSync(join(WEB, 'index.html'), 'utf8');
+  assert.match(
+    source.trimStart().slice(0, 40).toLowerCase(),
+    /^<!doctype html>/,
+    'index.html must start with <!doctype html> — without it every browser renders in quirks mode',
+  );
+});
+
+test('every stylesheet the page links exists, and the phone sheet is last', () => {
+  const source = readFileSync(join(WEB, 'index.html'), 'utf8');
+  const hrefs = [...source.matchAll(/<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(hrefs.length >= 4, `expected the stylesheet chain, found ${hrefs.length}`);
+
+  const missing = hrefs.filter((href) => !existsSync(join(WEB, href.replace(/^\//, ''))));
+  assert.deepEqual(missing, [], `stylesheets linked but not present: ${missing.join(', ')}`);
+
+  // mobile.css raises sizes the sheets above it set for a pointer, and it wins
+  // by source order rather than by `!important`. Moved earlier, it loses.
+  assert.equal(
+    hrefs.at(-1),
+    '/styles/mobile.css',
+    'mobile.css must be the LAST stylesheet — it overrides by cascade order, not by !important',
+  );
+});
+
+/**
+ * One breakpoint scale, and these are it (tokens.css §Breakpoints). There were
+ * five, no two of which agreed on what a small screen was; a media query can't
+ * read a custom property, so nothing but a test can hold the line.
+ */
+test('every media query uses one of the three declared breakpoints', () => {
+  const allowed = new Set(['640', '900', '1200']);
+  const strays: string[] = [];
+  for (const name of readdirSync(join(WEB, 'styles'))) {
+    if (!name.endsWith('.css')) continue;
+    const source = readFileSync(join(WEB, 'styles', name), 'utf8');
+    for (const match of source.matchAll(/@media[^{]*?\(\s*(?:max|min)-width:\s*(\d+)px/g)) {
+      if (!allowed.has(match[1])) {
+        strays.push(`${name}: ${match[1]}px`);
+      }
+    }
+  }
+  assert.deepEqual(strays, [], `breakpoints outside the scale (640/900/1200):\n${strays.join('\n')}`);
+});
+
+test('the touch tokens the phone sheet depends on are declared', () => {
+  const tokens = readFileSync(join(WEB, 'styles', 'tokens.css'), 'utf8');
+  for (const token of ['--tap-min', '--text-input', '--z-scrim', '--z-toast', '--z-shell']) {
+    assert.match(tokens, new RegExp(`${token}\\s*:`), `tokens.css must declare ${token}`);
+  }
+});
+
 test('every view the app routes to is a real export', () => {
   const app = readFileSync(join(WEB, 'app.js'), 'utf8');
   const used = [...app.matchAll(/<\$\{([A-Z][\w$]*)\}/g)].map((m) => m[1]);

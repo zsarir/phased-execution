@@ -7,13 +7,60 @@
  * barycentre ordering, so the same plan always draws the same way.
  */
 
-import { html, useState, useRef, useEffect, useMemo } from '../html.js';
+import { html, useState, useRef, useEffect, useMemo, useCallback } from '../html.js';
 import { STATE_BOARD, weight } from './ui.js';
 
 const COL_W = 178;
 const ROW_H = 108;
 const PAD = 58;
 const R = 15;
+
+/* Labels hang below the last row of stations; the content box has to include
+   them or "fit" cuts the bottom line of every name in the last rank. */
+const LABEL_DROP = 40;
+
+/** A finger's worth of station, in CSS pixels. */
+const TAP = 44;
+
+/**
+ * The zoom floor is a touch decision, not a taste one.
+ *
+ * Rows are `ROW_H` apart, so a 44px target stops overlapping its neighbour
+ * above only once 44/k < ROW_H — that is k > 0.407. The old floor was 0.25,
+ * which drew ~10px stations with 4px labels and put three of them inside one
+ * thumb. At 0.45 the whole map may not fit a phone at once, which is fine:
+ * a map you pan is a map, and a map you cannot hit is a picture.
+ */
+const MIN_K = 0.45;
+const MAX_K = 2.4;
+const FIT_MAX_K = 1.6;
+
+const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+
+/**
+ * The frame's size in CSS pixels, kept current.
+ *
+ * The map is drawn in plan coordinates and the `viewBox` is the window onto
+ * them, so the window has to know how big it is — including after a rotation,
+ * which is the one resize a phone actually performs.
+ */
+function useFrameSize(ref) {
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return undefined;
+    const measure = () => setSize({ w: node.clientWidth, h: node.clientHeight });
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+  return size;
+}
 
 const STATE_COLOR = {
   done: 'var(--line-done)',
@@ -88,18 +135,67 @@ function StationLabel({ node }) {
 
 export function RouteMap({ route, batches, budget, onSelect, selected }) {
   const { points, width, height } = useMemo(() => positions(route), [route]);
+  const contentH = height + LABEL_DROP;
+
+  /**
+   * `view` is the window onto the plan, in plan coordinates: `x`/`y` are the
+   * point at the frame's top-left corner and `k` is plan units per CSS pixel.
+   *
+   * It used to be a `scale()` transform on a `<g>` inside an SVG with no
+   * `viewBox` at all — so the drawing's coordinate system was "whatever pixel
+   * size the element happened to have", the SVG grew taller as you zoomed in,
+   * and "fit" was a guess at a scale rather than a statement about a rectangle.
+   * A viewBox says the thing directly: this is the part of the map you can see.
+   */
   const [view, setView] = useState({ k: 1, x: 0, y: 0 });
   const [hover, setHover] = useState(null);
   const frame = useRef(null);
-  const drag = useRef(null);
+  const size = useFrameSize(frame);
 
-  // Fit once per plan, so a 31-phase graph opens readable.
+  // Live pointers by id — two of them is a pinch, one is a drag.
+  const pointers = useRef(new Map());
+  const gesture = useRef(null);
+  // A drag that passes over a station must not also count as choosing it.
+  const dragged = useRef(false);
+
+  const fitTo = useCallback((w, h) => ({
+    k: clamp(Math.min(w / Math.max(width, 1), h / Math.max(contentH, 1)), MIN_K, FIT_MAX_K),
+    w,
+    h,
+  }), [width, contentH]);
+
+  const centred = useCallback((k, w, h) => ({
+    k,
+    x: (width - w / k) / 2,
+    y: (contentH - h / k) / 2,
+  }), [width, contentH]);
+
+  /* Fit once per plan — and once the frame has actually been measured, which
+     on a first paint is a tick later. A later resize deliberately does NOT
+     refit: rotating the phone should not throw away where you had panned to. */
+  const fitted = useRef(null);
   useEffect(() => {
-    const node = frame.current;
-    if (!node) return;
-    const scale = Math.min(1, (node.clientWidth - 16) / Math.max(width, 1));
-    setView({ k: Math.max(0.35, scale), x: 0, y: 0 });
-  }, [route, width]);
+    if (!size.w || !size.h) return;
+    const key = `${route.nodes.length}:${width}:${height}`;
+    if (fitted.current === key) return;
+    fitted.current = key;
+    const { k } = fitTo(size.w, size.h);
+    setView(centred(k, size.w, size.h));
+  }, [route, width, height, size.w, size.h, fitTo, centred]);
+
+  /** Zoom about a point in the frame, so what is under the finger stays there. */
+  const zoomAt = useCallback((px, py, next) => {
+    setView((v) => {
+      const k = clamp(next(v.k), MIN_K, MAX_K);
+      if (k === v.k) return v;
+      return { k, x: v.x + px / v.k - px / k, y: v.y + py / v.k - py / k };
+    });
+  }, []);
+
+  const local = (clientX, clientY) => {
+    const rect = frame.current?.getBoundingClientRect();
+    return rect ? { px: clientX - rect.left, py: clientY - rect.top } : { px: 0, py: 0 };
+  };
 
   const highlight = hover ?? selected ?? null;
   const related = useMemo(() => {
@@ -131,30 +227,82 @@ export function RouteMap({ route, batches, budget, onSelect, selected }) {
 
   const onWheel = (event) => {
     event.preventDefault();
+    const { px, py } = local(event.clientX, event.clientY);
     const factor = event.deltaY > 0 ? 0.92 : 1.08;
-    setView((v) => ({ ...v, k: Math.min(2.4, Math.max(0.25, v.k * factor)) }));
+    zoomAt(px, py, (k) => k * factor);
   };
+
+  const startDrag = (clientX, clientY) => { gesture.current = { kind: 'drag', x: clientX, y: clientY }; };
 
   const onPointerDown = (event) => {
-    if (event.button !== 0) return;
-    drag.current = { x: event.clientX, y: event.clientY, startX: view.x, startY: view.y };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    dragged.current = false;
+    // Capture keeps a drag alive past the edge of the frame. It throws rather
+    // than no-ops when the id is not an active pointer, and an exception here
+    // would take the rest of the gesture with it.
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* not capturable */ }
+
+    if (pointers.current.size === 2) {
+      const [a, b] = [...pointers.current.values()];
+      gesture.current = { kind: 'pinch', dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, k: view.k };
+    } else if (pointers.current.size === 1) {
+      startDrag(event.clientX, event.clientY);
+    }
   };
+
   const onPointerMove = (event) => {
-    if (!drag.current) return;
-    setView((v) => ({
-      ...v,
-      x: drag.current.startX + (event.clientX - drag.current.x),
-      y: drag.current.startY + (event.clientY - drag.current.y),
-    }));
+    if (!pointers.current.has(event.pointerId)) return;
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const active = gesture.current;
+    if (!active) return;
+
+    if (active.kind === 'pinch' && pointers.current.size >= 2) {
+      const [a, b] = [...pointers.current.values()];
+      const spread = Math.hypot(a.x - b.x, a.y - b.y);
+      const { px, py } = local((a.x + b.x) / 2, (a.y + b.y) / 2);
+      dragged.current = true;
+      zoomAt(px, py, () => active.k * (spread / active.dist));
+      return;
+    }
+
+    if (active.kind === 'drag') {
+      const dx = event.clientX - active.x;
+      const dy = event.clientY - active.y;
+      active.x = event.clientX;
+      active.y = event.clientY;
+      if (Math.abs(dx) + Math.abs(dy) > 2) dragged.current = true;
+      setView((v) => ({ ...v, x: v.x - dx / v.k, y: v.y - dy / v.k }));
+    }
   };
-  const onPointerUp = () => { drag.current = null; };
+
+  const onPointerUp = (event) => {
+    pointers.current.delete(event.pointerId);
+    if (pointers.current.size === 0) { gesture.current = null; return; }
+    // A pinch that loses one finger becomes a drag with the one left, rather
+    // than a dead gesture you have to lift and start again.
+    const [rest] = [...pointers.current.values()];
+    startDrag(rest.x, rest.y);
+  };
 
   const fit = () => {
-    const node = frame.current;
-    if (!node) return;
-    setView({ k: Math.max(0.3, Math.min(1.6, (node.clientWidth - 16) / Math.max(width, 1))), x: 0, y: 0 });
+    if (!size.w || !size.h) return;
+    const { k } = fitTo(size.w, size.h);
+    setView(centred(k, size.w, size.h));
   };
+
+  const zoomCentre = (factor) => zoomAt((size.w || 0) / 2, (size.h || 0) / 2, (k) => k * factor);
+
+  /* The window, in plan units. Falls back to the content box until the frame
+     has been measured, so the first paint draws the whole map rather than a
+     division by zero. */
+  const boxW = (size.w || width * view.k) / view.k;
+  const boxH = (size.h || contentH * view.k) / view.k;
+
+  /* A station's hit area, in plan units, so it lands at 44 CSS px whatever the
+     zoom. Capped at the row pitch: a target that overlaps its neighbour is
+     worse than a small one, and below MIN_K the cap would be doing that. */
+  const hitR = Math.min(TAP / view.k, ROW_H - 6) / 2;
 
   return html`
     <div class="route">
@@ -169,8 +317,8 @@ export function RouteMap({ route, batches, budget, onSelect, selected }) {
         <div class="row">
           <span class="faint mono">${Math.round(view.k * 100)}%</span>
           <div class="btn-group">
-            <button class="btn small" onClick=${() => setView((v) => ({ ...v, k: Math.max(0.25, v.k * 0.9) }))} aria-label="Zoom out">−</button>
-            <button class="btn small" onClick=${() => setView((v) => ({ ...v, k: Math.min(2.4, v.k * 1.1) }))} aria-label="Zoom in">+</button>
+            <button class="btn small" onClick=${() => zoomCentre(0.9)} aria-label="Zoom out">−</button>
+            <button class="btn small" onClick=${() => zoomCentre(1.1)} aria-label="Zoom in">+</button>
             <button class="btn small" onClick=${fit}>Fit</button>
           </div>
         </div>
@@ -183,11 +331,13 @@ export function RouteMap({ route, batches, budget, onSelect, selected }) {
         onPointerDown=${onPointerDown}
         onPointerMove=${onPointerMove}
         onPointerUp=${onPointerUp}
-        onPointerLeave=${onPointerUp}>
+        onPointerCancel=${onPointerUp}>
         <svg
           class="route-svg"
           width="100%"
-          height=${Math.max(240, height * view.k + 40)}
+          height="100%"
+          viewBox=${`${view.x} ${view.y} ${boxW} ${boxH}`}
+          preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="Phase dependency map">
           <defs>
@@ -196,7 +346,7 @@ export function RouteMap({ route, batches, budget, onSelect, selected }) {
             </pattern>
           </defs>
 
-          <g transform=${`translate(${view.x + 8},${view.y + 8}) scale(${view.k})`}>
+          <g>
             ${trains.map((train) => html`
               <g class="train" key=${`train-${train.index}`}>
                 ${train.nodes.length > 1 ? html`<path class="train-line" d=${train.path} />` : null}
@@ -220,7 +370,12 @@ export function RouteMap({ route, batches, budget, onSelect, selected }) {
                   d=${trackPath(from, to)} />`;
             })}
 
-            ${[...points.values()].map((node) => {
+            ${/* Each station carries an invisible `station-hit` circle sized in
+                  plan units to land at 44 CSS px. The 15-unit dot it sits under
+                  is a 13px circle at the fit zoom of a phone — a mark, not a
+                  target. Transparent rather than `fill: none`, because `none`
+                  does not receive pointer events at all. */
+              [...points.values()].map((node) => {
               const dim = related && !related.has(node.phase);
               return html`
                 <g
@@ -230,10 +385,11 @@ export function RouteMap({ route, batches, budget, onSelect, selected }) {
                   tabindex="0"
                   role="button"
                   aria-label=${`Phase ${node.phase}: ${node.title}, ${STATE_BOARD[node.state] ?? node.state}`}
-                  onClick=${() => onSelect?.(node.phase)}
+                  onClick=${() => { if (!dragged.current) onSelect?.(node.phase); }}
                   onKeyDown=${(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect?.(node.phase); } }}
                   onMouseEnter=${() => setHover(node.phase)}
                   onMouseLeave=${() => setHover(null)}>
+                  <circle class="station-hit" cx=${node.x} cy=${node.y} r=${hitR} />
                   ${node.gated ? html`<circle class="gate-ring" cx=${node.x} cy=${node.y} r=${R + 6} fill="url(#gate-hatch)" />` : null}
                   <circle class="halo" cx=${node.x} cy=${node.y} r=${R + 5} />
                   <circle class="dot" cx=${node.x} cy=${node.y} r=${R} />

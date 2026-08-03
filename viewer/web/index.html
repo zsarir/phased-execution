@@ -1,3 +1,4 @@
+<!doctype html>
 <meta charset="utf-8" />
 <!-- viewport-fit=cover pairs with the safe-area padding in base.css: installed
      on a phone the app draws under the status bar, and the insets put it back. -->
@@ -24,6 +25,10 @@
 <link rel="stylesheet" href="/styles/base.css" />
 <link rel="stylesheet" href="/styles/components.css" />
 <link rel="stylesheet" href="/styles/views.css" />
+<!-- Last, and it has to stay last: the phone sheet raises font sizes and hit
+     areas that the sheets above set for a pointer, and it wins by source order
+     rather than by `!important`. -->
+<link rel="stylesheet" href="/styles/mobile.css" />
 
 <div id="app"></div>
 

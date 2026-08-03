@@ -197,10 +197,17 @@
 .card-body.tight { padding: var(--s3); }
 .card-body.flush { padding: 0; }
 
+/* `minmax(360px, …)` is a floor the track will not go below even when the
+   container is narrower than 360px — which is how a two-column pair pushed
+   Settings, Statistics and plan Analysis sideways on a 390px screen (358px of
+   usable width against a 360px minimum, and it only had to lose by 2px).
+   `min(360px, 100%)` says the same thing about a wide screen and stops
+   claiming it about a narrow one. Every auto-fit grid in the app is written
+   this way for the same reason. */
 .grid { display: grid; gap: var(--s4); }
-.grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
-.grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-.grid.cols-4 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); }
+.grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); }
+.grid.cols-4 { grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); }
 
 /* ---------------- statistics tiles ---------------- */
 
@@ -262,7 +269,7 @@
   position: sticky;
   top: 0;
   background: var(--surface);
-  z-index: 1;
+  z-index: var(--z-base);
 }
 .table td { padding: var(--s2) var(--s3); border-bottom: 1px solid color-mix(in oklab, var(--rule) 60%, transparent); vertical-align: top; }
 .table tr:last-child td { border-bottom: 0; }
@@ -396,7 +403,7 @@
   display: grid;
   place-items: center;
   padding: var(--s4);
-  z-index: 60;
+  z-index: var(--z-scrim);
   animation: fade var(--fast) var(--ease);
 }
 .modal {
@@ -426,7 +433,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--s2);
-  z-index: 70;
+  z-index: var(--z-toast);
 }
 .toast {
   display: flex;
@@ -562,7 +569,10 @@
 
   /* A search field sharing a line with three filters is neither. */
   .filter-bar .field.grow { flex-basis: 100%; }
-  .field input, .field select { min-height: 32px; }
+  /* Was a flat 32px, which is a pointer's target rather than a thumb's — and
+     it out-specified the bare `input`/`select` floor in mobile.css, so raising
+     that alone left every field in the app at 32. */
+  .field input, .field select { min-height: var(--tap-min); }
 
   /* Key-above-value: a `max-content` key column and a phone are not compatible
      — the value ends up in a two-character gutter. */

@@ -149,48 +149,25 @@ button, input, select, textarea { font: inherit; color: inherit; }
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
+/* The phone shell is three rows — bar, page, tabs — rather than two columns.
+   It keys off the class the app puts there rather than repeating the 900px
+   breakpoint: `app.js` decides which shell to render, and CSS re-deriving that
+   from a media query is how the two end up disagreeing on a tablet.
+
+   The tab bar is a grid row, not `position: fixed`. Fixed bars on iOS Safari
+   move with the URL chrome and sit under it while it animates; a row simply
+   cannot be scrolled away from, and `.main` gets the leftover height. */
+.app.is-phone {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
 @media (max-width: 900px) {
-  .app { grid-template-columns: 1fr; }
-  .rail {
-    flex-direction: row;
-    align-items: center;
-    overflow-x: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--rule);
-    position: sticky;
-    top: 0;
-    z-index: 20;
-    /* A bar, not a column now: the top inset still applies — this is the strip
-       the status bar sits over — but the bottom one belongs to the page. */
-    padding:
-      max(var(--s3), env(safe-area-inset-top))
-      max(var(--s3), env(safe-area-inset-right))
-      var(--s3)
-      max(var(--s3), env(safe-area-inset-left));
-  }
-  .rail .rail-section-title, .rail .rail-footer { display: none; }
-
-  /* The rail turns into a bar, and everything inside it has to turn with it.
-     `.nav` is a column by default, so without this the six links stack and the
-     "bar" is six rows tall; `.source-chip` is `width: 100%`, so it claims the
-     whole bar and pushes itself off the end of it. */
-  .rail .brand { flex: none; }
-  .rail .nav { flex-direction: row; gap: var(--s1); }
-  .rail .nav-item { white-space: nowrap; padding: var(--s2) var(--s3); }
-  /* In a column the count sits at the far edge; in a row that edge is the next
-     link along. */
-  .rail .nav-item .count { margin-left: 0; }
-  /* A tick down the left side of a row of links marks the gap, not the link.
-     The background and weight already say which one is current. */
-  .rail .nav-item[aria-current='page']::before { display: none; }
-  .rail .source-chip { width: auto; flex: none; }
-  .rail .source-chip .path { display: none; }
-
   .page {
     padding:
       var(--s4)
       max(var(--s4), env(safe-area-inset-right))
-      max(var(--s7), env(safe-area-inset-bottom))
+      var(--s6)
       max(var(--s4), env(safe-area-inset-left));
   }
 }

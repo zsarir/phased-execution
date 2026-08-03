@@ -4,6 +4,7 @@
  */
 
 import { html, useState } from '../html.js';
+import { useMediaQuery } from './ui.js';
 
 /** Weekly completions. Amber marks the current week. */
 export function Bars({ data, height = 92, label = 'completions' }) {
@@ -33,11 +34,21 @@ export function Bars({ data, height = 92, label = 'completions' }) {
     </svg>`;
 }
 
-/** A year of phase completions, one square per day. */
+/**
+ * A year of phase completions, one square per day.
+ *
+ * Half the range on a phone. 26 weeks across 358px is a 12px square, and the
+ * readout under it was `onMouseEnter`-only — so on a phone the whole chart was
+ * a texture with no way to ask it anything. 13 weeks doubles the square and a
+ * tap answers; it is a display rather than a control, so the squares are
+ * deliberately not 44px (26 of those would be 1144px wide).
+ */
 export function Calendar({ data, weeks = 26 }) {
   const byDate = new Map(data.map((d) => [d.date, d.count]));
   const max = Math.max(1, ...data.map((d) => d.count));
   const [hover, setHover] = useState(null);
+  const narrow = useMediaQuery('(max-width: 640px)');
+  if (narrow) weeks = Math.min(weeks, 13);
 
   const today = new Date();
   const start = new Date(today);
@@ -65,7 +76,8 @@ export function Calendar({ data, weeks = 26 }) {
             x=${cell.x} y=${cell.y} width="9" height="9"
             fill=${cell.count ? `color-mix(in oklab, var(--line-done) ${Math.round(cell.intensity * 100)}%, var(--track))` : 'var(--track)'}
             onMouseEnter=${() => setHover(cell)}
-            onMouseLeave=${() => setHover(null)}>
+            onMouseLeave=${() => setHover(null)}
+            onClick=${() => setHover((current) => (current?.key === cell.key ? null : cell))}>
             <title>${`${cell.key}: ${cell.count} phase${cell.count === 1 ? '' : 's'}`}</title>
           </rect>`)}
       </svg>

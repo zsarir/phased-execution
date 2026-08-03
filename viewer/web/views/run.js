@@ -355,17 +355,19 @@ export function RunView({ slug, state, planPhases = [], planSkills = [] }) {
       ${history.length > 1 ? html`
         <section class="card">
           <h2 class="card-title">Earlier runs</h2>
-          <table class="table">
-            <tbody>
-              ${history.slice(1).map((r) => html`
-                <tr key=${r.id}>
-                  <td><code>${r.id}</code></td>
-                  <td><${Chip} kind=${RUN_TONE[r.status] ?? ''}>${r.status}</${Chip}></td>
-                  <td class="muted">${relativeTime(Date.parse(r.updatedAt))}</td>
-                  <td class="num">$${(r.spentUsd ?? 0).toFixed(2)}</td>
-                </tr>`)}
-            </tbody>
-          </table>
+          <div class="table-scroll">
+            <table class="table as-cards">
+              <tbody>
+                ${history.slice(1).map((r) => html`
+                  <tr key=${r.id}>
+                    <td data-label="Run"><code>${r.id}</code></td>
+                    <td data-label="Status"><${Chip} kind=${RUN_TONE[r.status] ?? ''}>${r.status}</${Chip}></td>
+                    <td class="muted" data-label="Updated">${relativeTime(Date.parse(r.updatedAt))}</td>
+                    <td class="num" data-label="Spent">$${(r.spentUsd ?? 0).toFixed(2)}</td>
+                  </tr>`)}
+              </tbody>
+            </table>
+          </div>
         </section>` : null}
     </div>`;
 }
@@ -609,7 +611,8 @@ function PhaseMatrix({ planPhases, overrides, runModel, runEffort, skills = [], 
         ${count ? html` <span class="chip">${count} overridden</span>` : html`
           <span class="muted small"> — every phase inherits the run's model and effort</span>`}
       </summary>
-      <table class="table">
+      <div class="table-scroll">
+      <table class="table as-cards">
         <thead>
           <tr>
             <th>Phase</th><th></th>
@@ -628,19 +631,19 @@ function PhaseMatrix({ planPhases, overrides, runModel, runEffort, skills = [], 
             const inheritEffort = planEffort ? `${planEffort} (plan)` : `${runEffort || 'default'} (run)`;
             return html`
               <tr key=${p.phase} class=${p.state === 'done' ? 'muted' : ''}>
-                <td><strong>${p.phase}</strong></td>
-                <td class="small">
+                <td data-label="Phase"><strong>${p.phase}</strong></td>
+                <td class="small" data-label="Title">
                   ${p.title}
                   ${p.state === 'done' ? html` <span class="muted">· done</span>` : null}
                 </td>
-                <td>
+                <td data-label="Model">
                   <select value=${own.model ?? ''} disabled=${disabled}
                           onChange=${(e) => set(p.phase, 'model', e.target.value)}>
                     <option value="">${inheritModel}</option>
                     ${MODELS.map((m) => html`<option key=${m} value=${m}>${m}</option>`)}
                   </select>
                 </td>
-                <td>
+                <td data-label="Effort">
                   <select value=${own.effort ?? ''} disabled=${disabled}
                           onChange=${(e) => set(p.phase, 'effort', e.target.value)}>
                     <option value="">${inheritEffort}</option>
@@ -648,7 +651,7 @@ function PhaseMatrix({ planPhases, overrides, runModel, runEffort, skills = [], 
                   </select>
                 </td>
                 ${skills.length ? html`
-                  <td>
+                  <td data-label="Skills">
                     <button class="btn small" disabled=${disabled}
                             onClick=${() => setSkillsFor(skillsFor === p.phase ? null : p.phase)}>
                       ${own.skills?.length ? `${own.skills.length} extra` : 'add'}
@@ -669,6 +672,7 @@ function PhaseMatrix({ planPhases, overrides, runModel, runEffort, skills = [], 
           })}
         </tbody>
       </table>
+      </div>
       <p class="muted small">
         A phase already running keeps what it started with — these apply to phases that have not
         begun. Clearing a row hands it back to the plan, or to the run's own default.
@@ -1074,7 +1078,7 @@ function PhaseTable({ slug, run, planPhases, live, allowRun, onAct }) {
       </p>
 
       <div class="table-scroll">
-        <table class="table phase-table">
+        <table class="table phase-table as-cards">
           <thead>
             <tr>
               <th scope="col" class="col-num">#</th>
@@ -1113,9 +1117,9 @@ function PhaseRow({ phase: p, slug, run, live, allowRun, onAct }) {
   return html`
     <tr key=${p.phase}
         class=${`${isActive ? 'is-active' : ''} ${p.state === 'done' ? 'is-done' : ''}`}>
-      <td class="phase-num tabular">${String(p.phase).padStart(2, '0')}</td>
+      <td class="phase-num tabular" data-label="#">${String(p.phase).padStart(2, '0')}</td>
 
-      <td>
+      <td data-label="Phase">
         <a class="phase-link" href=${`#/plan/${encodeURIComponent(slug)}/phase/${p.phase}`}>${p.title}</a>
         <div class="row wrap phase-flags">
           ${p.gated ? html`<${Chip} kind="gate">gated</${Chip}>` : null}
@@ -1128,9 +1132,9 @@ function PhaseRow({ phase: p, slug, run, live, allowRun, onAct }) {
         </div>
       </td>
 
-      <td><${StateChip} state=${p.state} board=${true} /></td>
+      <td data-label="Status"><${StateChip} state=${p.state} board=${true} /></td>
 
-      <td class="small">
+      <td class="small" data-label="This run">
         ${r ? html`
           <${Chip} kind=${PHASE_TONE[r.status] ?? ''}>${r.status}</${Chip}>
           <div class="muted phase-ran">
@@ -1143,11 +1147,11 @@ function PhaseRow({ phase: p, slug, run, live, allowRun, onAct }) {
         : html`<span class="muted">not attempted</span>`}
       </td>
 
-      <td class="num tabular">${r?.costUsd ? `$${r.costUsd.toFixed(2)}` : '—'}</td>
-      <td class="num tabular">${r?.turns ?? '—'}</td>
-      <td class="num tabular">${r?.durationMs ? duration(r.durationMs) : '—'}</td>
+      <td class="num tabular" data-label="Cost">${r?.costUsd ? `$${r.costUsd.toFixed(2)}` : '—'}</td>
+      <td class="num tabular" data-label="Turns">${r?.turns ?? '—'}</td>
+      <td class="num tabular" data-label="Took">${r?.durationMs ? duration(r.durationMs) : '—'}</td>
 
-      <td>
+      <td class="cell-actions">
         <div class="row wrap phase-actions">
           ${can.retry ? html`
             <button class="btn small" onClick=${() => onAct('retry', () => api.runRetry(slug, p.phase))}>
@@ -1174,7 +1178,7 @@ function PhaseRow({ phase: p, slug, run, live, allowRun, onAct }) {
     </tr>
     ${r?.note || r?.verification ? html`
       <tr key=${`${p.phase}-note`} class="phase-note">
-        <td></td>
+        <td class="cell-empty"></td>
         <td colspan="7">
           ${r.note ? html`<div class="muted small">${r.note}</div>` : null}
           ${r.verification ? html`
@@ -1492,20 +1496,22 @@ export function RunsView({ state }) {
 
       ${runs.length ? html`
         <section class="card" style="margin-top:var(--s4)">
-          <table class="table">
-            <thead><tr><th>Plan</th><th>Run</th><th>Status</th><th>Phase</th><th class="num">Spent</th><th>Updated</th></tr></thead>
-            <tbody>
-              ${runs.map((r) => html`
-                <tr key=${`${r.slug}-${r.id}`}>
-                  <td><a href=${`#/plan/${encodeURIComponent(r.slug)}/run`}>${r.slug}</a></td>
-                  <td><code>${r.id}</code></td>
-                  <td><${Chip} kind=${RUN_TONE[r.status] ?? ''}>${r.status}</${Chip}></td>
-                  <td>${r.activePhase ?? '—'}</td>
-                  <td class="num">$${(r.spentUsd ?? 0).toFixed(2)}</td>
-                  <td class="muted">${relativeTime(Date.parse(r.updatedAt))}</td>
-                </tr>`)}
-            </tbody>
-          </table>
+          <div class="table-scroll">
+            <table class="table as-cards">
+              <thead><tr><th>Plan</th><th>Run</th><th>Status</th><th>Phase</th><th class="num">Spent</th><th>Updated</th></tr></thead>
+              <tbody>
+                ${runs.map((r) => html`
+                  <tr key=${`${r.slug}-${r.id}`}>
+                    <td data-label="Plan"><a href=${`#/plan/${encodeURIComponent(r.slug)}/run`}>${r.slug}</a></td>
+                    <td data-label="Run"><code>${r.id}</code></td>
+                    <td data-label="Status"><${Chip} kind=${RUN_TONE[r.status] ?? ''}>${r.status}</${Chip}></td>
+                    <td data-label="Phase">${r.activePhase ?? '—'}</td>
+                    <td class="num" data-label="Spent">$${(r.spentUsd ?? 0).toFixed(2)}</td>
+                    <td class="muted" data-label="Updated">${relativeTime(Date.parse(r.updatedAt))}</td>
+                  </tr>`)}
+              </tbody>
+            </table>
+          </div>
         </section>`
         : html`<${Empty}
             title="No runs yet"

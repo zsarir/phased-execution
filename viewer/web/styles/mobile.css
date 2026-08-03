@@ -1,0 +1,526 @@
+/* ------------------------------------------------------------------ *
+ * Phones
+ *
+ * Loaded last, and it has to stay last. Everything here raises a size the
+ * sheets above set for a pointer — a 13px input, a 23px chip, a 150px label
+ * column — and it wins by being later in the cascade rather than by shouting
+ * `!important` at rules that were perfectly right for the screen they were
+ * written for.
+ *
+ * Three breakpoints, and they are the ones in tokens.css §Breakpoints:
+ *   900px — the rail gives way to the phone shell (`app.js` renders it)
+ *   640px — one thumb, one column
+ *   (hover: none) — not a width at all: a pointer that cannot hover
+ *
+ * The last one carries more than it looks. Half of what was wrong on a phone
+ * was not narrowness, it was that the interface assumed a cursor: a tooltip you
+ * hover, a row that un-dims when you point at it, a heatmap that only answers
+ * `onMouseEnter`. A narrow window on a laptop had none of those problems.
+ * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * The phone shell — top bar, tab bar, sheet
+ * ------------------------------------------------------------------ */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  background: var(--ground-deep);
+  border-bottom: 1px solid var(--rule);
+  z-index: var(--z-sticky);
+  /* Installed to a home screen this strip is what the status bar sits over. */
+  padding:
+    max(var(--s2), env(safe-area-inset-top))
+    max(var(--s2), env(safe-area-inset-right))
+    var(--s2)
+    max(var(--s2), env(safe-area-inset-left));
+}
+
+.topbar button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  min-height: var(--tap-min);
+  border-radius: var(--radius);
+}
+
+.topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  flex: none;
+  padding: 0 var(--s1);
+}
+.topbar-brand svg { flex: none; }
+.topbar-brand .brand-name { font-size: var(--text-md); }
+
+/* The source is the one piece of context that decides what every other screen
+   is showing, so it stays visible rather than living behind the sheet. */
+/* Written `.topbar .topbar-source` rather than `.topbar-source` for one
+   reason: `.topbar button` above already set a transparent background and no
+   border, and it out-specifies a lone class. Two classes beats a class and an
+   element, which is the argument `!important` would otherwise be making. */
+.topbar .topbar-source {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--s2);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  letter-spacing: 0.03em;
+  color: var(--ink-muted);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.topbar-bell {
+  position: relative;
+  flex: none;
+  min-width: var(--tap-min);
+  display: inline-grid;
+  place-items: center;
+  color: var(--ink-muted);
+}
+.topbar-bell[aria-current='page'] { color: var(--ink); background: var(--surface); }
+
+.glyph { width: 22px; height: 22px; display: block; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--line-ready);
+  color: #241800;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+:root[data-theme='light'] .badge { color: #fff; }
+.topbar-bell .badge { position: absolute; top: 3px; right: 2px; }
+
+/* ---- the tab bar ----
+   A grid row of the app frame, not `position: fixed`. A fixed bar on iOS Safari
+   travels with the URL chrome and spends the animation underneath it; a row
+   cannot be scrolled away from, and `.main` simply gets the height that is
+   left. */
+.tabbar {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  background: var(--ground-deep);
+  border-top: 1px solid var(--rule);
+  z-index: var(--z-shell);
+  padding:
+    0
+    env(safe-area-inset-right)
+    env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+.tab-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: var(--tap-min);
+  padding: var(--s2) 2px calc(var(--s2) - 2px);
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.06em;
+}
+/* Current reads the way the rail's current link reads — surface and weight, no
+   new colour. Amber in this app means "actionable now" and a tab you are
+   already looking at is not that. */
+.tab-item[aria-current='page'] { background: var(--surface); color: var(--ink); font-weight: 600; }
+.tab-glyph { position: relative; display: inline-flex; }
+.tab-glyph .badge { position: absolute; top: -5px; left: 11px; }
+.tab-label { line-height: 1; }
+
+/* ---- the sheet ---- */
+
+.scrim.sheet-scrim {
+  place-items: end stretch;
+  padding: 0;
+}
+.sheet {
+  background: var(--surface);
+  border-top: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: 0 -20px 60px -30px rgb(0 0 0 / 70%);
+  max-height: 88vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding:
+    var(--s2)
+    max(var(--s4), env(safe-area-inset-right))
+    max(var(--s4), env(safe-area-inset-bottom))
+    max(var(--s4), env(safe-area-inset-left));
+  animation: sheet-up var(--medium) var(--ease);
+}
+@keyframes sheet-up { from { transform: translateY(14%); opacity: 0.4; } }
+
+.sheet-grip {
+  width: 36px;
+  height: 4px;
+  flex: none;
+  border-radius: 2px;
+  background: var(--rule-strong);
+  margin: var(--s1) auto var(--s1);
+}
+
+.sheet-links { display: flex; flex-direction: column; }
+.sheet-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: var(--s3) var(--s2);
+  border: 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--rule) 60%, transparent);
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sheet-link:last-child { border-bottom: 0; }
+.sheet-link[aria-current='page'] { background: var(--surface-raised); }
+.sheet-link strong { font-family: var(--font-display); font-size: var(--text-md); }
+.sheet-link .faint { font-size: var(--text-xs); line-height: 1.4; }
+
+.sheet-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  min-height: var(--tap-min);
+}
+.sheet-row .btn { min-width: 0; }
+.sheet-row .btn .truncate { max-width: 42vw; }
+.sheet-label {
+  font-family: var(--font-display);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  flex: none;
+}
+.sheet-close { justify-content: center; }
+
+/* ------------------------------------------------------------------ *
+ * Text that has to be read on a phone, and text a phone must not zoom
+ * ------------------------------------------------------------------ */
+
+@media (max-width: 640px) {
+  /* The two smallest steps exist for a dense pointer interface. At arm's
+     length on a phone 0.68rem is not a size, it is a texture — and the tool
+     activity panel is written entirely in it. */
+  :root {
+    --text-xs: 0.8rem;
+    --text-2xs: 0.735rem;
+  }
+}
+
+@media (max-width: 900px) {
+  /* iOS zooms the whole viewport when a text input smaller than 16px takes
+     focus, and it does not zoom back out. Every filter field, the ask box and
+     the per-phase model selects were below it, so tapping any of them threw
+     the page sideways and left it there. This is the one place in the app
+     where a font size is a behaviour rather than a look. */
+  input, select, textarea,
+  .field input, .field select,
+  .live-ask input, .live-ask select,
+  .phase-matrix select,
+  .run-view .field input, .run-view .field select,
+  .skill-search {
+    font-size: var(--text-input);
+  }
+
+  /* Raised with the text: a 32px field with 16px text in it is a box the
+     letters touch the sides of. */
+  .field { padding: var(--s1) var(--s2); }
+
+  /* A `<select>`'s intrinsic width is its WIDEST OPTION, and "default · this
+     machine's" is 24 characters — at 16px that is a 313px control inside a
+     358px page, in a flex row beside a label. It has to be allowed to be
+     narrower than the option it is showing. */
+  .field, .run-view .field { max-width: 100%; flex-wrap: wrap; }
+  .field select, .field input, .run-view .field select, .run-view .field input {
+    min-height: var(--tap-min);
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 auto;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Targets — 44px, everywhere a finger is expected
+ * ------------------------------------------------------------------ */
+
+@media (max-width: 900px) {
+  /* `touch-action: none` gave the map every gesture inside its frame, which on
+     a phone made a 58vh block of page you could not get past: a swipe over it
+     nudged the map instead of scrolling. `pan-y` hands vertical swipes back to
+     the page and keeps the two gestures the map actually wants — a horizontal
+     drag, because a route map is wide rather than tall, and a two-finger pinch,
+     which `pan-y` still withholds from the browser so `dag.js` can answer it. */
+  .route-frame { touch-action: pan-y; }
+
+  .btn, .btn.small { min-height: var(--tap-min); min-width: var(--tap-min); padding-block: var(--s2); }
+  .btn-group .btn { justify-content: center; }
+
+  /* A chip is a label until something gives it an `onClick`, and then it is a
+     23px button. `Chip` renders a `<button>` in exactly that case, so the
+     element itself says which ones these are. */
+  button.chip, .chip.filter, .chip.is-clickable, .chip.is-picked {
+    min-height: var(--tap-min);
+    min-width: var(--tap-min);
+    justify-content: center;
+    padding-inline: var(--s3);
+  }
+  .chip-x { min-width: 32px; min-height: 32px; padding: 0 0 0 6px; }
+
+  /* 19px, and it is the control that takes you to the one phase that is
+     actionable — the smallest target in the app was on the most-wanted link. */
+  button.ready-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--tap-min);
+    padding: 0 var(--s3);
+  }
+
+  .tab { min-height: var(--tap-min); }
+  .dir-item { min-height: var(--tap-min); }
+  .search-hit { min-height: var(--tap-min); }
+  .linkish { min-height: var(--tap-min); display: inline-flex; align-items: center; }
+  .inbox-drop { min-width: var(--tap-min); min-height: var(--tap-min); }
+  .notify-category { min-height: var(--tap-min); }
+  .skill-row { min-height: var(--tap-min); align-items: center; padding-block: var(--s2); }
+
+  /* Everything that is not inside a `.field` — the Settings profile picker,
+     the per-phase model columns, the skill search — got neither the field's
+     padding nor its height. Tick boxes are excluded and handled below. */
+  select, textarea,
+  input:not([type='checkbox']):not([type='radio']) { min-height: var(--tap-min); }
+
+  /* A tick box is hit through the label that wraps it, and those are 44px
+     above; the box itself only has to be big enough to read as one. Growing
+     the box to 44 instead would put a 44px square beside every skill in a
+     three-hundred-row list. */
+  input[type='checkbox'], input[type='radio'] { width: 24px; height: 24px; min-height: 0; }
+
+  /* A link in a table cell is a row-sized target, not a word in a sentence —
+     inline links in prose are deliberately left alone (a 44px line in a
+     paragraph is not a paragraph). */
+  .table td a, .departures td a { display: inline-flex; align-items: center; min-height: var(--tap-min); }
+  .phase-matrix > summary, .skill-picker > summary { min-height: var(--tap-min); padding-block: var(--s2); }
+  .modal header .btn { min-width: var(--tap-min); justify-content: center; }
+}
+
+/* ------------------------------------------------------------------ *
+ * A pointer that cannot hover
+ * ------------------------------------------------------------------ */
+
+@media (hover: none) {
+  /* Dimming a finished row is a hover affordance: it says "this is context,
+     lean in if you want it", and un-dims when you do. A thumb cannot lean in,
+     so on touch these were stuck at 62–72% opacity permanently — the plans list
+     and the autopilot board both went quietly unreadable the moment a phase
+     finished. */
+  .plan-row.complete { opacity: 1; }
+  .phase-table tr.is-done td { opacity: 1; }
+  .phase-matrix tr.muted td { opacity: 1; }
+
+  /* iOS applies `:hover` to whatever you last tapped and keeps it there, so a
+     hover-only background leaves a false "you are here" trailing the finger
+     around the list. */
+  .table tbody tr:hover,
+  .departures tbody tr:hover,
+  .skill-row:hover,
+  .search-hit:hover,
+  .dir-item:hover,
+  .inbox-open:hover,
+  .notify-category:hover,
+  .nav-item:hover { background: transparent; }
+  .departures tbody tr.is-ready:hover { background: color-mix(in oklab, var(--line-ready) 7%, transparent); }
+  .plan-row:hover, .plan-card:hover, .link-card:hover, .attention-row:hover { background: var(--surface); }
+  .attention-row:hover { transform: none; }
+  .btn:hover { background: var(--surface); border-color: var(--rule); }
+  .btn.primary:hover { background: var(--line-ready); }
+  .btn.ghost:hover { background: transparent; color: var(--ink-muted); }
+
+  /* `title=` is the app's most common way of saying a second thing about
+     something, and a thumb cannot hover to read it. `useTapTitles` in
+     `components/ui.js` answers a tap with the same words as a toast; this is
+     what tells a finger there is something to tap. */
+  [title]:not([title='']) { -webkit-tap-highlight-color: color-mix(in oklab, var(--line-progress) 22%, transparent); }
+}
+
+/* A tooltip said out loud. Longer than an ordinary toast because it is prose
+   rather than a confirmation, and wrapped because some of them are a list. */
+.toast.hint {
+  align-items: flex-start;
+  max-width: min(46ch, calc(100vw - 2 * var(--s4)));
+  white-space: pre-line;
+  line-height: 1.45;
+  border-color: var(--rule-strong);
+  color: var(--ink-muted);
+}
+.toast.hint .dot { display: none; }
+
+/* ------------------------------------------------------------------ *
+ * Tables become cards
+ *
+ * A table is a shape for comparing rows across columns, and a phone has room
+ * for about two of them. `.phase-table` alone declares 714px of fixed column
+ * widths. Below the breakpoint each row becomes a card and each cell becomes a
+ * labelled line — the header row is where the labels come from, so it is the
+ * `data-label` on the cell that carries it once the header is gone.
+ * ------------------------------------------------------------------ */
+
+@media (max-width: 640px) {
+  .as-cards, .as-cards tbody, .as-cards tr, .as-cards td { display: block; }
+  .as-cards thead { display: none; }
+
+  .as-cards tr {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: var(--s2) var(--s3);
+    margin-bottom: var(--s2);
+  }
+  .as-cards tr:last-child { margin-bottom: 0; }
+
+  .as-cards td {
+    display: grid;
+    grid-template-columns: 7.5em minmax(0, 1fr);
+    gap: var(--s3);
+    align-items: baseline;
+    /* A chip is a chip, not a bar: a grid item stretches to its track unless
+       told otherwise, and a full-width "DEPARTED" pill reads as a progress bar. */
+    justify-items: start;
+    padding: 3px 0;
+    border: 0;
+    text-align: left;
+  }
+  .as-cards td::before {
+    content: attr(data-label);
+    font-family: var(--font-display);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  /* A cell with nothing to label — an actions row, a spanned note — is simply
+     the width of the card. */
+  .as-cards td:not([data-label]) { grid-template-columns: minmax(0, 1fr); }
+  .as-cards td:not([data-label])::before { content: none; }
+  .as-cards td.num { text-align: left; }
+  .as-cards .cell-empty { display: none; }
+  .as-cards .cell-actions .row { justify-content: flex-start; }
+
+  /* The board's own note row belongs to the card above it rather than opening
+     a second one. */
+  .as-cards tr.phase-note { margin-top: calc(-1 * var(--s2) - 1px); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); }
+
+  /* The one column class that survives: it sets a width on a `<th>` nobody can
+     see any more. */
+  .phase-table .col-num, .phase-table .col-state, .phase-table .col-run,
+  .phase-table .col-cost, .phase-table .col-turns, .phase-table .col-took,
+  .phase-table .col-actions { width: auto; }
+}
+
+/* ------------------------------------------------------------------ *
+ * The rest of the views at 390px
+ * ------------------------------------------------------------------ */
+
+@media (max-width: 640px) {
+  /* The same un-dimming as the `(hover: none)` block above, keyed on width
+     instead — and deliberately not only there.
+     `(hover: none)` is the honest test for "cannot hover", but it is false on
+     a touch laptop with a mouse plugged in and unreliable under emulation, and
+     a phone is where this actually mattered. There is also no reason to dim a
+     finished row on a phone even with a cursor: the list is short and you are
+     reading it, not scanning it for the one row that is actionable. */
+  .plan-row.complete { opacity: 1; }
+  .phase-table tr.is-done td { opacity: 1; }
+  .phase-matrix tr.muted td { opacity: 1; }
+
+  /* Badge, then everything else underneath it: three columns of which one is
+     `auto` is two columns too many at this width. */
+  .ready-card { grid-template-columns: var(--tap-min) minmax(0, 1fr); }
+  .ready-card > :last-child { grid-column: 1 / -1; }
+
+  /* 150px of name against 358px of screen is 42% of a phone spent on a label
+     for a bar it is describing. Name above, bar and figure below. */
+  .bar-row { grid-template-columns: minmax(0, 1fr) 3.5em; row-gap: 2px; }
+  .bar-row .name { grid-column: 1 / -1; }
+
+  .issue-row { grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
+
+  /* The map is a map: it should not own the screen before you can reach what
+     is under it. */
+  .route-frame { block-size: 58vh; }
+  .route-toolbar { gap: var(--s2); }
+
+  .plan-head .facts { gap: var(--s2); font-size: var(--text-2xs); }
+  .dash-head h1 { font-size: var(--text-2xl); }
+
+  /* A code BLOCK is the one thing here allowed to scroll sideways — wrapping a
+     command changes what it says. It scrolls inside its own box, not the page. */
+  .code, .guide pre.cmd, .md pre { max-width: 100%; }
+
+  /* Inline code is a different animal: a path has no break opportunity in it,
+     so `/Users/…/.config/phase-console/autopilot.json` is one 262px word, and
+     one of them in a card head was enough to push the whole page sideways.
+     Breaking a path mid-segment is ugly; a page that scrolls left is worse. */
+  code { overflow-wrap: anywhere; }
+  .card-head { flex-wrap: wrap; }
+
+  /* And the reason `anywhere` needs watching: it lowers an element's
+     min-content width, so a `<code>` that is a FLEX ITEM will happily shrink
+     to a four-character column of its own. A banner is a paragraph with a
+     coloured edge — `display: flex` on it turned "Restart it with
+     `--allow-run` to start a run" into three columns, one of which read
+     "-- all ow- run". Let the words flow. */
+  .banner { display: block; }
+
+  /* The ask box is the last thing on the run page and therefore the thing the
+     home indicator sits on top of. */
+  .live-ask {
+    flex-wrap: wrap;
+    padding-bottom: max(var(--s3), env(safe-area-inset-bottom));
+  }
+  .live-ask input { flex: 1 1 100%; }
+}
+
+/* The first-run screen renders outside the app frame (`app.js` returns it
+   before the shell exists), so it is the one view that never inherited the
+   frame's safe-area padding — on a notched phone its heading sat under the
+   status bar. Not in a media query: every `env()` is 0 without insets, so each
+   `max()` collapses to the padding it has always had. */
+.picker {
+  padding:
+    max(var(--s8), env(safe-area-inset-top))
+    max(var(--s4), env(safe-area-inset-right))
+    max(var(--s8), env(safe-area-inset-bottom))
+    max(var(--s4), env(safe-area-inset-left));
+}

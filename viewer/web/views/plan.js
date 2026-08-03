@@ -95,7 +95,7 @@ function DeparturesBoard({ detail }) {
         <span class="faint" style="font-size:var(--text-xs)">${detail.phases.length} phases · click a row for the full phase</span>
       </div>
       <div class="table-scroll">
-        <table class="departures">
+        <table class="departures as-cards">
           <thead>
             <tr>
               <th style="width:52px">#</th>
@@ -112,17 +112,17 @@ function DeparturesBoard({ detail }) {
                 key=${phase.phase}
                 class=${phase.state === 'ready' ? 'is-ready' : ''}
                 onClick=${() => navigate(phaseHref(slug, phase.phase).slice(2))}>
-                <td class="phase-num">${String(phase.phase).padStart(2, '0')}</td>
-                <td>
+                <td class="phase-num" data-label="#">${String(phase.phase).padStart(2, '0')}</td>
+                <td data-label="Phase">
                   <div class="phase-title">${phase.title}</div>
                   ${phase.state === 'waiting' && phase.analysis?.dependsOn.length
                     ? html`<div class="needs">needs ${phase.analysis.dependsOn.map((d) => `P${d}`).join(' · ')}</div>`
                     : phase.goal ? html`<div class="needs truncate" style="max-width:46ch">${phase.goal.replace(/[*`]/g, '')}</div>` : null}
                 </td>
-                <td><${StateChip} state=${phase.state} board=${true} /></td>
-                <td><span class="chip size">${phase.size}</span></td>
-                <td class="mono" style="font-size:var(--text-2xs);color:var(--ink-faint)">${phase.row?.repos ?? '—'}</td>
-                <td>
+                <td data-label="Status"><${StateChip} state=${phase.state} board=${true} /></td>
+                <td data-label="Size"><span class="chip size">${phase.size}</span></td>
+                <td class="mono" data-label="Platform" style="font-size:var(--text-2xs);color:var(--ink-faint)">${phase.row?.repos ?? '—'}</td>
+                <td data-label="Notes">
                   <div class="row-wrap">
                     ${phase.gated ? html`<${Chip} kind="gate">gated</${Chip}>` : null}
                     ${phase.lock && !phase.lock.expired ? html`<${Chip} kind="lock" title=${phase.lock.owner}>locked</${Chip}>` : null}
@@ -776,9 +776,8 @@ function PhasesTab({ detail }) {
     <div class="stack">
       ${detail.phases.map((phase) => html`
         <button
-          class=${`plan-row ${phase.state === 'ready' ? 'has-ready' : ''}`}
+          class=${`plan-row phase-row ${phase.state === 'ready' ? 'has-ready' : ''}`}
           key=${phase.phase}
-          style="grid-template-columns:56px minmax(0,1fr) 120px 120px"
           onClick=${() => navigate(phaseHref(slug, phase.phase).slice(2))}>
           <span class="phase-num mono" style="font-size:var(--text-xl)">${String(phase.phase).padStart(2, '0')}</span>
           <span style="min-width:0">
