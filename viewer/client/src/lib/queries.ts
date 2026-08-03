@@ -22,7 +22,7 @@ import {
   useQueryClient,
   type QueryClientConfig,
 } from '@tanstack/react-query';
-import { api, type ConsoleState, type PlanSummary } from './api';
+import { api, type ConsoleState, type InboxQuery, type PlanSummary } from './api';
 import { SSE_EVENTS, onSse, type SseEvent } from './sse';
 
 /* ---------------- keys ---------------- */
@@ -66,6 +66,12 @@ export const keys = {
   skills: () => ['skills'] as const,
   notifications: () => ['notifications'] as const,
   search: (query: string) => ['search', query] as const,
+  /** Both push keys sit under one prefix so subscribing refreshes the register. */
+  push: () => ['push'] as const,
+  policy: (slug: string) => ['policy', slug] as const,
+  restart: () => ['restart'] as const,
+  browse: (path: string) => ['browse', path] as const,
+  rootCheck: (path: string) => ['root-check', path] as const,
 };
 
 export const queryClientConfig: QueryClientConfig = {
@@ -329,6 +335,112 @@ export function useAuth(enabled: boolean) {
 /** Cached server-side, so switching tabs does not rescan a few hundred SKILL.md files. */
 export function useSkills(enabled: boolean) {
   return useQuery({ queryKey: keys.skills(), queryFn: api.skills, enabled, retry: false });
+}
+
+/* ---------------- the remaining surfaces ---------------- */
+
+/**
+ * The whole portfolio — every plan read, every issue collected.
+ *
+ * It is invalidated by `changed` like the plans list, because it is the same
+ * facts aggregated: a phase landing moves the velocity chart and the ready
+ * total, and a stats page that disagrees with the board it sits beside is worse
+ * than no stats page.
+ */
+export function useStats(enabled = true) {
+  return useQuery({ queryKey: keys.stats(), queryFn: api.stats, enabled });
+}
+
+/**
+ * Full-text search, debounced by the caller.
+ *
+ * Keyed by the query text so every distinct search is its own cache entry and
+ * going back to a previous term is instant. `keepPreviousData` keeps the last
+ * result on screen while a longer term is fetched — a list that blanks on every
+ * keystroke is unreadable at typing speed.
+ */
+export function useSearch(query: string) {
+  const text = query.trim();
+  return useQuery({
+    queryKey: keys.search(text),
+    queryFn: () => api.search(text),
+    enabled: text.length >= 2,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * One page of the inbox.
+ *
+ * The filters are part of the key: "unread only, approvals, 60 rows" is a
+ * different answer from the server, not a client-side slice of one. `EVENT_
+ * EFFECTS` invalidates the `notifications` prefix on all four inbox events, so
+ * every variant a tab is holding refreshes together — which is what makes a
+ * card answered on a phone take the badge down here.
+ */
+export function useInbox(query: InboxQuery) {
+  return useQuery({
+    queryKey: [...keys.notifications(), query.category ?? '', query.unread ?? false, query.limit ?? 60],
+    queryFn: () => api.notifications(query),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** The push register: which devices are subscribed, and to what. */
+export function usePush(enabled = true) {
+  return useQuery({ queryKey: keys.push(), queryFn: api.push, enabled, retry: false });
+}
+
+/**
+ * The permission rules, at one scope.
+ *
+ * `retry: false` because a console whose server predates the policy endpoint
+ * answers 404 and will keep answering 404; the card hides rather than retrying
+ * at somebody.
+ */
+export function usePolicy(slug: string | undefined) {
+  return useQuery({
+    queryKey: keys.policy(slug ?? ''),
+    queryFn: () => api.policy(slug || undefined),
+    retry: false,
+  });
+}
+
+/** Whether this console can restart itself — asked before the button renders. */
+export function useRestartReadiness(enabled = true) {
+  return useQuery({
+    queryKey: keys.restart(),
+    queryFn: api.restartReadiness,
+    enabled,
+    retry: false,
+  });
+}
+
+/**
+ * One directory's sub-directories, for the picker.
+ *
+ * Never invalidated by an event: the file system is not what the console
+ * watches, and a picker that refetched on every `changed` would fight the
+ * person typing in it. `keepPreviousData` keeps the list stable while walking
+ * into a folder.
+ */
+export function useDirListing(path: string) {
+  return useQuery({
+    queryKey: keys.browse(path),
+    queryFn: () => api.browse(path),
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
+/** Whether a path is a source directory — the Open button's whole basis. */
+export function useRootCheck(path: string) {
+  return useQuery({
+    queryKey: keys.rootCheck(path),
+    queryFn: () => api.checkRoot(path),
+    enabled: path.trim().length > 0,
+    retry: false,
+  });
 }
 
 /** The numbers on the rail and the tab bar. */

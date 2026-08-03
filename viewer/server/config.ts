@@ -150,6 +150,33 @@ function printHelp(): void {
 }
 
 /* ------------------------------------------------------------------ *
+ * Which client is being served
+ * ------------------------------------------------------------------ */
+
+export const WEB_DIR = join(VIEWER_DIR, 'web');
+export const DIST_DIR = join(VIEWER_DIR, 'client', 'dist');
+
+/**
+ * The rewrite's migration seam, as a live fact rather than a startup one.
+ *
+ * The static root is picked per request — `client/dist/` when a build exists,
+ * else the legacy `web/` — so `npm run build` cuts the console over and
+ * `rm -rf client/dist` rolls it back, neither needing a restart. That is
+ * exactly why it has to be reportable: with the choice moving underneath a
+ * long-lived process, "which client am I actually looking at" was otherwise
+ * only answerable by reading the startup log, and the startup log records the
+ * answer from hours ago.
+ */
+export function staticRoot(): 'dist' | 'legacy' {
+  return existsSync(join(DIST_DIR, 'index.html')) ? 'dist' : 'legacy';
+}
+
+/** The directory `staticRoot()` names. One implementation, two callers. */
+export function staticRootDir(): string {
+  return staticRoot() === 'dist' ? DIST_DIR : WEB_DIR;
+}
+
+/* ------------------------------------------------------------------ *
  * Is the code on disk newer than the code we are running?
  * ------------------------------------------------------------------ */
 

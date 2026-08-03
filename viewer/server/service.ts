@@ -11,7 +11,7 @@ import { basename } from 'node:path';
 import { execFile } from 'node:child_process';
 
 import {
-  checkRoot, rememberRoot, loadPrefs, savePrefs, serverIsStale,
+  checkRoot, rememberRoot, loadPrefs, savePrefs, serverIsStale, staticRoot,
   type Flags, type Prefs, type RootCheck,
 } from './config.ts';
 import { Store, handoffFor, lockFor, qaFor, type PlanRecord } from './store.ts';
@@ -1214,6 +1214,11 @@ export class Service {
       // True once the server files on disk are newer than this process. The
       // browser reloads from disk; this process cannot.
       serverStale: serverIsStale(),
+      // Which client this server would serve right now — `dist` once a build
+      // exists, else the legacy `web/`. Picked per request, so it can change
+      // under a long-lived process; Settings reports it rather than leaving the
+      // answer in a startup log written hours ago.
+      staticRoot: staticRoot(),
       // Whether a clean exit comes back. The Restart button is only honest if
       // it knows this before it is pressed — under `./run` there is nothing to
       // restart it, and a button that ends the console is not a Restart button.

@@ -1,5 +1,7 @@
 import { Banner, Chip, KeyValue, Progress, StateChip } from '@/components/ui';
 import { MarkdownInline } from '@/components/markdown';
+import { WriteMenu } from '@/components/write-menu';
+import { useConsoleState } from '@/lib/queries';
 import { plural, weight } from '@/lib/format';
 import { phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
@@ -15,15 +17,21 @@ import type { PlanDetail } from '@/lib/api';
 export function PlanHeader({ detail }: { detail: PlanDetail }) {
   const s = detail.summary;
   const budget = detail.plan?.sessionBudget;
+  const { data: state } = useConsoleState();
 
   return (
     <div className="mb-4 flex flex-col gap-3">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h1 className="font-display text-3xl leading-none">{s.title}</h1>
-        {s.status && <Chip>{s.status}</Chip>}
-        {s.kind !== 'plan' && (
-          <Chip tone="warn">{s.kind === 'document' ? 'document' : 'orphan handoffs'}</Chip>
-        )}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h1 className="font-display text-3xl leading-none">{s.title}</h1>
+          {s.status && <Chip>{s.status}</Chip>}
+          {s.kind !== 'plan' && (
+            <Chip tone="warn">{s.kind === 'document' ? 'document' : 'orphan handoffs'}</Chip>
+          )}
+        </div>
+        {/* Renders nothing at all on a read-only console — the rail already
+            says the session cannot write, and repeating it here is noise. */}
+        <WriteMenu detail={detail} allowWrites={Boolean(state?.allowWrites)} />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">

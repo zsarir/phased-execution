@@ -1,6 +1,7 @@
 import { FileText } from 'lucide-react';
-import { usePlans } from '@/lib/queries';
+import { useConsoleState, usePlans } from '@/lib/queries';
 import { Card, Chip, Empty, Skeleton, StateChip } from '@/components/ui';
+import { NewPlanButton } from '@/components/write-menu';
 import { planHref } from '@shared/routes.js';
 import { Page } from './_page';
 
@@ -15,6 +16,8 @@ import { Page } from './_page';
  */
 export default function PlansView() {
   const { data: plans, isPending, error } = usePlans();
+  const { data: state } = useConsoleState();
+  const newPlan = <NewPlanButton allowWrites={Boolean(state?.allowWrites)} />;
 
   if (error) {
     return (
@@ -37,18 +40,19 @@ export default function PlansView() {
   const list = plans ?? [];
   if (!list.length) {
     return (
-      <Page title="Plans">
+      <Page title="Plans" actions={newPlan}>
         <Empty
           icon={<FileText size={22} />}
           title="No plans here"
           body="This directory has no docs/plans/*.md yet."
+          action={newPlan}
         />
       </Page>
     );
   }
 
   return (
-    <Page title="Plans" subtitle={`${list.length} in this source`}>
+    <Page title="Plans" subtitle={`${list.length} in this source`} actions={newPlan}>
       <div className="flex flex-col gap-2">
         {list.map((plan) => {
           const ready = plan.ready?.length ?? 0;

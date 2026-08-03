@@ -47,13 +47,54 @@ const q = encodeURIComponent;
  * Only what the shell reads in this phase is typed. Views type their own as
  * they are ported; `unknown` is deliberate where a shape is not yet load-bearing. */
 
+/** A directory the console has read, as `/api/state` reports it. */
+export interface RootInfo {
+  path?: string;
+  label?: string;
+  ok?: boolean;
+  docsDir?: string;
+  plansDir?: string;
+  planCount?: number;
+  handoffCount?: number;
+  reason?: string;
+}
+
+/** The phase weights and session budgets the engine's `sizing.env` declares. */
+export interface Sizing {
+  S?: number;
+  M?: number;
+  L?: number;
+  budgetBig?: number;
+  budgetHaiku?: number;
+  [key: string]: number | undefined;
+}
+
 export interface ConsoleState {
   generation?: number;
-  root?: { path?: string; label?: string; ok?: boolean };
+  root?: RootInfo;
   allowWrites?: boolean;
+  allowRun?: boolean;
   autopilot?: boolean;
+  /** True once `server/` on disk is newer than the process serving this page. */
   serverStale?: boolean;
+  /** Which static root answered — the migration seam, surfaced in Settings. */
+  staticRoot?: 'dist' | 'legacy';
+  supervisor?: { ok?: boolean; kind?: string; detail?: string };
   unread?: number;
+  scriptsDir?: string;
+  sizing?: Sizing;
+  searchDocs?: number;
+  repo?: {
+    available?: boolean;
+    branch?: string;
+    ahead?: number;
+    behind?: number;
+    dirty?: string[];
+  };
+  recentRoots?: { path: string; label: string }[];
+  watcher?: { ok?: boolean; detail?: string };
+  health?: unknown;
+  run?: unknown;
   [key: string]: unknown;
 }
 
@@ -544,17 +585,247 @@ export interface AskResult {
   error?: string;
 }
 
+/* ---------------- search ----------------
+ * Mirrors `server/search.ts`. `kind` stays open for the same reason a phase
+ * `state` does: the index decides what it indexes. */
+
+export interface SearchHit {
+  slug: string;
+  kind: string;
+  section: string;
+  phase?: number;
+  title: string;
+  score: number;
+  snippet: string;
+}
+
+export interface SearchResult {
+  query: string;
+  total: number;
+  groups: { slug: string; title: string; hits: SearchHit[] }[];
+}
+
+/* ---------------- the portfolio ----------------
+ * Mirrors `server/analysis/stats.ts` (`Portfolio`). */
+
+export interface PortfolioTotals {
+  plans: number;
+  documents: number;
+  orphans: number;
+  phases: number;
+  done: number;
+  ready: number;
+  waiting: number;
+  inProgress: number;
+  stuck: number;
+  percent: number;
+  remainingWeight: number;
+  remainingSessions: number;
+}
+
+export interface Portfolio {
+  generatedAt: number;
+  totals: PortfolioTotals;
+  byStatus: { status: string; count: number }[];
+  activeLocks: { slug: string; phase: number; owner: string; expired: boolean; leaseUntil?: number }[];
+  issues: HealthIssue[];
+  velocity: { week: string; count: number }[];
+  calendar: { date: string; count: number }[];
+  medianCycleDays?: number;
+  sizeMix: { size: string; count: number }[];
+  repos: { repo: string; count: number }[];
+  skills: { skill: string; count: number }[];
+  models: { model: string; count: number }[];
+  stalled: { slug: string; days: number; ready: number[] }[];
+  busiest: { slug: string; completions: number }[];
+}
+
+/* ---------------- the directory picker ---------------- */
+
+export interface DirListing {
+  path: string;
+  parent?: string;
+  entries: { name: string; path: string; hasDocs: boolean }[];
+}
+
+/** `server/config.ts` `RootCheck` — `ok` is the only field always meaningful. */
+export interface RootCheck {
+  path: string;
+  ok: boolean;
+  label: string;
+  planCount: number;
+  handoffCount: number;
+  docsDir?: string;
+  plansDir?: string;
+  reason?: string;
+}
+
+export interface OpenRootResult {
+  check: RootCheck;
+  state: ConsoleState;
+}
+
+/* ---------------- the notification inbox ---------------- */
+
+export type DeliveryOutcome = 'sent' | 'throttled' | 'failed' | 'gone';
+
+export interface DeliveryRecord {
+  device: string;
+  label: string;
+  outcome: DeliveryOutcome;
+  at: string;
+  detail?: string;
+}
+
+export interface NotificationRecord {
+  id: string;
+  at: string;
+  category: string;
+  title: string;
+  body: string;
+  /** Built by the server's `routeFor` and never by hand. */
+  url: string;
+  slug?: string;
+  runId?: string;
+  phase?: number;
+  urgent: boolean;
+  read: boolean;
+  delivery: DeliveryRecord[];
+}
+
+export interface NotificationCategory {
+  id: string;
+  label: string;
+  detail: string;
+  byDefault: boolean;
+  urgent: boolean;
+}
+
+export interface InboxPage {
+  items: NotificationRecord[];
+  total: number;
+  unread: number;
+  /** `items` was cut short — so "Show older" can be offered honestly. */
+  more: boolean;
+  categories: NotificationCategory[];
+  /** How many devices are subscribed. A count, not the register. */
+  devices: number;
+  outOfBand: { configured: boolean };
+}
+
+export interface InboxQuery {
+  category?: string;
+  unread?: boolean;
+  limit?: number;
+  before?: string;
+}
+
+/* ---------------- push ----------------
+ * The endpoint and keys never leave the server; `service` is the endpoint's
+ * origin, which is the only thing a browser can match its own subscription
+ * against. */
+
+export interface PushDevice {
+  id: string;
+  label: string;
+  service: string;
+  categories: Record<string, boolean>;
+  createdAt: string;
+  lastOkAt: string | null;
+  failures: number;
+}
+
+export interface PushState {
+  publicKey: string;
+  devices: PushDevice[];
+  categories: NotificationCategory[];
+}
+
+/* ---------------- the permission policy ---------------- */
+
+export interface RuleSupport {
+  raw: string;
+  tool: string;
+  form: string;
+  support: string;
+  note?: string;
+}
+
+export interface PolicyLists {
+  deny: string[];
+  ask: string[];
+  allow: string[];
+}
+
+export interface PolicyView {
+  defaults: PolicyLists;
+  extra: PolicyLists;
+  plan: { slug: string; path: string; extra: PolicyLists } | null;
+  effective: PolicyLists;
+  file: string;
+  profiles: { id: string; label: string }[];
+  /** Rules the syntax accepts that nothing honours. */
+  inert: { raw: string; note: string }[];
+  support: RuleSupport[];
+  hookTools: string[];
+  wrappersNotStripped: string[];
+  /** Tools this console has actually been asked about. */
+  seen?: string[];
+}
+
+/** What `POST /api/policy` accepts — one scope, one edit. */
+export interface PolicyEdit {
+  scope: 'global' | 'plan';
+  slug?: string | null;
+  add?: Partial<Record<keyof PolicyLists, string[]>>;
+  remove?: Partial<Record<keyof PolicyLists, string[]>>;
+}
+
+/* ---------------- restarting the console ---------------- */
+
+export interface RestartReadiness {
+  ok: boolean;
+  reason?: string;
+  supervisor: { ok?: boolean; kind?: string; detail?: string };
+  busy: boolean;
+  run: { slug: string; status: string; phase?: number } | null;
+}
+
+/* ---------------- the guarded write verbs ----------------
+ * Every one of them shells out to a phased-execution script, and every one is
+ * refused unless the server was started with `--allow-writes`. `dry` returns
+ * the exact invocation without running it — the preview the dialog shows. */
+
+export interface WriteRequest {
+  action: string;
+  slug?: string;
+  phase?: number;
+  [field: string]: unknown;
+}
+
+export interface WriteResult {
+  /** Absent on a dry run — a preview neither succeeded nor failed. */
+  ok?: boolean;
+  dryRun?: boolean;
+  /** The literal command line. Present on a dry run and a real one. */
+  command?: string;
+  description?: string;
+  code?: number;
+  stdout?: string;
+  stderr?: string;
+}
+
 export const api = {
   /* ---- shell ---- */
   state: () => request<ConsoleState>('/api/state'),
   plans: () => request<PlanSummary[]>('/api/plans'),
-  stats: () => request<unknown>('/api/stats'),
+  stats: () => request<Portfolio>('/api/stats'),
   savePrefs: (patch: Record<string, unknown>) => post<unknown>('/api/prefs', patch),
 
   /* ---- the directory picker ---- */
-  browse: (path?: string) => request<unknown>(`/api/fs?path=${q(path ?? '')}`),
-  checkRoot: (path: string) => request<unknown>(`/api/root?path=${q(path)}`),
-  openRoot: (path: string) => post<unknown>('/api/root', { path }),
+  browse: (path?: string) => request<DirListing>(`/api/fs?path=${q(path ?? '')}`),
+  checkRoot: (path: string) => request<RootCheck>(`/api/root?path=${q(path)}`),
+  openRoot: (path: string) => post<OpenRootResult>('/api/root', { path }),
 
   /* ---- plans ----
      The prompt endpoints answer `text/plain`; `request` already returns a
@@ -574,12 +845,12 @@ export const api = {
   sessionPlan: (slug: string, model?: string) =>
     request<unknown>(`/api/plans/${q(slug)}/session-plan${model ? `?model=${q(model)}` : ''}`),
 
-  search: (query: string) => request<unknown>(`/api/search?q=${q(query)}`),
+  search: (query: string) => request<SearchResult>(`/api/search?q=${q(query)}`),
   skills: () => request<SkillInfo[]>('/api/skills'),
-  policy: (slug?: string) => request<unknown>(`/api/policy${slug ? `?slug=${q(slug)}` : ''}`),
-  addPolicy: (rules: unknown) => post<unknown>('/api/policy', rules),
-  editPolicy: (edit: Record<string, unknown>) => post<unknown>('/api/policy', { by: 'console', ...edit }),
-  write: (body: unknown, dry?: boolean) => post<unknown>(`/api/write${dry ? '?dry=1' : ''}`, body),
+  policy: (slug?: string) => request<PolicyView>(`/api/policy${slug ? `?slug=${q(slug)}` : ''}`),
+  addPolicy: (rules: unknown) => post<PolicyView>('/api/policy', rules),
+  editPolicy: (edit: PolicyEdit) => post<PolicyView>('/api/policy', { by: 'console', ...edit }),
+  write: (body: WriteRequest, dry?: boolean) => post<WriteResult>(`/api/write${dry ? '?dry=1' : ''}`, body),
 
   /* ---- autopilot ---- */
   runs: () => request<RunState[]>('/api/runs'),
@@ -615,7 +886,7 @@ export const api = {
     }),
 
   /* ---- the notification inbox ---- */
-  notifications: (query: Record<string, unknown> = {}) => request<unknown>(
+  notifications: (query: InboxQuery = {}) => request<InboxPage>(
     `/api/notifications?${new URLSearchParams(
       Object.entries(query)
         .filter(([, v]) => v != null && v !== '' && v !== false)
@@ -629,9 +900,20 @@ export const api = {
     { method: 'DELETE' },
   ),
 
+  /* ---- push: the register, not the browser half ----
+     Subscribing is `lib/push.ts` — it needs a service worker and a permission
+     prompt, neither of which belongs in a fetch helper. */
+  push: () => request<PushState>('/api/push'),
+  pushSubscribe: (body: { subscription: unknown; label: string; categories?: Record<string, boolean> }) =>
+    post<{ device?: PushDevice; state?: PushState; error?: string }>('/api/push/subscribe', body),
+  pushUnsubscribe: (endpoint: string) => post<{ removed?: unknown; state?: PushState }>('/api/push/unsubscribe', { endpoint }),
+  pushCategories: (id: string, categories: Record<string, boolean>) =>
+    post<{ device?: PushDevice }>('/api/push/categories', { id, categories }),
+  pushTest: (id: string) => post<{ ok: boolean; detail: string }>('/api/push/test', { id }),
+
   /* ---- signing in, and restarting the console itself ---- */
   auth: (force?: boolean) => request<AuthStatus>(`/api/auth${force ? '?force=1' : ''}`),
   authLogin: () => post<{ opened?: boolean; detail?: string }>('/api/auth/login'),
-  restartReadiness: () => request<unknown>('/api/restart'),
+  restartReadiness: () => request<RestartReadiness>('/api/restart'),
   restart: () => post<unknown>('/api/restart', { by: 'console' }),
 };

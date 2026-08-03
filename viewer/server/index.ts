@@ -16,7 +16,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 
-import { flagsRefusal, parseFlags, VIEWER_DIR } from './config.ts';
+import { flagsRefusal, parseFlags, staticRoot, staticRootDir, VIEWER_DIR } from './config.ts';
 import {
   configureLog, installExitLogging, isClientDisconnect, log, noteExit, previousRunEndedCleanly,
 } from './log.ts';
@@ -56,8 +56,6 @@ if (cleanLastTime === false) {
 }
 
 const service = new Service(flags);
-const WEB_DIR = join(VIEWER_DIR, 'web');
-const DIST_DIR = join(VIEWER_DIR, 'client', 'dist');
 
 // The client is served from the built Vite output (`client/dist`) when it exists,
 // else the legacy no-build client (`web/`). The choice is made PER REQUEST, not at
@@ -66,10 +64,11 @@ const DIST_DIR = join(VIEWER_DIR, 'client', 'dist');
 // lives for hours under launchd. One extra `existsSync` per navigation is nothing at
 // this traffic. During the rewrite `dist` is gitignored, so `main` keeps serving the
 // legacy client until a deliberate build.
-function webRoot(): string {
-  return existsSync(join(DIST_DIR, 'index.html')) ? DIST_DIR : WEB_DIR;
-}
-log.info('client-root', { serving: webRoot() === DIST_DIR ? 'dist' : 'legacy', dir: webRoot() });
+//
+// `staticRoot`/`staticRootDir` live in `config.ts` so this pick has exactly one
+// implementation: `/api/state` reports the same answer this handler acts on.
+const webRoot = staticRootDir;
+log.info('client-root', { serving: staticRoot(), dir: webRoot() });
 
 /**
  * The console outliving its faults is the whole point: a watcher that throws,

@@ -4,8 +4,9 @@ import {
 } from '@/components/ui';
 import { Markdown, MarkdownInline } from '@/components/markdown';
 import { PromptCard } from '@/components/prompt-card';
+import { WriteMenu } from '@/components/write-menu';
 import { api } from '@/lib/api';
-import { keys, useGateStatus } from '@/lib/queries';
+import { keys, useConsoleState, useGateStatus } from '@/lib/queries';
 import { countdown, pad2, plural, weight } from '@/lib/format';
 import { handoffHref, phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
@@ -36,6 +37,7 @@ function PhaseLink({ slug, phase, suffix }: { slug: string; phase: number; suffi
 export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: string | undefined }) {
   const slug = detail.summary.slug;
   const view = detail.phases.find((p) => p.phase === Number(phase));
+  const { data: state } = useConsoleState();
 
   // Only asked when the plan declares a machine-checkable gate for this phase —
   // the engine shells out per call, and every other phase would ask for nothing.
@@ -132,6 +134,10 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
       </div>
 
       <div className="flex min-w-0 flex-col gap-3">
+        {/* Inline, so a read-only console says what turning writes on would
+            give you rather than showing an empty sidebar. */}
+        <WriteMenu detail={detail} phase={view} allowWrites={Boolean(state?.allowWrites)} inline />
+
         <Card>
           <CardHeader><CardTitle>Dependencies</CardTitle></CardHeader>
           <CardBody>
