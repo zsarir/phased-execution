@@ -4,9 +4,18 @@
  * Two tabs, because they answer two different questions and only one of them is
  * about setup. **Inbox** is what the console has told you — everything it
  * announced, whether or not anything was listening at the time, which is the
- * failure this page exists for. **Devices** is the delivery plumbing, and it is
- * deliberately downstream of the inbox rather than the other way round: the
- * inbox works with nothing configured at all.
+ * failure this page exists for. **Settings** is everything upstream of that,
+ * and it is deliberately downstream of the inbox rather than the other way
+ * round: the inbox works with nothing configured at all.
+ *
+ * The settings tab holds two cards in the order the decisions are actually
+ * made. **What to announce** comes first because it governs the console — a
+ * category switched off there produces no record, no event, no command and no
+ * push. **Devices** comes second because it only decides which subscribed
+ * device a push that was already allowed goes to. Reversing them puts the
+ * narrower switch above the one that overrides it, which is the confusion the
+ * old single card created: its "what to send" list looked global and was
+ * per-device, so it silently did nothing on a console with no device.
  *
  * The tab is a sub-route (`#/notifications/settings`) so it deep-links and
  * survives a reload — and so the "Set a device up" link inside the inbox has
@@ -20,10 +29,13 @@ import type { ViewProps } from '@/router';
 import { Page } from '../_page';
 import { Inbox } from './inbox';
 import { DevicesCard } from './devices';
+import { PreferencesCard } from './preferences';
 
 const TABS = [
   { id: 'inbox', label: 'Inbox' },
-  { id: 'settings', label: 'Devices' },
+  // The id stays `settings` — it is what `routeFor` and every existing deep
+  // link already name. Only the label follows what the tab now holds.
+  { id: 'settings', label: 'Settings' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -59,7 +71,12 @@ export default function NotificationsView({ route }: ViewProps) {
           {tab === 'inbox' && <Inbox onUnread={setUnread} />}
         </TabsContent>
         <TabsContent value="settings" className="pt-4">
-          {tab === 'settings' && <DevicesCard />}
+          {tab === 'settings' && (
+            <div className="flex flex-col gap-4">
+              <PreferencesCard />
+              <DevicesCard />
+            </div>
+          )}
         </TabsContent>
       </Tabs>
     </Page>

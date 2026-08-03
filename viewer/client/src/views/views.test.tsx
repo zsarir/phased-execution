@@ -372,10 +372,13 @@ describe('the inbox', () => {
     expect(await screen.findByText('no device')).toBeTruthy();
   });
 
-  it('deep-links the devices tab', async () => {
+  // The tab id stays `settings` — `routeFor` and every existing deep link name
+  // it — but it now holds the global switches above the per-device card, so the
+  // label follows the contents rather than the id.
+  it('deep-links the settings tab', async () => {
     const { default: NotificationsView } = await import('./notifications');
     mount(<NotificationsView route={route(['notifications', 'settings'])} />);
-    const tab = await screen.findByRole('tab', { name: 'Devices' });
+    const tab = await screen.findByRole('tab', { name: 'Settings' });
     expect(tab.getAttribute('aria-selected')).toBe('true');
   });
 });

@@ -100,7 +100,7 @@ export function DevicesCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Notifications</CardTitle>
+        <CardTitle>Devices</CardTitle>
         <span className="text-2xs text-ink-faint">{plural(deviceCount, 'device')} subscribed</span>
       </CardHeader>
       <CardBody className="flex flex-col gap-3">
@@ -150,8 +150,19 @@ export function DevicesCard() {
         {subscribed && mine && push?.categories.length ? (
           <div>
             <h3 className="mb-2 font-display text-2xs tracking-[0.14em] text-ink-faint uppercase">
-              What to send
+              What to push to this device
             </h3>
+            {/*
+              This list narrows; it does not enable. It used to be the only
+              category control in the console, which made it look global — and
+              on a console with no device subscribed it did not exist at all.
+              Whether a category is announced is decided above, in
+              "What to announce".
+            */}
+            <p className="mb-2 text-2xs text-ink-muted">
+              Only narrows what <strong>What to announce</strong> already allows — a category
+              switched off there never reaches any device, whatever is ticked here.
+            </p>
             <div className="flex flex-col gap-2">
               {push.categories.map((category) => (
                 <label key={category.id} className="flex items-start gap-2">

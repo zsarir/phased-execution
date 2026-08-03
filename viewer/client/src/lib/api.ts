@@ -148,6 +148,17 @@ export interface ConsoleState {
   watcher?: { ok?: boolean; detail?: string };
   health?: unknown;
   run?: unknown;
+  /**
+   * Server-side preferences. `notify` is the global per-category switch the
+   * console consults before it announces anything at all — it is server truth
+   * and deliberately NOT mirrored into `lib/prefs.ts` (browser-local UI
+   * settings), because a notification suppressed in one tab has to stay
+   * suppressed for the process, not for the tab that happened to set it.
+   */
+  prefs?: {
+    notify?: Record<string, boolean>;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 

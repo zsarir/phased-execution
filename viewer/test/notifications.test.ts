@@ -18,7 +18,7 @@
 
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdtempSync, readFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -26,6 +26,24 @@ import { join } from 'node:path';
 // happen before anything pulls it in — otherwise this writes into the
 // operator's real notification history.
 process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), 'phase-inbox-'));
+// CONFIG_DIR resolves at the same moment and for the same reason: the gate
+// tests below write preferences, and they must not land in the operator's real
+// `~/.config/phase-console/config.json`.
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), 'phase-config-'));
+
+/*
+ * The out-of-band leg is a spawned command, so it is observed the way the
+ * operator would observe it: by giving `PHASE_CONSOLE_NOTIFY` a real notifier
+ * that appends what it was told to a file. Nothing else can see that leg —
+ * it leaves the process entirely — and it is precisely the leg that kept firing
+ * for categories that were switched off.
+ */
+const NOTIFY_DIR = mkdtempSync(join(tmpdir(), 'phase-notify-'));
+const NOTIFY_LOG = join(NOTIFY_DIR, 'announced.log');
+const NOTIFIER = join(NOTIFY_DIR, 'notifier.sh');
+writeFileSync(NOTIFIER, `#!/bin/sh\nprintf '%s\\n' "$1" >> ${NOTIFY_LOG}\n`, 'utf8');
+chmodSync(NOTIFIER, 0o755);
+process.env.PHASE_CONSOLE_NOTIFY = NOTIFIER;
 
 // Route vocabulary is asserted against the shared SSOT, not scraped from client
 // source. `shared/route-meta.js` and `shared/routes.js` are plain dependency-free
@@ -487,4 +505,170 @@ test('KeepAlive is read from the plist rather than assumed', async () => {
   const unknown = detectSupervisor({ HOME: home, XPC_SERVICE_NAME: 'com.absent' } as NodeJS.ProcessEnv, 'darwin');
   assert.equal(unknown.supervised, true);
   assert.equal(unknown.assumed, true);
+});
+
+/* ------------------------------------------------------------------ *
+ * The gate: one switch per category, in front of every leg
+ * ------------------------------------------------------------------ */
+
+/**
+ * The failure being pinned here is a toggle that lied.
+ *
+ * Categories used to be stored per subscribed push device, so they filtered
+ * exactly one of the four legs an announcement leaves by. With "Plans changed
+ * on disk" switched off, the inbox record was still written, the SSE event was
+ * still emitted and `PHASE_CONSOLE_NOTIFY` was still run — and a console with
+ * no device subscribed had nowhere to store the preference in the first place.
+ * That is how an inbox reaches 182 unread notifications in a category that is
+ * off by default.
+ *
+ * So the matrix is table-driven over the catalogue rather than written per
+ * category: a category added later is covered the day it is added, and the test
+ * fails if a fifth leg is ever attached above the gate.
+ */
+
+/** The out-of-band leg is a spawned process; wait for the ledger to settle. */
+async function outOfBandLines(expected: number): Promise<string[]> {
+  const read = () => (existsSync(NOTIFY_LOG)
+    ? readFileSync(NOTIFY_LOG, 'utf8').split('\n').filter(Boolean)
+    : []);
+  for (let i = 0; i < 200 && read().length < expected; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  // A grace beyond the last expected line, so a leaked announcement has time to
+  // show up and fail the assertion rather than racing past it.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  return read();
+}
+
+test('every category is gated on all four legs, in both directions', async () => {
+  const { Service } = await import('../server/service.ts');
+  const { SKILL_DIR } = await import('../server/config.ts');
+
+  const service = new Service({
+    port: 0, host: '127.0.0.1', open: false, allowWrites: false,
+    scriptsDir: join(SKILL_DIR, 'scripts'), logFile: null,
+  } as never);
+
+  // Leg 2 — the SSE event a tab would receive.
+  const emitted: string[] = [];
+  service.onEvent((event, data) => {
+    if (event === 'notification') emitted.push((data as { title: string }).title);
+  });
+
+  // Leg 4 — push. Replaced rather than driven through a real subscription on
+  // purpose: the point is that the gate holds with ZERO devices registered,
+  // which is exactly the console that had no per-device preference to consult.
+  const pushed: string[] = [];
+  service.push.announce = ((_category: unknown, message: { title: string }) => {
+    pushed.push(message.title);
+  }) as typeof service.push.announce;
+  assert.equal(service.push.list().length, 0, 'the whole matrix runs with no device subscribed');
+
+  const announce = (service as unknown as {
+    announce: (c: string, m: { title: string; body: string; tag: string }) => unknown;
+  }).announce.bind(service);
+
+  const allOff = Object.fromEntries(catalogue.CATEGORIES.map((c) => [c.id, false]));
+  const expectedOutOfBand: string[] = [];
+
+  for (const category of catalogue.CATEGORIES) {
+    // ---- enabled: all four legs fire ----
+    service.savePreferences({ notify: { ...allOff, [category.id]: true } } as never);
+    const on = `on:${category.id}`;
+    const record = announce(category.id, { title: on, body: 'body', tag: `tag-on-${category.id}` });
+    expectedOutOfBand.push(`Phase Console: ${on}`);
+
+    assert.ok(record, `${category.id}: enabled must produce a record`);
+    assert.equal(
+      service.inbox({ limit: 500 }).items.filter((r) => r.title === on).length, 1,
+      `${category.id}: enabled must be written to the inbox exactly once`,
+    );
+    assert.ok(emitted.includes(on), `${category.id}: enabled must emit over SSE`);
+    assert.ok(pushed.includes(on), `${category.id}: enabled must reach the push leg`);
+
+    // ---- disabled: nothing, anywhere ----
+    service.savePreferences({ notify: { ...allOff, [category.id]: false } } as never);
+    const off = `off:${category.id}`;
+    const suppressed = announce(category.id, { title: off, body: 'body', tag: `tag-off-${category.id}` });
+
+    assert.equal(suppressed, null, `${category.id}: disabled must announce nothing`);
+    assert.equal(
+      service.inbox({ limit: 500 }).items.filter((r) => r.title === off).length, 0,
+      `${category.id}: disabled must not write an inbox record — this is what keeps the unread count honest`,
+    );
+    assert.ok(!emitted.includes(off), `${category.id}: disabled must not emit over SSE`);
+    assert.ok(!pushed.includes(off), `${category.id}: disabled must not reach the push leg`);
+  }
+
+  // Leg 3 — the operator's own notifier, asserted once for the whole matrix
+  // because it is the only leg that leaves the process.
+  const lines = await outOfBandLines(expectedOutOfBand.length);
+  assert.deepEqual(
+    [...lines].sort(), [...expectedOutOfBand].sort(),
+    'the notifier ran for exactly the enabled announcements and for none of the disabled ones',
+  );
+});
+
+test('the firehose is off out of the box, and what stops work is on', () => {
+  const defaults = catalogue.defaultCategories();
+  assert.equal(defaults.changed, false, '"plans changed on disk" is a firehose and must default to silent');
+  assert.equal(defaults.ready, false, 'work becoming ready is frequent and must default to silent');
+  for (const id of ['approval', 'needs-you', 'halted'] as const) {
+    assert.equal(defaults[id], true, `${id} stops work dead and must default to on`);
+  }
+});
+
+test('a category absent from a stored config takes its own default, not undefined', async () => {
+  const { sanitiseCategories } = await import('../server/push/catalogue.ts');
+
+  // What a config written by an older version looks like once a category is
+  // added: the key simply is not there. Reading it as `undefined` would gate
+  // the new category off — silently, and in the direction that loses
+  // notifications rather than the one that merely annoys.
+  const stored = sanitiseCategories({ changed: true });
+  assert.equal(stored.changed, true, 'what was stored is honoured');
+  for (const category of catalogue.CATEGORIES) {
+    assert.equal(typeof stored[category.id], 'boolean', `${category.id} must resolve to a real boolean`);
+    if (category.id !== 'changed') {
+      assert.equal(stored[category.id], category.byDefault, `${category.id} falls back to its catalogue default`);
+    }
+  }
+
+  // Junk from a hand-edited file or an older client cannot turn anything on.
+  assert.deepEqual(sanitiseCategories({ 'not-a-category': true }), catalogue.defaultCategories());
+  assert.deepEqual(sanitiseCategories(null), catalogue.defaultCategories());
+});
+
+test('a toggle survives a restart, with no push device in the picture', async () => {
+  const { Service, } = await import('../server/service.ts');
+  const { SKILL_DIR, loadPrefs } = await import('../server/config.ts');
+
+  const service = new Service({
+    port: 0, host: '127.0.0.1', open: false, allowWrites: false,
+    scriptsDir: join(SKILL_DIR, 'scripts'), logFile: null,
+  } as never);
+
+  // Start from the catalogue defaults explicitly: the config file is shared
+  // with the matrix test above, and a test that depends on what ran before it
+  // is a test that will lie later.
+  service.savePreferences({ notify: catalogue.defaultCategories() } as never);
+  assert.equal(service.state().prefs.notify.approval, true, 'baseline: approval is on by default');
+
+  // One category, the way the Preferences card sends it: a delta, not the map.
+  service.savePreferences({ notify: { changed: true } } as never);
+
+  // A partial patch must not reset everything else to its default — that is the
+  // difference between a PATCH and an accidental factory reset.
+  assert.equal(service.state().prefs.notify.changed, true);
+  assert.equal(service.state().prefs.notify.approval, true, 'untouched categories keep their value');
+
+  service.savePreferences({ notify: { approval: false } } as never);
+  assert.equal(service.state().prefs.notify.changed, true, 'the earlier choice survived the second patch');
+  assert.equal(service.state().prefs.notify.approval, false);
+
+  // The restart: what a fresh process would read off disk.
+  const reloaded = loadPrefs();
+  assert.equal(reloaded.notify.changed, true, 'preferences live in config.json, not in a device record');
+  assert.equal(reloaded.notify.approval, false);
 });

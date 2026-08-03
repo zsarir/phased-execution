@@ -24,7 +24,7 @@ import { listSkills, type SkillInfo } from './skills.ts';
 import { DocsWatcher } from './watch.ts';
 import { degradedState, hasShutdownWork, onDegraded, requestRestart, supervisor } from './lifecycle.ts';
 import { log } from './log.ts';
-import { CATEGORIES, Push, routeFor, tagFor, type CategoryId } from './push/index.ts';
+import { CATEGORIES, Push, routeFor, sanitiseCategories, tagFor, type CategoryId } from './push/index.ts';
 import { Notifications, type NotificationQuery, type NotificationRecord } from './notifications.ts';
 import { repoInfo, lastCommit, type GitRepoInfo, type GitFileInfo } from './git.ts';
 import { findMemory, memoryIndexLines } from './memory.ts';
@@ -388,12 +388,29 @@ export class Service {
    * tab, if one is open), the operator's own notifier (`PHASE_CONSOLE_NOTIFY`,
    * if one is set), and web push (each subscribed device, reporting back what
    * became of it). None of them can throw into a run.
+   *
+   * And one gate stands in front of all four, which is the point of doing this
+   * here rather than per leg. A category the operator has turned off produces
+   * *nothing*: no record, no SSE, no out-of-band command, no push. That has to
+   * happen before `record()` or the inbox keeps filling with the very thing the
+   * switch was thrown to stop — which is exactly how a console accumulates 182
+   * unread notifications for a category that is off by default. Suppression
+   * before recording is what keeps the unread count honest.
+   *
+   * Push keeps its own per-device categories underneath this: the global switch
+   * decides whether the console speaks at all, the device switch decides whether
+   * this phone is one of the places it speaks to.
    */
   private announce(
     category: CategoryId,
     message: { title: string; body: string; tag: string; detail?: string },
     context: { slug?: string | null; phase?: number | null; runId?: string; approvalId?: string } = {},
-  ): NotificationRecord {
+  ): NotificationRecord | null {
+    // The one gate. `notify` is a complete map by construction (`loadPrefs`), so
+    // a category missing from a stored config took its catalogue default on load
+    // rather than arriving here as `undefined` and silencing itself.
+    if (!this.prefs.notify[category]) return null;
+
     const url = routeFor(category, context);
     const record = this.notifications.record({
       category,
@@ -1729,7 +1746,15 @@ export class Service {
   }
 
   savePreferences(patch: Partial<Prefs>): Prefs {
-    this.prefs = { ...this.prefs, ...patch };
+    // `notify` is a map inside a patch, so a shallow spread alone would let a
+    // client sending one toggle reset every other category to its default.
+    // Merged off the *current* map (captured before the spread overwrites it),
+    // then sanitised: unknown keys are dropped and a category this client has
+    // never heard of keeps the value it already had.
+    const notify = patch.notify === undefined
+      ? this.prefs.notify
+      : sanitiseCategories({ ...this.prefs.notify, ...patch.notify });
+    this.prefs = { ...this.prefs, ...patch, notify };
     savePrefs(this.prefs);
     return this.prefs;
   }

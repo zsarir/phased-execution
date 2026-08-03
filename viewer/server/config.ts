@@ -11,6 +11,8 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { sanitiseCategories, type CategoryId } from './push/catalogue.ts';
+
 export const VIEWER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 export const SKILL_DIR = dirname(VIEWER_DIR);
 
@@ -267,19 +269,46 @@ export type Prefs = {
   density?: 'comfortable' | 'compact';
   model?: string;
   sort?: string;
+  /**
+   * Which categories the console is allowed to announce **at all** — the switch
+   * an operator actually means when they turn a notification off.
+   *
+   * This lives here, in the console's own config, rather than on a push device,
+   * because the previous home for it was wrong in a way that made the toggles
+   * lie: categories were stored per subscribed device, so they filtered the push
+   * leg and nothing else. Turning "Plans changed on disk" off still wrote an
+   * inbox record, still emitted over SSE, still ran `PHASE_CONSOLE_NOTIFY` — and
+   * a console with no device subscribed had nowhere to store the preference at
+   * all. One global map, consulted at the top of `Service.announce()`, is what
+   * makes a disabled category mean silence on every leg.
+   *
+   * Never partial: `loadPrefs` sanitises it to a complete map so a category
+   * added in a later version takes its catalogue default instead of reading
+   * `undefined` (and being suppressed by accident).
+   */
+  notify: Record<CategoryId, boolean>;
 };
 
 const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'phase-console');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
-const DEFAULT_PREFS: Prefs = { recentRoots: [], theme: 'system', density: 'comfortable', sort: 'activity' };
+const DEFAULT_PREFS: Prefs = {
+  recentRoots: [], theme: 'system', density: 'comfortable', sort: 'activity', notify: sanitiseCategories(undefined),
+};
 
 export function loadPrefs(): Prefs {
   try {
     const parsed = JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) as Partial<Prefs>;
-    return { ...DEFAULT_PREFS, ...parsed, recentRoots: parsed.recentRoots ?? [] };
+    // `notify` is rebuilt rather than spread: a stored map missing a key must
+    // take that category's default, not inherit `undefined`.
+    return {
+      ...DEFAULT_PREFS,
+      ...parsed,
+      recentRoots: parsed.recentRoots ?? [],
+      notify: sanitiseCategories(parsed.notify),
+    };
   } catch {
-    return { ...DEFAULT_PREFS };
+    return { ...DEFAULT_PREFS, notify: sanitiseCategories(undefined) };
   }
 }
 

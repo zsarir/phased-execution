@@ -51,13 +51,15 @@ export default function SettingsView() {
           </CardHeader>
           <CardBody className="flex flex-col gap-2">
             <p className="text-sm text-ink-muted">
-              Devices, categories and the delivery test live on their own page, beside the inbox of
-              everything the console has announced — including the ones that arrived while nothing
-              was open to hear them.
+              Which categories the console announces at all, the devices a push reaches, and the
+              delivery test live on their own page — beside the inbox of everything the console has
+              announced, including the ones that arrived while nothing was open to hear them.
             </p>
             <p className="text-sm text-ink-muted">
-              <code>PHASE_CONSOLE_NOTIFY=&lt;command&gt;</code> is run with the title and body of
-              every one of them, for a machine with no browser in the picture at all.
+              Switching a category off there silences it everywhere: no inbox record, no open tab,
+              no device, and no <code>PHASE_CONSOLE_NOTIFY</code>. That command is run with the
+              title and body of everything that is <em>not</em> silenced, for a machine with no
+              browser in the picture at all.
             </p>
           </CardBody>
         </Card>
