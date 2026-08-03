@@ -189,7 +189,13 @@ _run_bounded() {  # _run_bounded <seconds> <command-string>
 # Commands no gate has any business running. A gate answers "is the world in the
 # required state" — it never changes the world. Defence in depth behind the
 # opt-in below, not the primary control.
-GATE_CMD_DENY='(^|[;&|[:space:]])(rm|mv|dd|mkfs|shutdown|reboot|kill|pkill|chown|chmod)([[:space:]]|$)|terraform[[:space:]]+(apply|destroy)|git[[:space:]]+(push|reset|clean|checkout)|docker[[:space:]]+(rm|rmi|kill|stop)|task[[:space:]]+[a-z:]*(deploy|ship|update|apply|destroy)|[[:space:]](delete|put|create|set|modify|terminate|reboot)-'
+#
+# Kept in step with MUTATION_DENY in viewer/server/runner/verify.ts — the two
+# state the same policy for the two places a plan's shell text gets executed, and
+# `test/verify-extract.test.ts` fails when they drift. They had already drifted:
+# this copy was missing sudo, git commit/rebase/merge, docker system prune and
+# the redirect clause.
+GATE_CMD_DENY='(^|[;&|[:space:]])(rm|mv|dd|mkfs|shutdown|reboot|kill|pkill|chown|chmod|sudo)([[:space:]]|$)|terraform[[:space:]]+(apply|destroy)|git[[:space:]]+(push|reset|clean|checkout|commit|rebase|merge)|docker[[:space:]]+(rm|rmi|kill|stop|system[[:space:]]+prune)|task[[:space:]]+[a-z:]*(deploy|ship|update|apply|destroy)|[[:space:]](delete|put|create|set|modify|terminate|reboot)-|>[[:space:]]*/|>>[[:space:]]*/'
 
 # Executing a command written in a markdown file is remote code execution by
 # document: clone a repo, run the board, run their shell. So `cmd` gates are OFF

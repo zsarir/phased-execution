@@ -489,7 +489,7 @@
   .code, .guide pre.cmd, .md pre { max-width: 100%; }
 
   /* Inline code is a different animal: a path has no break opportunity in it,
-     so `/Users/…/.config/phase-console/autopilot.json` is one 262px word, and
+     so `~/.config/phase-console/plans/<slug>.json` is one 262px word, and
      one of them in a card head was enough to push the whole page sideways.
      Breaking a path mid-segment is ugly; a page that scrolls left is worse. */
   code { overflow-wrap: anywhere; }
