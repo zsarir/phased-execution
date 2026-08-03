@@ -37,9 +37,15 @@ import {
   type PlanStats, type Portfolio, type PlanContext, type EtaEstimate,
 } from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
-import { Runner, applySettings, type AskResult, type RunSettingsPatch, type StartOptions } from './runner/runner.ts';
+import {
+  Runner, applySettings,
+  type AskResult, type RecoverMode, type RunSettingsPatch, type StartOptions,
+} from './runner/runner.ts';
 import { Journal } from './runner/journal.ts';
-import { latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT, type RunState } from './runner/state.ts';
+import {
+  latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT,
+  type RunState, type VerifySummary,
+} from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
 import { checkAuth, forgetAuth, openLoginTerminal, type AuthStatus } from './runner/auth.ts';
 import {
@@ -123,6 +129,89 @@ export type PlanDetail = {
   git: GitFileInfo & { dirty?: boolean };
   memory: { key: string; path: string; text: string; indexLines: string[] } | null;
 };
+
+/** A forward action the console can offer on a phase that is not done. */
+export type RecoveryAction = {
+  id: 'recheck' | 'closeout' | 'resume' | 'retry' | 'skip';
+  label: string;
+  /** What it costs — the thing that was never stated on the old Retry button. */
+  detail: string;
+};
+
+export type PhaseDiagnosis = {
+  runId: string;
+  phase: number;
+  status: string;
+  /** Which of the three checks is standing in the way, when one is. */
+  blockedOn: 'board' | 'verification' | 'lint' | null;
+  boardState: string;
+  said: string | null;
+  verification: VerifySummary | null;
+  lint: { ok: boolean; summary: string } | null;
+  closeout: { at: string; ok: boolean; sessionId?: string; note?: string } | null;
+  sessionId: string | null;
+  resumable: boolean;
+  note: string | null;
+  workingTree: string[];
+  lock: string | null;
+  actions: RecoveryAction[];
+};
+
+/**
+ * What can still be done about a phase in this state.
+ *
+ * The invariant this exists to hold: **a phase that is not done always offers at
+ * least one way forward.** A run that halted with its approval card expired had
+ * none — the card could not be answered, the phase could not be closed, and the
+ * only controls on the page re-ran or discarded work that was probably fine.
+ * `test/recovery.test.ts` walks every terminal status and asserts this is never
+ * empty.
+ */
+export function recoveryActions(status: string, resumable: boolean): RecoveryAction[] {
+  if (status === 'done' || status === 'skipped') return [];
+
+  const actions: RecoveryAction[] = [{
+    id: 'recheck',
+    label: 'Re-check',
+    detail: 'Runs the board, verification and validate.sh again. Starts no session and costs nothing.',
+  }];
+
+  if (resumable) {
+    actions.push({
+      id: 'closeout',
+      label: 'Finish this phase',
+      detail: 'Resumes this phase\'s own session and asks it to verify, commit and write the handoff.',
+    }, {
+      id: 'resume',
+      label: 'Resume with an instruction',
+      detail: 'The same, carrying words you type — for when it needs to fix something first.',
+    });
+  }
+
+  actions.push({
+    id: 'retry',
+    label: 'Retry from the start',
+    detail: resumable
+      ? 'Runs the phase again from its boot prompt. Discards the session above and whatever it had done.'
+      : 'Runs the phase again from its boot prompt.',
+  }, {
+    id: 'skip',
+    label: 'Skip',
+    detail: 'Marks the phase abandoned and moves on. The plan will read it as not done.',
+  });
+
+  return actions;
+}
+
+/** `git status --porcelain`, or empty when it cannot be read. */
+function gitPorcelain(root: string): Promise<string> {
+  return new Promise((resolve) => {
+    execFile('git', ['status', '--porcelain'], {
+      cwd: root, timeout: 15_000, maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
+    }, (error, stdout) => resolve(error ? '' : String(stdout).trim()));
+  });
+}
 
 type Cached<T> = { revision: number; value: T };
 
@@ -1376,6 +1465,100 @@ export class Service {
       record.note = 'skipped by the operator';
       state.halt = null;
     });
+  }
+
+  /**
+   * Move a stuck phase forward without starting it over.
+   *
+   * Retry and Skip were the whole vocabulary, and both discard something: the
+   * session that may have been minutes from done, or the phase itself. These
+   * three are the middle — re-check what is already on disk, ask the phase's own
+   * session to finish its closeout, or resume it with an instruction. See
+   * `Runner.recover`.
+   */
+  async recoverPhase(
+    slug: string, phase: number, mode: RecoverMode, opts: { instruction?: string; by?: string } = {},
+  ): Promise<RunState | null> {
+    if (this.runner.busy()) {
+      throw new Error('A run is in progress. Pause or stop it before recovering a phase.');
+    }
+    const root = this.root?.path;
+    if (!root) throw new Error('No repository is open.');
+
+    // The most recent run that actually reached this phase — recovery acts on a
+    // real record, never on an invented one.
+    const target = listRuns(root, slug)
+      .find((run) => run.phases[String(phase)]);
+    if (!target) throw new Error(`No run of ${slug} has a record for phase ${phase}.`);
+
+    return this.runner.recover({
+      slug, root, runId: target.id, phase, mode,
+      instruction: opts.instruction,
+      by: opts.by ?? 'console',
+    });
+  }
+
+  /**
+   * Everything known about why a phase is not done, in one payload.
+   *
+   * All of it was already being captured and none of it was reachable: the
+   * output of the command that failed, the session's closing words, the lint
+   * summary, whether a handoff exists at all. The page rendered a one-line
+   * reason and the rest lived in NDJSON, so diagnosing a stuck phase meant
+   * leaving the console — which is the one thing the console exists to prevent.
+   */
+  async phaseDiagnosis(slug: string, phase: number): Promise<PhaseDiagnosis | null> {
+    const root = this.root?.path;
+    if (!root) return null;
+    const run = this.runner.current()?.slug === slug
+      ? this.runner.current()!
+      : listRuns(root, slug).find((r) => r.phases[String(phase)]);
+    if (!run) return null;
+
+    const record = run.phases[String(phase)];
+    if (!record) return null;
+
+    const board = await this.boardStates(slug);
+    const [dirty, lock] = await Promise.all([
+      gitPorcelain(run.root),
+      this.phaseLock(slug, phase),
+    ]);
+
+    return {
+      runId: run.id,
+      phase,
+      status: record.status,
+      // Which of the three checks is the one standing in the way. Named rather
+      // than left for the reader to infer from four unrelated fields.
+      blockedOn: board[phase] !== 'done' ? 'board'
+        : record.verification && !record.verification.ok ? 'verification'
+          : record.lint && !record.lint.ok ? 'lint'
+            : null,
+      boardState: board[phase] ?? 'unknown',
+      said: record.said ?? null,
+      verification: record.verification ?? null,
+      lint: record.lint ?? null,
+      closeout: record.closeout ?? null,
+      sessionId: record.sessionId ?? record.resumeSessionId ?? null,
+      resumable: Boolean(record.sessionId ?? record.resumeSessionId),
+      note: record.note ?? null,
+      workingTree: dirty ? dirty.split('\n').slice(0, 40) : [],
+      lock,
+      actions: recoveryActions(record.status, Boolean(record.sessionId ?? record.resumeSessionId)),
+    };
+  }
+
+  private async phaseLock(slug: string, phase: number): Promise<string | null> {
+    try {
+      const out = await run(this.engineOpts(), 'phase-lock.sh', [slug, 'status', String(phase)]);
+      return out.stdout.trim() || null;
+    } catch { return null; }
+  }
+
+  private async boardStates(slug: string): Promise<Record<number, string>> {
+    try {
+      return readMemoryBlock(await run(this.engineOpts(), 'phase-graph.sh', [slug, '--memory-block'])).states;
+    } catch { return {}; }
   }
 
   /* ---- signing in ---- */

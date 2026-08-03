@@ -546,6 +546,17 @@ export async function handleApi(
           json(res, 200, service.runTranscript(slug, rest[2], Number(url.searchParams.get('limit') ?? 400)));
           return true;
         }
+        // Why a phase is not done, in one payload: the command output, the
+        // session's closing words, the lint summary, the board-vs-handoff
+        // disagreement, and what can still be done about it. All of it was
+        // already on disk; none of it was reachable from the page.
+        if (verb === 'diagnosis') {
+          const phase = Number(rest[2] ?? url.searchParams.get('phase'));
+          if (!Number.isFinite(phase)) { json(res, 400, { error: 'a phase number is required' }); return true; }
+          const diagnosis = await service.phaseDiagnosis(slug, phase);
+          json(res, diagnosis ? 200 : 404, diagnosis ?? { error: `no record of phase ${phase} in any run of ${slug}` });
+          return true;
+        }
         // `eta` rides along rather than getting an endpoint of its own: it is
         // derived from exactly this run plus the plan's board, and a second
         // request could be answered against a board that had moved on.
@@ -620,6 +631,25 @@ export async function handleApi(
           case 'stop': json(res, 200, { run: await service.stopRun(slug) }); return true;
           case 'skip': json(res, 200, { run: service.skipPhase(slug, Number(body.phase)) }); return true;
           case 'retry': json(res, 200, { run: service.retryPhase(slug, Number(body.phase)) }); return true;
+          // The middle ground between Retry and Skip: re-check what is on disk,
+          // or ask the phase's own session to finish what it started. Every one
+          // of these ends in the same three checks, so none of them can mark a
+          // phase done that the board does not agree about.
+          case 'recheck':
+          case 'closeout':
+          case 'resume-phase': {
+            const mode = verb === 'resume-phase' ? 'resume' : verb;
+            try {
+              const run = await service.recoverPhase(slug, Number(body.phase), mode, {
+                instruction: typeof body.instruction === 'string' ? body.instruction.slice(0, 8_000) : undefined,
+                by: typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
+              });
+              json(res, 200, { run });
+            } catch (error) {
+              json(res, 409, { error: (error as Error)?.message ?? 'the phase could not be recovered' });
+            }
+            return true;
+          }
           case 'settings': {
             const run = service.configureRun(slug, {
               ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),

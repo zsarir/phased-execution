@@ -50,8 +50,15 @@ export function boardCounts(rows) {
  */
 export function phaseActions(phase, { live, allowRun }) {
   const status = phase.record?.status;
+  // A phase that stopped short can always be asked why — including on a console
+  // started without `--allow-run`, because reading the evidence changes nothing.
+  // Refusing to show it is what sent people to a terminal. The actions inside
+  // the panel are the part that is gated.
+  const diagnose = !live && phase.state !== 'done'
+    && ['failed', 'interrupted', 'parked', 'awaiting-verification'].includes(status);
+
   if (!allowRun || phase.state === 'done') {
-    return { runAlone: false, retry: false, skip: false };
+    return { runAlone: false, retry: false, skip: false, diagnose };
   }
   return {
     // Only a phase the board says is ready can be run: anything else is either
@@ -61,6 +68,7 @@ export function phaseActions(phase, { live, allowRun }) {
     // Skipping takes a phase off a running loop's list; with no loop there is
     // nothing to take it off.
     skip: Boolean(live) && status !== 'skipped' && status !== 'done',
+    diagnose,
   };
 }
 

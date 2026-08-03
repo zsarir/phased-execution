@@ -106,6 +106,19 @@ export const api = {
   runStop: (slug) => post(`/api/run/${encodeURIComponent(slug)}/stop`),
   runSkip: (slug, phase) => post(`/api/run/${encodeURIComponent(slug)}/skip`, { phase }),
   runRetry: (slug, phase) => post(`/api/run/${encodeURIComponent(slug)}/retry`, { phase }),
+  /**
+   * The three verbs between Retry and Skip. `recheck` starts no session at all;
+   * the other two resume the phase's own session rather than beginning it again,
+   * so a phase that was minutes from done does not lose that work.
+   */
+  runRecheck: (slug, phase) => post(`/api/run/${encodeURIComponent(slug)}/recheck`, { phase }),
+  runCloseout: (slug, phase) => post(`/api/run/${encodeURIComponent(slug)}/closeout`, { phase }),
+  runResumePhase: (slug, phase, instruction) =>
+    post(`/api/run/${encodeURIComponent(slug)}/resume-phase`, { phase, instruction }),
+  /** Why a phase is not done — the evidence behind the one-line reason. */
+  phaseDiagnosis: (slug, phase) => request(
+    `/api/run/${encodeURIComponent(slug)}/diagnosis/${encodeURIComponent(phase)}`,
+  ),
   /** Change model, autonomy or budgets on a run in flight; applies next phase. */
   runSettings: (slug, patch) => post(`/api/run/${encodeURIComponent(slug)}/settings`, patch),
   /** Stop the running session where it stands, without losing it. */

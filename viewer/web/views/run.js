@@ -1176,21 +1176,145 @@ function PhaseRow({ phase: p, slug, run, live, allowRun, onAct }) {
         </div>
       </td>
     </tr>
-    ${r?.note || r?.verification ? html`
+    ${r?.note || r?.verification || can.diagnose ? html`
       <tr key=${`${p.phase}-note`} class="phase-note">
         <td class="cell-empty"></td>
         <td colspan="7">
-          ${r.note ? html`<div class="muted small">${r.note}</div>` : null}
-          ${r.verification ? html`
+          ${r?.note ? html`<div class="muted small">${r.note}</div>` : null}
+          ${r?.verification ? html`
             <div class=${`small ${r.verification.ok ? 'ok' : 'bad'}`}>${r.verification.reason}</div>` : null}
-          ${r.verification?.notRun?.length ? html`
+          ${r?.verification?.notRun?.length ? html`
             <details>
               <summary class="small">${r.verification.notRun.length} step(s) a person must check</summary>
               <ul class="small">${r.verification.notRun.map((n, i) => html`
                 <li key=${i}><code>${n.text}</code> — ${n.reason}</li>`)}</ul>
             </details>` : null}
+          ${can.diagnose ? html`
+            <${PhaseDiagnosis} slug=${slug} phase=${p.phase} allowRun=${allowRun} onAct=${onAct} />` : null}
         </td>
       </tr>` : null}`;
+}
+
+/**
+ * Why this phase is not done, and what can still be done about it.
+ *
+ * Every fact below was already being written to disk and none of it reached the
+ * page: the output of the command that failed, the session's own closing words,
+ * the lint summary, whether a handoff exists at all. The run that prompted this
+ * halted saying "no handoff was written" while the session had, in its last
+ * message, explained exactly why it could not write one — and reading that meant
+ * opening NDJSON in a terminal.
+ *
+ * Fetched when opened rather than with the row: it costs a `git status` and two
+ * script runs, and most rows are never opened.
+ */
+function PhaseDiagnosis({ slug, phase, allowRun, onAct }) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [instruction, setInstruction] = useState('');
+  const [asking, setAsking] = useState(false);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try { setData(await api.phaseDiagnosis(slug, phase)); }
+    catch (e) { setError(e?.message ?? String(e)); }
+  }, [slug, phase]);
+
+  useEffect(() => { if (open && !data) load(); }, [open, data, load]);
+
+  const act = (id) => {
+    if (id === 'resume') { setAsking(true); return; }
+    const call = {
+      recheck: () => api.runRecheck(slug, phase),
+      closeout: () => api.runCloseout(slug, phase),
+      retry: () => api.runRetry(slug, phase),
+      skip: () => api.runSkip(slug, phase),
+    }[id];
+    if (call) onAct(id, call);
+  };
+
+  const failed = (data?.verification?.ran ?? []).filter((x) => !x.ok);
+
+  return html`
+    <details class="diagnosis" onToggle=${(e) => setOpen(e.currentTarget.open)}>
+      <summary class="small">Why is this not done?</summary>
+      ${error ? html`<div class="small bad">${error}</div>` : null}
+      ${!data && !error ? html`<div class="small muted">Reading the run…</div>` : null}
+      ${data ? html`
+        <dl class="diagnosis-facts small">
+          <dt>Blocked on</dt>
+          <dd>${{
+            board: 'the board — no handoff, or it is not marked complete',
+            verification: 'the verification commands',
+            lint: 'validate.sh',
+          }[data.blockedOn] ?? 'nothing the runner can name'}</dd>
+          <dt>Board says</dt><dd><code>${data.boardState}</code></dd>
+          ${data.lock ? html`<dt>Lock</dt><dd class="muted">${data.lock}</dd>` : null}
+          ${data.sessionId ? html`
+            <dt>Session</dt>
+            <dd><code>${data.sessionId}</code> ${data.resumable ? '· can be resumed' : ''}</dd>` : null}
+        </dl>
+
+        ${data.said ? html`
+          <div class="small"><b>The session signed off:</b></div>
+          <pre class="diagnosis-out small">${data.said}</pre>` : null}
+
+        ${failed.length ? html`
+          <div class="small"><b>What failed:</b></div>
+          ${failed.map((x, i) => html`
+            <div key=${i}>
+              <div class="small"><code>${x.command}</code> — exited ${x.code}</div>
+              <pre class="diagnosis-out small">${x.output || '(no output)'}</pre>
+            </div>`)}` : null}
+
+        ${data.lint && !data.lint.ok ? html`
+          <div class="small"><b>validate.sh:</b></div>
+          <pre class="diagnosis-out small">${data.lint.summary}</pre>` : null}
+
+        ${data.closeout ? html`
+          <div class="small muted">
+            A closeout was already attempted ${relativeTime(data.closeout.at)}
+            — ${data.closeout.ok ? 'the session ran' : 'it did not complete'}${data.closeout.note ? ` (${data.closeout.note})` : ''}.
+          </div>` : null}
+
+        ${data.workingTree.length ? html`
+          <details>
+            <summary class="small">${data.workingTree.length} uncommitted path(s)</summary>
+            <pre class="diagnosis-out small">${data.workingTree.join('\n')}</pre>
+          </details>` : null}
+
+        ${asking ? html`
+          <div class="diagnosis-ask">
+            <label class="small" for=${`fix-${phase}`}>
+              What should it do before closing the phase?
+            </label>
+            <textarea id=${`fix-${phase}`} class="input" rows="3"
+                      placeholder="e.g. the scrub grep still matches README.fa.md — fix that first"
+                      value=${instruction}
+                      onInput=${(e) => setInstruction(e.currentTarget.value)}></textarea>
+            <div class="row wrap">
+              <button class="btn small primary" disabled=${!instruction.trim()}
+                      onClick=${() => {
+                        onAct('resume', () => api.runResumePhase(slug, phase, instruction.trim()));
+                        setAsking(false);
+                      }}>Resume with this</button>
+              <button class="btn small" onClick=${() => setAsking(false)}>Cancel</button>
+            </div>
+          </div>` : null}
+
+        <div class="row wrap diagnosis-actions">
+          ${data.actions.map((a) => html`
+            <button key=${a.id} class="btn small" title=${a.detail}
+                    disabled=${!allowRun}
+                    onClick=${() => act(a.id)}>${a.label}</button>`)}
+        </div>
+        ${!allowRun ? html`
+          <div class="small muted">
+            This console was started without <code>--allow-run</code>. The evidence above is
+            readable; every action here would be refused by the server.
+          </div>` : null}` : null}
+    </details>`;
 }
 
 /* ------------------------------------------------------------------ *

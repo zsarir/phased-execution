@@ -1604,3 +1604,69 @@
   .plan-head h1 { font-size: var(--text-xl); }
   .chart .axis-label { font-size: 10px; }
 }
+
+/* ------------------------------------------------------------------ *
+ * Why is this phase not done?
+ *
+ * The evidence panel under a stopped phase. Its whole job is to render
+ * things that are wide — command output, a stack trace, a porcelain
+ * listing — inside a page that must not scroll sideways at 390px. So
+ * every wide child scrolls in its own box and nothing relies on the
+ * viewport being generous.
+ * ------------------------------------------------------------------ */
+
+.diagnosis { margin-top: var(--s2); }
+
+.diagnosis > summary {
+  cursor: pointer;
+  color: var(--ink-muted);
+}
+
+.diagnosis-facts {
+  display: grid;
+  /* `auto` as a minimum is min-content, which lets a long session id blow the
+     column past the page. `minmax(0, 1fr)` is what keeps it in. */
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--s1) var(--s3);
+  margin: var(--s2) 0;
+}
+
+.diagnosis-facts dt { color: var(--ink-muted); }
+.diagnosis-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.diagnosis-out {
+  margin: var(--s1) 0 var(--s3);
+  padding: var(--s2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--ground-deep);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  /* The two that matter: keep the lines intact and let the BOX scroll, so a
+     240-column stack trace never widens the document. */
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.diagnosis-actions { margin-top: var(--s3); gap: var(--s2); }
+
+.diagnosis-ask {
+  margin: var(--s3) 0;
+  padding: var(--s3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.diagnosis-ask textarea {
+  width: 100%;
+  margin: var(--s1) 0 var(--s2);
+  font-family: var(--font-mono);
+}

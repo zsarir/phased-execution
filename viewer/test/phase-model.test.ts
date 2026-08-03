@@ -84,11 +84,16 @@ test('a finished phase offers nothing at all, whatever the run recorded', () => 
   // `skipped` in the run record; the old table read the record and offered to
   // run it.
   const [, ten] = mergePhases(PLAN, RUN);
-  assert.deepEqual(phaseActions(ten, opts), { runAlone: false, retry: false, skip: false });
+  assert.deepEqual(phaseActions(ten, opts), {
+    runAlone: false, retry: false, skip: false, diagnose: false,
+  });
 
-  // Even when the record looks retryable.
+  // Even when the record looks retryable. `diagnose` obeys the same rule as the
+  // rest of the row: a phase the board calls done has nothing left to explain.
   const failed = { state: 'done', record: { status: 'failed' } };
-  assert.deepEqual(phaseActions(failed, opts), { runAlone: false, retry: false, skip: false });
+  assert.deepEqual(phaseActions(failed, opts), {
+    runAlone: false, retry: false, skip: false, diagnose: false,
+  });
 });
 
 test('only a phase the board calls ready can be run on its own', () => {
@@ -120,10 +125,30 @@ test('retry is offered only for a record that actually stopped badly', () => {
   }
 });
 
-test('a read-only console offers no controls whatsoever', () => {
+test('a read-only console offers no controls — but will still say what went wrong', () => {
   const readOnly = { live: false, allowRun: false };
   const ready = { state: 'ready', record: { status: 'failed' } };
-  assert.deepEqual(phaseActions(ready, readOnly), { runAlone: false, retry: false, skip: false });
+  // Every control is off, and `diagnose` is deliberately not one: reading why a
+  // phase stopped changes nothing, and withholding it is what sent people to a
+  // terminal to grep NDJSON. The buttons inside the panel are gated on
+  // `allowRun` in the view, and the server refuses all of them without it.
+  const actions = phaseActions(ready, readOnly);
+  assert.deepEqual(actions, { runAlone: false, retry: false, skip: false, diagnose: true });
+});
+
+test('there is always a way forward from a phase that stopped', () => {
+  // The dead end this closes: a run halted with its approval card expired
+  // offered Retry (re-runs a session that was probably fine) and Skip (throws
+  // the phase away) and nothing else. Every stopped state must open the panel,
+  // which is where the three non-destructive verbs live.
+  for (const status of ['failed', 'interrupted', 'parked', 'awaiting-verification']) {
+    assert.equal(phaseActions({ state: 'ready', record: { status } }, opts).diagnose, true, status);
+  }
+  // Nothing to diagnose about a phase that never ran, or one still going.
+  assert.equal(phaseActions({ state: 'ready', record: undefined }, opts).diagnose, false);
+  assert.equal(phaseActions({ state: 'ready', record: { status: 'running' } }, opts).diagnose, false);
+  assert.equal(phaseActions({ state: 'ready', record: { status: 'failed' } }, { live: true, allowRun: true }).diagnose,
+    false, 'a driving loop owns the phase; the panel is for when nothing does');
 });
 
 /* ------------------------------------------------------------------ *
