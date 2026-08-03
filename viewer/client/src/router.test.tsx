@@ -39,8 +39,13 @@ describe('route registry', () => {
     expect(resolveHead(undefined)).toBe(DEFAULT_HEAD);
     expect(resolveHead('')).toBe(DEFAULT_HEAD);
     expect(resolveHead('nope')).toBe(DEFAULT_HEAD);
-    // `terminal` is deliberately unregistered until Phase 6 builds the page —
-    // it must degrade to the dashboard, not to a blank screen.
-    expect(resolveHead('terminal')).toBe(DEFAULT_HEAD);
+  });
+
+  it('resolves the terminal to its own page, gated or not', () => {
+    // The gate is `--allow-terminal` on the server, and the page explains
+    // itself when it is off. Resolving to the dashboard instead would make a
+    // deep link from a phone look like a broken app.
+    expect(resolveHead('terminal')).toBe('terminal');
+    expect(resolveHead('terminal')).not.toBe(DEFAULT_HEAD);
   });
 });

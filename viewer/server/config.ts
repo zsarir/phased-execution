@@ -27,6 +27,13 @@ export type Flags = {
    */
   allowRun: boolean;
   /**
+   * A third decision again, not a wider reading of the other two. `--allow-run`
+   * spawns a supervised agent inside a policy this console enforces;
+   * `--allow-terminal` hands over an unsupervised shell, where the policy is
+   * whatever the person typing knows. Same machine, different promise.
+   */
+  allowTerminal: boolean;
+  /**
    * Hostnames this console answers to besides localhost, reached through an
    * authenticating proxy that puts the caller's identity in a header.
    *
@@ -66,6 +73,7 @@ export function parseFlags(argv: string[]): Flags {
     open: process.env.PHASE_CONSOLE_NO_OPEN !== '1',
     allowWrites: false,
     allowRun: false,
+    allowTerminal: false,
     remoteHosts: [],
     remoteUsers: splitList(process.env.PHASE_CONSOLE_REMOTE_USERS),
     scriptsDir: join(SKILL_DIR, 'scripts'),
@@ -81,6 +89,7 @@ export function parseFlags(argv: string[]): Flags {
     else if (arg === '--no-open') flags.open = false;
     else if (arg === '--allow-writes') flags.allowWrites = true;
     else if (arg === '--allow-run') flags.allowRun = true;
+    else if (arg === '--allow-terminal') flags.allowTerminal = true;
     else if (arg === '--remote') flags.remoteHosts.push(...splitList(next()));
     else if (arg === '--remote-user') flags.remoteUsers.push(...splitList(next()));
     else if (arg === '--scripts') flags.scriptsDir = resolve(expandHome(next() ?? ''));
@@ -138,6 +147,8 @@ function printHelp(): void {
   --no-open         do not open the browser (it opens by default)
   --allow-writes    enable the guarded write verbs (scaffold, QA record, locks)
   --allow-run       enable the autopilot: spawn \`claude -p\` sessions per phase
+  --allow-terminal  enable the Terminal page: a real shell over a WebSocket,
+                    running as you, with no policy in front of it
   --remote <host>   also answer to this hostname, fronted by an authenticating
                     proxy (e.g. \`tailscale serve\`). Repeatable. Turns on strict
                     Host checking, so any other Host is refused.

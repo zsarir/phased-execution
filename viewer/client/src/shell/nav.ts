@@ -1,7 +1,9 @@
 import {
-  Bell, Compass, LayoutGrid, LineChart, ListChecks, Search, Settings, FileText, Zap,
+  Bell, Compass, LayoutGrid, LineChart, ListChecks, Search, Settings, FileText,
+  TerminalSquare, Zap,
   type LucideIcon,
 } from 'lucide-react';
+import type { ConsoleState } from '@/lib/api';
 
 /**
  * Where you can go, defined once.
@@ -30,6 +32,14 @@ export interface NavItem {
   tab?: boolean;
   /** In the rail's main block (vs its footer). */
   primary?: boolean;
+  /**
+   * A server capability this destination needs before it is worth offering.
+   *
+   * The route always exists and always explains itself — what this hides is the
+   * *nav entry*, because a permanent dead link in a nine-item list is noise on
+   * every machine that never turns the feature on.
+   */
+  requires?: 'allowTerminal';
 }
 
 export const NAV: readonly NavItem[] = [
@@ -40,14 +50,37 @@ export const NAV: readonly NavItem[] = [
   { id: 'notifications', label: 'Notifications', icon: Bell, note: 'Everything the console has announced', badge: 'unread', primary: true },
   { id: 'stats', label: 'Statistics', icon: ListChecks, note: 'Throughput, cost and the shape of the portfolio', primary: true },
   { id: 'search', label: 'Search', icon: Search, note: 'Every plan, handoff and phase at once', primary: true },
+  {
+    id: 'terminal',
+    label: 'Terminal',
+    icon: TerminalSquare,
+    note: 'A shell on this machine, from here or from a phone',
+    requires: 'allowTerminal',
+  },
   { id: 'guide', label: 'Guide', icon: Compass, note: 'How the runner works, and the phone setup' },
   { id: 'settings', label: 'Settings', icon: Settings, note: 'Notifications, permission rules, devices' },
 ];
 
-/** The phone tab bar: the four, plus More. */
+/**
+ * The destinations this console can actually offer.
+ *
+ * Filtered at render rather than at module scope: `NAV` is a constant, but
+ * whether the server has a terminal is a fact that arrives with `/api/state`
+ * and can change on a restart.
+ */
+export function visibleNav(state: ConsoleState | undefined): NavItem[] {
+  return NAV.filter((item) => !item.requires || state?.[item.requires] === true);
+}
+
+/**
+ * The phone tab bar: the four, plus More. Never capability-gated — the four
+ * are the ones every console has, and a tab bar that changes width between
+ * machines is worse than a rule.
+ *
+ * The sheet is `visibleNav(state).filter(i => !i.tab)`, computed at render
+ * because the gate depends on the server.
+ */
 export const TAB_ITEMS = NAV.filter((item) => item.tab);
-/** The sheet: everything the tab bar does not already show. */
-export const SHEET_ITEMS = NAV.filter((item) => !item.tab);
 
 /**
  * A plan page is somewhere you arrived from Plans, so Plans stays lit while you

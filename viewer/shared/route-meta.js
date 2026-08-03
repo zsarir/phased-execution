@@ -21,8 +21,12 @@
  * Top-level route heads — `route.segments[0]`. The empty hash (`#/`) and any
  * unknown head resolve to `dashboard` (the client registry maps '' → 'dashboard').
  * `source` renders outside the app shell (the pre-open directory picker).
- * NOTE: `terminal` is intentionally absent until the terminal phase adds its view —
- * the route-registry guard asserts every head here resolves to a real component.
+ * `terminal` takes an optional session id (`#/terminal/<id>`) so a shell survives
+ * a reload; it is a route whether or not `--allow-terminal` was given, because a
+ * route that explains why it is off is better than one that vanishes.
+ * NOTE: the route-registry guard asserts every head here resolves to a real
+ * component AND that no component exists without a head — adding one means
+ * adding both sides.
  * @type {readonly string[]}
  */
 export const ROUTE_HEADS = Object.freeze([
@@ -37,6 +41,7 @@ export const ROUTE_HEADS = Object.freeze([
   'source',
   'notifications',
   'guide',
+  'terminal',
 ]);
 
 /**

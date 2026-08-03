@@ -40,8 +40,7 @@ type View = LazyExoticComponent<ComponentType<ViewProps>>;
 
 /**
  * One entry per `ROUTE_HEADS` member — the client test fails if that stops being
- * true in either direction. `terminal` is deliberately absent from both until
- * Phase 6 adds the page.
+ * true in either direction.
  */
 export const VIEWS: Record<string, View> = {
   dashboard: lazy(() => import('./views/dashboard')),
@@ -55,6 +54,10 @@ export const VIEWS: Record<string, View> = {
   source: lazy(() => import('./views/source')),
   notifications: lazy(() => import('./views/notifications')),
   guide: lazy(() => import('./views/guide')),
+  // xterm and its addons are ~250 KB of JavaScript that only this route needs.
+  // Lazy is not an optimisation here — it is why a phone opening the ready
+  // queue does not download a terminal emulator.
+  terminal: lazy(() => import('./views/terminal')),
 };
 
 /** `''` and anything unregistered land on the dashboard rather than nowhere. */

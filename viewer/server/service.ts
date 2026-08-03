@@ -41,6 +41,7 @@ import {
   Runner, applySettings,
   type AskResult, type RecoverMode, type RunSettingsPatch, type StartOptions,
 } from './runner/runner.ts';
+import { Terminals } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
 import {
   latestRun, listRuns, phaseRecord, saveRun, IN_FLIGHT,
@@ -295,11 +296,18 @@ export class Service {
   readonly approvals: Approvals;
   readonly push: Push;
   readonly notifications: Notifications;
+  readonly terminals: Terminals;
 
   constructor(flags: Flags) {
     this.flags = flags;
     this.prefs = loadPrefs();
     this.sizing = loadSizing(flags.scriptsDir);
+    // A new shell opens where you are working, not in `$HOME` — the source
+    // directory is what every command you were about to type is relative to.
+    this.terminals = new Terminals({
+      allowed: flags.allowTerminal,
+      cwd: () => this.root?.path,
+    });
     this.push = new Push(flags.remoteUsers);
     this.notifications = new Notifications();
     this.watcher = new DocsWatcher((paths) => this.onChange(paths));
@@ -452,6 +460,9 @@ export class Service {
 
   close(): void {
     this.watcher.stop();
+    // Every pty is a child process of this one. Leaving them behind would leave
+    // orphaned login shells holding the source directory open.
+    this.terminals.close();
     // Read markers and delivery outcomes are collapsed behind a debounce; this
     // is the one moment they would otherwise be lost.
     this.notifications.flush();
@@ -1225,6 +1236,11 @@ export class Service {
       supervisor: supervisor(),
       unread: this.notifications.unread(),
       allowRun: this.flags.allowRun,
+      // The shell gate, so the nav can offer a Terminal only where there is one
+      // to offer. `/api/terminal` carries the richer answer (whether node-pty
+      // actually loaded, and what is open); this is the one bit the shell needs
+      // on every page.
+      allowTerminal: this.flags.allowTerminal,
       run: this.runner.current(),
       scriptsDir: this.flags.scriptsDir,
       sizing: this.sizing,

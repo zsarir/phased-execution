@@ -41,6 +41,12 @@ export default defineConfig({
       // SSE + the service worker are GETs — no CSRF, no Origin rewrite needed.
       '/events': { target: CONSOLE, changeOrigin: true },
       '/sw.js': { target: CONSOLE, changeOrigin: true },
+      // The terminal socket. `ws: true` is what makes Vite proxy the upgrade
+      // rather than answer it; without it the handshake 404s in dev only, which
+      // reads as a broken server. No Origin rewrite: the console deliberately
+      // does not consult Origin on an upgrade (CORS does not apply to one), so
+      // there is nothing to satisfy — the ticket is the credential.
+      '/ws': { target: CONSOLE, ws: true, changeOrigin: true },
     },
   },
   plugins: [react(), tailwindcss()],

@@ -1,0 +1,37 @@
+/**
+ * The terminal's background, taken back from xterm.
+ *
+ * `@xterm/xterm/css/xterm.css` pins `.xterm .xterm-viewport` to
+ * `background-color: #000`, and the DOM renderer never writes an inline
+ * background over it — it only paints cells that carry one, so every default
+ * cell shows that black through. The symptom is specific and misleading: the
+ * *foreground* follows the theme (the rows really do get `--ink`), so the
+ * terminal looks like it half-understood the toggle rather than like a
+ * stylesheet winning.
+ *
+ * Two things about how this is written:
+ *
+ * - **Unlayered, and one class deeper than xterm's rule.** Tailwind's
+ *   `@layer components` would lose outright — unlayered styles beat layered
+ *   ones no matter the order — and matching xterm's specificity exactly would
+ *   leave the outcome to import order inside a lazily-loaded chunk. `.phase-term
+ *   .xterm .xterm-viewport` wins on specificity alone, whichever loads first.
+ * - **`var(--ground-deep)`, not a value read in JavaScript.** The whole palette
+ *   is `light-dark()`, so a CSS reference repaints on the theme toggle by
+ *   itself. The JS theme handed to xterm still carries the same colour, because
+ *   that is what inverse video and selection are drawn against.
+ */
+
+.phase-term .xterm .xterm-viewport {
+  background-color: var(--ground-deep);
+}
+
+/* The scrollbar in the viewport, so it does not read as a black gutter. */
+.phase-term .xterm .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+
+.phase-term .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background-color: var(--rule-strong);
+  border-radius: 5px;
+}

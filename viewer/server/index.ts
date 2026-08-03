@@ -24,6 +24,7 @@ import { markDegraded, onRestartRequest, runShutdownHandlers } from './lifecycle
 import { Service } from './service.ts';
 import { handleApi } from './api/routes.ts';
 import { classify } from './api/access.ts';
+import { refuse } from './terminal.ts';
 import { HOOK_TIMEOUT_SECONDS } from './runner/approvals.ts';
 
 const flags = parseFlags(process.argv.slice(2));
@@ -156,6 +157,49 @@ const server = createServer(async (req, res) => {
   sendFile(res, target);
 });
 
+/**
+ * The terminal's socket.
+ *
+ * A WebSocket upgrade never reaches the request handler above, so the access
+ * gate has to be applied here as well — and it is the *first* thing that runs.
+ * The reason is specific: **CORS does not apply to WebSockets**. A browser will
+ * happily open one cross-origin and send whatever `Origin` the page has, and no
+ * preflight ever happens, so the same-origin check that guards every POST is
+ * worth nothing on this path. What is worth something is `classify` (the
+ * tailscale identity, on the upgrade request rather than on the page that
+ * opened it) followed by a single-use token minted through a guarded POST.
+ *
+ * With `--allow-terminal` unset, `handleUpgrade` refuses before it looks at the
+ * token at all, so an off switch cannot be probed.
+ */
+server.on('upgrade', (req, socket, head) => {
+  // An upgrade socket has no response object to attach errors to; unhandled,
+  // a client that vanishes mid-handshake is an uncaught exception.
+  socket.on('error', (error) => {
+    if (!isClientDisconnect(error)) log.warn('upgrade.error', { url: req.url, error });
+  });
+
+  const verdict = classify(req, flags);
+  if (!verdict.ok) {
+    log.warn('access.refused', {
+      reason: verdict.reason, host: req.headers.host, upgrade: true,
+      // The path only — the query carries the terminal token, and a refused
+      // handshake is not a reason to write a credential to disk.
+      url: (req.url ?? '').split('?')[0],
+    });
+    refuse(socket, verdict.status === 421 ? 400 : verdict.status, verdict.message);
+    return;
+  }
+
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  service.terminals.handleUpgrade(req, socket, head, url).then((handled) => {
+    if (!handled) refuse(socket, 404, 'no such socket');
+  }).catch((error) => {
+    log.error('upgrade.unhandled', { url: url.pathname, error });
+    socket.destroy();
+  });
+});
+
 function sendFile(res: import('node:http').ServerResponse, path: string): void {
   const type = MIME[extname(path)] ?? 'application/octet-stream';
   // Vendored runtime and fonts never change without a redeploy, and Vite's built
@@ -221,6 +265,7 @@ server.listen(flags.port, flags.host, () => {
   process.stdout.write(`  scripts       ${flags.scriptsDir}\n`);
   process.stdout.write(`  writes        ${flags.allowWrites ? 'enabled (--allow-writes)' : 'read-only'}\n`);
   process.stdout.write(`  autopilot     ${flags.allowRun ? 'enabled (--allow-run) — this console can spawn agent sessions' : 'off'}\n`);
+  process.stdout.write(`  terminal      ${flags.allowTerminal ? 'enabled (--allow-terminal) — this console can open a shell' : 'off'}\n`);
   if (flags.remoteHosts.length) {
     process.stdout.write(`  remote        ${flags.remoteHosts.join(', ')} — only ${flags.remoteUsers.join(', ')}\n`);
   }

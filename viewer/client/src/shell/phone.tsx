@@ -5,7 +5,7 @@ import { Button, ButtonGroup, Chip, Sheet, SheetContent } from '@/components/ui'
 import { navigate } from '@/router';
 import type { ConsoleState } from '@/lib/api';
 import type { ShellCounts } from '@/lib/queries';
-import { SHEET_ITEMS, TAB_ITEMS, activeNavId } from './nav';
+import { TAB_ITEMS, activeNavId, visibleNav } from './nav';
 import { Badge, RouteGlyph } from './brand';
 
 const THEMES: readonly [Theme, string][] = [
@@ -152,12 +152,16 @@ export function MoreSheet({
 }) {
   const [prefs, setPrefs] = usePrefs();
   const current = activeNavId(head);
+  // Everything the four tabs do not show — minus anything this server cannot
+  // actually do. The sheet is the phone's only route to Terminal, so it is the
+  // one place the capability gate has to be applied.
+  const sheetItems = visibleNav(state).filter((item) => !item.tab);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent title="More">
         <div className="flex flex-col gap-1">
-          {SHEET_ITEMS.map((item) => {
+          {sheetItems.map((item) => {
             const count = item.badge ? counts[item.badge] : 0;
             return (
               <button

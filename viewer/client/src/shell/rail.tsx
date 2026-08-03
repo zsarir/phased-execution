@@ -4,7 +4,7 @@ import { Button, ButtonGroup, Chip } from '@/components/ui';
 import { navigate } from '@/router';
 import type { ConsoleState } from '@/lib/api';
 import type { ShellCounts } from '@/lib/queries';
-import { NAV, activeNavId } from './nav';
+import { visibleNav, activeNavId } from './nav';
 import { Badge, RouteGlyph } from './brand';
 
 const THEMES: readonly [Theme, string][] = [
@@ -27,9 +27,10 @@ export function Rail({
 }) {
   const [prefs, setPrefs] = usePrefs();
   const current = activeNavId(head);
+  const nav = visibleNav(state);
 
   const item = (id: string) => {
-    const entry = NAV.find((n) => n.id === id);
+    const entry = nav.find((n) => n.id === id);
     if (!entry) return null;
     const count = entry.badge ? counts[entry.badge] : 0;
     const hot = entry.badge === 'ready' || entry.badge === 'approvals' || entry.badge === 'unread';
@@ -70,7 +71,7 @@ export function Rail({
       </div>
 
       <div className="flex flex-col gap-0.5">
-        {NAV.filter((n) => n.primary).map((n) => item(n.id))}
+        {nav.filter((n) => n.primary).map((n) => item(n.id))}
       </div>
 
       <div className="mt-auto flex flex-col gap-2">
@@ -113,7 +114,7 @@ export function Rail({
         </ButtonGroup>
 
         <div className="flex flex-col gap-0.5">
-          {NAV.filter((n) => !n.primary).map((n) => item(n.id))}
+          {nav.filter((n) => !n.primary).map((n) => item(n.id))}
         </div>
       </div>
     </nav>

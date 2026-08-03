@@ -47,6 +47,7 @@ export const keys = {
   qaPrompt: (slug: string, phase: number | string) => ['plan', slug, 'qa-prompt', String(phase)] as const,
   gate: (slug: string, phase: number | string) => ['plan', slug, 'gate', String(phase)] as const,
   stats: () => ['stats'] as const,
+  terminal: () => ['terminal'] as const,
   approvals: () => ['approvals'] as const,
   runs: () => ['runs'] as const,
   run: (slug: string) => ['run', slug] as const,
@@ -201,6 +202,19 @@ export function useConsoleState() {
 
 export function usePlans(enabled = true) {
   return useQuery({ queryKey: keys.plans(), queryFn: api.plans, enabled });
+}
+
+/**
+ * Which shells are open.
+ *
+ * Deliberately absent from `EVENT_EFFECTS`: the server emits no event for a
+ * terminal, because the socket IS the live channel and a session list that
+ * refreshed on every unrelated `changed` would be noise. The two moments it can
+ * be wrong — a shell opened, a shell closed — are both things this client did,
+ * so the view invalidates it itself.
+ */
+export function useTerminals(enabled = true) {
+  return useQuery({ queryKey: keys.terminal(), queryFn: api.terminal, enabled });
 }
 
 /**

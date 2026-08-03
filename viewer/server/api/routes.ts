@@ -16,6 +16,7 @@ import { isEffort, PERMISSION_MODES } from '../runner/spawn.ts';
 import { isPermissionProfile, type PolicyScope } from '../runner/approvals.ts';
 import { MODEL_FALLBACK as MODELS } from '../runner/errors.ts';
 import { planWrite, runWrite, openInEditor, WriteError, type WriteRequest } from '../writes.ts';
+import { TERMINAL_PATH } from '../terminal.ts';
 import type { PhaseOptions } from '../runner/state.ts';
 
 export type ApiContext = { service: Service };
@@ -66,6 +67,21 @@ function guardRun(req: IncomingMessage, service: Service): string | null {
   return guardMutation(req, service.flags.allowRun
     ? null
     : 'Runs are disabled. Restart with --allow-run to enable the autopilot.');
+}
+
+/**
+ * The shell gate — a third capability, not a wider reading of the other two.
+ *
+ * `--allow-run` spawns an agent inside a permission policy this console
+ * enforces and can revoke; `--allow-terminal` hands over a shell where the only
+ * policy is the person typing. Minting a ticket is also the only place the
+ * cross-site check can be made — the WebSocket upgrade that follows cannot make
+ * it, because CORS does not apply to upgrades and Origin is forgeable there.
+ */
+function guardTerminal(req: IncomingMessage, service: Service): string | null {
+  return guardMutation(req, service.flags.allowTerminal
+    ? null
+    : 'The terminal is disabled. Restart with --allow-terminal to enable it.');
 }
 
 /**
@@ -382,6 +398,37 @@ export async function handleApi(
         const by = typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console';
         const outcome = service.restart(by, body.force === true);
         json(res, outcome.ok ? 200 : 409, outcome);
+        return true;
+      }
+    }
+
+    /* ---------------- the terminal ---------------- */
+    if (head === 'terminal') {
+      // Deliberately above the "no source directory is open" wall below: a
+      // shell is exactly what you want on a machine where there is nothing to
+      // open yet.
+      if (req.method === 'GET') { json(res, 200, service.terminals.state()); return true; }
+
+      if (req.method === 'POST') {
+        const refusal = guardTerminal(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const sessionId = typeof body.sessionId === 'string' ? body.sessionId.slice(0, 64) : undefined;
+        const minted = await service.terminals.mint(sessionId, {
+          cols: Number(body.cols), rows: Number(body.rows),
+        });
+        if (!minted.ok) { json(res, minted.status, { error: minted.error }); return true; }
+        // The socket path travels with the ticket so the client never has to
+        // hard-code it — one source of truth for where the terminal lives.
+        json(res, 200, { ...minted, path: TERMINAL_PATH });
+        return true;
+      }
+
+      if (req.method === 'DELETE') {
+        const refusal = guardTerminal(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const id = url.searchParams.get('id') ?? rest[0] ?? '';
+        json(res, 200, { closed: service.terminals.kill(id), state: service.terminals.state() });
         return true;
       }
     }

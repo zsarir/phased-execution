@@ -69,11 +69,49 @@ export interface Sizing {
   [key: string]: number | undefined;
 }
 
+/* ---------------- the terminal ---------------- */
+
+export interface TerminalSession {
+  id: string;
+  label: string;
+  cwd: string;
+  shell: string;
+  cols: number;
+  rows: number;
+  pid: number;
+  clients: number;
+  createdAt: number;
+  /** Present once the shell has gone; the page says so rather than "disconnected". */
+  exited?: { code: number; signal?: number; closedByOperator?: boolean };
+}
+
+export interface TerminalState {
+  /** `--allow-terminal` was given. */
+  allowed: boolean;
+  /** Whether `node-pty` actually loaded — `unknown` until something has tried. */
+  available: 'yes' | 'no' | 'unknown';
+  limit: number;
+  sessions: TerminalSession[];
+}
+
+/** A single-use ticket for one WebSocket upgrade. Never logged, never stored. */
+export interface TerminalTicket {
+  ok: true;
+  sessionId: string;
+  token: string;
+  expiresAt: number;
+  path: string;
+  /** The session as it now is — so the caller never races its own creation. */
+  session: TerminalSession;
+}
+
 export interface ConsoleState {
   generation?: number;
   root?: RootInfo;
   allowWrites?: boolean;
   allowRun?: boolean;
+  /** `--allow-terminal`: the shell gate the nav reads on every page. */
+  allowTerminal?: boolean;
   autopilot?: boolean;
   /** True once `server/` on disk is newer than the process serving this page. */
   serverStale?: boolean;
@@ -910,6 +948,16 @@ export const api = {
   pushCategories: (id: string, categories: Record<string, boolean>) =>
     post<{ device?: PushDevice }>('/api/push/categories', { id, categories }),
   pushTest: (id: string) => post<{ ok: boolean; detail: string }>('/api/push/test', { id }),
+
+  /* ---- the terminal ----
+     `terminalTicket` is the handshake: a POST, so it carries the console header
+     and the same-origin check that the WebSocket upgrade that follows cannot.
+     See `server/terminal.ts` for why the socket alone is not defensible. */
+  terminal: () => request<TerminalState>('/api/terminal'),
+  terminalTicket: (body: { sessionId?: string; cols?: number; rows?: number }) =>
+    post<TerminalTicket>('/api/terminal', body),
+  terminalClose: (id: string) =>
+    request<{ closed: boolean; state: TerminalState }>(`/api/terminal?id=${q(id)}`, { method: 'DELETE' }),
 
   /* ---- signing in, and restarting the console itself ---- */
   auth: (force?: boolean) => request<AuthStatus>(`/api/auth${force ? '?force=1' : ''}`),
