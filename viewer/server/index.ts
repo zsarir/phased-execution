@@ -57,6 +57,19 @@ if (cleanLastTime === false) {
 
 const service = new Service(flags);
 const WEB_DIR = join(VIEWER_DIR, 'web');
+const DIST_DIR = join(VIEWER_DIR, 'client', 'dist');
+
+// The client is served from the built Vite output (`client/dist`) when it exists,
+// else the legacy no-build client (`web/`). The choice is made PER REQUEST, not at
+// startup, so `npm run build` cuts the live console over and `rm -rf client/dist`
+// rolls it straight back — both without a restart, which matters because the server
+// lives for hours under launchd. One extra `existsSync` per navigation is nothing at
+// this traffic. During the rewrite `dist` is gitignored, so `main` keeps serving the
+// legacy client until a deliberate build.
+function webRoot(): string {
+  return existsSync(join(DIST_DIR, 'index.html')) ? DIST_DIR : WEB_DIR;
+}
+log.info('client-root', { serving: webRoot() === DIST_DIR ? 'dist' : 'legacy', dir: webRoot() });
 
 /**
  * The console outliving its faults is the whole point: a watcher that throws,
@@ -130,11 +143,13 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // Static: everything under web/, with index.html as the SPA entry.
+  // Static: everything under the chosen client root, with index.html as the SPA
+  // entry. `webRoot()` is re-checked per request so a build/rollback takes effect live.
+  const root = webRoot();
   const requested = url.pathname === '/' ? '/index.html' : url.pathname;
-  const target = resolve(join(WEB_DIR, normalize(requested).replace(/^(\.\.[/\\])+/, '')));
-  if (!target.startsWith(WEB_DIR) || !existsSync(target) || !statSync(target).isFile()) {
-    if (!extname(requested)) { sendFile(res, join(WEB_DIR, 'index.html')); return; }
+  const target = resolve(join(root, normalize(requested).replace(/^(\.\.[/\\])+/, '')));
+  if (!target.startsWith(root) || !existsSync(target) || !statSync(target).isFile()) {
+    if (!extname(requested)) { sendFile(res, join(root, 'index.html')); return; }
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found');
     return;
@@ -144,9 +159,11 @@ const server = createServer(async (req, res) => {
 
 function sendFile(res: import('node:http').ServerResponse, path: string): void {
   const type = MIME[extname(path)] ?? 'application/octet-stream';
-  // Vendored runtime and fonts never change without a redeploy; app files are
-  // served fresh so an edit is one reload away, never a stale-cache puzzle.
-  const immutable = /\/(vendor|fonts)\//.test(path);
+  // Vendored runtime and fonts never change without a redeploy, and Vite's built
+  // output under /assets/ is content-hashed (a new build is a new filename); all of
+  // it is safe to cache hard. App files (index.html, sw.js, the manifest) are served
+  // fresh so an edit or a new build is one reload away, never a stale-cache puzzle.
+  const immutable = /\/(vendor|fonts|assets)\//.test(path);
   res.writeHead(200, {
     'content-type': type,
     'cache-control': immutable ? 'public, max-age=86400' : 'no-store',

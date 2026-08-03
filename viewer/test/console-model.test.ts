@@ -12,7 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { toLine, fold, activity, NO_ACTIVITY, QUIET, KIND_LABEL, MAX_TOOLS } =
-  await import('../web/components/console-model.js');
+  await import('../shared/console-model.js');
 
 const stream = (data: Record<string, unknown>) => toLine('stream', data);
 

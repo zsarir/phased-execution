@@ -18,31 +18,32 @@
 
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdtempSync, readFileSync, existsSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 // STATE_DIR resolves when config.ts is first imported, so the redirect has to
 // happen before anything pulls it in — otherwise this writes into the
 // operator's real notification history.
 process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), 'phase-inbox-'));
 
-const WEB = join(dirname(dirname(fileURLToPath(import.meta.url))), 'viewer', 'web');
-const WEB_DIR = existsSync(WEB) ? WEB : join(dirname(dirname(fileURLToPath(import.meta.url))), 'web');
+// Route vocabulary is asserted against the shared SSOT, not scraped from client
+// source. `shared/route-meta.js` and `shared/routes.js` are plain dependency-free
+// ESM, importable from Node with no build — that split is what makes this possible.
+import { ROUTE_HEADS, PLAN_TABS } from '../shared/route-meta.js';
 
 let notifications: typeof import('../server/notifications.ts');
 let catalogue: typeof import('../server/push/catalogue.ts');
 let approvalsMod: typeof import('../server/runner/approvals.ts');
 // `routes.js`, not `router.js`: the rules, without the rendering runtime the
 // hook needs. That split exists so this import is possible at all.
-let router: typeof import('../web/routes.js');
+let router: typeof import('../shared/routes.js');
 
 before(async () => {
   notifications = await import('../server/notifications.ts');
   catalogue = await import('../server/push/catalogue.ts');
   approvalsMod = await import('../server/runner/approvals.ts');
-  router = await import('../web/routes.js');
+  router = await import('../shared/routes.js');
 });
 
 function store() {
@@ -200,17 +201,14 @@ test('a half-written tail line does not take the inbox with it', () => {
  * Where a notification goes
  * ------------------------------------------------------------------ */
 
-/** Every tab id the plan view actually registers, read from the client. */
+/** Every tab id the plan view registers — the client's route-meta SSOT. */
 function planTabs(): string[] {
-  const source = readFileSync(join(WEB_DIR, 'views', 'plan.js'), 'utf8');
-  const block = /const TABS = \[(.*?)\];/s.exec(source)?.[1] ?? '';
-  return [...block.matchAll(/id: '([^']+)'/g)].map((m) => m[1]);
+  return [...PLAN_TABS];
 }
 
-/** Every top-level route the shell dispatches on, read from the client. */
+/** Every top-level route head the shell registers — the client's route-meta SSOT. */
 function appRoutes(): string[] {
-  const source = readFileSync(join(WEB_DIR, 'app.js'), 'utf8');
-  return [...source.matchAll(/head === '([^']+)'/g)].map((m) => m[1]);
+  return [...ROUTE_HEADS];
 }
 
 test('every category resolves to a route the client actually matches', () => {

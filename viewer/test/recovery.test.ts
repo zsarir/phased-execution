@@ -27,7 +27,7 @@ import { join } from 'node:path';
 import { Runner } from '../server/runner/runner.ts';
 import { Approvals } from '../server/runner/approvals.ts';
 import { recoveryActions } from '../server/service.ts';
-import { phaseActions } from '../web/components/phase-model.js';
+import { phaseActions } from '../shared/phase-model.js';
 import type { SpawnRequest } from '../server/runner/spawn.ts';
 import type { VerifySummary } from '../server/runner/state.ts';
 

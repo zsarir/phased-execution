@@ -16,7 +16,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { mergePhases, boardCounts, phaseActions, fellOverToAnotherModel } =
-  await import('../web/components/phase-model.js');
+  await import('../shared/phase-model.js');
 
 /** The real shape of the disagreement, taken from the plan that reported it. */
 const PLAN = [

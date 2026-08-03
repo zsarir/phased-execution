@@ -1,6 +1,13 @@
-# Phase Console has no dependencies and no build step. Nothing here should ever
-# be installed or generated — these entries exist only to catch accidents.
+# The server is still zero-dependency plain Node. The CLIENT is now a built Vite
+# app (React + Tailwind), so node_modules and the build output are generated and
+# must never be committed. package.json + package-lock.json ARE committed so a
+# clean checkout can `npm ci && npm run build`.
 node_modules/
+client/dist/
 dist/
 *.local.json
 .DS_Store
+
+# Vite / Vitest caches
+.vite/
+coverage/
