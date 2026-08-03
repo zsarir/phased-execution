@@ -26,6 +26,13 @@
 
 @import 'tailwindcss';
 
+/* Two surfaces whose paint is a descendant relationship rather than a set of
+   utilities — rendered markdown, and the SVG route map. Both declare their rules
+   inside `@layer components`, so a utility on the element still wins and file
+   order here does not decide the cascade. */
+@import './prose.css';
+@import './route-map.css';
+
 /* ------------------------------------------------------------------ *
  * Fonts — vendored, hashed by Vite (no network at runtime, ever)
  * ------------------------------------------------------------------ */

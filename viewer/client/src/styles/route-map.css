@@ -1,0 +1,150 @@
+/* ------------------------------------------------------------------ *
+ * The route map — the plan drawn as a transit network
+ *
+ * Ported from `web/styles/views.css` with the palette changes Phase 2 made:
+ * `--line-stuck` is its own colour now (a wedged phase and a failed one used to
+ * paint identically), and the two hard-coded hexes that made the number on a
+ * "departed" station readable are token expressions rather than literals.
+ *
+ * Why CSS and not utilities: an SVG station is a group whose *children* change
+ * appearance on hover, focus and selection of the group. That is a descendant
+ * relationship — `.station:hover .halo` — which is exactly the shape a utility
+ * class cannot express without inventing a variant per child. The geometry
+ * lives in `components/dag.tsx`; only the paint is here.
+ * ------------------------------------------------------------------ */
+
+@layer components {
+  /* The frame is a fixed window and the SVG's viewBox is what moves inside it.
+     It used to be the other way round — the SVG grew taller as you zoomed and
+     the frame clipped whatever spilled — which meant zooming in made the map
+     *longer* rather than closer, and the page grew with it. */
+  .route-frame {
+    background:
+      radial-gradient(circle at 1px 1px, color-mix(in oklab, var(--rule) 70%, transparent) 1px, transparent 0)
+      0 0 / 24px 24px;
+    cursor: grab;
+    overflow: hidden;
+    block-size: clamp(300px, 56vh, 640px);
+    /* Without this the browser claims the pan and the pinch for scrolling and
+       the map never sees a second pointer. */
+    touch-action: none;
+    overscroll-behavior: contain;
+  }
+  .route-frame:active { cursor: grabbing; }
+
+  .route-svg { display: block; user-select: none; width: 100%; height: 100%; }
+
+  /* The station's target, sized in plan units by `dag.tsx` so it lands at 44 CSS
+     px at any zoom. `transparent` and not `none`: `fill: none` is invisible to
+     pointer events, which is the difference between a hit area and a decoration. */
+  .station-hit { fill: transparent; }
+
+  .track {
+    fill: none;
+    stroke: var(--track);
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: opacity var(--duration-fast) var(--ease-transit),
+                stroke var(--duration-fast) var(--ease-transit);
+    stroke-dasharray: 1400;
+    stroke-dashoffset: 0;
+    animation: draw-track var(--duration-draw) var(--ease-transit) backwards;
+    animation-delay: calc(var(--i, 0) * 70ms);
+  }
+  .track-done { stroke: color-mix(in oklab, var(--line-done) 65%, var(--track)); }
+  .track.dim { opacity: 0.25; }
+
+  @keyframes draw-track { from { stroke-dashoffset: 1400; } }
+
+  .station { cursor: pointer; }
+  .station .dot {
+    fill: var(--surface);
+    stroke: var(--state, var(--line-waiting));
+    stroke-width: 3;
+    transition: transform var(--duration-fast) var(--ease-transit);
+  }
+  .station.state-done .dot { fill: var(--line-done); stroke: var(--line-done); }
+  .station.state-in-progress .dot { fill: color-mix(in oklab, var(--line-progress) 30%, var(--surface)); }
+  .station.state-stuck .dot { fill: color-mix(in oklab, var(--line-stuck) 25%, var(--surface)); }
+  .station.state-blocked .dot { fill: color-mix(in oklab, var(--line-blocked) 25%, var(--surface)); }
+  .station.state-waiting .dot { stroke-dasharray: 3 3; }
+
+  .station .halo { fill: none; stroke: transparent; stroke-width: 2; }
+  .station:hover .halo,
+  .station:focus-visible .halo,
+  .station.selected .halo { stroke: color-mix(in oklab, var(--state, var(--ink)) 55%, transparent); }
+  .station.selected .halo { stroke-width: 3; }
+  .station.dim { opacity: 0.32; }
+  /* The group carries the focus ring; the browser's own outline would trace the
+     bounding box of a two-line label rather than the station. */
+  .station:focus-visible { outline: none; }
+
+  .station-number {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    fill: var(--ink);
+    pointer-events: none;
+  }
+  /* A departed station is filled solid with the done colour, so its number has
+     to invert — against the darkest form of that colour in either theme. */
+  .station.state-done .station-number {
+    fill: color-mix(in oklab, var(--line-done) 18%, light-dark(white, black));
+  }
+
+  .station-label {
+    font-family: var(--font-display);
+    font-size: 11.5px;
+    letter-spacing: 0.03em;
+    fill: var(--ink-muted);
+    pointer-events: none;
+    /* A halo in the surface colour keeps names readable where track passes behind. */
+    stroke: var(--surface);
+    stroke-width: 3px;
+    paint-order: stroke fill;
+  }
+  .station.state-ready .station-label { fill: var(--ink); font-weight: 600; }
+
+  .station.boarding .dot { animation: boarding 3s var(--ease-transit) infinite; }
+  @keyframes boarding {
+    0%, 100% { filter: drop-shadow(0 0 0 transparent); }
+    50% { filter: drop-shadow(0 0 6px color-mix(in oklab, var(--action) 55%, transparent)); }
+  }
+
+  /* A train: the stations one session carries, threaded rather than boxed. */
+  .train-line {
+    fill: none;
+    stroke: color-mix(in oklab, var(--line-progress) 55%, transparent);
+    stroke-width: 8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.22;
+  }
+  .train-ring {
+    fill: none;
+    stroke: color-mix(in oklab, var(--line-progress) 45%, transparent);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 4;
+  }
+  .band-label {
+    font-family: var(--font-display);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    fill: color-mix(in oklab, var(--line-progress) 75%, var(--ink-faint));
+    stroke: var(--surface);
+    stroke-width: 3px;
+    paint-order: stroke fill;
+  }
+
+  /* The legend dot borrows the same `--state` mechanism as every chip. */
+  .legend-dot {
+    inline-size: 9px;
+    block-size: 9px;
+    border-radius: 50%;
+    border: 2px solid var(--state, var(--ink-faint));
+    background: color-mix(in oklab, var(--state, transparent) 45%, transparent);
+  }
+  .legend-dot.hatched { background: var(--hatch); border-color: var(--line-gated); }
+}

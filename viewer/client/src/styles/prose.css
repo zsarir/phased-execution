@@ -1,0 +1,185 @@
+/* ------------------------------------------------------------------ *
+ * Rendered markdown — `.md` (block) and `.md-inline`
+ *
+ * Plan bodies, phase fields, handoff bodies and (from Phase 5) the guide all
+ * arrive as markdown written by an agent, and they are the longest prose in the
+ * app. Two rules shape this:
+ *
+ * 1. **Reading measure over full width.** A paragraph is capped at 74ch. A plan
+ *    read across a 1560px content column is a line so long the eye loses the
+ *    return sweep — the tables and code blocks still get the whole width,
+ *    because those are scanned rather than read.
+ * 2. **Nothing here may escape its box.** Long commands, file paths and URLs are
+ *    the single most common cause of a phone scrolling sideways, so every code
+ *    block scrolls inside itself and every inline code span may break.
+ *
+ * This lives in `@layer components` so a utility class on the wrapper still
+ * wins — `<Markdown className="text-sm" />` does what it looks like it does.
+ * ------------------------------------------------------------------ */
+
+@layer components {
+  .md {
+    color: var(--ink-muted);
+    font-size: var(--text-sm);
+    line-height: 1.65;
+    min-width: 0;
+  }
+
+  .md > :first-child { margin-top: 0; }
+  .md > :last-child { margin-bottom: 0; }
+
+  .md p,
+  .md ul,
+  .md ol,
+  .md blockquote {
+    max-width: 74ch;
+  }
+
+  .md p { margin: 0.7em 0; }
+
+  .md h1,
+  .md h2,
+  .md h3,
+  .md h4,
+  .md h5,
+  .md h6 {
+    color: var(--ink);
+    font-family: var(--font-display);
+    font-weight: 600;
+    line-height: 1.25;
+    margin: 1.4em 0 0.5em;
+  }
+
+  .md h1 { font-size: var(--text-xl); }
+  .md h2 { font-size: var(--text-lg); }
+  .md h3 { font-size: var(--text-md); }
+  .md h4,
+  .md h5,
+  .md h6 {
+    font-size: var(--text-sm);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .md ul,
+  .md ol {
+    margin: 0.7em 0;
+    padding-left: 1.35em;
+  }
+  .md ul { list-style: disc; }
+  .md ol { list-style: decimal; }
+  .md li { margin: 0.28em 0; }
+  .md li::marker { color: var(--ink-faint); }
+  .md li > ul,
+  .md li > ol { margin: 0.25em 0; }
+
+  .md strong { color: var(--ink); font-weight: 600; }
+  .md em { font-style: italic; }
+  .md del { opacity: 0.6; }
+
+  .md a {
+    color: var(--action);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    /* A bare URL in a plan is usually longer than a phone is wide. */
+    overflow-wrap: anywhere;
+  }
+  .md a:hover { text-decoration-thickness: 2px; }
+
+  .md code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    color: var(--ink);
+    background: var(--surface-raised);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    padding: 0.05em 0.32em;
+    overflow-wrap: anywhere;
+  }
+
+  .md pre {
+    margin: 0.8em 0;
+    padding: 0.75rem;
+    background: var(--ground-deep);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    /* The block scrolls; the page never does. */
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    max-width: 100%;
+  }
+  .md pre code {
+    display: block;
+    background: none;
+    border: 0;
+    padding: 0;
+    font-size: var(--text-xs);
+    line-height: 1.6;
+    white-space: pre;
+    overflow-wrap: normal;
+  }
+
+  .md blockquote {
+    margin: 0.9em 0;
+    padding: 0.15em 0 0.15em 0.9em;
+    border-left: 3px solid var(--rule-strong);
+    color: var(--ink-faint);
+  }
+
+  .md hr {
+    margin: 1.4em 0;
+    border: 0;
+    border-top: 1px solid var(--rule);
+  }
+
+  /* A table wide enough to need scrolling scrolls in its own wrapper — the
+     `display: block` is what gives `overflow-x` something to act on, since a
+     `<table>` cannot overflow itself. */
+  .md table {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    margin: 0.9em 0;
+    border-collapse: collapse;
+    font-size: var(--text-xs);
+  }
+  .md th,
+  .md td {
+    border: 1px solid var(--rule);
+    padding: 0.35em 0.6em;
+    text-align: left;
+    vertical-align: top;
+  }
+  .md th {
+    background: var(--surface-raised);
+    color: var(--ink);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .md img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-sm);
+  }
+
+  /* No `input[type=checkbox]` rule: `input` is on the sanitizer's FORBIDDEN
+     list, so a GFM task list arrives here as plain list items. Styling one
+     would be a rule that can never match. */
+
+  /* Inline: the same type, none of the block spacing. */
+  .md-inline {
+    min-width: 0;
+  }
+  .md-inline code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+  .md-inline strong { color: var(--ink); font-weight: 600; }
+  .md-inline a { color: var(--action); text-decoration: underline; }
+}

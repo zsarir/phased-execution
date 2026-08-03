@@ -51,8 +51,23 @@ export function Chip({ className, tone, mono, dot = false, children, ...props }:
 }
 
 /** Phase/run states, as the route map names them. */
-export type PhaseState =
-  | 'done' | 'ready' | 'in-progress' | 'waiting' | 'blocked' | 'stuck' | 'gated';
+export const PHASE_STATES = [
+  'done', 'ready', 'in-progress', 'waiting', 'blocked', 'stuck', 'gated',
+] as const;
+
+export type PhaseState = (typeof PHASE_STATES)[number];
+
+/**
+ * The engine's state strings arrive as plain `string` off the wire, and an
+ * unknown one must still paint *something* — `waiting` is the honest default
+ * ("we do not know that this can start"), and it is never amber, so an
+ * unrecognised state can never be mistaken for an actionable one.
+ */
+export function asPhaseState(value: string | undefined): PhaseState {
+  return (PHASE_STATES as readonly string[]).includes(value ?? '')
+    ? (value as PhaseState)
+    : 'waiting';
+}
 
 const STATE_LABEL: Record<PhaseState, string> = {
   done: 'done',
@@ -65,23 +80,47 @@ const STATE_LABEL: Record<PhaseState, string> = {
 };
 
 /**
+ * The same states spelled the way a departures board would.
+ *
+ * This is the transit identity doing real work rather than decoration: "Held"
+ * says *why* a phase is not moving in a way "waiting" does not, and "Boarding"
+ * is the one word on the board that means go.
+ */
+export const STATE_BOARD: Record<PhaseState, string> = {
+  done: 'Departed',
+  ready: 'Boarding',
+  'in-progress': 'On track',
+  waiting: 'Held',
+  blocked: 'Blocked',
+  stuck: 'Blocked',
+  gated: 'Gated',
+};
+
+/**
  * A chip that carries its own `--state`, so the colour and the word can never
  * disagree — the one class sets both.
  */
 export function StateChip({
   state,
   label,
+  board = false,
   className,
   ...props
-}: { state: PhaseState; label?: string } & Omit<ChipProps, 'tone' | 'children'>) {
+}: {
+  state: PhaseState | string;
+  label?: string;
+  /** Use the departures vocabulary — Departed / Boarding / On track / Held. */
+  board?: boolean;
+} & Omit<ChipProps, 'tone' | 'children'>) {
+  const resolved = asPhaseState(state);
   return (
     <Chip
       tone="state"
       dot
-      className={cn(`state-${state}`, className)}
+      className={cn(`state-${resolved}`, className)}
       {...props}
     >
-      {label ?? STATE_LABEL[state]}
+      {label ?? (board ? STATE_BOARD : STATE_LABEL)[resolved]}
     </Chip>
   );
 }

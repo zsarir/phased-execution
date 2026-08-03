@@ -17,6 +17,7 @@
 import { useEffect } from 'react';
 import {
   QueryClient,
+  keepPreviousData,
   useQuery,
   useQueryClient,
   type QueryClientConfig,
@@ -26,10 +27,25 @@ import { SSE_EVENTS, onSse, type SseEvent } from './sse';
 
 /* ---------------- keys ---------------- */
 
+/**
+ * Everything about one plan hangs off `['plan', slug]` on purpose.
+ *
+ * TanStack matches query keys by prefix, so the single `slugScoped: 'plan'`
+ * invalidation in the table below reaches the plan detail, the open handoff, the
+ * raw markdown and any boot prompt at once. The alternative — a flat key per
+ * endpoint — means every new event has to remember every screen it affects, and
+ * the one it forgets is the one that goes stale in front of you.
+ */
 export const keys = {
   state: () => ['state'] as const,
   plans: () => ['plans'] as const,
   plan: (slug: string) => ['plan', slug] as const,
+  planRaw: (slug: string) => ['plan', slug, 'raw'] as const,
+  handoff: (slug: string, phase: number | string) => ['plan', slug, 'handoff', String(phase)] as const,
+  prompt: (slug: string, phase: number | string) => ['plan', slug, 'prompt', String(phase)] as const,
+  nextPrompt: (slug: string, phase: number | string) => ['plan', slug, 'next-prompt', String(phase)] as const,
+  qaPrompt: (slug: string, phase: number | string) => ['plan', slug, 'qa-prompt', String(phase)] as const,
+  gate: (slug: string, phase: number | string) => ['plan', slug, 'gate', String(phase)] as const,
   stats: () => ['stats'] as const,
   approvals: () => ['approvals'] as const,
   runs: () => ['runs'] as const,
@@ -175,6 +191,61 @@ export function usePlans(enabled = true) {
  */
 export function useApprovals(enabled: boolean) {
   return useQuery({ queryKey: keys.approvals(), queryFn: api.approvals, enabled });
+}
+
+/* ---------------- the plan surface ---------------- */
+
+/**
+ * One plan, and the fix for the defect that made the old plan view unusable
+ * while anything else was happening.
+ *
+ * The old view held the detail in `useState`, and its `changed` subscriber set
+ * it back to `null` before refetching — so *any* write anywhere in the repo
+ * (another session finishing a phase, a file saved in an editor, the watcher
+ * warming) blanked the page you were reading to a spinner and scrolled you back
+ * to the top. `placeholderData: keepPreviousData` is the whole fix: the last
+ * answer stays on screen while the next one is fetched, including across a slug
+ * change, and `isFetching` is what says "a newer one is coming".
+ */
+export function usePlan(slug: string | undefined) {
+  return useQuery({
+    queryKey: keys.plan(slug ?? ''),
+    queryFn: () => api.plan(slug!),
+    enabled: Boolean(slug),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useHandoff(slug: string | undefined, phase: number | string | undefined) {
+  return useQuery({
+    queryKey: keys.handoff(slug ?? '', phase ?? ''),
+    queryFn: () => api.handoff(slug!, phase!),
+    enabled: Boolean(slug) && phase != null && phase !== '',
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function usePlanRaw(slug: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: keys.planRaw(slug ?? ''),
+    queryFn: () => api.planRaw(slug!),
+    enabled: Boolean(slug) && enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * A gate's machine-checkable status. Only asked for phases that declare one —
+ * the engine shells out per call, so this is not something to ask idly.
+ */
+export function useGateStatus(slug: string | undefined, phase: number | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: keys.gate(slug ?? '', phase ?? ''),
+    queryFn: () => api.gate(slug!, phase!),
+    enabled: Boolean(slug) && phase != null && enabled,
+    // A gate that cannot be evaluated is not an error worth retrying at people.
+    retry: false,
+  });
 }
 
 /** The numbers on the rail and the tab bar. */
