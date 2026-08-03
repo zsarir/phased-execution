@@ -66,12 +66,6 @@ export interface PlanSummary {
   [key: string]: unknown;
 }
 
-export interface Approval {
-  id: string;
-  status: string;
-  [key: string]: unknown;
-}
-
 /* ---------------- the plan surface ----------------
  * These mirror `server/service.ts` (`PlanDetail`, `PhaseView`, `RouteView`) and
  * `server/analysis/stats.ts` (`PlanStats`). They are hand-written rather than
@@ -322,6 +316,234 @@ export interface GateStatus {
   detail: string;
 }
 
+/* ---------------- the autopilot ----------------
+ * Mirrors `server/runner/state.ts` (`RunState`, `PhaseRecord`, `VerifySummary`),
+ * `server/runner/approvals.ts` (`Approval`), `server/service.ts`
+ * (`PhaseDiagnosis`, `RecoveryAction`) and `server/analysis/stats.ts`
+ * (`EtaEstimate`). Hand-written for the same reason the plan shapes are: the
+ * server is frozen, so a shape that drifts is a decision rather than an accident.
+ *
+ * `status` unions ARE narrowed here, unlike the plan surface's phase `state`.
+ * They are the runner's own closed vocabulary rather than the engine's open one,
+ * and every tone table below is keyed by them — an unknown status should be a
+ * type error at the table, not a chip that silently paints grey. */
+
+export type RunStatus =
+  | 'running' | 'waiting' | 'paused' | 'pausing' | 'frozen'
+  | 'halted' | 'finished' | 'stopping' | 'interrupted';
+
+export type PhaseStatus =
+  | 'pending' | 'gated' | 'running' | 'verifying' | 'done'
+  | 'failed' | 'interrupted' | 'skipped' | 'parked' | 'awaiting-verification';
+
+export type Autonomy = 'halt-on-everything' | 'keep-going';
+export type PermissionProfile = 'guarded' | 'trusted' | 'bypass';
+
+export interface VerifyRun {
+  command: string;
+  ok: boolean;
+  code: number;
+  ms: number;
+  output: string;
+}
+
+export interface VerifySummary {
+  ok: boolean;
+  reason: string;
+  ran: VerifyRun[];
+  notRun: { text: string; reason: string }[];
+}
+
+export interface PhaseRecord {
+  phase: number;
+  status: PhaseStatus;
+  attempts: number;
+  costUsd: number;
+  turns?: number;
+  durationMs?: number;
+  frozenMs?: number;
+  /** Left by a checkpointed freeze; makes Continue a `--resume` rather than a restart. */
+  resumeSessionId?: string;
+  model?: string;
+  effort?: string;
+  /** What the session's own `init` said it was running on — not always what it was asked for. */
+  actualModel?: string;
+  sessionId?: string;
+  startedAt?: string;
+  endedAt?: string;
+  note?: string;
+  verification?: VerifySummary;
+  lint?: { ok: boolean; summary: string };
+  closeout?: { at: string; ok: boolean; sessionId?: string; note?: string };
+  said?: string;
+}
+
+export interface PhaseOptions {
+  model?: string;
+  effort?: string;
+  tools?: string[];
+  permissionMode?: string;
+  skills?: string[];
+}
+
+export interface RunState {
+  id: string;
+  slug: string;
+  root: string;
+  status: RunStatus;
+  autonomy: Autonomy;
+  model: string;
+  effort?: string;
+  limits?: { status: string; window?: string; utilization?: number; resetsAt?: number; at: string };
+  phaseBudgetUsd: number | null;
+  runBudgetUsd: number | null;
+  spentUsd: number;
+  maxConsecutiveFailures: number;
+  consecutiveFailures: number;
+  createdAt: string;
+  updatedAt: string;
+  activePhase: number | null;
+  child: { pid: number; phase: number; sessionId: string; startedAt: string } | null;
+  waitUntil: string | null;
+  halt: { at: string; reason: string; phase?: number } | null;
+  pause: { requestedAt: string; afterPhase: number | null; by: string } | null;
+  freeze: { at: string; phase: number | null; pid: number; by: string; escalateAt: string } | null;
+  finishedReason?: string;
+  onlyPhases?: number[];
+  phaseOptions?: Record<string, PhaseOptions>;
+  skills?: string[];
+  permissionProfile?: PermissionProfile;
+  phases: Record<string, PhaseRecord>;
+}
+
+/** Always a range, always hedged — see `server/analysis/stats.ts`. */
+export interface EtaEstimate {
+  ratePerWeight: number;
+  samples: number;
+  remainingWeight: number;
+  remainingPhases: number;
+  lowMs: number;
+  highMs: number;
+  label: string;
+}
+
+export interface RunDetail {
+  run: RunState | null;
+  history: RunState[];
+  eta: EtaEstimate | null;
+}
+
+export interface Evidence {
+  label: string;
+  body: string;
+}
+
+export interface Approval {
+  id: string;
+  runId: string;
+  slug: string;
+  phase: number | null;
+  /** `verify` is a question for a person, not a permission question. */
+  kind: 'gate' | 'tool' | 'verify';
+  title: string;
+  detail: string;
+  evidence: Evidence[];
+  tool?: { name: string; input?: { command?: string; [key: string]: unknown }; cwd?: string };
+  suggestedRule?: string;
+  createdAt: string;
+  expiresAt: string;
+  status: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  reason?: string;
+}
+
+export interface DecideResult {
+  ok?: boolean;
+  /** The rule can be refused while the card is still answered — both are reported. */
+  error?: string;
+  wrote?: string;
+  scope?: string;
+}
+
+export interface RecoveryAction {
+  id: 'recheck' | 'closeout' | 'resume' | 'retry' | 'skip';
+  label: string;
+  detail: string;
+}
+
+export interface PhaseDiagnosis {
+  runId: string;
+  phase: number;
+  status: string;
+  blockedOn: 'board' | 'verification' | 'lint' | null;
+  boardState: string;
+  said: string | null;
+  verification: VerifySummary | null;
+  lint: { ok: boolean; summary: string } | null;
+  closeout: { at: string; ok: boolean; sessionId?: string; note?: string } | null;
+  sessionId: string | null;
+  resumable: boolean;
+  note: string | null;
+  workingTree: string[];
+  lock: string | null;
+  actions: RecoveryAction[];
+}
+
+export interface TranscriptEntry {
+  seq: number;
+  at: string;
+  event: string;
+  data: Record<string, unknown>;
+}
+
+export interface AuthStatus {
+  loggedIn: boolean;
+  email?: string;
+  method?: string;
+  organisation?: string;
+  subscription?: string;
+  checkedAt: string;
+  /** Present when the probe could not answer — different from answering "no". */
+  detail?: string;
+}
+
+export interface SkillInfo {
+  id: string;
+  name: string;
+  description: string;
+  source: 'personal' | 'project' | 'plugin';
+  plugin?: string;
+  path: string;
+}
+
+/** What a start or a settings change sends. Every field is checked server-side. */
+export interface RunSettings {
+  model?: string;
+  effort?: string;
+  autonomy?: Autonomy;
+  phaseBudgetUsd?: number | null;
+  runBudgetUsd?: number | null;
+  phaseOptions?: Record<string, PhaseOptions>;
+  skills?: string[];
+  permissionProfile?: PermissionProfile;
+  onlyPhases?: number[];
+  resumeRunId?: string;
+}
+
+/** `{ run }` — every mutating run endpoint answers in this envelope. */
+export interface RunEnvelope {
+  run: RunState | null;
+  error?: string;
+}
+
+export interface AskResult {
+  ok: boolean;
+  /** The browser's own retry landed twice; the server saw the key and said so. */
+  repeated?: boolean;
+  error?: string;
+}
+
 export const api = {
   /* ---- shell ---- */
   state: () => request<ConsoleState>('/api/state'),
@@ -353,42 +575,42 @@ export const api = {
     request<unknown>(`/api/plans/${q(slug)}/session-plan${model ? `?model=${q(model)}` : ''}`),
 
   search: (query: string) => request<unknown>(`/api/search?q=${q(query)}`),
-  skills: () => request<unknown>('/api/skills'),
+  skills: () => request<SkillInfo[]>('/api/skills'),
   policy: (slug?: string) => request<unknown>(`/api/policy${slug ? `?slug=${q(slug)}` : ''}`),
   addPolicy: (rules: unknown) => post<unknown>('/api/policy', rules),
   editPolicy: (edit: Record<string, unknown>) => post<unknown>('/api/policy', { by: 'console', ...edit }),
   write: (body: unknown, dry?: boolean) => post<unknown>(`/api/write${dry ? '?dry=1' : ''}`, body),
 
   /* ---- autopilot ---- */
-  runs: () => request<unknown>('/api/runs'),
-  run: (slug: string) => request<unknown>(`/api/run/${q(slug)}`),
+  runs: () => request<RunState[]>('/api/runs'),
+  run: (slug: string) => request<RunDetail>(`/api/run/${q(slug)}`),
   runJournal: (slug: string, id?: number, limit?: number) =>
     request<unknown>(`/api/run/${q(slug)}/journal${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`),
-  runTranscript: (slug: string, id?: number, limit?: number) =>
-    request<unknown>(`/api/run/${q(slug)}/transcript${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`),
-  runStart: (slug: string, options?: unknown) => post<unknown>(`/api/run/${q(slug)}/start`, options),
-  runPause: (slug: string) => post<unknown>(`/api/run/${q(slug)}/pause`),
-  runResume: (slug: string) => post<unknown>(`/api/run/${q(slug)}/resume`),
-  runStop: (slug: string) => post<unknown>(`/api/run/${q(slug)}/stop`),
-  runSkip: (slug: string, phase: number) => post<unknown>(`/api/run/${q(slug)}/skip`, { phase }),
-  runRetry: (slug: string, phase: number) => post<unknown>(`/api/run/${q(slug)}/retry`, { phase }),
-  runRecheck: (slug: string, phase: number) => post<unknown>(`/api/run/${q(slug)}/recheck`, { phase }),
-  runCloseout: (slug: string, phase: number) => post<unknown>(`/api/run/${q(slug)}/closeout`, { phase }),
+  runTranscript: (slug: string, id?: string, limit?: number) =>
+    request<TranscriptEntry[]>(`/api/run/${q(slug)}/transcript${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`),
+  runStart: (slug: string, options?: RunSettings) => post<RunEnvelope>(`/api/run/${q(slug)}/start`, options),
+  runPause: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/pause`),
+  runResume: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/resume`),
+  runStop: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/stop`),
+  runSkip: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/skip`, { phase }),
+  runRetry: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/retry`, { phase }),
+  runRecheck: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/recheck`, { phase }),
+  runCloseout: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/closeout`, { phase }),
   runResumePhase: (slug: string, phase: number, instruction?: string) =>
-    post<unknown>(`/api/run/${q(slug)}/resume-phase`, { phase, instruction }),
+    post<RunEnvelope>(`/api/run/${q(slug)}/resume-phase`, { phase, instruction }),
   phaseDiagnosis: (slug: string, phase: number | string) =>
-    request<unknown>(`/api/run/${q(slug)}/diagnosis/${q(String(phase))}`),
-  runSettings: (slug: string, patch: unknown) => post<unknown>(`/api/run/${q(slug)}/settings`, patch),
-  runFreeze: (slug: string) => post<unknown>(`/api/run/${q(slug)}/freeze`),
-  runThaw: (slug: string) => post<unknown>(`/api/run/${q(slug)}/thaw`),
+    request<PhaseDiagnosis>(`/api/run/${q(slug)}/diagnosis/${q(String(phase))}`),
+  runSettings: (slug: string, patch: RunSettings) => post<RunEnvelope>(`/api/run/${q(slug)}/settings`, patch),
+  runFreeze: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/freeze`),
+  runThaw: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/thaw`),
   runAsk: (slug: string, question: string, key: string) =>
-    post<unknown>(`/api/run/${q(slug)}/ask`, { question, key }),
+    post<AskResult>(`/api/run/${q(slug)}/ask`, { question, key }),
   runSteer: (slug: string, instruction: string, key: string) =>
-    post<unknown>(`/api/run/${q(slug)}/steer`, { instruction, key }),
+    post<AskResult>(`/api/run/${q(slug)}/steer`, { instruction, key }),
 
   approvals: () => request<Approval[]>('/api/approvals'),
-  decide: (id: string, decision: string, reason?: string, remember?: string, rule?: unknown) =>
-    post<unknown>(`/api/approvals/${q(id)}`, {
+  decide: (id: string, decision: string, reason?: string, remember?: string, rule?: string) =>
+    post<DecideResult>(`/api/approvals/${q(id)}`, {
       decision, reason, by: 'console', ...(remember ? { remember, rule } : {}),
     }),
 
@@ -408,8 +630,8 @@ export const api = {
   ),
 
   /* ---- signing in, and restarting the console itself ---- */
-  auth: (force?: boolean) => request<unknown>(`/api/auth${force ? '?force=1' : ''}`),
-  authLogin: () => post<unknown>('/api/auth/login'),
+  auth: (force?: boolean) => request<AuthStatus>(`/api/auth${force ? '?force=1' : ''}`),
+  authLogin: () => post<{ opened?: boolean; detail?: string }>('/api/auth/login'),
   restartReadiness: () => request<unknown>('/api/restart'),
   restart: () => post<unknown>('/api/restart', { by: 'console' }),
 };

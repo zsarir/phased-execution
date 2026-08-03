@@ -36,6 +36,20 @@ export type Severity = NonNullable<VariantProps<typeof noteVariants>['severity']
 /** Worst first — an error must never sort below a hint. */
 const ORDER: Record<Severity, number> = { error: 0, warn: 1, info: 2, ok: 3 };
 
+/**
+ * How a caller's notes get ordered.
+ *
+ * `severity` is the default and the right rule when the notes are unrelated —
+ * it is the only ordering available from the notes themselves. `given` is for a
+ * caller that has a *declared* priority the severities do not encode: the run
+ * view orders by how much a note needs a person (approval, then halt, then a
+ * pause, down to standing configuration facts), and severity is a consequence of
+ * that judgement rather than a substitute for it. Sorting such a list by
+ * severity would put "you are on bypass" above "the run finished", which is
+ * backwards.
+ */
+export type NoteOrder = 'severity' | 'given';
+
 export interface StatusNote {
   id: string;
   severity: Severity;
@@ -60,15 +74,19 @@ export function Banner({
 export function StatusStack({
   notes,
   max = 3,
+  order = 'severity',
   className,
 }: {
   notes: readonly StatusNote[];
   /** Beyond this the stack is the problem. The rest are counted, not shown. */
   max?: number;
+  order?: NoteOrder;
   className?: string;
 }) {
   if (!notes.length) return null;
-  const sorted = [...notes].sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
+  const sorted = order === 'given'
+    ? notes
+    : [...notes].sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
   const shown = sorted.slice(0, max);
   const hidden = sorted.length - shown.length;
 

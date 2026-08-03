@@ -22,7 +22,7 @@ import {
   useQueryClient,
   type QueryClientConfig,
 } from '@tanstack/react-query';
-import { api, type Approval, type ConsoleState, type PlanSummary } from './api';
+import { api, type ConsoleState, type PlanSummary } from './api';
 import { SSE_EVENTS, onSse, type SseEvent } from './sse';
 
 /* ---------------- keys ---------------- */
@@ -50,6 +50,20 @@ export const keys = {
   approvals: () => ['approvals'] as const,
   runs: () => ['runs'] as const,
   run: (slug: string) => ['run', slug] as const,
+  /**
+   * Deliberately NOT under `['run', slug]`.
+   *
+   * Everything else about a plan hangs off its prefix so one event refreshes the
+   * lot — but these two must not. The transcript is a one-shot replay of up to
+   * 4 MB that live events supersede the moment it lands, and a diagnosis costs a
+   * `git status` and two script runs. Under the run prefix, every `run:phase`
+   * would refetch both; the console would re-hydrate from the network several
+   * times a minute to learn nothing it was not already being told.
+   */
+  transcript: (slug: string) => ['transcript', slug] as const,
+  diagnosis: (slug: string, phase: number | string) => ['diagnosis', slug, String(phase)] as const,
+  auth: () => ['auth'] as const,
+  skills: () => ['skills'] as const,
   notifications: () => ['notifications'] as const,
   search: (query: string) => ['search', query] as const,
 };
@@ -248,6 +262,75 @@ export function useGateStatus(slug: string | undefined, phase: number | undefine
   });
 }
 
+/* ---------------- the autopilot ---------------- */
+
+/**
+ * One plan's run, its history and its ETA.
+ *
+ * `keepPreviousData` for the same reason the plan detail has it: a run emits
+ * `run:phase` every few seconds while it works, and each one invalidates this
+ * key. Dropping to a skeleton on every phase event would make the tab unusable
+ * precisely while there is something to watch.
+ *
+ * `enabled` is the stale-server guard. A console whose server predates the
+ * autopilot has no run endpoints, and asking anyway just fills the browser
+ * console with 404s — the view says so instead.
+ */
+export function useRun(slug: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: keys.run(slug ?? ''),
+    queryFn: () => api.run(slug!),
+    enabled: Boolean(slug) && enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useRuns(enabled = true) {
+  return useQuery({ queryKey: keys.runs(), queryFn: api.runs, enabled });
+}
+
+/**
+ * The recorded events of a run, replayed once into the console.
+ *
+ * Never invalidated (see `keys.transcript`): what happened after it was read
+ * arrives on the live stream, and re-reading it would only re-deliver events the
+ * console already folded. A missing replay is not an error worth showing.
+ */
+export function useTranscript(slug: string | undefined, id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: [...keys.transcript(slug ?? ''), id ?? 'latest'],
+    queryFn: () => api.runTranscript(slug!, id),
+    enabled: Boolean(slug) && enabled,
+    retry: false,
+  });
+}
+
+/** Fetched when a diagnosis panel is opened, because most rows are never opened. */
+export function useDiagnosis(slug: string | undefined, phase: number | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: keys.diagnosis(slug ?? '', phase ?? ''),
+    queryFn: () => api.phaseDiagnosis(slug!, phase!),
+    enabled: Boolean(slug) && phase != null && enabled,
+    retry: false,
+  });
+}
+
+/**
+ * Whether the CLI is signed in.
+ *
+ * A signed-out session does not look like a failure: it reports success, uses
+ * one turn, costs nothing and changes nothing. `force` re-probes rather than
+ * reading the server's cache — what the "Check again" button is for.
+ */
+export function useAuth(enabled: boolean) {
+  return useQuery({ queryKey: keys.auth(), queryFn: () => api.auth(), enabled, retry: false });
+}
+
+/** Cached server-side, so switching tabs does not rescan a few hundred SKILL.md files. */
+export function useSkills(enabled: boolean) {
+  return useQuery({ queryKey: keys.skills(), queryFn: api.skills, enabled, retry: false });
+}
+
 /** The numbers on the rail and the tab bar. */
 export interface ShellCounts {
   plans: number;
@@ -259,7 +342,10 @@ export interface ShellCounts {
 
 export function shellCounts(
   plans: PlanSummary[] | undefined,
-  approvals: Approval[] | undefined,
+  // Only the status is read, and saying so keeps this callable with a stub: the
+  // full `Approval` is a nine-field server shape, and a counting function should
+  // not demand one to be tested.
+  approvals: readonly { status: string }[] | undefined,
   unread: number,
 ): ShellCounts {
   const list = plans ?? [];

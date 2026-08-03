@@ -442,7 +442,7 @@ test('the profile a run starts under reaches every one of its children', async (
   r.cleanup();
 });
 
-test('a run with no profile is guarded, and says so by saying nothing', async () => {
+test('a run with no profile is trusted, and writes that out', async () => {
   const r = repo();
   const profiles: (string | undefined)[] = [];
   const spy: SpawnFn = async (request) => {
@@ -454,9 +454,31 @@ test('a run with no profile is guarded, and says so by saying nothing', async ()
   await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
   await instance.wait();
 
+  assert.deepEqual(profiles, ['trusted', 'trusted', 'trusted']);
+  // Written explicitly, unlike `guarded` below — the record must say what it is
+  // rather than leave a reader to apply whatever the default happens to be now.
+  assert.equal(instance.current()!.permissionProfile, 'trusted');
+  r.cleanup();
+});
+
+test('`guarded` is the one profile written as an omission', async () => {
+  // The compatibility rule the default flip must not break: absent means
+  // guarded. A run file written before profiles existed has no field, and it has
+  // to keep reading as the careful option however the default moves.
+  const r = repo();
+  const profiles: (string | undefined)[] = [];
+  const spy: SpawnFn = async (request) => {
+    profiles.push(request.permissionProfile);
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  };
+  const { instance } = runner(r, spy);
+  await instance.start({
+    slug: 'demo', root: r.root, autonomy: 'keep-going', permissionProfile: 'guarded',
+  });
+  await instance.wait();
+
   assert.deepEqual(profiles, ['guarded', 'guarded', 'guarded']);
-  // Absent on the record, so a run file written before profiles existed reads
-  // as the careful default rather than as an unset field someone must guess at.
   assert.equal(instance.current()!.permissionProfile, undefined);
   r.cleanup();
 });
@@ -474,7 +496,11 @@ test('switching profile mid-run is journaled, and the next phase runs under it',
     return ok();
   };
   const { instance } = runner(r, spy);
-  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  // Started `guarded` explicitly: the widening is the thing under test, so the
+  // run has to begin somewhere narrower than the default now is.
+  await instance.start({
+    slug: 'demo', root: r.root, autonomy: 'keep-going', permissionProfile: 'guarded',
+  });
   await instance.wait();
 
   assert.deepEqual(profiles, ['guarded', 'trusted', 'trusted'], 'it applies from the next phase');
@@ -1495,12 +1521,27 @@ test('a start request may name the only phases it wants, and they are sanitised'
   assert.deepEqual((started[0] as { options: { onlyPhases: number[] } }).options.onlyPhases, [3, 4]);
 });
 
-test('an unknown autonomy value falls back to the cautious one', async () => {
+test('an unknown autonomy value falls back to the run default', async () => {
   const { started } = await call('/api/run/demo/start', {
     method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
     body: { autonomy: 'yolo' },
   });
-  assert.equal((started[0] as { options: { autonomy: string } }).options.autonomy, 'halt-on-everything');
+  assert.equal((started[0] as { options: { autonomy: string } }).options.autonomy, 'keep-going');
+});
+
+test('halting on everything is still reachable, and only by asking for it', async () => {
+  // The flip moved the default, not the option. Unlike `permissionProfile` —
+  // where an unrecognised value must land on the narrow choice, because getting
+  // that one wrong grants trust — autonomy defaults to the wide one, so the
+  // cautious side is the one worth proving still arrives when asked for.
+  const { started } = await call('/api/run/demo/start', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+    body: { autonomy: 'halt-on-everything' },
+  });
+  assert.equal(
+    (started[0] as { options: { autonomy: string } }).options.autonomy,
+    'halt-on-everything',
+  );
 });
 
 test('every control verb goes through the service, so it works after a restart', async () => {

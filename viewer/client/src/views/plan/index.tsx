@@ -16,7 +16,8 @@
  *    nothing and every tab was its own tab stop.
  */
 
-import { Banner, Button, Empty, Skeleton, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
+import { Suspense, lazy } from 'react';
+import { Banner, Button, Skeleton, Spinner, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { usePlan } from '@/lib/queries';
 import { navigate, planHref } from '@shared/routes.js';
 import { Page } from '../_page';
@@ -31,6 +32,17 @@ import { RawTab } from './raw-tab';
 import { DETAIL_TABS, TAB_IDS, isDetailRoute, resolveTab, tabLabel } from './tabs';
 import type { PlanDetail } from '@/lib/api';
 import type { ViewProps } from '@/router';
+
+/**
+ * The autopilot is its own chunk inside the plan chunk.
+ *
+ * It is the largest surface here by some way — controls, the skill picker, the
+ * approval queue, the console model — and most visits to a plan are to read the
+ * route map or a handoff. Splitting it keeps that reading path as cheap as it
+ * was before the run view existed, for the same reason the plan surface is split
+ * from the shell.
+ */
+const RunView = lazy(() => import('../run'));
 
 function PlanSkeleton() {
   return (
@@ -57,13 +69,10 @@ function TabBody({ tab, arg, detail }: { tab: string; arg?: string; detail: Plan
     case 'overview': return <OverviewTab detail={detail} />;
     case 'raw': return <RawTab slug={slug} />;
     case 'run':
-      // Phase 4 rebuilds the run view. Saying which phase owns it is the
-      // difference between "not built yet" and "broken".
       return (
-        <Empty
-          title="The autopilot is rebuilt in Phase 4"
-          body="Starting a run, the approval queue, the live console and the phase table all live on this tab."
-        />
+        <Suspense fallback={<Spinner label="Reading run state" />}>
+          <RunView detail={detail} />
+        </Suspense>
       );
     default: return <RouteTab detail={detail} />;
   }

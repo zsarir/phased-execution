@@ -581,7 +581,8 @@ export async function handleApi(
               // on an unknown effort and carries on at its own default, so a
               // typo would quietly run every phase of a plan at the wrong one.
               effort: isEffort(body.effort) ? body.effort : undefined,
-              autonomy: body.autonomy === 'keep-going' ? 'keep-going' : 'halt-on-everything',
+              // Flipped with the run defaults (see `runner/state.ts` newRun).
+              autonomy: body.autonomy === 'halt-on-everything' ? 'halt-on-everything' : 'keep-going',
               phaseBudgetUsd: numberOrNull(body.phaseBudgetUsd),
               runBudgetUsd: numberOrNull(body.runBudgetUsd),
               resumeRunId: typeof body.resumeRunId === 'string' ? body.resumeRunId : undefined,

@@ -278,11 +278,29 @@ export function newRun(opts: NewRunOptions): RunState {
     slug: opts.slug,
     root: opts.root,
     status: 'running',
-    // Halting on everything is the default on purpose: the first runs of an
-    // unattended system should stop and show their work, not press on.
-    autonomy: opts.autonomy ?? 'halt-on-everything',
-    model: opts.model ?? 'sonnet',
-    ...(opts.effort ? { effort: opts.effort } : {}),
+    // The opening posture, changed deliberately (2026-08-03).
+    //
+    // These were `halt-on-everything` / `sonnet` / no effort / `guarded`, which
+    // was right for the first weeks of an unattended system — stop and show your
+    // work — and wrong for what the autopilot is actually used for: a phase of
+    // real engineering, left running while nobody watches. On those settings a
+    // phase thought less hard than the operator would have asked for and then
+    // stopped at the first commit to ask about something the deny list already
+    // governs. The two failures compound, because the cheap model is the one
+    // that needs supervision and nobody is there to give it.
+    //
+    // `trusted` is not "unguarded": the deny list still refuses pushes,
+    // destructive git, deploys and publishes, from inside the CLI, so it holds
+    // even with this console dead. What changes is that the reversible things
+    // stop raising a card. See `client/src/views/run/defaults.ts` — the client
+    // sends all four explicitly, and `api/routes.ts` still reads an
+    // *unrecognised* profile as `guarded` so a typo cannot grant trust.
+    autonomy: opts.autonomy ?? 'keep-going',
+    model: opts.model ?? 'opus',
+    // A conditional spread, because `effort: undefined` and no key are different
+    // things on disk. An explicit empty string is a caller saying "this
+    // machine's default" and must survive as one.
+    ...(opts.effort === '' ? {} : { effort: opts.effort ?? 'max' }),
     phaseBudgetUsd: opts.phaseBudgetUsd ?? null,
     runBudgetUsd: opts.runBudgetUsd ?? null,
     spentUsd: 0,
@@ -299,10 +317,14 @@ export function newRun(opts: NewRunOptions): RunState {
     ...(opts.onlyPhases?.length ? { onlyPhases: [...opts.onlyPhases] } : {}),
     ...(opts.phaseOptions ? { phaseOptions: { ...opts.phaseOptions } } : {}),
     ...(opts.skills?.length ? { skills: [...opts.skills] } : {}),
-    // Absent means `guarded`. Written only when it is something else, so an
-    // older run file cannot read as anything but the careful default.
-    ...(opts.permissionProfile && opts.permissionProfile !== 'guarded'
-      ? { permissionProfile: opts.permissionProfile } : {}),
+    // **Absent still means `guarded` when reading**, and that does not change:
+    // a run file written before profiles existed must not become trusted because
+    // the default moved under it. So `guarded` is the one value written as an
+    // omission, and everything else — including the new `trusted` default — is
+    // written out explicitly.
+    ...(opts.permissionProfile === 'guarded'
+      ? {}
+      : { permissionProfile: opts.permissionProfile ?? 'trusted' }),
     phases: {},
   };
 }

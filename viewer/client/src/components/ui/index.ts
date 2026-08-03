@@ -4,7 +4,10 @@ export {
   type ChipProps, type PhaseState,
 } from './chip';
 export { Card, CardHeader, CardTitle, CardBody, Tile } from './card';
-export { Banner, StatusStack, noteVariants, type Severity, type StatusNote } from './status-stack';
+export {
+  Banner, StatusStack, noteVariants,
+  type Severity, type StatusNote, type NoteOrder,
+} from './status-stack';
 export {
   Dialog, DialogTrigger, DialogClose, DialogContent, DialogFooter,
   Sheet, SheetClose, SheetContent,

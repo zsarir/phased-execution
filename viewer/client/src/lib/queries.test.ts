@@ -62,7 +62,7 @@ describe('shellCounts', () => {
         { slug: 'b', kind: 'plan', phases: 3, ready: [] },
         { slug: 'c', kind: 'document', phases: 0, ready: [] },
       ],
-      [{ id: '1', status: 'pending' }, { id: '2', status: 'resolved' }],
+      [{ status: 'pending' }, { status: 'resolved' }],
       4,
     );
     expect(counts).toEqual({ plans: 2, phases: 11, ready: 2, approvals: 1, unread: 4 });

@@ -17,7 +17,11 @@ const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 // every non-GET (Origin.host === Host); a browser POST from :5173 would fail that,
 // so the proxy rewrites BOTH: changeOrigin sets Host to the target, and the hook
 // below sets Origin to match. `changeOrigin` alone is not enough.
-const CONSOLE = 'http://127.0.0.1:4123';
+// Overridable so a session can develop against a scratch console on another
+// port — driving a real autopilot run needs `--allow-run` against a throwaway
+// repo, and pointing the dev server at the operator's live console to do that
+// would start a run in their working tree.
+const CONSOLE = process.env.PHASE_CONSOLE_ORIGIN ?? 'http://127.0.0.1:4123';
 const rewriteOrigin = (proxy: { on: (e: string, cb: (r: { setHeader: (k: string, v: string) => void }) => void) => void }) => {
   proxy.on('proxyReq', (proxyReq) => proxyReq.setHeader('origin', CONSOLE));
 };

@@ -1,0 +1,134 @@
+/**
+ * The live session console's line grid.
+ *
+ * Utilities cannot express this: every rule below paints a *descendant* chosen
+ * by the parent's kind (`.live-line.k-tool .live-k`), and the kind arrives from
+ * the console model at runtime — there is no set of classes a component could
+ * hold. Same reasoning as `prose.css` and `route-map.css`, and the same
+ * mechanism: `@import`ed by `theme.css` inside `@layer components`, so layer
+ * order (not file order) decides the cascade and a utility on the element still
+ * wins.
+ *
+ * The colour vocabulary is the board's, unchanged: progress for a tool call,
+ * done for verification, blocked for a failure, ready/amber for anything an
+ * operator did or must attend to. Nothing invents a hue.
+ */
+
+@layer components {
+
+.live-line {
+  display: grid;
+  grid-template-columns: 62px 1fr auto;
+  gap: 0.5rem;
+  padding: 1px 0;
+}
+
+.live-k {
+  color: var(--ink-faint);
+  text-align: right;
+  user-select: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-t {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink-muted);
+}
+
+/* Replayed from the transcript rather than watched live. Legible, but visibly
+   not the present tense. */
+.live-line.is-replayed .live-t { opacity: 0.72; }
+
+.live-line.k-tool .live-k,
+.live-line.k-tool .live-t { color: var(--line-progress); }
+
+.live-line.k-verify .live-k,
+.live-line.k-verify .live-t { color: var(--line-done); }
+
+.live-line.k-phase .live-k { color: var(--line-done); }
+.live-line.k-phase .live-t { color: var(--ink); }
+
+.live-line.k-runner .live-t { color: var(--line-ready); }
+
+.live-line.k-retry .live-k,
+.live-line.k-retry .live-t { color: var(--line-ready); }
+
+.live-line.k-limits .live-k,
+.live-line.k-limits .live-t { color: var(--line-ready); }
+
+.live-line.k-stderr .live-k,
+.live-line.k-stderr .live-t,
+.live-line.k-tool-fail .live-k,
+.live-line.k-tool-fail .live-t,
+.live-line.k-idle .live-k,
+.live-line.k-idle .live-t { color: var(--line-blocked); }
+
+.live-line.k-init .live-t { color: var(--ink-faint); }
+
+/* The model's working, and the hook noise. Both are behind Detail. */
+.live-line.k-thinking .live-k,
+.live-line.k-thinking .live-t {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+.live-line.k-hook .live-k,
+.live-line.k-hook .live-t { color: var(--ink-faint); }
+
+/* A subagent speaks in its own margin — the visual half of what `parent` does
+   in the fold. */
+.live-line.k-subagent {
+  border-left: 2px solid var(--rule);
+  padding-left: 0.25rem;
+  margin-left: 2px;
+}
+.live-line.k-subagent .live-k,
+.live-line.k-subagent .live-t { color: var(--line-progress); }
+
+/* The operator's own words, and the session's reply to them. */
+.live-line.k-injected .live-k,
+.live-line.k-steer .live-k,
+.live-line.k-answer .live-k { color: var(--line-ready); }
+
+.live-line.k-injected .live-t,
+.live-line.k-steer .live-t {
+  color: var(--ink);
+  font-style: italic;
+}
+
+.live-line.k-answer .live-t { color: var(--ink); }
+
+.live-line.k-steer,
+.live-line.k-answer {
+  border-left: 2px solid var(--line-ready);
+  padding-left: 0.25rem;
+  margin-left: 2px;
+}
+
+/* The session ended: a rule, because it is the end of something. */
+.live-line.k-result {
+  border-top: 1px solid var(--rule);
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+}
+.live-line.k-result .live-t { color: var(--ink); }
+
+.live-tick {
+  color: var(--ink-faint);
+  user-select: none;
+  padding-top: 2px;
+}
+.live-tick.is-delivered { color: var(--line-done); }
+
+/* One thumb, one column: the kind gutter is the first thing to give. */
+@media (width <= 640px) {
+  .live-line {
+    grid-template-columns: 46px 1fr auto;
+    gap: 0.25rem;
+  }
+}
+
+}

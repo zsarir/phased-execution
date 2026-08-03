@@ -43,6 +43,15 @@ vi.mock('@/lib/api', async (importOriginal) => {
       nextPrompt: vi.fn(async () => 'board + prompts'),
       qaPrompt: vi.fn(async () => 'qa brief'),
       gate: vi.fn(async () => ({ kind: 'date', clear: true, detail: 'passed' })),
+      // The run tab is a lazy child of this view, so its endpoints have to exist
+      // here too. An idle console with no run is the case worth defaulting to:
+      // it is what every plan looks like before anyone presses Start.
+      state: vi.fn(async () => ({ allowRun: true, autopilot: true, allowWrites: false })),
+      run: vi.fn(async () => ({ run: null, history: [], eta: null })),
+      runTranscript: vi.fn(async () => []),
+      approvals: vi.fn(async () => []),
+      auth: vi.fn(async () => ({ loggedIn: true, checkedAt: '2026-08-03T00:00:00Z' })),
+      skills: vi.fn(async () => []),
     },
   };
 });
@@ -274,9 +283,11 @@ describe('the plan surface renders its parts', () => {
     expect(strong?.textContent).toBe('surface');
   });
 
-  it('says which phase owns the run view rather than looking broken', async () => {
+  it('mounts the real run view on the run tab', async () => {
+    // It arrives through a `lazy()` boundary, so this also proves the Suspense
+    // fallback resolves rather than leaving the tab on a spinner for ever.
     renderPlan(['demo', 'run']);
-    expect(await screen.findByText(/rebuilt in Phase 4/)).toBeInTheDocument();
+    expect(await screen.findByText('Start a run')).toBeInTheDocument();
   });
 
   it('reports a missing phase instead of rendering an empty panel', async () => {
