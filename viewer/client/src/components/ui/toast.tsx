@@ -17,11 +17,22 @@ import { cn } from '@/lib/cn';
 
 export type ToastKind = 'ok' | 'warn' | 'error' | 'info';
 
+/**
+ * A toast that wants something. Almost none do — this exists for the update
+ * prompt, which must not act on its own and must not disappear before it has
+ * been read.
+ */
+export interface ToastAction {
+  label: string;
+  onSelect: () => void;
+}
+
 export interface ToastRecord {
   id: number;
   message: string;
   kind: ToastKind;
   ms: number;
+  action?: ToastAction;
 }
 
 let toasts: ToastRecord[] = [];
@@ -30,9 +41,15 @@ const listeners = new Set<() => void>();
 
 const publish = () => { for (const notify of listeners) notify(); };
 
-export function toast(message: string, kind: ToastKind = 'ok', ms = 2600): number {
+/** `ms: 0` means it stays until it is dismissed or acted on. */
+export function toast(
+  message: string,
+  kind: ToastKind = 'ok',
+  ms = 2600,
+  action?: ToastAction,
+): number {
   const id = ++nextId;
-  toasts = [...toasts, { id, message, kind, ms }];
+  toasts = [...toasts, { id, message, kind, ms, action }];
   publish();
   return id;
 }
@@ -84,7 +101,10 @@ export function Toaster() {
       {items.map((item) => (
         <ToastPrimitive.Root
           key={item.id}
-          duration={item.ms}
+          // 0 means "until someone deals with it" — Radix reads Infinity as
+          // never expiring, and a prompt that times out is a prompt that gets
+          // missed.
+          duration={item.ms === 0 ? Infinity : item.ms}
           onOpenChange={(open) => { if (!open) dismissToast(item.id); }}
           className={cn(toastVariants({ kind: item.kind }))}
         >
@@ -92,6 +112,18 @@ export function Toaster() {
           <ToastPrimitive.Description className="min-w-0 flex-1">
             {item.message}
           </ToastPrimitive.Description>
+          {item.action && (
+            <ToastPrimitive.Action
+              altText={item.action.label}
+              onClick={item.action.onSelect}
+              className={cn(
+                'shrink-0 rounded border border-action/60 px-2 py-0.5 text-xs font-medium text-action',
+                'hover:bg-action/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus',
+              )}
+            >
+              {item.action.label}
+            </ToastPrimitive.Action>
+          )}
         </ToastPrimitive.Root>
       ))}
       <ToastPrimitive.Viewport

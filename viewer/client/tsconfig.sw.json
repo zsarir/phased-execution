@@ -1,0 +1,22 @@
+// The service worker, typechecked on its own.
+//
+// It cannot share a program with the app: `ServiceWorkerGlobalScope`,
+// `FetchEvent` and `PushEvent` live only in TypeScript's `WebWorker` lib, and
+// that lib and `DOM` declare enough of the same names that having both is an
+// error rather than a union. So the app excludes `src/sw.ts` and this project
+// compiles exactly that one file, with the libs a worker actually has.
+//
+// `npm run typecheck:client` runs both, so there is still one command to trust.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "WebWorker"],
+    // The worker has no `describe`/`expect` and no `process`; leaving the app's
+    // ambient types in would let a mistake typecheck here that cannot run.
+    "types": []
+  },
+  // `extends` inherits the app project's `exclude`, which exists precisely to
+  // keep this file out of it — inherited here it would exclude the only input.
+  "exclude": [],
+  "include": ["src/sw.ts"]
+}

@@ -33,5 +33,9 @@
       "@shared/*": ["../shared/*"]
     }
   },
-  "include": ["src", "vite-env.d.ts"]
+  "include": ["src", "vite-env.d.ts"],
+  // The service worker is a WebWorker program, not a DOM one — `tsconfig.sw.json`
+  // compiles it with the right libs. Leaving it here would fail on `FetchEvent`
+  // and every other name only a worker has.
+  "exclude": ["src/sw.ts"]
 }

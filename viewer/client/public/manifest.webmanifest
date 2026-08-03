@@ -1,0 +1,46 @@
+{
+  "name": "Phase Console",
+  "short_name": "Phase",
+  "description": "The portfolio view for phased execution: plans, the route map, the ready queue, live runs and the approval queue.",
+  "lang": "en",
+  "dir": "ltr",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "launch_handler": { "client_mode": "focus-existing" },
+  "orientation": "any",
+  "background_color": "#0e1b22",
+  "theme_color": "#0e1b22",
+  "categories": ["productivity", "developer"],
+  "shortcuts": [
+    {
+      "name": "Ready now",
+      "short_name": "Ready",
+      "description": "Phases whose dependencies are all done",
+      "url": "/#/ready",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Runs",
+      "short_name": "Runs",
+      "description": "Live sessions and the approvals waiting on you",
+      "url": "/#/runs",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Notifications",
+      "short_name": "Inbox",
+      "description": "Everything the console has announced",
+      "url": "/#/notifications",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/icon-badge-96.png", "sizes": "96x96", "type": "image/png", "purpose": "monochrome" }
+  ]
+}

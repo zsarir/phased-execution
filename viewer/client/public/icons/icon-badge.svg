@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="Phase Console">
+  <!--
+    The notification badge: the source of record for `icon-badge-96.png`.
+
+    Android draws a badge from its alpha channel alone, at roughly 20px in the
+    status bar, so this is not `icon.svg` scaled down — that mark is 336 wide
+    and 92 tall on a 512 ground, and at 20px it is a grey smudge. Redrawn for
+    the size it is actually seen at: no ground, one flat colour, a stroke heavy
+    enough to survive the reduction, and the two stations far enough apart to
+    still read as two.
+  -->
+  <path d="M22 48h52" stroke="#ffffff" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <circle cx="22" cy="48" r="19" fill="#ffffff"/>
+  <circle cx="74" cy="48" r="19" fill="#ffffff"/>
+</svg>

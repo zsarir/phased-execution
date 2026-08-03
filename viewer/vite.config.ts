@@ -5,6 +5,7 @@ import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { VitePWA } from 'vite-plugin-pwa';
 
 // The Vite project lives in `client/`; its build output goes to `client/dist`,
 // which the server serves in preference to the legacy `web/` client (see
@@ -38,9 +39,13 @@ export default defineConfig({
     proxy: {
       '/api': { target: CONSOLE, changeOrigin: true, configure: rewriteOrigin },
       '/hooks': { target: CONSOLE, changeOrigin: true, configure: rewriteOrigin },
-      // SSE + the service worker are GETs — no CSRF, no Origin rewrite needed.
+      // SSE is a GET — no CSRF, no Origin rewrite needed.
       '/events': { target: CONSOLE, changeOrigin: true },
-      '/sw.js': { target: CONSOLE, changeOrigin: true },
+      // `/sw.js` is deliberately NOT proxied any more. The client owns the
+      // service worker now, and forwarding this would hand the dev origin the
+      // *production* worker — one that precaches `/assets/index-<hash>.js`
+      // URLs which do not exist on :5173, and then answers navigations from
+      // that cache. `lib/pwa.ts` skips registration in dev for the same reason.
       // The terminal socket. `ws: true` is what makes Vite proxy the upgrade
       // rather than answer it; without it the handshake 404s in dev only, which
       // reads as a broken server. No Origin rewrite: the console deliberately
@@ -49,7 +54,47 @@ export default defineConfig({
       '/ws': { target: CONSOLE, ws: true, changeOrigin: true },
     },
   },
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    VitePWA({
+      // `injectManifest`, not `generateSW`: the worker is hand-written
+      // (`client/src/sw.ts`) because what it must NOT do — cache the board — is
+      // the part worth reading, and a generated one hides that in options.
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      // ⚠️ The output stays `/sw.js` at scope `/`. The push subscriptions that
+      // already exist are bound to that pair; moving either silently
+      // unsubscribes every device and nothing announces it.
+      filename: 'sw.ts',
+      // The manifest is a static file in `client/public/` and the <link> is in
+      // index.html — both because it predates this build and is already
+      // installed on a home screen, and because it reads better as a document
+      // than as a config block.
+      manifest: false,
+      // Registration is `lib/pwa.ts`'s job: it also owns the update toast, and
+      // an injected script that registers behind its back would race it.
+      injectRegister: null,
+      injectManifest: {
+        // A classic script, not an ES module. The default (`es`) happens to
+        // emit import-free output while everything inlines, so it registers as
+        // classic *by luck*; the day something does not inline, module workers
+        // are unsupported in Firefox and this would break there and nowhere
+        // else. `iife` makes it true on purpose.
+        rollupFormat: 'iife',
+        // Fonts and icons are part of the shell — the defaults cover only
+        // js/css/html, which would leave an offline app in Times New Roman.
+        globPatterns: ['**/*.{js,css,html}', 'assets/*.woff2', 'icons/*.png', 'manifest.webmanifest'],
+        // The terminal is 89 KB gz of xterm that is useless without a socket,
+        // and precaching is exactly the wrong place to spend that: it is
+        // downloaded on install, by everyone, before anyone asks for a shell.
+        // It stays a lazy chunk fetched from the network on demand.
+        globIgnores: ['**/terminal-*.js', '**/terminal-*.css'],
+      },
+      // No worker in dev. See the `/sw.js` proxy note above.
+      devOptions: { enabled: false },
+    }),
+  ],
   resolve: {
     alias: {
       '@': here('client/src'),

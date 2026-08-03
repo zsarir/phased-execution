@@ -1,11 +1,13 @@
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { WifiOff } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { usePhone } from '@/lib/media';
+import { useOnline, useServiceWorker } from '@/lib/pwa';
 import { useSseStatus } from '@/lib/sse';
 import { shellCounts, useApprovals, useConsoleState, useLiveData, usePlans } from '@/lib/queries';
 import { Banner, Spinner, Toaster, TooltipProvider } from '@/components/ui';
 import { CHROMELESS_HEADS, navigate, resolveView, useRoute } from '@/router';
+import { Disconnected } from '@/shell/disconnected';
 import { Rail } from '@/shell/rail';
 import { MoreSheet, TabBar, TopBar } from '@/shell/phone';
 
@@ -19,12 +21,15 @@ export function App() {
   const head = route.segments[0];
   const phone = usePhone();
   const sse = useSseStatus();
+  const online = useOnline();
   const [moreOpen, setMoreOpen] = useState(false);
 
   // Every server event, wired to what it makes stale. Mounted once, here.
   useLiveData();
+  // Registers the worker and offers an update when one is waiting. Also once.
+  useServiceWorker();
 
-  const { data: state, error: stateError } = useConsoleState();
+  const { data: state, error: stateError, isFetching: stateFetching, refetch: refetchState } = useConsoleState();
   const rootOk = Boolean(state?.root?.ok);
   const { data: plans } = usePlans(rootOk);
   // Nothing to poll on a server that predates the runner — asking anyway just
@@ -52,11 +57,31 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // The queries are invalidated by the stream, not by a timer, so nothing
+  // retries on its own once this one has failed. Coming back onto a network is
+  // the one moment it is worth asking again unprompted.
+  //
+  // ⚠️ On the *transition*, never on "online && errored". Every failure is a new
+  // Error object, so an effect that depends on the error refetches, fails,
+  // produces a different error, and refetches again — a request every
+  // millisecond, and a permanent spinner instead of the offline screen, because
+  // the query is always mid-retry and never settled. Found in a browser; the
+  // regression test is `app.test.tsx`.
+  const wasOnline = useRef(online);
+  useEffect(() => {
+    const cameBack = online && !wasOnline.current;
+    wasOnline.current = online;
+    if (cameBack) void refetchState();
+  }, [online, refetchState]);
+
   if (stateError) {
     return (
-      <div className="grid min-h-dvh place-items-center p-4">
-        <Banner severity="error">{String((stateError as Error).message ?? stateError)}</Banner>
-      </div>
+      <Disconnected
+        online={online}
+        detail={String((stateError as Error).message ?? stateError)}
+        onRetry={() => { void refetchState(); }}
+        retrying={stateFetching}
+      />
     );
   }
 
@@ -108,7 +133,7 @@ export function App() {
         )}
 
         <main className="min-w-0 overflow-y-auto overscroll-contain">
-          {(state.serverStale || sse !== 'live') && (
+          {(state.serverStale || !online || sse !== 'live') && (
             <div className="flex flex-col gap-2 px-3 pt-3 md:px-5">
               {state.serverStale && (
                 <Banner severity="warn">
@@ -120,13 +145,18 @@ export function App() {
                   </div>
                 </Banner>
               )}
-              {sse !== 'live' && (
-                <Banner severity={sse === 'offline' ? 'error' : 'info'}>
+              {(!online || sse !== 'live') && (
+                <Banner severity={!online || sse === 'offline' ? 'error' : 'info'}>
                   <WifiOff size={15} className="mt-0.5 shrink-0" aria-hidden />
                   <div className="min-w-0">
-                    {sse === 'offline'
-                      ? 'Live updates stopped. Reload to reconnect.'
-                      : 'Reconnecting to the console — the board may be a moment behind.'}
+                    {/* Being offline outranks whatever the stream thinks: it
+                        explains the stream, and it is the one the reader can
+                        actually do something about. */}
+                    {!online
+                      ? 'This device is offline. Everything below was loaded before that and is no longer updating.'
+                      : sse === 'offline'
+                        ? 'Live updates stopped. Reload to reconnect.'
+                        : 'Reconnecting to the console — the board may be a moment behind.'}
                   </div>
                 </Banner>
               )}

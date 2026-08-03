@@ -16,13 +16,16 @@
  * be used — each is a state to report, not an error to handle.
  *
  * ⚠️ The service worker URL and scope (`/sw.js`, `/`) are a contract with the
- * two subscriptions that already exist against this console. Phase 7 replaces
- * what that file *contains* (vite-plugin-pwa, `injectManifest`); it must not
- * change where it lives, or every subscribed device silently stops being
- * reachable and nothing announces it.
+ * subscriptions that already exist against this console — a subscription
+ * belongs to a registration, and a registration is its scope. Phase 7 replaced
+ * what that file *contains* (vite-plugin-pwa, `injectManifest`) and left where
+ * it lives alone. Registration itself now belongs to `lib/pwa.ts`, which does
+ * it at boot for everyone; this module no longer owns that decision, it just
+ * waits for the result.
  */
 
 import { api, type PushDevice, type PushState } from './api';
+import { registerServiceWorker } from './pwa';
 
 const SUPPORTED = typeof navigator !== 'undefined'
   && 'serviceWorker' in navigator
@@ -90,7 +93,9 @@ export function describeBrowser(): string {
 async function registration(): Promise<ServiceWorkerRegistration> {
   const existing = await navigator.serviceWorker.getRegistration('/');
   if (existing) return existing;
-  return navigator.serviceWorker.register('/sw.js', { scope: '/' });
+  const registered = await registerServiceWorker();
+  if (!registered) throw new Error('This console has no service worker to subscribe with.');
+  return registered;
 }
 
 /** The endpoint identifies this browser to the server; nothing else does. */
