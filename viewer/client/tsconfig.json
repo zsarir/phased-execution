@@ -17,15 +17,19 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
 
+    // `node` is for the guards under src/**/*.test.ts, which read the
+    // stylesheet off disk to assert what it declares; `vitest/globals` matches
+    // `test.globals` in vite.config.ts.
+    "types": ["node", "vitest/globals"],
+
     "allowJs": true,
     "checkJs": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
 
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
+      "@/*": ["./src/*"],
       "@shared/*": ["../shared/*"]
     }
   },

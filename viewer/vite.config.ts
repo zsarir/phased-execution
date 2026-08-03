@@ -1,6 +1,10 @@
 import { fileURLToPath, URL } from 'node:url';
-import { defineConfig } from 'vite';
+// `vitest/config` re-exports Vite's own defineConfig and widens it with the
+// `test` block below — one config file, so the client tests resolve `@shared`
+// and `@` exactly the way the app does.
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 // The Vite project lives in `client/`; its build output goes to `client/dist`,
 // which the server serves in preference to the legacy `web/` client (see
@@ -35,7 +39,7 @@ export default defineConfig({
       '/sw.js': { target: CONSOLE, changeOrigin: true },
     },
   },
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       '@': here('client/src'),
@@ -47,5 +51,16 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+  },
+  test: {
+    // Relative to `root` (= `client/`), so this is `client/src/**`. The
+    // server's own suite lives at `viewer/test/*.test.ts`, outside that root,
+    // and must never be swept up here: it runs under `node --test`, imports
+    // node: builtins and expects no DOM.
+    include: ['src/**/*.test.{ts,tsx}'],
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: [here('client/src/test-setup.ts')],
+    css: false,
   },
 });

@@ -1,0 +1,337 @@
+/* ------------------------------------------------------------------ *
+ * Phase Console — design tokens (Tailwind v4)
+ *
+ * A plan is a network: phases are stations, dependencies are track, and a
+ * session batch is one train carrying several stations. Every phase state gets
+ * its own line colour, and amber — the "boarding" colour of a departures board
+ * — is reserved for the one thing that is actionable now. That reservation is
+ * encoded here as `--action`: nothing in the interface may reach for the amber
+ * literal, because the literal cannot say *why* it is amber.
+ *
+ * ---- What changed from web/styles/tokens.css ----
+ *
+ * 1. ONE palette definition. The old file wrote the Paper map twice (once for
+ *    `[data-theme='light']`, once inside `@media (prefers-color-scheme: light)`)
+ *    on top of the Night board — three blocks, hand-synchronised. They had
+ *    already drifted: `--line-waiting` was missing from the media-query copy, so
+ *    a system-light browser inherited the Night value. Here each token is
+ *    declared ONCE with `light-dark(paper, night)` and the theme is a single
+ *    `color-scheme` flip. Drift is now unrepresentable.
+ * 2. OKLCH, and AA-verified. Every state colour clears 4.5:1 against the worst
+ *    background of its own theme — see the table above the state palette. The
+ *    Paper map did not: `waiting` sat at 2.90:1 on the map ground.
+ * 3. `--line-stuck` exists. `.state-stuck` used to alias `--line-blocked`, so a
+ *    wedged run and a failed one were the same colour.
+ * ------------------------------------------------------------------ */
+
+@import 'tailwindcss';
+
+/* ------------------------------------------------------------------ *
+ * Fonts — vendored, hashed by Vite (no network at runtime, ever)
+ * ------------------------------------------------------------------ */
+
+@font-face {
+  font-family: 'Archivo Narrow';
+  src: url('../assets/fonts/archivo-narrow.woff2') format('woff2-variations');
+  font-weight: 400 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Public Sans';
+  src: url('../assets/fonts/public-sans.woff2') format('woff2-variations');
+  font-weight: 300 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('../assets/fonts/jetbrains-mono.woff2') format('woff2-variations');
+  font-weight: 400 600;
+  font-display: swap;
+}
+
+/* ------------------------------------------------------------------ *
+ * The two grounds — declared once, selected by `color-scheme`
+ *
+ * `light-dark()` reads the computed `color-scheme`, so the entire theme switch
+ * is the three rules below it. `system` is the absence of `data-theme`.
+ * ------------------------------------------------------------------ */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---- Surfaces ---- */
+  --ground: light-dark(oklch(93.19% 0.0069 174.37), oklch(21.36% 0.0229 232.86));
+  --ground-deep: light-dark(oklch(90.00% 0.0090 179.58), oklch(18.83% 0.0201 233.18));
+  --surface: light-dark(oklch(100% 0 0), oklch(26.14% 0.0292 231.11));
+  --surface-raised: light-dark(oklch(97.58% 0.0044 179.74), oklch(29.22% 0.0325 229.87));
+  --rule: light-dark(oklch(84.71% 0.0144 185.89), oklch(33.14% 0.0373 223.89));
+  --rule-strong: light-dark(oklch(74.22% 0.0212 192.85), oklch(39.95% 0.0444 222.75));
+
+  /* ---- Ink ---- */
+  --ink: light-dark(oklch(21.36% 0.0229 232.86), oklch(95.17% 0.0097 204.91));
+  --ink-muted: light-dark(oklch(47.24% 0.0283 227.06), oklch(74.72% 0.0244 220.82));
+  --ink-faint: light-dark(oklch(58.32% 0.0264 223.97), oklch(60.50% 0.0298 223.53));
+
+  /* ---- The track the stations sit on ---- */
+  --track: light-dark(oklch(82.37% 0.0175 196.82), oklch(36.05% 0.0405 223.66));
+  --hatch: light-dark(oklch(54.13% 0.2466 293.01 / 18%), oklch(71.97% 0.1930 308.60 / 22%));
+
+  /* ---- Line colours — one per phase state ----
+     Hue is held across both themes so the route map reads the same way on
+     either ground; only lightness moves, and it moves exactly as far as WCAG
+     AA demands. Measured against the worst background of each theme (Night:
+     `--surface-raised`; Paper: `--ground`) — every one of these is >= 4.5:1:
+
+              Night (ground/surface/raised)   Paper (ground/surface/raised)
+       done        6.90 / 6.06 / 5.48             4.58 / 5.58 / 5.21
+       ready       9.99 / 8.77 / 7.93             4.59 / 5.59 / 5.22
+       progress    6.99 / 6.14 / 5.55             4.59 / 5.60 / 5.23
+       waiting     5.77 / 5.07 / 4.58             4.56 / 5.56 / 5.19
+       blocked     5.82 / 5.11 / 4.62             4.56 / 5.56 / 5.19
+       stuck       5.76 / 5.05 / 4.57             4.82 / 5.87 / 5.49
+       gated       6.51 / 5.72 / 5.17             4.68 / 5.70 / 5.32 */
+  --line-done: light-dark(oklch(50.36% 0.1097 161.43), oklch(69.85% 0.1240 165.27));
+  --line-ready: light-dark(oklch(52.35% 0.1117 69.62), oklch(82.44% 0.1632 77.79));
+  --line-progress: light-dark(oklch(52.08% 0.1676 256.16), oklch(71.63% 0.1533 250.39));
+  --line-waiting: light-dark(oklch(51.55% 0.0224 224.50), oklch(66.35% 0.0224 224.50));
+  --line-blocked: light-dark(oklch(54.01% 0.1859 25.95), oklch(69.22% 0.1976 23.83));
+  /* Wedged, not failed — a sibling of `blocked` in tone, its own hue. Never
+     amber: a stuck run is not a thing you can act on by tapping it. */
+  --line-stuck: light-dark(oklch(53.13% 0.2015 5.62), oklch(69.30% 0.2124 2.33));
+  --line-gated: light-dark(oklch(54.13% 0.2466 293.01), oklch(71.97% 0.1930 308.60));
+
+  /* ---- The one actionable colour ----
+     `--action` is the semantic name; `--line-ready` happens to be the same
+     amber because "ready" IS the actionable state. Anything else that wants to
+     say "do this now" reaches for `--action`, never for the amber literal and
+     never for `--line-ready` (which means a phase state, not an affordance). */
+  --action: var(--line-ready);
+  --focus: var(--action);
+
+  /* ---- Elevation ---- */
+  --shadow-card: light-dark(
+    0 1px 2px oklch(21.36% 0.0229 232.86 / 6%),
+    0 1px 0 oklch(100% 0 0 / 4%) inset
+  ),
+  light-dark(
+    0 8px 20px -18px oklch(21.36% 0.0229 232.86 / 40%),
+    0 8px 24px -16px oklch(0% 0 0 / 80%)
+  );
+  --glow-action: 0 0 0 3px light-dark(
+    oklch(52.35% 0.1117 69.62 / 12%),
+    oklch(82.44% 0.1632 77.79 / 14%)
+  );
+
+  /* ---- Touch ----
+     44px is Apple's floor for a target you are expected to hit with a thumb.
+     16px is iOS's floor for a text input: focus a smaller one and the browser
+     zooms the whole viewport to meet it and leaves it there. */
+  --tap-min: 44px;
+  --text-input: 16px;
+
+  /* ---- Breakpoints, as documentation ----
+     A custom property cannot be interpolated into a media query, so these
+     record the intent; the `@theme` block below is what actually generates
+     them, and the Vitest theme guard asserts the two agree. */
+  --bp-phone: 640px; /* one thumb, one column */
+  --bp-shell: 900px; /* the rail gives way to the phone shell */
+  --bp-wide: 1200px; /* the plan detail stops being two columns */
+
+  /* ---- Stacking order ----
+     Every z-index in the app, in the order they may cover each other. */
+  --z-base: 1; /* sticky table headers, list group headings */
+  --z-sticky: 20; /* the phone top bar */
+  --z-shell: 40; /* the phone tab bar and the sheet it opens */
+  --z-scrim: 60; /* modals */
+  --z-toast: 70; /* toasts — above everything, including a modal */
+
+  --rail-width: 236px;
+  --content-max: 1560px;
+}
+
+:root[data-theme='dark'] { color-scheme: dark; }
+:root[data-theme='light'] { color-scheme: light; }
+
+/* ------------------------------------------------------------------ *
+ * Tailwind theme
+ *
+ * `inline` matters: it makes the utilities emit `var(--ground)` rather than a
+ * frozen copy of the value, which is what lets one `color-scheme` flip repaint
+ * the app. Breakpoints are the exception — a media query needs a literal, so
+ * they live in a plain `@theme` and the defaults are cleared first so 640/900/
+ * 1200 really are the only three.
+ * ------------------------------------------------------------------ */
+
+@theme inline {
+  --color-ground: var(--ground);
+  --color-ground-deep: var(--ground-deep);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+
+  --color-track: var(--track);
+  --color-hatch: var(--hatch);
+
+  --color-done: var(--line-done);
+  --color-ready: var(--line-ready);
+  --color-progress: var(--line-progress);
+  --color-waiting: var(--line-waiting);
+  --color-blocked: var(--line-blocked);
+  --color-stuck: var(--line-stuck);
+  --color-gated: var(--line-gated);
+
+  --color-action: var(--action);
+  /* `state` is set by the `.state-*` classes below; any chip, dot, row or map
+     segment can then paint itself `text-state` / `bg-state` without knowing
+     which state it is showing. */
+  --color-state: var(--state, var(--line-waiting));
+
+  --font-display: 'Archivo Narrow', 'Helvetica Neue', system-ui, sans-serif;
+  --font-body: 'Public Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --shadow-card: var(--shadow-card);
+  --shadow-action: var(--glow-action);
+
+  --ease-transit: cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+@theme {
+  /* The three, and only three. Clearing the namespace first removes Tailwind's
+     sm/md/lg/xl/2xl, so a stray `md:` is a build-visible mistake rather than a
+     fourth breakpoint nobody agreed to. */
+  --breakpoint-*: initial;
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 900px;
+  --breakpoint-lg: 1200px;
+
+  /* Display sizes are fluid: they are the ones that overflow a phone. The
+     reading sizes are NOT — body text that shrinks with the viewport is the
+     opposite of what a small screen wants. */
+  --text-3xl: clamp(1.75rem, 1.35rem + 1.9vw, 2.25rem);
+  --text-2xl: clamp(1.35rem, 1.16rem + 0.9vw, 1.6rem);
+  --text-xl: clamp(1.12rem, 1.02rem + 0.5vw, 1.25rem);
+  --text-lg: clamp(1rem, 0.97rem + 0.15vw, 1.05rem);
+  --text-md: 0.925rem;
+  --text-sm: 0.825rem;
+  --text-xs: 0.75rem;
+  --text-2xs: 0.68rem;
+
+  --radius-sm: 3px;
+  --radius: 6px;
+  --radius-lg: 10px;
+
+  --duration-fast: 120ms;
+  --duration-medium: 260ms;
+  --duration-draw: 620ms;
+
+  /* The two motions the app has. `tailwindcss-animate` is not installed — these
+     are the whole vocabulary, so a component cannot invent a third. */
+  --animate-fade: fade 120ms cubic-bezier(0.2, 0.7, 0.3, 1);
+  --animate-rise: rise 260ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ------------------------------------------------------------------ *
+ * Base
+ * ------------------------------------------------------------------ */
+
+@layer base {
+  * { min-width: 0; } /* the minmax(0,1fr) discipline, applied once */
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: var(--text-md);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* The shell owns its own scrolling; the document must not also scroll
+       sideways when a table is wider than the phone. */
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    line-height: 1.2;
+    margin: 0;
+  }
+
+  code, pre, kbd, samp {
+    font-family: var(--font-mono);
+    /* A ligature turns `!=` into `≠` and `->` into `→`. In prose that is a
+       nicety; in a diff, a command or a phase id it is a lie about the bytes. */
+    font-variant-ligatures: none;
+    font-feature-settings: 'liga' 0, 'calt' 0;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* An input below 16px makes iOS zoom the viewport to meet it and stay there. */
+  input, textarea, select { font-size: max(var(--text-input), 1em); }
+
+  ::selection { background: color-mix(in oklab, var(--action) 30%, transparent); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * State → colour
+ *
+ * One class sets `--state`; everything downstream paints with it. This is what
+ * lets a chip, a dot, a table row and a map segment agree without any of them
+ * naming a colour.
+ * ------------------------------------------------------------------ */
+
+.state-done { --state: var(--line-done); }
+.state-ready { --state: var(--line-ready); }
+.state-in-progress { --state: var(--line-progress); }
+.state-waiting { --state: var(--line-waiting); }
+.state-blocked { --state: var(--line-blocked); }
+.state-stuck { --state: var(--line-stuck); }
+.state-gated { --state: var(--line-gated); }
+
+/* ------------------------------------------------------------------ *
+ * Safe areas — the phone shell's floor and ceiling
+ * ------------------------------------------------------------------ */
+
+.pt-safe { padding-top: env(safe-area-inset-top, 0px); }
+.pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.px-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
