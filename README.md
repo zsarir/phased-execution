@@ -675,6 +675,7 @@ work is left, and whether a plan's graph even lints.
 | **Ready now** | Every ready phase across every plan, ranked by how much it unblocks. |
 | **Statistics** | Portfolio totals, velocity, completions calendar, size mix, repos, skills, target models, locks and every health issue. |
 | **Autopilot** | Drive a plan unattended: one `claude -p` per phase, the live session console, the approval queue, and the controls to pause, stop, retry, skip or run a single phase. |
+| **Agent** | Interactive `claude` sessions in the browser terminal — off unless started with `--allow-agent`; a launcher for model/effort/permission mode/first prompt/skills, and a **New plan with AI** wizard that authors a plan from a brief in the skill's own plan mode. |
 | **Terminal** | A real shell in the browser — off unless started with `--allow-terminal`; token-handshaked WebSocket, sessions that survive a reload, a phone key bar. |
 | **Search** | Full text across all plans and handoffs, grouped by plan. |
 

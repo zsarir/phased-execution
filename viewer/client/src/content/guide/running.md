@@ -1,6 +1,6 @@
 ## Stop 3 · Open the console with runs enabled
 
-Two separate permissions, because they have very different blast radii.
+Each capability is its own flag, because they have very different blast radii.
 
 ```bash
 ./start --root ~/code/my-repo --allow-writes --allow-run
@@ -10,6 +10,8 @@ Two separate permissions, because they have very different blast radii.
 |---|---|
 | `--allow-writes` | Scaffold plans and handoffs, record QA results, and take phase locks. |
 | `--allow-run` | **Spawn Claude sessions that edit your repository** for hours without you watching. Off by default. Nothing on the Autopilot tab can start, stop or approve anything without it. |
+| `--allow-terminal` | Open a **real shell** in the browser — running as you, with no policy in front of it. |
+| `--allow-agent` | Open **interactive `claude` sessions** in the browser terminal, and the *New plan with AI* wizard. The CLI asks before it acts; you approve in the terminal itself. |
 
 The startup banner tells you which are on. If you upgrade the skill while a console is running,
 **restart it** — the browser reloads the page from disk, but the server is whatever Node loaded at

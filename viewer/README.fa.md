@@ -1,3 +1,6 @@
+<!-- NOTE (2026-08-03): the English original gained the Agent page and the --allow-agent flag
+     (interactive claude sessions + the New-plan-with-AI wizard); this translation predates it. -->
+
 <div dir="rtl">
 
 # Phase Console

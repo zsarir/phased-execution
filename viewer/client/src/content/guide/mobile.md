@@ -64,10 +64,13 @@ Check `tailscale status` on your machine; the phone should be listed.
 ### Step 3 · Tell the console who may arrive
 
 ```bash
-./start --root ~/code/your-repo --allow-writes --allow-run \
+./start --root ~/code/your-repo --allow-writes --allow-run --allow-agent \
         --remote your-machine.your-tailnet.ts.net \
         --remote-user you@example.com
 ```
+
+(`--allow-agent` is optional — it is what makes the **Agent** page and the *New plan with AI*
+wizard work from the phone; leave it off if you only want the boards.)
 
 | Flag | Meaning |
 |---|---|
@@ -84,10 +87,13 @@ warning.
 To survive reboots, install it as a launchd agent with the same flags:
 
 ```bash
-./start --install-agent --root ~/code/your-repo --allow-writes --allow-run \
+./start --install-agent --root ~/code/your-repo --allow-writes --allow-run --allow-agent \
         --remote your-machine.your-tailnet.ts.net --remote-user you@example.com
 ./start --agent-status
 ```
+
+(The launchd *agent* here is the background **process supervisor** — nothing to do with the
+console's Agent page; the flag for that is `--allow-agent`.)
 
 ### Step 4 · Put the proxy in front of it
 

@@ -27,10 +27,12 @@ board, the dependency graph drawn as a route map, phase and handoff detail, the 
 ready phase, portfolio statistics (velocity, critical paths, locks, health), and full-text search
 across plans and handoffs. It updates itself as agent sessions write files, and it takes every status
 claim from `scripts/phase-graph.sh` rather than recomputing it. Read-only unless you pass
-`--allow-writes` (guarded scaffold / QA / lock verbs) or `--allow-run` (the **autopilot** — one
+`--allow-writes` (guarded scaffold / QA / lock verbs), `--allow-run` (the **autopilot** — one
 `claude -p` per phase, driving a plan unattended, with approvals for anything reaching outside the
-working tree); it never commits or pushes. One-time setup per machine: `cd viewer && npm ci &&
-npm run build` — see `viewer/README.md`.
+working tree), `--allow-agent` (the **Agent** page — interactive `claude` sessions in a browser
+terminal, plus a *New plan with AI* wizard that authors a plan from a brief), or
+`--allow-terminal` (a real shell); it never commits or pushes. One-time setup per machine:
+`cd viewer && npm ci && npm run build` — see `viewer/README.md`.
 
 ## Where things live (two places)
 

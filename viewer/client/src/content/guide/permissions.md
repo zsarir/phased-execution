@@ -71,3 +71,14 @@ the outside, so they get a card.
 
 Settings lists any rule you have written that **parses and does nothing**, rather than leaving you
 to discover it at 3am.
+
+## The shell and the agent page
+
+`--allow-terminal` and `--allow-agent` sit outside everything above, on purpose. A shell is a
+person typing — no deny list, no approval hook, no profile; the only policy is whoever is at the
+keyboard. An agent session sits in between: the console builds the `claude` command itself from
+allowlisted choices (model, effort, permission mode — never the bypass mode), but once the session
+is up, approvals happen **in the terminal**, not in the console's queue. Neither capability
+weakens the autopilot's rules — they are different doors into the same machine, each behind its
+own flag, and a session parked unattended is reaped only once it has been silent for half an hour
+(a working one is left to work).

@@ -71,7 +71,8 @@ answer.
 | **Ready now** | Every ready phase across every plan, ranked by how much it unblocks, each with a copyable prompt. |
 | **Statistics** | Portfolio totals, velocity, completions calendar, size mix, repos, skills, models, locks and every health issue. |
 | **Autopilot** | Drive a plan unattended: one `claude -p` per phase, with the model, effort, skills and tool set chosen per run or per phase; the live session console; the approval queue; and the controls to pause, stop, retry, skip or run a single phase. A **status header** carries a clock that advances on its own and an estimate of how much is left, and **What it is doing** shows the session's task list, its tool calls with durations and outcomes, and one lane per subagent. |
-| **Terminal** | A real shell in the browser — off unless the console was started with `--allow-terminal`. Token-handshaked WebSocket, persistent sessions that survive a reload, a key bar for phone keyboards. |
+| **Agent** | Interactive `claude` sessions in the browser terminal — off unless started with `--allow-agent`. A launcher for model, effort, permission mode, the first prompt and extra skills; a **New plan with AI** wizard that boots the skill's plan mode from your brief and links the plan the moment it exists; ended sessions offer their `claude --resume` command. The argv is built server-side from allowlisted fields — the browser never supplies a command. |
+| **Terminal** | A real shell in the browser — off unless the console was started with `--allow-terminal`. Token-handshaked WebSocket, persistent sessions that survive a reload, a key bar for phone keyboards (including `⇧Tab`, claude's permission-mode cycle). |
 | **Search** | Full text across all plans and handoffs, grouped by plan. |
 
 The page updates itself: a watch on `docs/` pushes changes over server-sent events, so a handoff
