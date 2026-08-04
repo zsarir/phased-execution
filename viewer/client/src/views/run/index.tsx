@@ -159,7 +159,14 @@ export function RunView({ detail }: { detail: PlanDetail }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {run && <RunHeader run={run} live={live} eta={detailRun?.eta ?? null} />}
+      {run && (
+        <RunHeader
+          run={run}
+          live={live}
+          eta={detailRun?.eta ?? null}
+          phaseEta={detailRun?.phaseEta ?? []}
+        />
+      )}
 
       {/* First, always: a session parked with its hand up is the only thing on
           this page that is waiting on a person. */}
@@ -212,6 +219,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
         planPhases={planPhases}
         planSkills={planSkills}
         skills={skills ?? []}
+        defaultSkills={state?.defaultSkills ?? []}
         onAct={act}
       />
 
@@ -227,6 +235,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           onAct={act}
           queue={admission?.entries}
           scopes={scopes?.scopes}
+          phaseEta={detail.eta?.perPhase}
           recovery={{
             allowAgent,
             authFailure,

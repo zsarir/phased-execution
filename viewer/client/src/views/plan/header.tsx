@@ -2,7 +2,7 @@ import { Banner, Chip, KeyValue, Progress, StateChip } from '@/components/ui';
 import { MarkdownInline } from '@/components/markdown';
 import { WriteMenu } from '@/components/write-menu';
 import { useConsoleState } from '@/lib/queries';
-import { plural, weight } from '@/lib/format';
+import { etaLabel, etaTitle, plural, weight } from '@/lib/format';
 import { phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
 
@@ -18,6 +18,10 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
   const s = detail.summary;
   const budget = detail.plan?.sessionBudget;
   const { data: state } = useConsoleState();
+  // The detail's own estimate, not the summary's: they are computed from the
+  // same rate, but the detail's `remaining` respects a scoped run and this page
+  // is where that difference would be visible.
+  const eta = detail.eta?.plan ?? s.eta ?? null;
 
   return (
     <div className="mb-4 flex flex-col gap-3">
@@ -77,8 +81,21 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
           // the same treatment the phase titles get.
           budget?.branch ? ['Branch', <MarkdownInline text={budget.branch} />] : null,
           ['QA', s.qaMode],
+          // Weight and sessions are what is left to DO; the estimate beside them
+          // is how long that has actually been taking. The two answer the
+          // question people ask as one — "how much further" — and the page could
+          // only ever say the first half of it.
           s.remainingWeight
-            ? ['Left', `${weight(s.remainingWeight)} ≈ ${plural(s.remainingSessions, 'session')}`]
+            ? ['Left', (
+                <span>
+                  {weight(s.remainingWeight)} ≈ {plural(s.remainingSessions, 'session')}
+                  {eta && (
+                    <span className="text-ink-faint" title={etaTitle(eta)}>
+                      {' · '}{etaLabel(eta.lowMs, eta.highMs, eta.basis)}
+                    </span>
+                  )}
+                </span>
+              )]
             : null,
           detail.git?.sha
             ? ['Last commit', (

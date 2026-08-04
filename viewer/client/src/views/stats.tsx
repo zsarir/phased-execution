@@ -21,7 +21,7 @@ import { BarList, Bars, Calendar, StackBar, type ChartTone } from '@/components/
 import { ReleaseAllStaleButton, ReleaseStaleButton } from '@/components/release-lock';
 import { classifyIssue, liveRecovery } from '@/lib/recovery';
 import { startRecovery } from '@/lib/start-recovery';
-import type { HealthIssue, TerminalSession } from '@/lib/api';
+import type { HealthIssue, Portfolio, TerminalSession } from '@/lib/api';
 import { Page } from './_page';
 
 const SEVERITY_ORDER: Record<string, number> = { error: 0, warning: 1, info: 2 };
@@ -33,6 +33,25 @@ const SEVERITY_TONE = { error: 'bad', warning: 'warn', info: 'neutral' } as cons
 const SIZE_TONE: ChartTone[] = ['done', 'progress', 'gated'];
 
 type Severity = 'all' | HealthIssue['severity'];
+
+/**
+ * How fast a phase has actually been going, in the only unit anyone says aloud.
+ *
+ * A rate in milliseconds per unit of weight is the right thing to store and an
+ * unreadable thing to print, so it is multiplied back up by an M phase's weight
+ * — the size the sizing constants are anchored on. Empty string rather than a
+ * placeholder when there is no evidence: this rides on the end of a hint that
+ * already says something, and `· unknown` is worse than silence.
+ */
+export function recentRate(
+  rate: Portfolio['rate'],
+  mediumWeight = 40_000,
+): string {
+  if (!rate || rate.basis === 'heuristic' || !(rate.ratePerWeight > 0)) return '';
+  const minutes = Math.round((rate.ratePerWeight * mediumWeight) / 60_000);
+  if (!minutes) return '';
+  return ` · recent rate ≈ ${minutes} min per M phase`;
+}
 
 export default function StatsView() {
   const { data: stats, isPending, error } = useStats();
@@ -102,10 +121,14 @@ export default function StatsView() {
           state={t.ready > 0 ? 'state-ready' : undefined}
           hint={`${t.inProgress} in flight · ${t.waiting} waiting`}
         />
+        {/* The page counted phases and never said how long one takes, which is
+            the quantity every other figure on it is implicitly about. Stated per
+            M phase because M is the unit the sizing constants are anchored on —
+            "40K of weight" is the same number and means nothing out loud. */}
         <Tile
           label="Work left"
           value={weight(t.remainingWeight)}
-          hint={`≈ ${plural(t.remainingSessions, 'session')} across open plans`}
+          hint={`≈ ${plural(t.remainingSessions, 'session')} across open plans${recentRate(stats.rate, state?.sizing?.M)}`}
         />
         <Tile
           label="Errors"

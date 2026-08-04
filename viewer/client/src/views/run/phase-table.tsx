@@ -21,11 +21,13 @@ import {
   TBody, TD, TH, THead, TR, Table, TableWrap,
 } from '@/components/ui';
 import {
-  api, type PhaseRecord, type PhaseScope, type PhaseStatus, type PhaseView, type QueueEntry,
-  type RunState, type TerminalSession,
+  api, type PhaseEta, type PhaseRecord, type PhaseScope, type PhaseStatus, type PhaseView,
+  type QueueEntry, type RunState, type TerminalSession,
 } from '@/lib/api';
-import { duration, money, pad2, relativeTime } from '@/lib/format';
+import { duration, elapsed, money, pad2, relativeTime } from '@/lib/format';
+import { useNow } from '@/lib/clock';
 import { useDiagnosis } from '@/lib/queries';
+import { phaseProgress } from './header';
 import { classifyPhase, liveRecovery, type RecoveryClass } from '@/lib/recovery';
 import { canQa, liveQa } from '@/lib/qa';
 import { QaButton, QaVerdict } from '@/components/qa-launcher';
@@ -133,6 +135,7 @@ export function PhaseTable({
   recovery,
   queue,
   scopes,
+  phaseEta,
 }: {
   slug: string;
   run: RunState | null;
@@ -145,6 +148,8 @@ export function PhaseTable({
   queue?: QueueEntry[] | undefined;
   /** Per-phase scope + what it would collide with if started now. */
   scopes?: PhaseScope[] | undefined;
+  /** What each phase was expected to take. Absent on a source with no plan detail. */
+  phaseEta?: PhaseEta[] | undefined;
 }) {
   if (!planPhases.length) {
     return (
@@ -215,6 +220,7 @@ export function PhaseTable({
                   recovery={recovery}
                   entry={queueEntryFor(queue, slug, p.phase)}
                   conflicts={scopes?.find((s) => s.phase === p.phase)?.conflicts}
+                  eta={phaseEta?.find((e) => e.phase === p.phase)}
                 />
               ))}
             </TBody>
@@ -242,6 +248,7 @@ function PhaseRows({
   recovery,
   entry,
   conflicts,
+  eta,
 }: {
   phase: MergedPhase;
   slug: string;
@@ -252,6 +259,7 @@ function PhaseRows({
   recovery?: PhaseRecovery;
   entry?: QueueEntry | undefined;
   conflicts?: string[] | undefined;
+  eta?: PhaseEta | undefined;
 }) {
   const r = p.record;
   const isActive = run?.activePhase === p.phase;
@@ -274,6 +282,14 @@ function PhaseRows({
   // The record is what THIS run is doing; the entry is the scheduler's own view.
   // Either alone is enough to say the phase is in a line.
   const queued = r?.status === 'queued' || Boolean(entry);
+
+  // A session of THIS run is open on this phase. `startedAt` with no `endedAt`
+  // is the record's own account; `live` is the console's, and both have to hold
+  // — a checkpoint left by a killed console has the first and not the second.
+  const running = live && Boolean(r?.startedAt) && !r?.endedAt
+    && (r?.status === 'running' || r?.status === 'verifying');
+  const now = useNow(running);
+  const runningMs = running && r?.startedAt ? now - Date.parse(r.startedAt) : 0;
 
   return (
     <>
@@ -354,8 +370,24 @@ function PhaseRows({
         </TD>
         <TD className="text-right font-mono tabular-nums">{r?.costUsd ? money(r.costUsd) : '—'}</TD>
         <TD className="text-right font-mono tabular-nums">{r?.turns ?? '—'}</TD>
+        {/* Three different questions, so three different answers. A finished
+            phase wants the wall clock it took. A RUNNING one wants the stopwatch
+            against what it was expected to take — the figure that turns "it has
+            been 40 minutes" into "and that is about right" or "and that is
+            twice as long". One not yet attempted wants the estimate alone. */}
         <TD className="text-right font-mono tabular-nums">
-          {r?.durationMs ? duration(r.durationMs) : '—'}
+          {r?.durationMs
+            ? duration(r.durationMs)
+            : running
+              ? (
+                <span title={eta ? `Phase ${p.phase} was expected to take about ${eta.label.replace('~', '')}.` : undefined}>
+                  {elapsed(runningMs)}
+                  {eta && <span className="text-ink-faint"> / {phaseProgress(runningMs, eta.estMs)}</span>}
+                </span>
+              )
+              : eta
+                ? <span className="text-ink-faint" title={`An estimate for phase ${p.phase}, not a measurement.`}>{eta.label}</span>
+                : '—'}
         </TD>
         <TD>
           <div className="flex flex-wrap gap-1">

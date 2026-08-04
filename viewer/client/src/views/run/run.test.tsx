@@ -19,7 +19,10 @@ import { NO_ACTIVITY, activity, fold, toLine } from './console-model';
 import { DEFAULTS, EFFORTS, MODELS, effortAlias, isLive, modelAlias } from './defaults';
 import { LiveConsole } from './console';
 import { displayState } from './phase-table';
+import { seedSkills } from './controls';
+import { phaseProgress } from './header';
 import { phaseActions } from '@shared/phase-model.js';
+import type { RunState } from '@/lib/api';
 
 describe('DEFAULTS', () => {
   it('opens a fresh run on opus / max / keep-going / trusted', () => {
@@ -183,5 +186,48 @@ describe('phaseActions — the board gates every action', () => {
     const failed = { phase: 2, state: 'ready', record: { status: 'failed' } };
     const live = phaseActions(failed, { live: true, allowRun: true });
     expect(live).toMatchObject({ runAlone: false, retry: false, skip: true });
+  });
+});
+
+describe('seedSkills — which boxes the picker opens with ticked', () => {
+  it('gives a run that does not exist yet the machine defaults', () => {
+    expect(seedSkills(null, ['graph-tool'])).toEqual(['graph-tool']);
+  });
+
+  it('lets an existing run answer for itself, empty list included', () => {
+    // THE case this exists for. `state.skills` is deleted when it is empty, so
+    // an absent list on a REAL run means the operator turned them all off —
+    // and `run.skills ?? defaults` would put the boxes straight back, making
+    // them impossible to untick.
+    const run = { id: 'r1' } as unknown as RunState;
+    expect(seedSkills(run, ['graph-tool'])).toEqual([]);
+  });
+
+  it('shows an existing run its own list, not the machine one', () => {
+    const run = { id: 'r1', skills: ['investigate'] } as unknown as RunState;
+    expect(seedSkills(run, ['graph-tool'])).toEqual(['investigate']);
+  });
+
+  it('hands back a copy, so editing the picker cannot edit console state', () => {
+    const defaults = ['graph-tool'];
+    seedSkills(null, defaults).push('something-else');
+    expect(defaults).toEqual(['graph-tool']);
+  });
+});
+
+describe('phaseProgress — a running phase against its estimate', () => {
+  it('shows the estimate while the phase is inside it', () => {
+    expect(phaseProgress(10 * 60_000, 40 * 60_000)).toBe('~40 min');
+  });
+
+  it('says "over estimate" rather than counting down to zero', () => {
+    // A clock that reaches 0:00 and stops reads as "it is stuck", which is the
+    // one thing an over-running phase most reliably is not.
+    expect(phaseProgress(90 * 60_000, 40 * 60_000)).toBe('over estimate');
+  });
+
+  it('renders nothing at all without an estimate', () => {
+    expect(phaseProgress(60_000, undefined)).toBeNull();
+    expect(phaseProgress(60_000, 0)).toBeNull();
   });
 });

@@ -1805,7 +1805,13 @@ export class Runner {
     // Appended, never woven in: `phase-graph.sh` stays the only thing that
     // decides what a boot prompt says about the plan — including the plan's own
     // skills line. This is the operator adding to it for one run.
-    const extraSkills = [...(state.skills ?? []), ...(state.phaseOptions?.[String(phase)]?.skills ?? [])];
+    // `skillsOff` drops the RUN's list for this phase and keeps the phase's own:
+    // "not the default here" and "nothing at all here" are different asks, and a
+    // phase that names a skill has clearly asked for that one.
+    const own = state.phaseOptions?.[String(phase)];
+    const extraSkills = own?.skillsOff
+      ? [...(own.skills ?? [])]
+      : [...(state.skills ?? []), ...(own?.skills ?? [])];
     // A retry used to get the SAME prompt as the first attempt, because the
     // engine's boot prompt describes the job and the job did not change. So a
     // second session opened knowing everything about what to do and nothing

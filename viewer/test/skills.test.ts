@@ -156,3 +156,30 @@ test('the directive is additive, deduped, and silent when nothing was chosen', (
   // engine, and nothing here may look like it replaced it.
   assert.match(text, /in addition to any the plan names/);
 });
+
+test('naming a skill also asks what to do with a knowledge graph, if there is one', () => {
+  // A skill that keeps durable per-repository state is worth almost nothing if
+  // it is only ever written. Sessions named one and did neither, because nothing
+  // asked — so the ask rides along with every list of skills.
+  const text = skillDirective(['some-graph-skill']);
+  assert.match(text, /knowledge graph/i);
+  assert.match(text, /session START/i, 'query it when not knowing costs the most');
+  assert.match(text, /before your handoff/i, 'refresh it while what changed is still known');
+  assert.match(text, /from inside that repository/i, 'a query from the wrong tree answers about the wrong tree');
+});
+
+test('the knowledge-graph ask is conditional, and names no particular skill', () => {
+  // A console with no such skill installed must carry a sentence that is simply
+  // vacuous — never an instruction to invoke something that is not there.
+  const text = skillDirective(['investigate']);
+  assert.match(text, /^[\s\S]*If a listed skill maintains/m);
+  // Whatever this machine happens to call its graph tool, the public text does
+  // not know: only "a listed skill" and only "if".
+  assert.doesNotMatch(text, /\/(?!investigate)[a-z-]+ (?:will|must) (?:query|update)/i);
+});
+
+test('with nothing chosen there is no directive at all, graph ask included', () => {
+  // The paragraph hangs off a list of skills. With no list there is nothing it
+  // could be about, and a bare instruction in a boot prompt is noise.
+  assert.equal(skillDirective([]), '');
+});

@@ -257,6 +257,11 @@ export interface ConsoleState {
   supervisor?: SupervisorInfo;
   unread?: number;
   scriptsDir?: string;
+  /**
+   * Skills a NEW run would start with (`--default-skills` /
+   * `PHASE_CONSOLE_DEFAULT_SKILLS`). Not what a run HAS — that is on the run.
+   */
+  defaultSkills?: string[];
   sizing?: Sizing;
   searchDocs?: number;
   repo?: {
@@ -366,6 +371,8 @@ export interface PlanSummaryFull {
   engineError?: string;
   issueCounts: { error: number; warning: number; info: number };
   hasHandoffs: boolean;
+  /** How long this plan has left. Absent only when nothing is left. */
+  eta?: EtaEstimate;
 }
 
 export interface PhaseRow {
@@ -511,6 +518,16 @@ export interface PlanDetail {
   lint: LintResult | null;
   handoffs: HandoffRow[];
   index: { phase: number; title: string; status: string; link?: string }[];
+  /**
+   * The plan's own estimate and one per phase, from a single rate reading.
+   *
+   * Optional because the server is whatever Node loaded at startup while the
+   * client is read from disk per request — upgrading the skill under a running
+   * console leaves a new UI talking to an old API (see `state.serverStale`), and
+   * a required field would make that show up as a crash rather than a missing
+   * line. Every read site already spells it `detail.eta?.…`.
+   */
+  eta?: { plan: EtaEstimate | null; perPhase: PhaseEta[] };
   qa: { phase: number; result: string; report?: string }[];
   locks: PhaseLock[];
   git: {
@@ -633,6 +650,8 @@ export interface PhaseOptions {
   tools?: string[];
   permissionMode?: string;
   skills?: string[];
+  /** Drop the RUN's skills for this phase; its own `skills` still apply. */
+  skillsOff?: boolean;
 }
 
 /** One live `claude -p` process: which phase it is on, and the session it holds. */
@@ -702,10 +721,17 @@ export interface RunResolution {
   note?: string;
 }
 
+/**
+ * Which link of the fallback chain answered — and therefore how much of a claim
+ * the number is. `etaLabel()` in `lib/format` turns it into words.
+ */
+export type EtaBasis = 'plan' | 'portfolio' | 'heuristic';
+
 /** Always a range, always hedged — see `server/analysis/stats.ts`. */
 export interface EtaEstimate {
   ratePerWeight: number;
   samples: number;
+  basis: EtaBasis;
   remainingWeight: number;
   remainingPhases: number;
   lowMs: number;
@@ -713,10 +739,28 @@ export interface EtaEstimate {
   label: string;
 }
 
+/** One phase's own estimate — a point, not a range. */
+export interface PhaseEta {
+  phase: number;
+  weight: number;
+  estMs: number;
+  basis: EtaBasis;
+  label: string;
+}
+
 export interface RunDetail {
   run: RunState | null;
   history: RunState[];
   eta: EtaEstimate | null;
+  /**
+   * One estimate per open lane. The REMAINDER is not here on purpose: the
+   * elapsed clock ticks in the browser, so a server-computed "time left" would
+   * be stale the instant it was serialised. See `server/service.ts`.
+   *
+   * Optional for the same reason as `PlanDetail.eta` — an older server process
+   * under a newer client simply does not send it.
+   */
+  phaseEta?: PhaseEta[];
 }
 
 export interface Evidence {
@@ -885,6 +929,8 @@ export interface Portfolio {
   models: { model: string; count: number }[];
   stalled: { slug: string; days: number; ready: number[] }[];
   busiest: { slug: string; completions: number }[];
+  /** How fast a phase has actually been going lately, pooled across every plan. */
+  rate?: { ratePerWeight: number; basis: EtaBasis; samples: number; spread: number };
 }
 
 /* ---------------- the directory picker ---------------- */

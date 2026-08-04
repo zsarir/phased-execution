@@ -76,6 +76,20 @@ function ProfileNote({ profile }: { profile: PermissionProfile }) {
   );
 }
 
+/**
+ * Which skills the picker opens on.
+ *
+ * A run that EXISTS answers for itself, empty list included: `state.skills` is
+ * deleted when it is empty (`applySettings`, `newRun`), so an absent list on a
+ * real run means the operator turned them all off — and re-seeding the machine
+ * defaults over that would make the box impossible to untick. Only a run that
+ * does not exist yet gets the defaults, which is exactly when the server would
+ * apply them.
+ */
+export function seedSkills(run: RunState | null, defaultSkills: string[]): string[] {
+  return run ? (run.skills ?? []) : [...defaultSkills];
+}
+
 export function Controls({
   slug,
   run,
@@ -85,6 +99,7 @@ export function Controls({
   planPhases,
   planSkills,
   skills,
+  defaultSkills = [],
   onAct,
 }: {
   slug: string;
@@ -95,15 +110,21 @@ export function Controls({
   planPhases: PhaseView[];
   planSkills: string[];
   skills: SkillInfo[];
+  /** What a NEW run would start with. An existing run's own list wins. */
+  defaultSkills?: string[];
   onAct: (label: string, fn: () => Promise<unknown>) => Promise<void>;
 }) {
+  // A stable dependency for the effect below: `defaultSkills` is a fresh array
+  // on every render of the parent, so depending on the array itself would reset
+  // the picker — and every other field with it — on each poll.
+  const defaultKey = defaultSkills.join(',');
   const [model, setModel] = useState(run?.model ?? DEFAULTS.model);
   const [effort, setEffort] = useState(run?.effort ?? DEFAULTS.effort);
   const [autonomy, setAutonomy] = useState<Autonomy>(run?.autonomy ?? DEFAULTS.autonomy);
   const [phaseBudget, setPhaseBudget] = useState(String(run?.phaseBudgetUsd ?? ''));
   const [runBudget, setRunBudget] = useState(String(run?.runBudgetUsd ?? ''));
   const [overrides, setOverrides] = useState<Record<string, PhaseOptions>>(run?.phaseOptions ?? {});
-  const [runSkills, setRunSkills] = useState<string[]>(run?.skills ?? []);
+  const [runSkills, setRunSkills] = useState<string[]>(() => seedSkills(run, defaultSkills));
   const [profile, setProfile] = useState<PermissionProfile>(
     run?.permissionProfile ?? (run ? 'guarded' : DEFAULTS.permissionProfile),
   );
@@ -119,10 +140,10 @@ export function Controls({
     setPhaseBudget(String(run?.phaseBudgetUsd ?? ''));
     setRunBudget(String(run?.runBudgetUsd ?? ''));
     setOverrides(run?.phaseOptions ?? {});
-    setRunSkills(run?.skills ?? []);
+    setRunSkills(seedSkills(run, defaultSkills));
     setProfile(run?.permissionProfile ?? (run ? 'guarded' : DEFAULTS.permissionProfile));
   }, [run?.id, run?.model, run?.effort, run?.autonomy, run?.phaseBudgetUsd, run?.runBudgetUsd,
-    run?.permissionProfile, run]);
+    run?.permissionProfile, run, defaultKey]);
 
   const resumable = Boolean(run) && !live && run?.status !== 'finished';
   const disabled = !allowRun || Boolean(busy);
@@ -240,11 +261,12 @@ export function Controls({
 
         {skills.length > 0 && (
           <SkillPicker skills={skills} chosen={runSkills} planSkills={planSkills}
-            disabled={disabled} onChange={setRunSkills} />
+            defaultSkills={defaultSkills} disabled={disabled} onChange={setRunSkills} />
         )}
 
         <PhaseMatrix planPhases={planPhases} overrides={overrides} runModel={model}
-          runEffort={effort} skills={skills} disabled={disabled} onChange={setOverrides} />
+          runEffort={effort} skills={skills} runSkills={runSkills} disabled={disabled}
+          onChange={setOverrides} />
 
         {changed && (
           <p className="max-w-prose text-2xs text-ink-faint">

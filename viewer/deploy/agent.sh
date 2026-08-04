@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Phase Console as a launchd agent.
 #
-#   agent.sh install [--root DIR] [--port N] [--notify CMD] [extra console flags…]
+#   agent.sh install [--root DIR] [--port N] [--notify CMD] [--default-skills CSV]
+#                    [extra console flags…]
 #   agent.sh update              # npm ci + npm run build, then restart
 #   agent.sh uninstall
 #   agent.sh status
@@ -38,7 +39,8 @@ current_path="$PATH"
 xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 cmd_install() {
-  local node_bin root="" port="4123" notify="" notify_given=0 extra=()
+  local node_bin root="" port="4123" notify="" notify_given=0
+  local default_skills="" skills_given=0 extra=()
   node_bin="$(command -v node)" || die "node is not on PATH"
 
   while [ "$#" -gt 0 ]; do
@@ -46,6 +48,7 @@ cmd_install() {
       --root) root="$2"; shift 2 ;;
       --port) port="$2"; shift 2 ;;
       --notify) notify="$2"; notify_given=1; shift 2 ;;
+      --default-skills) default_skills="$2"; skills_given=1; shift 2 ;;
       *) extra+=("$1"); shift ;;
     esac
   done
@@ -61,6 +64,12 @@ cmd_install() {
   # existing setup keeps working; `--notify ''` clears it deliberately.
   if [ "$notify_given" -eq 0 ] && [ -n "${PHASE_CONSOLE_NOTIFY:-}" ]; then
     notify="$PHASE_CONSOLE_NOTIFY"
+  fi
+  # Same leg, same reason: skills every run should start with are a property of
+  # THIS MACHINE, so they belong in the plist rather than in whichever shell
+  # happened to start the console. `--default-skills ''` clears them deliberately.
+  if [ "$skills_given" -eq 0 ] && [ -n "${PHASE_CONSOLE_DEFAULT_SKILLS:-}" ]; then
+    default_skills="$PHASE_CONSOLE_DEFAULT_SKILLS"
   fi
   [ -n "$root" ] || die "install needs --root <dir> (the repo holding docs/plans)"
   [ -d "$root/docs/plans" ] || die "no docs/plans under $root"
@@ -83,6 +92,11 @@ cmd_install() {
   local notify_xml=""
   if [ -n "$notify" ]; then
     notify_xml="    <key>PHASE_CONSOLE_NOTIFY</key><string>$(xml_escape "$notify")</string>"$'\n'
+  fi
+
+  local skills_xml=""
+  if [ -n "$default_skills" ]; then
+    skills_xml="    <key>PHASE_CONSOLE_DEFAULT_SKILLS</key><string>$(xml_escape "$default_skills")</string>"$'\n'
   fi
 
   cat > "$PLIST" <<PLIST_END
@@ -114,7 +128,7 @@ $arg_xml  </array>
     <key>PATH</key><string>$(xml_escape "$current_path")</string>
     <key>HOME</key><string>$(xml_escape "$HOME")</string>
     <key>PHASE_CONSOLE_NO_OPEN</key><string>1</string>
-$notify_xml  </dict>
+$notify_xml$skills_xml  </dict>
 </dict>
 </plist>
 PLIST_END
@@ -129,6 +143,7 @@ PLIST_END
   echo "url        http://127.0.0.1:$port"
   echo "logs       $STATE_DIR/console.{out,err}.log"
   echo "notify     ${notify:-not set — pass --notify '<command>' for out-of-band alerts}"
+  echo "skills     ${default_skills:-none — pass --default-skills a,b to seed every run}"
   echo
   echo "It is running now and will start at login. Stop it with: agent.sh uninstall"
 }

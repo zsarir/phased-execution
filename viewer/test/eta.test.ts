@@ -11,7 +11,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { emaRate, estimateEta, etaSamples, ETA_ALPHA } from '../server/analysis/stats.ts';
+import {
+  emaRate, estimateEta, etaFrom, etaSamples, phaseEtaFor, rateFor,
+  ETA_ALPHA, HEURISTIC_RATE_PER_WEIGHT,
+} from '../server/analysis/stats.ts';
 
 const MIN = 60_000;
 const HOUR = 3_600_000;
@@ -146,4 +149,103 @@ test('a phase the plan no longer sizes is not a sample', () => {
     phases: { 9: { phase: 9, status: 'done', durationMs: 30 * MIN, endedAt: '2026-08-01T09:00:00Z' } },
   }], weights);
   assert.deepEqual(samples, []);
+});
+
+/* ---------------- the fallback chain ----------------
+ * Suppression used to be the answer to "no evidence", and it was worst exactly
+ * where the question is loudest: a plan that has never run showed nothing at
+ * all. These pin that the weaker links exist, that they are LABELLED, and that
+ * a stronger link is never passed over for a weaker one. */
+
+const ownSample = { weight: M, durationMs: 40 * MIN };
+const poolSample = { weight: M, durationMs: 80 * MIN };
+
+test("this plan's own phases win over the pool, however big the pool", () => {
+  const rate = rateFor([ownSample], Array.from({ length: 50 }, () => poolSample));
+  assert.equal(rate.basis, 'plan');
+  assert.equal(rate.ratePerWeight, (40 * MIN) / M);
+});
+
+test('with nothing of its own a plan borrows the pool, and says so', () => {
+  const rate = rateFor([], [poolSample, poolSample]);
+  assert.equal(rate.basis, 'portfolio');
+  assert.equal(rate.ratePerWeight, (80 * MIN) / M);
+  assert.equal(rate.samples, 2);
+});
+
+test('with nothing anywhere the heuristic answers, labelled as the guess it is', () => {
+  const rate = rateFor([], []);
+  assert.equal(rate.basis, 'heuristic');
+  assert.equal(rate.samples, 0);
+  assert.equal(rate.ratePerWeight, HEURISTIC_RATE_PER_WEIGHT);
+});
+
+test('the heuristic constant lands the three size tags where sizing.md says', () => {
+  // The whole reason for that number: S ≈ 15 min, M ≈ 40 min, L ≈ 90 min.
+  const rate = rateFor([], []);
+  assert.equal(S * rate.ratePerWeight, 15 * MIN);
+  assert.equal(M * rate.ratePerWeight, 40 * MIN);
+  assert.equal(L * rate.ratePerWeight, 90 * MIN);
+});
+
+test('the band never tightens as the evidence weakens', () => {
+  const strong = rateFor(Array.from({ length: 5 }, () => ownSample), []);
+  const borrowed = rateFor([], Array.from({ length: 5 }, () => poolSample));
+  const guessed = rateFor([], []);
+
+  assert.ok(borrowed.spread > strong.spread, 'another plan is weaker evidence than this one');
+  assert.ok(guessed.spread >= 0.5, 'a guess is never presented as tight');
+  // Five samples of the pool is still the pool: the count says how well the
+  // POOL is measured, not how well it applies here.
+  assert.ok(borrowed.spread >= 0.5);
+});
+
+test('a borrowed rate still refuses to estimate a plan with nothing left', () => {
+  assert.equal(etaFrom(rateFor([], [poolSample]), { weight: 0, phases: 0 }), null);
+});
+
+test('the estimate carries its basis all the way to the render site', () => {
+  const eta = etaFrom(rateFor([], [poolSample]), { weight: M * 2, phases: 2 })!;
+  assert.equal(eta.basis, 'portfolio');
+  const guess = etaFrom(rateFor([], []), { weight: M * 2, phases: 2 })!;
+  assert.equal(guess.basis, 'heuristic');
+  assert.match(guess.label, /^~.+ left$/);
+});
+
+test('estimateEta stays plan-evidence-only, so the old contract is unchanged', () => {
+  // The chain is opt-in. A caller that wants "what this plan has actually shown
+  // us and nothing weaker" still gets null rather than a borrowed number.
+  assert.equal(estimateEta([], { weight: M * 3, phases: 3 }), null);
+  assert.ok(estimateEta([ownSample], { weight: M * 3, phases: 3 }));
+});
+
+/* ---------------- one phase at a time ---------------- */
+
+test('a phase estimate is the same rate applied to that phase alone', () => {
+  const rate = rateFor([ownSample], []);
+  const one = phaseEtaFor(4, M, rate);
+  assert.equal(one.phase, 4);
+  assert.equal(one.weight, M);
+  assert.equal(one.estMs, 40 * MIN);
+  assert.equal(one.basis, 'plan');
+  // A point, not a range, and never "left" — a phase that has not started has none.
+  assert.equal(one.label, '~40 min');
+  assert.doesNotMatch(one.label, /left|–/);
+});
+
+test('a phase estimate is bucketed like every other figure here', () => {
+  // 37 minutes is not a thing anyone says; the bucket is five-minute steps.
+  const rate = { ratePerWeight: (37 * MIN) / M, basis: 'plan' as const, samples: 3, spread: 0.35 };
+  assert.equal(phaseEtaFor(1, M, rate).estMs % (5 * MIN), 0);
+});
+
+test('a plan and its phases cannot disagree about how fast it goes', () => {
+  // The one property that makes it safe to show both on one page: the header
+  // total and the rows are the same reading, so they add up.
+  const rate = rateFor([ownSample, ownSample], []);
+  const plan = etaFrom(rate, { weight: M * 3, phases: 3 })!;
+  const rows = [1, 2, 3].map((phase) => phaseEtaFor(phase, M, rate));
+  const summed = rows.reduce((total, row) => total + row.estMs, 0);
+  assert.ok(plan.lowMs <= summed && summed <= plan.highMs, `${summed} outside ${plan.label}`);
+  assert.equal(plan.basis, rows[0].basis);
 });

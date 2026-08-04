@@ -30,7 +30,7 @@
 
 import { plainText } from '@/components/markdown';
 import { outcomeOf, type OutcomeId } from '../run/defaults';
-import type { PlanSummaryFull, RunState } from '@/lib/api';
+import type { EtaEstimate, PlanSummaryFull, RunState } from '@/lib/api';
 
 /** The newest run on a plan, as much of it as a list row can use. */
 export interface RowRun {
@@ -60,6 +60,8 @@ export interface PlanRow {
   waiting: number;
   qaFailures: number[];
   remainingSessions: number;
+  /** How long this plan has left, when there is anything left. See `EtaEstimate`. */
+  eta?: EtaEstimate;
 
   repos: string[];
   branch?: string;
@@ -135,6 +137,7 @@ export function toRows(
       waiting: plan.waiting ?? 0,
       qaFailures: plan.qaFailures ?? [],
       remainingSessions: plan.remainingSessions ?? 0,
+      eta: plan.eta,
 
       repos: plan.repos ?? [],
       branch: plan.branch,

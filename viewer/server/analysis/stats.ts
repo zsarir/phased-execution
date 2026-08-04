@@ -110,6 +110,15 @@ export type Portfolio = {
   phaseCounts: { phases: number; plans: number }[];
   stalled: { slug: string; days: number; ready: number[] }[];
   busiest: { slug: string; completions: number }[];
+  /**
+   * How fast phases have actually been going lately, pooled across every plan.
+   *
+   * The statistics page counted phases and never once said how long one takes,
+   * which is the number every other figure on it is implicitly about. Absent
+   * only when the caller did not compute it — `basis: 'heuristic'` is how "we
+   * have never finished anything" is reported.
+   */
+  rate?: RateReading;
 };
 
 const DAY = 86_400_000;
@@ -269,7 +278,7 @@ export function healthIssues(ctx: PlanContext): HealthIssue[] {
   return issues;
 }
 
-export function portfolio(contexts: PlanContext[], sizing: Sizing): Portfolio {
+export function portfolio(contexts: PlanContext[], sizing: Sizing, rate?: RateReading): Portfolio {
   const stats = contexts.map((ctx) => ({ ctx, stats: planStats(ctx, sizing) }));
   const plans = stats.filter((s) => s.stats.kind === 'plan');
 
@@ -369,6 +378,7 @@ export function portfolio(contexts: PlanContext[], sizing: Sizing): Portfolio {
       .sort((a, b) => a.phases - b.phases),
     stalled,
     busiest: tally(completions.map((c) => c.slug)).slice(0, 10).map(([slug, completionCount]) => ({ slug, completions: completionCount })),
+    ...(rate ? { rate } : {}),
   };
 }
 
@@ -385,17 +395,62 @@ export function portfolio(contexts: PlanContext[], sizing: Sizing): Portfolio {
  */
 export type EtaSample = { weight: number; durationMs: number; at?: string };
 
+/**
+ * Where a rate came from, which is the thing that decides how much to believe it.
+ *
+ * An estimate built from this plan's own finished phases and one built from a
+ * heuristic constant are the same shape and nothing like the same claim. Before
+ * this existed the console could only say the number or say nothing, so the only
+ * way to be honest about a guess was to suppress it — and a plan that has never
+ * run showed no estimate at all, which is the case someone most wants one for.
+ */
+export type EtaBasis = 'plan' | 'portfolio' | 'heuristic';
+
+/**
+ * Milliseconds per unit of weight when nothing, anywhere, has ever finished.
+ *
+ * Not a measurement — a stake in the ground, chosen so the three size tags land
+ * on the durations `references/sizing.md` describes: at the sizing constants
+ * (S 15K / M 40K / L 90K) this is 15 min, 40 min and 90 min. It is the last link
+ * in the chain and always labelled `heuristic`, so nobody reads it as evidence.
+ */
+export const HEURISTIC_RATE_PER_WEIGHT = 60;
+
+/** A rate, and how much weight to put on it. See `rateFor`. */
+export type RateReading = {
+  /** Milliseconds per unit of weight. */
+  ratePerWeight: number;
+  basis: EtaBasis;
+  /** Finished phases behind the rate. Zero for the heuristic. */
+  samples: number;
+  /** How far the band runs either side of the point estimate, as a fraction. */
+  spread: number;
+};
+
 export type EtaEstimate = {
   /** Milliseconds per unit of weight, EMA-smoothed. */
   ratePerWeight: number;
   /** How many completed phases the rate is built from. */
   samples: number;
+  /** Which link of the fallback chain answered. See `EtaBasis`. */
+  basis: EtaBasis;
   remainingWeight: number;
   remainingPhases: number;
   /** The range, in milliseconds, already snapped to its coarse bucket. */
   lowMs: number;
   highMs: number;
   /** What to render. Always a range, always hedged. */
+  label: string;
+};
+
+/** One phase's own estimate — what the plan page puts beside a phase row. */
+export type PhaseEta = {
+  phase: number;
+  weight: number;
+  /** The point estimate for this phase alone, in milliseconds, bucketed. */
+  estMs: number;
+  basis: EtaBasis;
+  /** `~40 min` — no "left", because a phase that has not started has none. */
   label: string;
 };
 
@@ -444,41 +499,127 @@ export function emaRate(samples: EtaSample[], alpha = ETA_ALPHA): number | null 
   return ema;
 }
 
+/** Phases that are actually evidence — a zero-weight or zero-duration one is not. */
+function usableSamples(samples: EtaSample[]): number {
+  return samples.filter((s) => s.weight && s.durationMs > 0).length;
+}
+
+/** How wide the band runs on `n` of this plan's own finished phases. */
+function spreadFor(used: number): number {
+  return used >= 4 ? 0.35 : used >= 2 ? 0.5 : 0.7;
+}
+
+/**
+ * The rate to use, and how much of a claim it is.
+ *
+ * Three links, tried in order, each weaker and each labelled as such:
+ *
+ * 1. **this plan's own finished phases** — the only reading that accounts for
+ *    what this particular work is like;
+ * 2. **every plan's finished phases, pooled** — the machine and the account are
+ *    the same, so throughput transfers *somewhat*; how much is exactly the thing
+ *    this cannot measure, hence a band never tighter than half;
+ * 3. **the heuristic constant** — no evidence at all, and it says so.
+ *
+ * The chain exists because suppression was the old answer to "no evidence", and
+ * suppression is worst precisely where the question is loudest: a plan that has
+ * never run showed nothing. A labelled rough guess is more use than silence, and
+ * strictly more honest than an unlabelled precise one.
+ */
+export function rateFor(
+  planSamples: EtaSample[],
+  portfolioSamples: EtaSample[] = [],
+  alpha = ETA_ALPHA,
+): RateReading {
+  const own = emaRate(planSamples, alpha);
+  if (own !== null && own > 0) {
+    const used = usableSamples(planSamples);
+    return { ratePerWeight: own, basis: 'plan', samples: used, spread: spreadFor(used) };
+  }
+
+  const pooled = emaRate(portfolioSamples, alpha);
+  if (pooled !== null && pooled > 0) {
+    const used = usableSamples(portfolioSamples);
+    return {
+      ratePerWeight: pooled,
+      basis: 'portfolio',
+      samples: used,
+      // Never tighter than half however many samples there are: the count says
+      // how well the pool is measured, not how well it applies to this plan.
+      spread: Math.max(0.5, spreadFor(used)),
+    };
+  }
+
+  return {
+    ratePerWeight: HEURISTIC_RATE_PER_WEIGHT,
+    basis: 'heuristic',
+    samples: 0,
+    spread: 0.6,
+  };
+}
+
 /**
  * What is left, as a range nobody should read to the minute.
  *
- * Two deliberate refusals. It is **suppressed entirely** until a phase of this
- * plan has actually finished — an estimate with no evidence behind it is a
- * number that gets believed and should not be. And it is a **range in coarse
- * buckets**, never a countdown: the underlying quantity is a model's throughput
- * on work nobody has seen yet, and rendering that to the second claims a
- * precision that does not exist. The band widens when there is less evidence,
- * which is the honest direction for it to move.
+ * A **range in coarse buckets**, never a countdown: the underlying quantity is a
+ * model's throughput on work nobody has seen yet, and rendering that to the
+ * second claims a precision that does not exist. The band widens as the evidence
+ * weakens, which is the honest direction for it to move — and `basis` says which
+ * kind of evidence it was, so the render site can hedge in words too.
+ *
+ * Still null on **zero remaining weight**: "0 min left" on a finished plan is
+ * not an estimate, it is a units error.
  */
-export function estimateEta(
-  samples: EtaSample[],
+export function etaFrom(
+  rate: RateReading,
   remaining: { weight: number; phases: number },
-  alpha = ETA_ALPHA,
 ): EtaEstimate | null {
-  const rate = emaRate(samples, alpha);
-  if (rate === null || rate <= 0) return null;
   if (!remaining.weight || remaining.weight <= 0) return null;
+  if (!(rate.ratePerWeight > 0)) return null;
 
-  const used = samples.filter((s) => s.weight && s.durationMs > 0).length;
-  const point = remaining.weight * rate;
-  const spread = used >= 4 ? 0.35 : used >= 2 ? 0.5 : 0.7;
-  const lowMs = bucketMs(point * (1 - spread));
-  const highMs = bucketMs(point * (1 + spread));
+  const point = remaining.weight * rate.ratePerWeight;
+  const lowMs = bucketMs(point * (1 - rate.spread));
+  const highMs = bucketMs(point * (1 + rate.spread));
 
   return {
-    ratePerWeight: rate,
-    samples: used,
+    ratePerWeight: rate.ratePerWeight,
+    samples: rate.samples,
+    basis: rate.basis,
     remainingWeight: remaining.weight,
     remainingPhases: remaining.phases,
     lowMs,
     highMs,
     label: lowMs === highMs ? `~${humanMs(highMs)} left` : `~${humanMs(lowMs)}–${humanMs(highMs)} left`,
   };
+}
+
+/**
+ * The plan-evidence-only estimate: null until a phase of THIS plan has finished.
+ *
+ * Kept as its own function because that suppression is still the right answer
+ * for a caller that wants "what this plan has actually shown us" and nothing
+ * weaker. Everything else goes through `rateFor` + `etaFrom`.
+ */
+export function estimateEta(
+  samples: EtaSample[],
+  remaining: { weight: number; phases: number },
+  alpha = ETA_ALPHA,
+): EtaEstimate | null {
+  const rate = rateFor(samples, [], alpha);
+  return rate.basis === 'plan' ? etaFrom(rate, remaining) : null;
+}
+
+/**
+ * One phase, on its own.
+ *
+ * The same rate as the plan estimate, applied to one phase's weight — so a table
+ * of phases and the header above it cannot disagree about how fast this plan
+ * goes. A point rather than a range: beside a row there is space for one number,
+ * and `~` plus a bucket is already the whole claim.
+ */
+export function phaseEtaFor(phase: number, weight: number, rate: RateReading): PhaseEta {
+  const estMs = bucketMs(weight * rate.ratePerWeight);
+  return { phase, weight, estMs, basis: rate.basis, label: `~${humanMs(estMs)}` };
 }
 
 /** Snap to a scale a person would say out loud: 5 min, then half hours, then hours. */

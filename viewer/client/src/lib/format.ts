@@ -6,6 +6,8 @@
  * runtime — including a test.
  */
 
+import type { EtaBasis, EtaEstimate } from './api';
+
 /** `310000` → `310K`. A weight is always tokens, and always rounded. */
 export function weight(tokens: number | undefined): string {
   if (!tokens) return '0';
@@ -91,3 +93,60 @@ export function relativeTime(ms: number | undefined): string {
 
 /** `$1.20`. Absent and zero are different things — only the caller knows which. */
 export const money = (usd: number | null | undefined): string => `$${(usd ?? 0).toFixed(2)}`;
+
+/* ---------------- estimates ----------------
+ * An estimate is rendered in exactly one place, here, because the thing most
+ * easily got wrong about one is not the arithmetic — the server did that — but
+ * how much of a claim it sounds like. Five surfaces printing `eta.label` would
+ * be five chances to drop the hedge, and a hedge dropped is a guess presented as
+ * a measurement. */
+
+/**
+ * What each basis is worth, in the words a reader needs after the number.
+ *
+ * `plan` still says "(estimate)" rather than nothing: even the strongest reading
+ * here is a model's throughput on work nobody has looked at yet.
+ */
+const BASIS_SUFFIX: Record<EtaBasis, string> = {
+  plan: '(estimate)',
+  portfolio: '(from other plans)',
+  heuristic: '(rough guess)',
+};
+
+/** Longer than the bucket it came from deserves would be a lie about precision. */
+function coarse(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = ms / 3_600_000;
+  if (hours < 24) return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} h`;
+  const days = ms / 86_400_000;
+  return `${days < 10 ? days.toFixed(1) : Math.round(days)} d`;
+}
+
+/**
+ * `~40 min–1.5 h (estimate)` — a range and how much to believe it.
+ *
+ * The server has already snapped both ends to a bucket a person would say out
+ * loud, so this only formats and hedges. A collapsed range (both ends in the
+ * same bucket) prints once rather than as `~5 min–5 min`.
+ */
+export function etaLabel(lowMs: number, highMs: number, basis: EtaBasis): string {
+  const range = lowMs === highMs ? `~${coarse(highMs)}` : `~${coarse(lowMs)}–${coarse(highMs)}`;
+  return `${range} ${BASIS_SUFFIX[basis] ?? BASIS_SUFFIX.heuristic}`;
+}
+
+/** `~40 min` — one phase's own estimate, with no hedge and no "left". */
+export function etaPoint(ms: number): string {
+  return `~${coarse(ms)}`;
+}
+
+/** Where the number came from, in a sentence, for the `title` of any of them. */
+export function etaTitle(eta: EtaEstimate): string {
+  const evidence = eta.basis === 'plan'
+    ? `${plural(eta.samples, 'finished phase')} of this plan`
+    : eta.basis === 'portfolio'
+      ? `${plural(eta.samples, 'finished phase')} across other plans — this one has none yet`
+      : 'no finished phase anywhere yet, so this is the size tags alone';
+  return `From ${evidence}, against ${weight(eta.remainingWeight)} of remaining weight. `
+    + 'Weight-normalised, recency-weighted, and deliberately coarse.';
+}

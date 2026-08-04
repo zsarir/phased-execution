@@ -235,6 +235,17 @@ export type PhaseOptions = {
   permissionMode?: string;
   /** Skills to invoke on top of the plan's own, for this phase. */
   skills?: string[];
+  /**
+   * Drop the RUN's skills for this phase — its own `skills` still apply.
+   *
+   * The escape hatch that makes a machine-level default safe to set. A skill
+   * that is right for eighty-five phases can be exactly wrong for one (a phase
+   * that touches no repository, a phase whose whole job is the thing the skill
+   * would do), and without this the only way to exclude it would be to turn it
+   * off for the entire run. `false` and absent are the same thing, so an older
+   * checkpoint reads as "inherit" — which is what it meant.
+   */
+  skillsOff?: boolean;
 };
 
 export type RunState = {

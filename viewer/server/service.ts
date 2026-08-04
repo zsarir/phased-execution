@@ -36,8 +36,9 @@ import {
   resolveBudget, weightOf, type Sizing, type PhaseAnalysis,
 } from './analysis/graph.ts';
 import {
-  planStats, portfolio, etaSamples, estimateEta, healthIssues, splitRepos,
-  type PlanStats, type Portfolio, type PlanContext, type EtaEstimate,
+  planStats, portfolio, etaSamples, etaFrom, rateFor, phaseEtaFor, healthIssues, splitRepos,
+  type PlanStats, type Portfolio, type PlanContext, type EtaEstimate, type EtaSample,
+  type PhaseEta, type RateReading,
 } from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
 import {
@@ -49,8 +50,8 @@ import { formatScope, scopeOfRow, scopesIntersect } from '../shared/scope.js';
 import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
 import {
-  latestRun, listRuns, loadRun, phaseRecord, resolveRunsAgainst, saveRun, slugsNeedingBoard,
-  IN_FLIGHT, type RunState, type VerifySummary,
+  childrenOf, latestRun, listRuns, loadRun, phaseRecord, resolveRunsAgainst, saveRun,
+  slugsNeedingBoard, IN_FLIGHT, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
 import { checkAuth, forgetAuth, openLoginTerminal, type AuthStatus } from './runner/auth.ts';
@@ -82,6 +83,16 @@ export type PlanSummary = PlanStats & {
   engineError?: string;
   issueCounts: { error: number; warning: number; info: number };
   hasHandoffs: boolean;
+  /**
+   * How long this plan has left, cheap enough to send for every plan at once.
+   *
+   * The whole estimate rather than a pre-rendered string, so the ONE decision
+   * about how an estimate reads — the range, and the hedge its `basis` earns —
+   * stays in the one client formatter every surface calls. Absent on a plan with
+   * nothing left to do; never absent for want of evidence, which is what `basis`
+   * is for.
+   */
+  eta?: EtaEstimate;
 };
 
 export type PhaseView = {
@@ -138,6 +149,16 @@ export type PlanDetail = {
     bytes: number; mtime: number; prompts: number; skillsUsed: string[];
   }[];
   index: { phase: number; title: string; status: string; link?: string }[];
+  /**
+   * How long the plan has left, and how long each phase would take on its own.
+   *
+   * `perPhase` is an array rather than a map keyed by phase because it is
+   * derived render data, not run state: the pages that read it want it in plan
+   * order, and a `.find` is the only lookup anything does. Both halves come from
+   * ONE `RateReading`, so a phase row and the header above it can never disagree
+   * about how fast this plan goes.
+   */
+  eta: { plan: EtaEstimate | null; perPhase: PhaseEta[] };
   qa: { phase: number; result: string; report?: string }[];
   locks: { phase: number; owner: string; expired: boolean; leaseUntil?: number; host?: string }[];
   git: GitFileInfo & { dirty?: boolean };
@@ -337,6 +358,46 @@ function gitRead(cwd: string, args: string[]): Promise<string> {
   });
 }
 
+/**
+ * Every plan's finished-phase evidence, read once. See `Service.etaPool`.
+ *
+ * `all` is the portfolio fallback and is sorted by when each phase ENDED rather
+ * than grouped by plan: it feeds an EMA, whose entire behaviour is the order of
+ * its input, so stacking one plan's history after another's would make the
+ * newest evidence whatever plan happened to sort last.
+ */
+type EtaPool = { bySlug: Map<string, EtaSample[]>; all: EtaSample[] };
+
+/**
+ * How long a read of every plan's runs stays good for.
+ *
+ * Not the plan `generation`, which is the right key for anything derived from
+ * files in `docs/` and the wrong one here: run records change when a PHASE
+ * finishes, which moves no document and bumps no generation — so a
+ * generation-keyed estimate would freeze for the whole of a long run, exactly
+ * when it is being watched. Short enough that a finished phase shows up before
+ * anyone reloads, long enough that a burst of list requests reads the disk once.
+ */
+const ETA_POOL_MS = 5_000;
+
+/**
+ * The skills a NEW run starts with: what was asked for, else the machine's.
+ *
+ * `??` and deliberately not `||`. An explicit empty list is the operator having
+ * unchecked every box, and that has to mean "none" rather than "you did not
+ * say" — with `||` the default would reassert itself and there would be no way
+ * to turn it off for a run at all. Absent means the request never mentioned
+ * skills (a `curl`, an older client), and then the machine's default applies.
+ *
+ * Seeded ONCE, here. From this point the run's own `skills[]` is the single
+ * truth and nothing re-reads the flag — so changing the flag cannot retroactively
+ * alter a run in flight, and unchecking survives every later write.
+ */
+export function seedSkills(chosen: string[] | undefined, defaults: string[]): string[] | undefined {
+  if (chosen !== undefined) return chosen;
+  return defaults.length ? [...defaults] : undefined;
+}
+
 export class Service {
   readonly flags: Flags;
   prefs: Prefs;
@@ -352,6 +413,7 @@ export class Service {
   private lints = new Map<string, Cached<LintResult>>();
   private sessionPlans = new Map<string, Cached<SessionPlan>>();
   private portfolioCache: { generation: number; value: Portfolio } | null = null;
+  private etaPoolCache: { at: number; value: EtaPool } | null = null;
   private listeners = new Set<LiveListener>();
   private repo: GitRepoInfo = { available: false, dirty: [] };
 
@@ -1663,11 +1725,19 @@ export class Service {
     const stats = planStats(ctx, this.sizing);
     const issueCounts = { error: 0, warning: 0, info: 0 };
     for (const issue of stats.issues) issueCounts[issue.severity]++;
+    // `remainingWork` already excludes done phases by weight; the phase count
+    // beside it is only metadata on the estimate, so it is derived rather than
+    // recomputed from the graph a second time.
+    const eta = etaFrom(this.planRate(stats.slug), {
+      weight: stats.remainingWeight,
+      phases: Math.max(0, stats.phases - stats.done),
+    });
     return {
       ...stats,
       engineError: ctx.board.error,
       issueCounts,
       hasHandoffs: ctx.record.handoffs.length > 0,
+      ...(eta ? { eta } : {}),
     };
   }
 
@@ -1681,7 +1751,10 @@ export class Service {
     if (this.portfolioCache?.generation === this.generation) return this.portfolioCache.value;
     const records = this.store?.list() ?? [];
     const contexts = await Promise.all(records.map((r) => this.context(r)));
-    const value = portfolio(contexts, this.sizing);
+    // `rateFor([], pool)` and not `rateFor(pool)`: the number IS the pool, so it
+    // has to be labelled `portfolio` — reading it as one plan's own evidence
+    // would put "(estimate)" under a figure that is an average of everything.
+    const value = portfolio(contexts, this.sizing, rateFor([], this.etaPool().all));
     this.portfolioCache = { generation: this.generation, value };
     return value;
   }
@@ -1700,6 +1773,17 @@ export class Service {
     const critical = criticalPath(index, ctx.board, sizes, this.sizing, budget);
     const analyses = analysePhases(rows, ctx.board, sizes, this.sizing, critical.phases);
     const layout = routeLayout(index);
+
+    // One rate for the whole page. The plan total and every phase row are the
+    // same reading applied to different weights, so they cannot drift apart —
+    // and the `basis` each carries is the same basis, which is what lets the
+    // header and a row hedge in the same words.
+    const rate = this.planRate(slug);
+    const eta = {
+      plan: etaFrom(rate, remainingWork(rows, ctx.board, sizes, this.sizing, budget)),
+      perPhase: rows.map((row) =>
+        phaseEtaFor(row.phase, weightOf(plan?.phases[row.phase]?.size, this.sizing), rate)),
+    };
 
     const [batches, lint, boardText, gitInfo] = await Promise.all([
       this.sessionPlan(slug, model),
@@ -1780,6 +1864,7 @@ export class Service {
         bytes: h.bytes, mtime: h.mtime, prompts: h.prompts.length, skillsUsed: h.skillsUsed,
       })),
       index: record.index,
+      eta,
       qa: record.qa,
       locks: record.locks.map((l) => ({
         phase: l.phase, owner: l.owner, expired: l.expired, leaseUntil: l.leaseUntil, host: l.host,
@@ -2009,6 +2094,10 @@ export class Service {
       // queued" instead of leaving a queued phase looking like a stalled one.
       concurrency: this.concurrency(),
       scriptsDir: this.flags.scriptsDir,
+      // What a NEW run would start with, so the picker can pre-check them and
+      // say where they came from. Not what any existing run has — that is on
+      // the run.
+      defaultSkills: this.flags.defaultSkills,
       sizing: this.sizing,
       generation: this.generation,
       repo: this.repo,
@@ -2046,7 +2135,12 @@ export class Service {
         `${slug} is already running in this console. Pause or stop it first — `
         + 'another plan can start beside it, but one plan cannot run twice.');
     }
-    const state = await this.runnerFor(slug).start({ ...options, slug, root: this.root.path });
+    const state = await this.runnerFor(slug).start({
+      ...options,
+      skills: seedSkills(options.skills, this.flags.defaultSkills),
+      slug,
+      root: this.root.path,
+    });
     this.emit('run:state', { state });
     return state;
   }
@@ -2191,7 +2285,6 @@ export class Service {
     if (!record?.plan?.phased || !this.root) return null;
 
     const plan = record.plan;
-    const weights = new Map(plan.graph.map((r) => [r.phase, weightOf(plan.phases[r.phase]?.size, this.sizing)]));
     const sizes = new Map(plan.graph.map((r) => [r.phase, plan.phases[r.phase]?.size ?? 'M' as const]));
     const board = await this.board(slug);
 
@@ -2203,7 +2296,77 @@ export class Service {
 
     const budget = resolveBudget(plan.sessionBudget.targetModel, this.sizing);
     const remaining = remainingWork(rows, board, sizes, this.sizing, budget);
-    return estimateEta(etaSamples(await this.runsFor(slug), weights), remaining);
+    return etaFrom(this.planRate(slug), remaining);
+  }
+
+  /**
+   * Every plan's finished phases, as evidence — this plan's own, and the pool.
+   *
+   * Read in one pass because the fallback chain needs both halves and because a
+   * per-plan read repeated from the plans list would be 86 directory scans per
+   * request. Runs live under `STATE_DIR`, not in the repo, so nothing here is
+   * derived from a document and none of it invalidates on `generation` — hence
+   * the time-based cache. See `ETA_POOL_MS`.
+   */
+  private etaPool(): EtaPool {
+    const now = Date.now();
+    if (this.etaPoolCache && now - this.etaPoolCache.at < ETA_POOL_MS) return this.etaPoolCache.value;
+
+    const bySlug = new Map<string, EtaSample[]>();
+    const all: EtaSample[] = [];
+    const root = this.root?.ok ? this.root.path : null;
+
+    if (root) {
+      const live = this.liveRunIds();
+      for (const record of this.store?.list() ?? []) {
+        const plan = record.plan;
+        if (!plan?.phased) continue;
+        const weights = new Map(
+          plan.graph.map((r) => [r.phase, weightOf(plan.phases[r.phase]?.size, this.sizing)]),
+        );
+        // `listRuns` rather than `runsFor`: the board resolver answers "does this
+        // stopped run still want a person", which changes no finished phase's
+        // duration — and asking it here would cost an engine read per plan.
+        const samples = etaSamples(listRuns(root, record.slug, live), weights);
+        if (samples.length) bySlug.set(record.slug, samples);
+        all.push(...samples);
+      }
+      all.sort((a, b) => (a.at ?? '9999').localeCompare(b.at ?? '9999'));
+    }
+
+    const value: EtaPool = { bySlug, all };
+    this.etaPoolCache = { at: now, value };
+    return value;
+  }
+
+  /** The rate to estimate this plan with, and how much of a claim it is. */
+  private planRate(slug: string): RateReading {
+    const pool = this.etaPool();
+    return rateFor(pool.bySlug.get(slug) ?? [], pool.all);
+  }
+
+  /**
+   * How long each phase this run has a session on was expected to take.
+   *
+   * One entry per LANE, not one for "the" active phase: a run may be driving
+   * three disjoint-scope phases, and a single figure would silently be whichever
+   * of them the mirror happens to name. `remaining` is deliberately NOT computed
+   * here — the elapsed clock ticks in the browser, so a server-side remainder
+   * would be stale the moment it was serialised. The server owns the estimate;
+   * the client owns the clock.
+   */
+  runPhaseEta(slug: string, run: RunState | null): PhaseEta[] {
+    const plan = this.store?.get(slug)?.plan;
+    if (!plan?.phased || !run) return [];
+
+    const lanes = childrenOf(run).map((child) => child.phase);
+    const phases = lanes.length ? lanes : run.activePhase != null ? [run.activePhase] : [];
+    if (!phases.length) return [];
+
+    const rate = this.planRate(slug);
+    return [...new Set(phases)]
+      .sort((a, b) => a - b)
+      .map((phase) => phaseEtaFor(phase, weightOf(plan.phases[phase]?.size, this.sizing), rate));
   }
 
   /**

@@ -221,6 +221,10 @@ function phaseOptions(value: unknown): Record<string, PhaseOptions> | undefined 
     }
     const skills = skillList(item.skills);
     if (skills?.length) option.skills = skills;
+    // Only ever written when true: `skillsOff: false` and absent mean the same
+    // thing, and storing the false would put a key in every phase's options and
+    // make `Object.keys(option).length` below claim the operator chose something.
+    if (item.skillsOff === true) option.skillsOff = true;
     if (Object.keys(option).length) out[String(phase)] = option;
   }
   return out;
@@ -854,10 +858,14 @@ export async function handleApi(
         // `eta` rides along rather than getting an endpoint of its own: it is
         // derived from exactly this run plus the plan's board, and a second
         // request could be answered against a board that had moved on.
+        // `phaseEta` is the same estimate per open lane; the run is read once
+        // and handed to it, so the three figures cannot describe different runs.
+        const current = await service.runFor(slug);
         json(res, 200, {
-          run: await service.runFor(slug),
+          run: current,
           history: await service.runsFor(slug),
           eta: await service.runEta(slug),
+          phaseEta: service.runPhaseEta(slug, current),
         });
         return true;
       }

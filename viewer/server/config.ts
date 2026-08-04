@@ -76,6 +76,20 @@ export type Flags = {
    * rather than throughput. `--max-sessions`, or `PHASE_CONSOLE_MAX_SESSIONS`.
    */
   maxSessions: number;
+  /**
+   * Skills every run of every plan starts with, unless the operator says
+   * otherwise when starting it.
+   *
+   * A MACHINE-level default, which is the level the need actually lives at: a
+   * skill that maintains state about the repositories on this machine (a
+   * knowledge graph, an index) is wanted by every phase of every plan, and
+   * saying so once in the launch environment beats naming it in eighty-six
+   * plans. It seeds `RunState.skills` at start and then stops mattering — the
+   * run's own list is the single truth from that moment, so unchecking one in
+   * the console is a real "off" and not a preference the next tick overrides.
+   * `--default-skills a,b`, or `PHASE_CONSOLE_DEFAULT_SKILLS`.
+   */
+  defaultSkills: string[];
   /** Where the structured log goes. `null` disables file logging entirely. */
   logFile: string | null;
 };
@@ -110,6 +124,7 @@ export function parseFlags(argv: string[]): Flags {
     remoteUsers: splitList(process.env.PHASE_CONSOLE_REMOTE_USERS),
     scriptsDir: join(SKILL_DIR, 'scripts'),
     maxSessions: positive(process.env.PHASE_CONSOLE_MAX_SESSIONS) ?? DEFAULT_MAX_SESSIONS,
+    defaultSkills: splitList(process.env.PHASE_CONSOLE_DEFAULT_SKILLS),
     logFile: process.env.PHASE_CONSOLE_LOG === '' ? null : (process.env.PHASE_CONSOLE_LOG ?? defaultLogFile()),
   };
   for (let i = 0; i < argv.length; i++) {
@@ -128,6 +143,9 @@ export function parseFlags(argv: string[]): Flags {
     else if (arg === '--remote-user') flags.remoteUsers.push(...splitList(next()));
     else if (arg === '--scripts') flags.scriptsDir = resolve(expandHome(next() ?? ''));
     else if (arg === '--max-sessions') flags.maxSessions = positive(next()) ?? flags.maxSessions;
+    // Repeatable and additive to the environment, like --remote: an operator
+    // adding one for a session should not have to restate what the plist bakes in.
+    else if (arg === '--default-skills') flags.defaultSkills.push(...splitList(next()));
     else if (arg === '--log-file') flags.logFile = resolve(expandHome(next() ?? ''));
     else if (arg === '--no-log-file') flags.logFile = null;
     else if (arg === '--help' || arg === '-h') { printHelp(); process.exit(0); }
@@ -136,6 +154,10 @@ export function parseFlags(argv: string[]): Flags {
   // here rather than at every comparison site.
   flags.remoteHosts = unique(flags.remoteHosts.map((h) => h.toLowerCase().replace(/\.$/, '')));
   flags.remoteUsers = unique(flags.remoteUsers.map((u) => u.toLowerCase()));
+  // A skill id is what `/name` or `/plugin:name` accepts and nothing else: these
+  // go straight into a child's boot prompt, so anything shaped wrong is dropped
+  // here rather than named at a session that cannot invoke it.
+  flags.defaultSkills = unique(flags.defaultSkills.filter((id) => SKILL_ID.test(id))).slice(0, 40);
   return flags;
 }
 
@@ -163,6 +185,16 @@ function positive(value: string | undefined): number | undefined {
   const n = Number(value);
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
+
+/**
+ * A skill id: what `/name` or `/plugin:name` accepts, and nothing else.
+ *
+ * The same expression `api/routes.ts` checks a browser's list against — kept
+ * separately rather than imported because routes reads config and not the other
+ * way round, and one shared constant here would close an import cycle for a
+ * regular literal.
+ */
+const SKILL_ID = /^[a-z0-9][\w.-]{0,63}(:[a-z0-9][\w.-]{0,63})?$/i;
 
 /** `a,b, c` and `a` both mean the same thing, and neither may contain blanks. */
 function splitList(value: string | undefined): string[] {
@@ -216,6 +248,11 @@ function printHelp(): void {
                     Host checking, so any other Host is refused.
   --remote-user <l> a login allowed to arrive via --remote. Repeatable; also
                     PHASE_CONSOLE_REMOTE_USERS. Required by --remote.
+  --default-skills <csv>
+                    skills every new run starts with, on top of anything the
+                    plan names. Repeatable; also PHASE_CONSOLE_DEFAULT_SKILLS.
+                    Seeds the run at start — unchecking one in the console is
+                    then a real "off" for that run.
   --scripts <dir>   phased-execution scripts dir (default: the skill this lives in)
   --log-file <p>    structured log (default ${defaultLogFile()})
   --no-log-file     log to stderr only

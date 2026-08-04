@@ -21,6 +21,7 @@ export function PhaseMatrix({
   runModel,
   runEffort,
   skills,
+  runSkills = [],
   disabled,
   onChange,
 }: {
@@ -29,15 +30,24 @@ export function PhaseMatrix({
   runModel: string;
   runEffort: string;
   skills: SkillInfo[];
+  /** What the run gives every phase — what the Skip box turns off for one. */
+  runSkills?: string[];
   disabled?: boolean;
   onChange: (next: Record<string, PhaseOptions>) => void;
 }) {
   const [skillsFor, setSkillsFor] = useState<number | null>(null);
   if (!planPhases.length) return null;
 
-  const set = (phase: number, key: keyof PhaseOptions, value: string | string[]) => {
+  const set = (
+    phase: number,
+    key: keyof PhaseOptions,
+    value: string | string[] | boolean,
+  ) => {
     const key2 = String(phase);
     const next: Record<string, PhaseOptions> = { ...overrides, [key2]: { ...(overrides[key2] ?? {}) } };
+    // `false` clears for the same reason `''` and `[]` do: it is this control's
+    // way of saying "no choice here", and a stored `false` would show as an
+    // override on a row where nothing was chosen.
     if (value && (!Array.isArray(value) || value.length)) {
       (next[key2] as Record<string, unknown>)[key] = value;
     } else {
@@ -132,15 +142,35 @@ export function PhaseMatrix({
                     </TD>
                     {skills.length > 0 && (
                       <TD>
-                        <button
-                          type="button"
-                          disabled={disabled}
-                          aria-expanded={skillsFor === p.phase}
-                          onClick={() => setSkillsFor(skillsFor === p.phase ? null : p.phase)}
-                          className="rounded border border-rule px-1.5 py-0.5 text-2xs disabled:opacity-50"
-                        >
-                          {own.skills?.length ? `${own.skills.length} extra` : 'add'}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            aria-expanded={skillsFor === p.phase}
+                            onClick={() => setSkillsFor(skillsFor === p.phase ? null : p.phase)}
+                            className="rounded border border-rule px-1.5 py-0.5 text-2xs disabled:opacity-50"
+                          >
+                            {own.skills?.length ? `${own.skills.length} extra` : 'add'}
+                          </button>
+                          {/* Only where there is something to skip. A checkbox
+                              that turns off an empty list is a control that
+                              cannot do anything, offered on every row. */}
+                          {runSkills.length > 0 && (
+                            <label
+                              className="flex items-center gap-1 text-2xs text-ink-faint"
+                              title={`Run phase ${p.phase} without the run's skills `
+                                + `(${runSkills.join(', ')}). Extras chosen here still apply.`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={Boolean(own.skillsOff)}
+                                disabled={disabled}
+                                onChange={(e) => set(p.phase, 'skillsOff', e.target.checked)}
+                              />
+                              skip run&rsquo;s
+                            </label>
+                          )}
+                        </div>
                       </TD>
                     )}
                   </TR>,

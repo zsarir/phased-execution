@@ -29,7 +29,7 @@
 import { AlertTriangle, Lock } from 'lucide-react';
 import { Card, Chip, StateChip, TBody, TD, TH, THead, TR, Table, TableWrap } from '@/components/ui';
 import { Progress } from '@/components/ui';
-import { relativeTime } from '@/lib/format';
+import { etaLabel, etaTitle, relativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { phaseHref, planHref } from '@shared/routes.js';
 import type { ChipProps } from '@/components/ui';
@@ -171,6 +171,11 @@ export function PlanCard({ row, index }: { row: PlanRow; index: number }) {
               {repoLabel(row.repos).text}
             </span>
           )}
+          {row.eta && (
+            <span className="shrink-0 whitespace-nowrap" title={etaTitle(row.eta)}>
+              {etaLabel(row.eta.lowMs, row.eta.highMs, row.eta.basis)}
+            </span>
+          )}
           <span className="shrink-0 whitespace-nowrap">{relativeTime(row.activity)}</span>
         </span>
       </div>
@@ -301,8 +306,16 @@ export function PlanTable({
                   )
                   : <span className="text-ink-faint">—</span>}
               </TD>
+              {/* Sessions is the unit of work left; the estimate under it is
+                  what that has been costing in wall-clock. Sorting still keys
+                  off the session count — a time is a derived reading of it. */}
               <TD className="text-right font-mono tabular-nums text-ink-faint">
                 {row.remainingSessions || '—'}
+                {row.eta && (
+                  <span className="block whitespace-nowrap" title={etaTitle(row.eta)}>
+                    {etaLabel(row.eta.lowMs, row.eta.highMs, row.eta.basis)}
+                  </span>
+                )}
               </TD>
               <TD className="max-w-40">
                 <span

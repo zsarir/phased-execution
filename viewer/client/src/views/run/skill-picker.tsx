@@ -40,6 +40,7 @@ export function SkillPicker({
   skills,
   chosen,
   planSkills = [],
+  defaultSkills = [],
   disabled,
   onChange,
   label = 'Skills for this run',
@@ -47,6 +48,12 @@ export function SkillPicker({
   skills: SkillInfo[];
   chosen: string[];
   planSkills?: string[];
+  /**
+   * Skills this console starts every run with. Shown as a badge on whichever
+   * are chosen, so a checkbox nobody ticked is explained rather than mysterious
+   * — and unticking one is visibly a decision about THIS run.
+   */
+  defaultSkills?: string[];
   disabled?: boolean;
   onChange: (next: string[]) => void;
   label?: string;
@@ -55,6 +62,7 @@ export function SkillPicker({
   const [source, setSource] = useState('');
 
   const picked = new Set(chosen);
+  const byDefault = new Set(defaultSkills);
   const planKey = planSkills.join(',');
 
   const selectable = useMemo(
@@ -133,12 +141,17 @@ export function SkillPicker({
                 key={s.id}
                 type="button"
                 disabled={disabled}
-                title={`${s.description} — click to remove`}
+                title={byDefault.has(s.id)
+                  ? `${s.description} — on by default for every run on this console; click to remove it from this one`
+                  : `${s.description} — click to remove`}
                 aria-label={`Remove ${s.id}`}
                 onClick={() => toggle(s.id)}
                 className="inline-flex items-center gap-1 rounded-sm border border-action/50 bg-action/10 px-1.5 py-0.5 font-mono text-2xs text-action disabled:opacity-50"
               >
                 {s.id}
+                {byDefault.has(s.id) && (
+                  <span className="rounded-xs bg-action/20 px-1 text-[0.9em] not-italic">default</span>
+                )}
                 <span aria-hidden="true">×</span>
               </button>
             ))}
@@ -191,6 +204,11 @@ export function SkillPicker({
                       onChange={() => toggle(skill.id)}
                     />
                     <span className="shrink-0 font-mono">{skill.id}</span>
+                    {byDefault.has(skill.id) && (
+                      <Chip className="shrink-0" title="On by default for every run on this console">
+                        default
+                      </Chip>
+                    )}
                     <span className="min-w-0 truncate text-ink-faint" title={skill.description}>
                       {skill.description || 'no description'}
                     </span>

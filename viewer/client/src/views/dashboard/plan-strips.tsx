@@ -27,7 +27,7 @@ import { ArrowRight } from 'lucide-react';
 import { Card, CardBody, CardHeader, CardTitle, Chip, Skeleton } from '@/components/ui';
 import { RouteStrip } from '@/components/charts';
 import { plainText } from '@/components/markdown';
-import { relativeTime } from '@/lib/format';
+import { etaLabel, etaTitle, relativeTime } from '@/lib/format';
 import { phaseHref, planHref } from '@shared/routes.js';
 import type { PlanDetail, PlanSummaryFull } from '@/lib/api';
 
@@ -72,6 +72,11 @@ export function PlanStrips({
                 </a>
                 <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">
                   {plan.done}/{plan.phases} · {plan.percent}%
+                  {plan.eta && (
+                    <span title={etaTitle(plan.eta)}>
+                      {' · '}{etaLabel(plan.eta.lowMs, plan.eta.highMs, plan.eta.basis)}
+                    </span>
+                  )}
                 </span>
               </div>
 

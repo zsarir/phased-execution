@@ -240,16 +240,43 @@ export function listSkills(root: string | undefined, env: NodeJS.ProcessEnv = pr
 export function forgetSkills(): void { cache = null; }
 
 /**
+ * What a session should do with a skill that keeps a per-repository index.
+ *
+ * Written CONDITIONALLY and in the general case on purpose. Some machines run a
+ * skill that maintains durable per-repository state — a knowledge graph, a
+ * search index — and such a skill is worth almost nothing if it is only ever
+ * written: the value is in querying it at the START of a session, when the cost
+ * of not knowing where something lives is highest, and refreshing it at the end,
+ * when what changed is still known. A session naming the skill and never doing
+ * either was the ordinary outcome, because nothing asked.
+ *
+ * It says "if a listed skill" rather than naming one, so a console with no such
+ * skill installed carries a sentence that is simply vacuous rather than an
+ * instruction to invoke something that does not exist. The per-repository half
+ * matters as much: these graphs are built inside a repository and a query run
+ * from the wrong directory answers about the wrong tree.
+ */
+const KNOWLEDGE_GRAPH_DIRECTIVE =
+  'If a listed skill maintains a per-repository knowledge graph: at session START, query it for '
+  + 'each repository this phase touches — run the query from inside that repository — and '
+  + 'refresh/update the graph there before your handoff.';
+
+/**
  * The line appended to a boot prompt for skills chosen in the console.
  *
  * Deliberately additive and deliberately separate from the engine's own text:
  * `phase-graph.sh` remains the only thing that decides what a boot prompt says
  * about the *plan*, including the plan's own skills line. This is the operator
  * adding to it for one run, and it reads as that.
+ *
+ * Every caller that names skills goes through here — the runner's phase prompts,
+ * the agent launcher, the wizard, recovery sessions — which is why the directive
+ * above lives in this function and not at one of them.
  */
 export function skillDirective(skills: string[]): string {
   const named = [...new Set(skills.filter(Boolean))];
   if (!named.length) return '';
   return `\nAlso invoke ${named.length === 1 ? 'this skill' : 'these skills'} for this phase `
-    + `(chosen for this run, in addition to any the plan names): ${named.map((s) => `/${s}`).join(', ')}\n`;
+    + `(chosen for this run, in addition to any the plan names): ${named.map((s) => `/${s}`).join(', ')}\n`
+    + `\n${KNOWLEDGE_GRAPH_DIRECTIVE}\n`;
 }

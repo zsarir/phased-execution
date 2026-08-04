@@ -127,3 +127,28 @@ describe('statistics', () => {
       .toBeTruthy();
   });
 });
+
+describe('recentRate — how long a phase actually takes', () => {
+  it('states the rate per M phase, not per unit of weight', async () => {
+    // "60 ms per unit of weight" is the right thing to store and an unreadable
+    // thing to print. M is the size the sizing constants are anchored on.
+    const { recentRate } = await import('./stats');
+    expect(recentRate({ ratePerWeight: 60, basis: 'plan', samples: 5, spread: 0.35 }, 40_000))
+      .toBe(' · recent rate ≈ 40 min per M phase');
+  });
+
+  it('scales with the machine\'s own sizing rather than a baked-in 40K', async () => {
+    const { recentRate } = await import('./stats');
+    expect(recentRate({ ratePerWeight: 60, basis: 'portfolio', samples: 5, spread: 0.5 }, 20_000))
+      .toContain('20 min');
+  });
+
+  it('says nothing at all when there is nothing to say', async () => {
+    // It rides on the end of a hint that already says something, so `· unknown`
+    // is worse than silence — and the heuristic is not a measured rate.
+    const { recentRate } = await import('./stats');
+    expect(recentRate(undefined)).toBe('');
+    expect(recentRate({ ratePerWeight: 60, basis: 'heuristic', samples: 0, spread: 0.6 })).toBe('');
+    expect(recentRate({ ratePerWeight: 0, basis: 'plan', samples: 1, spread: 0.7 })).toBe('');
+  });
+});

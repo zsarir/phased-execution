@@ -1684,6 +1684,9 @@ function call(
     // Null is the ordinary answer: no phase of this plan has finished, so
     // there is nothing to estimate from.
     runEta: async () => null,
+    // Sync, and given the run the route already read — the payload's three
+    // figures have to be about one run, so the route reads it once.
+    runPhaseEta: () => [],
     allRuns: async () => [{ id: 'r1' }],
     runJournal: () => [{ seq: 1, event: 'run.start' }],
     markNotificationsRead: (...args: unknown[]) => {
@@ -1785,6 +1788,28 @@ test('per-phase choices are checked against known values, never passed through',
     4: { tools: ['Read', 'Edit'] },
   }, 'anything unrecognised is dropped, and a phase left with nothing is dropped with it');
   assert.deepEqual(options.skills, ['systematic-debugging', 'plugin:test-first', 'ok-name']);
+});
+
+test('a per-phase skills-off survives the door, and a false one leaves no trace', async () => {
+  const { started } = await call('/api/run/demo/start', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+    body: {
+      phaseOptions: {
+        1: { skillsOff: true },
+        2: { skillsOff: false },        // the same as not saying it
+        3: { skillsOff: 'yes' },        // a string is not a decision
+        4: { skillsOff: true, skills: ['investigate'] },
+      },
+    },
+  });
+  const options = (started[0] as { options: Record<string, unknown> }).options;
+  // Phases 2 and 3 are absent entirely: writing `skillsOff: false` would put a
+  // key on a row where nothing was chosen, and the row would then read as an
+  // override in the console's own "N overridden" count.
+  assert.deepEqual(options.phaseOptions, {
+    1: { skillsOff: true },
+    4: { skills: ['investigate'], skillsOff: true },
+  });
 });
 
 test('an effort the CLI would silently ignore is dropped at the door', async () => {

@@ -14,10 +14,10 @@
  */
 
 import { Chip, Tile } from '@/components/ui';
-import { elapsed, money, relativeTime } from '@/lib/format';
+import { elapsed, etaLabel, etaPoint, etaTitle, money, relativeTime } from '@/lib/format';
 import { useNow } from '@/lib/clock';
 import { cn } from '@/lib/cn';
-import type { EtaEstimate, PhaseRecord, RunState, RunStatus } from '@/lib/api';
+import type { EtaEstimate, PhaseEta, PhaseRecord, RunState, RunStatus } from '@/lib/api';
 
 /**
  * `pausing` reads as a state the operator asked for and is waiting on. Neutral
@@ -56,14 +56,29 @@ export function livePhases(run: RunState): number[] {
   return [...new Set(phases)].sort((a, b) => a - b);
 }
 
+/**
+ * How long the phase running now has been going, against how long it was
+ * expected to take.
+ *
+ * Never a countdown to zero. Past the estimate it says so and keeps counting —
+ * a clock that hits 0:00 and stops reads as "it is stuck", which is the one
+ * thing an over-running phase most reliably is not.
+ */
+export function phaseProgress(ms: number, estMs: number | undefined): string | null {
+  if (!estMs || estMs <= 0) return null;
+  return ms > estMs ? 'over estimate' : etaPoint(estMs);
+}
+
 export function RunHeader({
   run,
   live,
   eta,
+  phaseEta = [],
 }: {
   run: RunState;
   live: boolean;
   eta: EtaEstimate | null;
+  phaseEta?: PhaseEta[];
 }) {
   const ticking = live && run.status !== 'frozen';
   const now = useNow(ticking);
@@ -82,6 +97,9 @@ export function RunHeader({
   // set; `child` is the mirror of the lowest-numbered one, and the fallback for a
   // run recorded before the pool existed.
   const lanes = livePhases(run);
+  // `child` is the mirror lane and `phaseMs` is measured from it, so this is the
+  // estimate that belongs beside that clock rather than "the first one sent".
+  const mirrorEta = phaseEta.find((p) => p.phase === run.child?.phase);
 
   return (
     <header className="flex flex-col gap-1.5">
@@ -114,6 +132,13 @@ export function RunHeader({
             {elapsed(phaseMs)}
           </span>
         )}
+        {/* Against the estimate for the SAME lane the clock beside it counts —
+            the mirror — so the two figures are about one phase. */}
+        {phaseMs != null && mirrorEta && (
+          <span className="text-2xs text-ink-faint" title={`Phase ${mirrorEta.phase} was expected to take about ${mirrorEta.label.replace('~', '')}.`}>
+            / {phaseProgress(phaseMs, mirrorEta.estMs)}
+          </span>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-ink-faint">
         <span>
@@ -122,17 +147,12 @@ export function RunHeader({
         <span title={`started ${new Date(run.createdAt).toLocaleString()}`}>
           {ticking ? 'running for' : 'ran for'} {elapsed(Math.max(0, runMs))}
         </span>
-        {/* Suppressed entirely until a phase of this plan has finished, and a
-            range rather than a countdown even then. The thing being predicted is
-            a model's throughput on work nobody has looked at yet. */}
+        {/* A range rather than a countdown, and hedged by where the rate came
+            from: the thing being predicted is a model's throughput on work
+            nobody has looked at yet. `basis` is what stops a plan with no
+            history from showing a number that reads like a measurement. */}
         {eta && (
-          <span
-            title={`Estimated from ${eta.samples} finished phase(s) of this plan and `
-              + `${Math.round(eta.remainingWeight / 1000)}K of remaining weight. `
-              + 'Weight-normalised, recency-weighted, and deliberately coarse.'}
-          >
-            {eta.label} <em>(estimate)</em>
-          </span>
+          <span title={etaTitle(eta)}>{etaLabel(eta.lowMs, eta.highMs, eta.basis)} left</span>
         )}
       </div>
     </header>
