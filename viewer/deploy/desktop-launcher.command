@@ -64,7 +64,7 @@ SUPERVISED="yes"
 # SUPERVISED knob kept starting unsupervised while this file said it would not.
 # Comparing revisions rather than bytes means your own edits to the knobs above
 # never look like staleness.
-LAUNCHER_REV=2
+LAUNCHER_REV=3
 
 set -uo pipefail
 
@@ -89,16 +89,34 @@ if [ -z "$VIEWER" ]; then
 fi
 
 # ---- node check ------------------------------------------------------------
-if ! command -v node >/dev/null 2>&1; then
+# The server runs TypeScript natively, which needs node 22.6+. Finding *a*
+# node is not enough — an old one produces a syntax-error stack in this window
+# that reads as "the console is broken", so the version is checked wherever a
+# candidate is found.
+node_ok() { "$1" -e 'const [maj, min] = process.versions.node.split(".").map(Number);
+process.exit(maj > 22 || (maj === 22 && min >= 6) ? 0 : 1)' 2>/dev/null; }
+
+if ! command -v node >/dev/null 2>&1 || ! node_ok "$(command -v node)"; then
   # A double-clicked .command gets a login shell without a version manager's
-  # PATH, so look where node usually lives before giving up.
-  for candidate in /opt/homebrew/bin /usr/local/bin "$HOME/.volta/bin" "$HOME/.nvm/versions/node"/*/bin; do
-    [ -x "$candidate/node" ] && PATH="$candidate:$PATH" && break
+  # PATH, so look where node usually lives before giving up. nvm keeps every
+  # installed version side by side and a plain glob walks them ALPHABETICALLY
+  # (v10 sorts before v8) — take the newest that satisfies the check instead.
+  candidates=(/opt/homebrew/bin /usr/local/bin "$HOME/.volta/bin")
+  if [ -d "$HOME/.nvm/versions/node" ]; then
+    while IFS= read -r v; do candidates+=("$HOME/.nvm/versions/node/$v/bin"); done \
+      < <(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -rV)
+  fi
+  for candidate in "${candidates[@]}"; do
+    if [ -x "$candidate/node" ] && node_ok "$candidate/node"; then
+      PATH="$candidate:$PATH"
+      break
+    fi
   done
 fi
 
-if ! command -v node >/dev/null 2>&1; then
-  echo "node is required (22.6 or newer) and was not found on PATH."
+if ! command -v node >/dev/null 2>&1 || ! node_ok "$(command -v node)"; then
+  echo "node 22.6 or newer is required, and none of the usual places had one"
+  echo "(PATH, Homebrew, /usr/local, volta, nvm)."
   echo
   read -r -p "Press return to close. "
   exit 1
@@ -167,6 +185,35 @@ collect_carried() {
   done
 }
 
+# The same promise for the plist's ENVIRONMENT. `agent.sh install` writes the
+# whole EnvironmentVariables dict too, and two real settings live there rather
+# than in the argv: PHASE_CONSOLE_DEFAULT_SKILLS (skills every run starts
+# with) and PHASE_CONSOLE_NOTIFY (the out-of-band alert hook). Carrying the
+# arguments but not these deleted a machine's default skills on the first
+# knob-flip reinstall — same silent-loss shape, one dict further down. They
+# are re-exported so agent.sh's own env fallbacks pick them up; anything ELSE
+# found there is named on screen as NOT carried, never dropped in silence.
+carried_env=()
+uncarried_env=()
+collect_carried_env() {
+  [ -f "$PLIST" ] || return 0
+  local key value
+  while IFS=$'\t' read -r key value; do
+    # Undo agent.sh's xml_escape, or a notify hook containing `&` would come
+    # back as `&amp;` and be escaped AGAIN on the next install — drifting one
+    # entity deeper per double-click. `&` last, so `&amp;lt;` cannot double-decode.
+    value="$(printf '%s' "$value" | sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g')"
+    case "$key" in
+      PATH|HOME|PHASE_CONSOLE_NO_OPEN) : ;;   # agent.sh always rewrites these
+      PHASE_CONSOLE_NOTIFY|PHASE_CONSOLE_DEFAULT_SKILLS)
+        export "$key=$value"
+        carried_env+=("$key=$value") ;;
+      *) uncarried_env+=("$key") ;;
+    esac
+  done < <(sed -n '/<key>EnvironmentVariables<\/key>/,/<\/dict>/p' "$PLIST" 2>/dev/null \
+    | sed -n 's/.*<key>\([^<]*\)<\/key><string>\(.*\)<\/string>.*/\1\t\2/p')
+}
+
 banner() {
   printf '\033]0;Phase Console\007'          # name the Terminal window
   echo "  source   ${ROOT:-choose one in the browser}"
@@ -222,12 +269,20 @@ if [ "$SUPERVISED" = yes ]; then
   fi
 
   collect_carried
+  collect_carried_env
 
   echo "Phase Console — supervised by launchd ($LABEL)"
   banner
-  [ "${#carried[@]}" -gt 0 ] && {
-    echo "  keeping  ${carried[*]}"
+  { [ "${#carried[@]}" -gt 0 ] || [ "${#carried_env[@]}" -gt 0 ]; } && {
+    echo "  keeping  ${carried[*]-}${carried[*]:+ }${carried_env[*]-}"
     echo "           (already in the plist, not managed here — kept on re-install)"
+    echo
+  }
+  [ "${#uncarried_env[@]}" -gt 0 ] && {
+    echo "  ⚠️  in the plist's environment but NOT carried by this launcher:"
+    echo "      ${uncarried_env[*]}"
+    echo "      A re-install from here would drop these — re-run agent.sh install"
+    echo "      yourself with them exported if they matter."
     echo
   }
 
@@ -236,7 +291,13 @@ if [ "$SUPERVISED" = yes ]; then
   # grew a SUPERVISED knob — answers identically, holds the port, and is exactly
   # the unsupervised process whose Restart button refuses. Ask launchd what it
   # is actually running instead of inferring it from a healthy-looking port.
-  agent_loaded() { launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; }
+  # `print` first (authoritative), `list` as the fallback: print has been seen
+  # answering non-zero transiently right around a kickstart window, and a false
+  # "not loaded" here costs a harmless-but-noisy bootstrap of a loaded job.
+  agent_loaded() {
+    launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1 \
+      || launchctl list 2>/dev/null | grep -qF "$LABEL"
+  }
 
   if ! agent_loaded && lsof -ti "tcp:$PORT" >/dev/null 2>&1; then
     # launchd cannot bind a port something else holds: the job would crash-loop

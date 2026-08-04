@@ -55,6 +55,10 @@ cmd_install() {
       --port) port="$2"; shift 2 ;;
       --notify) notify="$2"; notify_given=1; shift 2 ;;
       --default-skills) default_skills="$2"; skills_given=1; shift 2 ;;
+      # Swallowed, not carried: the plist always gets exactly one --no-open of
+      # its own below. Passed through, a caller that (reasonably) includes it
+      # duplicated the flag in ProgramArguments on every reinstall.
+      --no-open) shift ;;
       *) extra+=("$1"); shift ;;
     esac
   done
