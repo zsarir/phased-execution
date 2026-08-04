@@ -372,7 +372,7 @@ network interface, anyone could send the header themselves. `--remote` deliberat
 
 **The full setup** — the two admin-console switches, the phone, the Home Screen install that iOS
 notifications require, out-of-band alerts, access rules and a troubleshooting table — is in
-[the main README](../README.md#-reaching-it-from-your-phone).
+[docs/phone.md](../docs/phone.md).
 
 [serve]: https://tailscale.com/docs/features/tailscale-serve
 

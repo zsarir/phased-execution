@@ -21,6 +21,7 @@ import { PolicyCard } from './policy';
 import { RestartButton } from './restart';
 import { ShutdownButton } from './shutdown';
 import { LauncherCard } from './launcher';
+import { TailscaleCard } from './tailscale';
 
 const MODELS = ['', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-haiku-4-5'];
 
@@ -101,6 +102,14 @@ export default function SettingsView() {
         {/* Directly after *This process*: that card is where Restart refuses,
             and this is the fix for the reason it refuses. */}
         <LauncherCard supervised={state.supervisor?.supervised} />
+
+        {/* Between *This process* and *Source*: how this console is reached and
+            by whom belongs with the process, not with the repo it reads. */}
+        <TailscaleCard
+          port={state.port ?? 4123}
+          remoteHosts={state.remoteHosts}
+          remoteUsers={state.remoteUsers}
+        />
 
         <Card>
           <CardHeader>

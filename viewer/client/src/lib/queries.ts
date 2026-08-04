@@ -67,6 +67,7 @@ export const keys = {
    * plan's answer at once, which is what a release actually changes.
    */
   queue: () => ['queue'] as const,
+  tailscale: () => ['tailscale'] as const,
   scopes: (slug: string) => ['scopes', slug] as const,
   /**
    * Deliberately NOT under `['run', slug]`.
@@ -490,6 +491,26 @@ export function useQueue(enabled = true) {
     queryKey: keys.queue(),
     queryFn: api.queue,
     enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * This machine's tailnet, for the Settings card.
+ *
+ * Polled rather than pushed, and only while the card showing it is mounted: the
+ * answer changes when a phone wakes up or someone runs `tailscale serve`,
+ * neither of which this server has any way to hear about. The interval is
+ * deliberately slower than the server's own 30-second memo, so a Settings tab
+ * left open overnight costs about one process spawn a minute — most polls are
+ * answered from that memo without touching the CLI at all.
+ */
+export function useTailscale(enabled = true) {
+  return useQuery({
+    queryKey: keys.tailscale(),
+    queryFn: api.tailscale,
+    enabled,
+    refetchInterval: 60_000,
     placeholderData: keepPreviousData,
   });
 }

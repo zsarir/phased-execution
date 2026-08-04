@@ -2094,6 +2094,21 @@ export class Service {
       // queued" instead of leaving a queued phase looking like a stalled one.
       concurrency: this.concurrency(),
       scriptsDir: this.flags.scriptsDir,
+      // Which hostnames this console answers to besides localhost, and who may
+      // arrive through them. Both are on the state rather than only on
+      // `/api/tailscale` because the interesting question is a *disagreement*
+      // between two places: `tailscale serve` can be publishing this port with
+      // no `--remote` flag set (every request 421s), or the flags can name a
+      // host nothing is serving (the URL never resolves). Either way the
+      // console looks broken from the phone and fine from here, so Settings
+      // needs both halves to say which one it is.
+      remoteHosts: this.flags.remoteHosts,
+      remoteUsers: this.flags.remoteUsers,
+      // The port this console is actually on, because the setup commands the
+      // Settings card prints embed it. A card that hard-codes 4123 tells
+      // somebody on `--port 5000` to publish a port nothing is listening on,
+      // and the resulting 502 looks like a Tailscale problem.
+      port: this.flags.port,
       // What a NEW run would start with, so the picker can pre-check them and
       // say where they came from. Not what any existing run has — that is on
       // the run.

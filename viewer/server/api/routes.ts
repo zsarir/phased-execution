@@ -20,6 +20,7 @@ import { isPermissionProfile, type PolicyScope } from '../runner/approvals.ts';
 import { MODEL_FALLBACK as MODELS } from '../runner/errors.ts';
 import { planWrite, runWrite, openInEditor, WriteError, type WriteRequest } from '../writes.ts';
 import { TERMINAL_PATH, type LaunchSpec } from '../terminal.ts';
+import { tailscaleStatus } from '../tailscale.ts';
 import type { PhaseOptions } from '../runner/state.ts';
 
 export type ApiContext = { service: Service };
@@ -613,6 +614,20 @@ export async function handleApi(
         json(res, 200, { closed: service.terminals.kill(id), state: service.terminals.state() });
         return true;
       }
+    }
+
+    /* ---------------- reaching this console from a phone ----------------
+     * Above the source-directory guard on purpose: whether Tailscale can reach
+     * this machine has nothing to do with whether a docs root is open, and
+     * Settings — where this renders — is the page you are on precisely when no
+     * root is chosen yet. Behind the standard access gate like every other
+     * read, which is the part worth stating: on a `--remote` console it answers
+     * only to the proxy carrying an allowlisted login, so the device list is
+     * not something an unauthenticated caller can ask for. It shells out, so it
+     * can take a moment; Settings polls it only while it is open. */
+    if (head === 'tailscale' && req.method === 'GET') {
+      json(res, 200, await tailscaleStatus(service.flags.port));
+      return true;
     }
 
     if (!service.store) { json(res, 409, { error: 'No source directory is open.' }); return true; }

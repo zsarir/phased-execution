@@ -18,16 +18,33 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { SETUP_PROMPTS, DESKTOP_LAUNCHER_PROMPT } from '../shared/setup-prompts.js';
+import {
+  SETUP_PROMPTS, DESKTOP_LAUNCHER_PROMPT, INSTALL_PROMPT, TAILSCALE_PROMPT,
+} from '../shared/setup-prompts.js';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 const read = (rel: string) => readFileSync(join(ROOT, rel), 'utf8');
 
-/** The carriers: every file that reproduces a setup prompt for a reader. */
-const CARRIERS = [
-  'README.md',
-  'viewer/client/src/content/guide/running.md',
+/**
+ * Which files must reproduce which prompt.
+ *
+ * Per-prompt rather than one global list, because they are documented in
+ * different places: the README carries the two prompts a new reader needs and
+ * deliberately carries nothing else — it is kept short on purpose, and a test
+ * that demanded every prompt appear there would push it back towards the
+ * thousand-line version this replaced.
+ */
+const CARRIERS: [string, string[]][] = [
+  ['install', ['README.md']],
+  ['tailscale', ['README.md']],
+  ['desktop-launcher', ['docs/install.md', 'viewer/client/src/content/guide/running.md']],
 ];
+
+const PROMPTS: Record<string, string> = {
+  install: INSTALL_PROMPT,
+  tailscale: TAILSCALE_PROMPT,
+  'desktop-launcher': DESKTOP_LAUNCHER_PROMPT,
+};
 
 test('every setup prompt is well-formed', () => {
   assert.ok(SETUP_PROMPTS.length > 0, 'expected at least one setup prompt');
@@ -39,21 +56,42 @@ test('every setup prompt is well-formed', () => {
   }
 });
 
-test('the launcher prompt is reproduced verbatim wherever it is documented', () => {
-  for (const file of CARRIERS) {
-    const body = read(file);
-    assert.ok(
-      body.includes(DESKTOP_LAUNCHER_PROMPT),
-      `${file} does not carry the launcher prompt verbatim — re-copy it from shared/setup-prompts.js`,
-    );
-    // Verbatim is not enough: outside a fence, markdown would reflow the
-    // indented knob list into one paragraph and the reader would copy that.
-    const fenced = body.split('```').filter((_, i) => i % 2 === 1);
-    assert.ok(
-      fenced.some((f) => f.includes(DESKTOP_LAUNCHER_PROMPT)),
-      `${file} carries the prompt outside a code fence`,
-    );
+test('every prompt is reproduced verbatim wherever it is documented', () => {
+  for (const [id, files] of CARRIERS) {
+    const prompt = PROMPTS[id];
+    assert.ok(prompt, `no prompt exported for ${id}`);
+    for (const file of files) {
+      const body = read(file);
+      assert.ok(
+        body.includes(prompt),
+        `${file} does not carry the ${id} prompt verbatim — re-copy it from shared/setup-prompts.js`,
+      );
+      // Verbatim is not enough: outside a fence, markdown would reflow the
+      // indented lists into one paragraph and the reader would copy that.
+      const fenced = body.split('```').filter((_, i) => i % 2 === 1);
+      assert.ok(
+        fenced.some((f) => f.includes(prompt)),
+        `${file} carries the ${id} prompt outside a code fence`,
+      );
+    }
   }
+});
+
+test('every prompt in the module is documented somewhere', () => {
+  // A prompt the console shows and no document carries is one that only exists
+  // for someone who already found the Settings page.
+  const declared = new Set(CARRIERS.map(([id]) => id));
+  for (const p of SETUP_PROMPTS) {
+    assert.ok(declared.has(p.id), `${p.id} has no carrier — add one to CARRIERS`);
+  }
+});
+
+test('the README stays short enough to be read', () => {
+  // The whole point of the rewrite: deep content lives under docs/. The two
+  // install prompts are most of what is left, so this is a ceiling on the
+  // prose around them, not on the prompts themselves.
+  const lines = read('README.md').split('\n').length;
+  assert.ok(lines < 200, `README.md is ${lines} lines — move deep sections into docs/`);
 });
 
 test('the prompt keeps the promises the launcher actually makes', () => {

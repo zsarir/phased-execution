@@ -10,7 +10,7 @@
       "name": "phased-execution",
       "source": "./",
       "strict": false,
-      "description": "Run large work as a dependency graph of right-sized Claude sessions — plans, per-phase handoffs, a computed ready-set, and a zero-dependency local web console for the whole plan library.",
+      "description": "Run large work as a dependency graph of right-sized Claude sessions — plans, per-phase handoffs, and a computed ready-set. Ships a zero-dependency local web console: scope-aware concurrency so disjoint plans run at once while intersecting phases queue, per-session tabs, remaining-time estimates, a plan-mode wizard that drafts a plan before writing it, and Tailscale onboarding to drive it all from your phone.",
       "author": {
         "name": "mobin",
         "url": "https://github.com/zsarir"
@@ -26,7 +26,14 @@
         "sessions",
         "context",
         "workflow",
-        "dependency-graph"
+        "dependency-graph",
+        "concurrency",
+        "scheduler",
+        "queue",
+        "estimates",
+        "dashboard",
+        "tailscale",
+        "remote-access"
       ],
       "tags": [
         "planning",

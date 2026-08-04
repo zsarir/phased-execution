@@ -233,6 +233,36 @@ export interface QueueSnapshot extends Concurrency {
   entries: QueueEntry[];
 }
 
+/** One machine on the tailnet, reduced to what the Settings card renders. */
+export interface TailscaleDevice {
+  hostName: string;
+  dnsName: string;
+  ips: string[];
+  os?: string;
+  online: boolean;
+  /** Only present, and only useful, for a device that is offline now. */
+  lastSeen?: string;
+}
+
+/**
+ * The tailnet as this machine sees it.
+ *
+ * `serve.active` and `serve.forOurPort` stay separate on the wire because they
+ * have different fixes: nothing is served, versus something else is.
+ */
+export type TailscaleStatus =
+  | { state: 'not-installed' }
+  | { state: 'installed-not-running'; detail?: string }
+  | {
+      state: 'running';
+      tailnet?: string;
+      magicDns: boolean;
+      magicDnsSuffix?: string;
+      self: TailscaleDevice;
+      peers: TailscaleDevice[];
+      serve: { active: boolean; forOurPort: boolean; url?: string };
+    };
+
 /** A phase's declared scope, and what it would collide with if started now. */
 export interface PhaseScope {
   phase: number;
@@ -262,6 +292,15 @@ export interface ConsoleState {
    * `PHASE_CONSOLE_DEFAULT_SKILLS`). Not what a run HAS — that is on the run.
    */
   defaultSkills?: string[];
+  /**
+   * `--remote` / `--remote-user`. Optional like everything else here: a new
+   * client can be talking to a server started before these existed, and a
+   * missing answer must read as "this server cannot say", never as "none".
+   */
+  remoteHosts?: string[];
+  remoteUsers?: string[];
+  /** The port this console is served on — setup commands embed it. */
+  port?: number;
   sizing?: Sizing;
   searchDocs?: number;
   repo?: {
@@ -1145,6 +1184,8 @@ export const api = {
   state: () => request<ConsoleState>('/api/state'),
   /** The admission queue: what holds a scope, and what is waiting on it. */
   queue: () => request<QueueSnapshot>('/api/queue'),
+  /** This machine's tailnet — devices, and whether `serve` points here. */
+  tailscale: () => request<TailscaleStatus>('/api/tailscale'),
   /** Each phase's scope and what it would collide with if started right now. */
   runScopes: (slug: string) =>
     request<{ scopes: PhaseScope[] }>(`/api/run/${encodeURIComponent(slug)}/scopes`),
