@@ -171,3 +171,15 @@ export function classifyPhase(
 export function classifyIssue(issue: { severity?: string }): RecoveryClass | undefined {
   return issue.severity === 'error' || issue.severity === 'warning' ? 'plan-repair' : undefined;
 }
+
+/**
+ * Classification for a phase the BOARD calls stuck — a handoff whose
+ * frontmatter reads blocked/in-progress. Such a phase often has no run record
+ * at all (the work happened in another session), so `classifyPhase` has
+ * nothing to read; the board state itself is the fact. The repair is
+ * plan-repair's stale-handoff job: establish what really happened, finish it
+ * if finishable, and set the status the repository supports.
+ */
+export function classifyBoardPhase(state: string): RecoveryClass | undefined {
+  return state === 'stuck' ? 'plan-repair' : undefined;
+}

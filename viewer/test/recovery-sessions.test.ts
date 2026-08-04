@@ -777,3 +777,12 @@ test('a recovery whose target cannot be checked says so instead of claiming succ
     assert.match(blind.detail, /Nothing to check it against/);
   } finally { cleanup(); }
 });
+
+test('every briefing ends with the record-truth rule: statuses flipped, board re-read on exit', () => {
+  for (const kind of RECOVERY_CLASSES) {
+    const text = recoveryPrompt(facts({ class: kind, ...(kind === 'plan-repair' ? PLAN_REPAIR : {}) }));
+    assert.match(text, /status: complete/, `${kind} must say what a finished phase's handoff reads`);
+    assert.match(text, /re-reads the board/, `${kind} must say the console shows what is left on disk`);
+    assert.match(text, /beats a hopeful status/, `${kind} must bless an honest blocked handoff too`);
+  }
+});

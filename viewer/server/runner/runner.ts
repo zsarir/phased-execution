@@ -1672,16 +1672,25 @@ export class Runner {
             ? undefined
             : `every phase of ${state.slug} is done.`;
           if (outstanding.length) {
-            // Parking with work left is not self-explanatory: every ready phase
-            // is in a state this loop will not pick up again by itself, and the
-            // operator needs to know which and why to know what to press.
-            const held = board.ready
-              .map((p) => `phase ${p} is ${phaseRecord(state, p).status}`)
-              .join(', ');
+            // Parking with work left is not self-explanatory: every phase this
+            // loop will not pick up again needs its ACTUAL blocker named — a
+            // gated phase parked with "is parked", and a blocked-handoff phase
+            // hid behind "waiting on a gate or an earlier phase", and both
+            // read as dead ends (reported twice, with two real plans).
+            const held = [
+              ...board.ready.map((p) => {
+                const record = phaseRecord(state, p);
+                return `phase ${p} is ${record.status}${record.note ? ` (${record.note})` : ''}`;
+              }),
+              ...board.stuck.map((p) =>
+                `phase ${p}'s handoff is marked blocked — its Outstanding section says why`),
+            ].join('; ');
             state.halt ??= {
               at: new Date().toISOString(),
               reason: held
-                ? `nothing left to run on its own — ${held}. Retry or skip them to carry on.`
+                ? `nothing left to run on its own — ${held}. Gates need your confirmation `
+                  + '(then Retry re-checks them); a blocked handoff has Repair with AI; '
+                  + 'failed phases take Retry or Skip.'
                 : `nothing is ready to run: ${outstanding.length} phase(s) are still waiting on a gate or an earlier phase.`,
             };
             state.finishedReason = state.halt.reason;

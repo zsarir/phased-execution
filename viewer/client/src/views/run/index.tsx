@@ -53,6 +53,7 @@ import { Controls } from './controls';
 import { LiveConsole } from './console';
 import { RunHeader, RunTiles } from './header';
 import { PhaseTable } from './phase-table';
+import { NextSteps } from './next-steps';
 import { QueuedPane, SessionPanes, laneId, lanesOf, queueEntryFor, resolveTab, type Lane } from './session-panes';
 import { AuthCard, RunStatusStack, StaleServerNote, looksLikeAuthFailure } from './status';
 import { RunHistory } from './history';
@@ -210,6 +211,26 @@ export function RunView({ detail }: { detail: PlanDetail }) {
             })
             : undefined,
         }}
+      />
+
+      {/* Every stopped phase's cause in its own words, with the action that
+          moves it — a status word alone was a dead end (reported twice). */}
+      <NextSteps
+        slug={slug}
+        planPhases={planPhases}
+        run={run}
+        live={live}
+        allowRun={allowRun}
+        allowAgent={allowAgent}
+        authFailure={authFailure}
+        sessions={terminals?.sessions}
+        busy={busy}
+        onRecover={(phase, recoveryClass) => recover({
+          recoveryClass,
+          phase,
+          ...(run?.id ? { runId: run.id } : {}),
+        })}
+        onRetry={(phase) => void act('retry', () => api.runRetry(slug, phase))}
       />
 
       <Controls

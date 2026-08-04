@@ -28,7 +28,7 @@ import { duration, elapsed, money, pad2, relativeTime } from '@/lib/format';
 import { useNow } from '@/lib/clock';
 import { useDiagnosis } from '@/lib/queries';
 import { phaseProgress } from './header';
-import { classifyPhase, liveRecovery, type RecoveryClass } from '@/lib/recovery';
+import { classifyBoardPhase, classifyPhase, liveRecovery, type RecoveryClass } from '@/lib/recovery';
 import { canQa, liveQa } from '@/lib/qa';
 import { QaButton, QaVerdict } from '@/components/qa-launcher';
 import { RecoveryButton } from './status';
@@ -274,8 +274,12 @@ function PhaseRows({
   // A recovery is offered for a phase that is genuinely stuck — never for one
   // the BOARD calls done, however this run's record reads, and never while the
   // run is live (the autopilot owns the tree, and the server refuses anyway).
-  const recoveryClass = recovery && r && !live && p.state !== 'done'
-    ? classifyPhase(r.status, run, { authFailure: recovery.authFailure ?? false })
+  // A stuck phase (its handoff says blocked) often has NO record on this run —
+  // the work happened in another session — so the board state is the fallback
+  // fact when the record has nothing to say.
+  const recoveryClass = recovery && !live && p.state !== 'done'
+    ? (r ? classifyPhase(r.status, run, { authFailure: recovery.authFailure ?? false }) : undefined)
+      ?? classifyBoardPhase(p.state)
     : undefined;
   const recovering = liveRecovery(recovery?.sessions, { slug, phase: p.phase });
   const reviewing = liveQa(recovery?.sessions, { slug, phase: p.phase });

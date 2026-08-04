@@ -122,6 +122,23 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
           </CardBody>
         </Card>
 
+        {/* A stuck phase's cause, in the handoff's own words — the banner says
+            "prefer the recovery actions"; this says WHY, so the person is not
+            sent to a terminal to find out. */}
+        {view.state === 'stuck' && view.handoff?.outstanding && (
+          <div className="rounded border border-rule bg-surface px-3 py-2">
+            <p className="text-2xs font-medium uppercase tracking-wide text-ink-faint">
+              Why it is blocked — from the handoff
+            </p>
+            <p className="mt-1 max-w-prose text-2xs whitespace-pre-wrap text-ink-muted">
+              {view.handoff.outstanding.slice(0, 900)}
+              {view.handoff.outstanding.length > 900 ? '…' : ''}
+            </p>
+            <p className="mt-1.5 text-2xs text-ink-faint">
+              The run page&rsquo;s <em>Why this is stopped</em> card offers Repair with AI for it.
+            </p>
+          </div>
+        )}
         {/* Every state, not just the two that can start. The prompt was hidden
             on a done or waiting phase because booting one is usually the wrong
             move — but "usually wrong" is a thing to SAY, and hiding it instead

@@ -43,6 +43,7 @@ type Repo = {
   markDone: (phase: number) => void;
   doneList: () => number[];
   setGate: (phase: number, text: string) => void;
+  setStuck: (phase: number) => void;
   setLockRefused: (yes: boolean) => void;
   setLintFail: (yes: boolean) => void;
   /** Make the board read slow, so a control can be pressed while it is in flight. */
@@ -76,13 +77,14 @@ case "$mode" in
     # on demand is what makes the gap between "the loop checked for a pause" and
     # "the loop started a phase" long enough to press a button inside.
     [ -f "$S/slow-board" ] && sleep 1
-    d=""; r=""; w=""; found=0
+    d=""; r=""; w=""; s=""; found=0
     for p in ${PHASES.join(' ')}; do
       if grep -qx "$p" "$S/done" 2>/dev/null; then d="$d$p,"
+      elif grep -qx "$p" "$S/stuck" 2>/dev/null; then s="$s$p,"
       elif [ "$found" -eq 0 ]; then r="$r$p,"; found=1
       else w="$w$p,"; fi
     done
-    echo "done: \${d%,}"; echo "in-progress: "; echo "stuck: "
+    echo "done: \${d%,}"; echo "in-progress: "; echo "stuck: \${s%,}"
     echo "ready: \${r%,}"; echo "waiting: \${w%,}"
     ;;
   --gate-status)
@@ -124,6 +126,7 @@ echo "VALIDATE OK"
       `${readFileSync(join(state, 'done'), 'utf8')}${phase}\n`),
     doneList: () => readFileSync(join(state, 'done'), 'utf8').split('\n').filter(Boolean).map(Number),
     setGate: (phase, text) => writeFileSync(join(state, `gate-${phase}`), `${text}\n`),
+    setStuck: (phase) => writeFileSync(join(state, 'stuck'), `${phase}\n`),
     setLockRefused: (yes) => yes ? writeFileSync(join(state, 'lock-refused'), '') : rmSync(join(state, 'lock-refused'), { force: true }),
     setLintFail: (yes) => yes ? writeFileSync(join(state, 'lint-fail'), '') : rmSync(join(state, 'lint-fail'), { force: true }),
     setSlowBoard: (yes) => yes ? writeFileSync(join(state, 'slow-board'), '') : rmSync(join(state, 'slow-board'), { force: true }),
@@ -2329,5 +2332,38 @@ test('preflight warnings are journalled without blocking the phase', async () =>
     .filter((j) => j.event === 'phase.verify-preflight');
   assert.equal(preflights.length, 1);
   assert.match(preflights[0].data?.warnings?.join('\n') ?? '', /a person will be asked/);
+  r.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
+ * A parked run explains itself: every blocker in its own words
+ * ------------------------------------------------------------------ */
+
+test('a parked run names a gated phase with the gate note, and says what to do', async () => {
+  const r = repo();
+  r.setGate(1, 'manual: confirm the rollout window');
+  const { instance } = runner(r, workingSession(r));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'parked');
+  assert.match(state.halt?.reason ?? '', /phase 1 is parked \(gate not clear/,
+    'the gate itself is quoted, not summarised into "waiting on a gate"');
+  assert.match(state.halt?.reason ?? '', /Gates need your confirmation/);
+  r.cleanup();
+});
+
+test('a stuck phase is named as blocked-by-its-handoff, never "waiting on a gate"', async () => {
+  const r = repo();
+  r.setStuck(1);
+  const { instance } = runner(r, workingSession(r));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'parked');
+  assert.match(state.halt?.reason ?? '', /phase 1's handoff is marked blocked/);
+  assert.match(state.halt?.reason ?? '', /Repair with AI/);
   r.cleanup();
 });
