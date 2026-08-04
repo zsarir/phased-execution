@@ -38,6 +38,7 @@ import {
 } from '@/components/ui';
 import { useSkills } from '@/lib/queries';
 import { startQa } from '@/lib/start-qa';
+import { qaResultTitle } from '@/lib/status-vocab';
 import { QA_PROFILES, QA_PROFILE_LABEL, QA_TONE, isVerdict, type QaProfile } from '@/lib/qa';
 import { EFFORTS, EFFORT_NOTE, MODELS } from '@/views/run/defaults';
 import { SkillPicker } from '@/views/run/skill-picker';
@@ -291,7 +292,7 @@ export function QaButton({
  */
 export function QaVerdict({ qa, href }: { qa?: { result: string; report?: string }; href?: string }) {
   if (!qa || !isVerdict(qa.result)) return null;
-  const chip = <Chip tone={QA_TONE[qa.result] as never}>QA {qa.result}</Chip>;
+  const chip = <Chip tone={QA_TONE[qa.result] as never} title={qaResultTitle(qa.result)}>QA {qa.result}</Chip>;
   return qa.report && href
     ? <a href={href} className="hover:underline" title={qa.report}>{chip}</a>
     : chip;

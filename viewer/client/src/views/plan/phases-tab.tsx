@@ -4,6 +4,7 @@ import { ScopeChips } from '@/components/scope-chips';
 import { pad2 } from '@/lib/format';
 import { phaseHref } from '@shared/routes.js';
 import { scopeOfRow } from '@shared/scope.js';
+import { boardStateTitle } from '@/lib/status-vocab';
 import { cn } from '@/lib/cn';
 import type { PlanDetail } from '@/lib/api';
 
@@ -46,7 +47,7 @@ export function PhasesTab({ detail }: { detail: PlanDetail }) {
           <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
             <StateChip state={phase.state} board />
             <Chip mono>{phase.size}</Chip>
-            {phase.gated && <Chip tone="gate">gate</Chip>}
+            {phase.gated && <Chip tone="gate" title={boardStateTitle('gated')}>gate</Chip>}
             {phase.handoff && <Chip title={`Handoff: ${phase.handoff.status}`}>H</Chip>}
           </span>
         </a>

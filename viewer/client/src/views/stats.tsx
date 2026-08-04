@@ -250,8 +250,8 @@ export default function StatsView() {
                         {lock.owner}
                       </span>
                       {lock.expired
-                        ? <Chip tone="bad">expired</Chip>
-                        : <Chip tone="busy">{countdown(lock.leaseUntil)}</Chip>}
+                        ? <Chip tone="bad" title="The lease ran out and nobody renewed it — the session is gone. Safe to release (Plans page offers it), and a takeover recovery may claim the phase.">expired</Chip>
+                        : <Chip tone="busy" title="A live lease — a session is (or very recently was) working this phase. Never release a live lease.">{countdown(lock.leaseUntil)}</Chip>}
                       {/* The owner is right there in the row and the server
                           reads it from the file — nobody retypes it. */}
                       {lock.expired && (
@@ -320,7 +320,7 @@ export default function StatsView() {
             <ul className="flex flex-col gap-1.5">
               {issues.map((issue, i) => (
                 <li key={`${issue.slug}-${issue.kind}-${i}`} className="flex flex-wrap items-baseline gap-2">
-                  <Chip tone={SEVERITY_TONE[issue.severity]}>{issue.kind}</Chip>
+                  <Chip tone={SEVERITY_TONE[issue.severity]} title={issue.message}>{issue.kind}</Chip>
                   <a
                     href={issue.phase ? phaseHref(issue.slug, issue.phase) : planHref(issue.slug)}
                     className="font-mono text-2xs text-ink hover:text-action"

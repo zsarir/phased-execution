@@ -12,8 +12,10 @@
  * component owns.
  */
 
+import { useEffect, useRef } from 'react';
 import { useConsoleState } from '@/lib/queries';
 import { Markdown } from '@/components/markdown';
+import { decorateStatusWord } from '@/components/ui/chip';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { navigate } from '@/router';
 import type { ViewProps } from '@/router';
@@ -43,7 +45,7 @@ export default function GuideView({ route }: ViewProps) {
             {s.id === section.id && (
               <article className="mx-auto max-w-[72ch]">
                 <p className="mb-3 text-sm text-ink-muted">{s.lede}</p>
-                <Markdown text={s.body} />
+                <GuideBody text={s.body} />
               </article>
             )}
           </TabsContent>
@@ -51,6 +53,32 @@ export default function GuideView({ route }: ViewProps) {
       </Tabs>
     </Page>
   );
+}
+
+/**
+ * The section's markdown, with every status word dressed as its real badge.
+ *
+ * Markdown cannot colour `halted` the way the app paints it, and a glossary in
+ * plain text asks the reader to imagine the mapping. After the sanitizer has
+ * filled the DOM (the Markdown child's effect runs before this one), every
+ * inline-code or bold token that IS a status word — including the departures
+ * spellings, Departed / Boarding / Held — gets the exact class and hover title
+ * its chip carries, from the same tone maps the chips read. Unknown words are
+ * left alone.
+ */
+function GuideBody({ text }: { text?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const rootEl = ref.current;
+    if (!rootEl) return;
+    for (const el of rootEl.querySelectorAll('code, strong')) {
+      const worn = decorateStatusWord(el.textContent ?? '');
+      if (!worn) continue;
+      el.className = worn.className;
+      el.setAttribute('title', worn.title);
+    }
+  }, [text]);
+  return <div ref={ref}><Markdown text={text} /></div>;
 }
 
 /**

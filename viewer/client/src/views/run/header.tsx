@@ -18,34 +18,14 @@ import { Chip, Tile } from '@/components/ui';
 import { elapsed, etaLabel, etaPoint, etaTitle, money, relativeTime } from '@/lib/format';
 import { useNow } from '@/lib/clock';
 import { cn } from '@/lib/cn';
-import { runStatusTitle } from '@/lib/status-vocab';
-import type { EtaEstimate, PhaseEta, PhaseRecord, RunState, RunStatus } from '@/lib/api';
+import { RUN_STATUS_TONE, runStatusTitle } from '@/lib/status-vocab';
+import type { EtaEstimate, PhaseEta, PhaseRecord, RunState } from '@/lib/api';
 
-/**
- * `pausing` reads as a state the operator asked for and is waiting on. Neutral
- * grey made an armed pause look identical to an idle run, which is half the
- * reason pressing Pause felt like nothing had happened.
- */
-export const RUN_TONE: Record<RunStatus, 'ok' | 'busy' | 'bad' | 'warn' | undefined> = {
-  running: 'busy',
-  finished: 'ok',
-  halted: 'bad',
-  // The halt is already a fact while lanes drain — same colour as the ending
-  // it becomes, not a softer one that would read as "still deciding".
-  halting: 'bad',
-  waiting: 'warn',
-  // Not `bad`: parked is not a failure, it is a queue of questions. The run did
-  // everything it could without someone.
-  parked: 'warn',
-  paused: undefined,
-  pausing: 'warn',
-  stopping: 'warn',
-  interrupted: 'warn',
-  frozen: 'warn',
-  // Not `warn`: nothing is wrong and nobody is being asked for anything. The run
-  // is in a line behind another plan's scope and will start itself.
-  queued: 'busy',
-};
+// The tones live in `lib/status-vocab.ts` beside the words' explanations —
+// one module owns what a status says AND how it paints, so the guide's
+// coloured glossary and these chips cannot drift. Re-exported under the old
+// name for every existing reader.
+export const RUN_TONE = RUN_STATUS_TONE;
 
 /**
  * The phases this run holds a live session on, lowest first.

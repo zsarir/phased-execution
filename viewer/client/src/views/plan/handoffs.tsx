@@ -68,7 +68,7 @@ export function HandoffsTab({ detail }: { detail: PlanDetail }) {
                 <TD>
                   {indexRows.has(handoff.phase)
                     ? <span className="text-xs text-ink-faint">{indexRows.get(handoff.phase)!.status}</span>
-                    : <Chip tone="warn">missing</Chip>}
+                    : <Chip tone="warn" title="INDEX.md has no row for this handoff. Re-running new-handoff.sh for the phase rebuilds it — or Repair with AI.">missing</Chip>}
                 </TD>
               </TR>
             ))}

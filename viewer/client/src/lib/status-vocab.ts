@@ -177,3 +177,78 @@ export function phaseStatusTitle(status: string | undefined): string | undefined
 export function boardStateTitle(state: string | undefined): string | undefined {
   return line(BOARD_STATE_HELP[state as PhaseState]);
 }
+
+/* ------------------------------------------------------------------ *
+ * Tones — the colour each word paints, single-sourced with the words
+ * ------------------------------------------------------------------ */
+
+/** The chip palette. Mirrors `chipVariants`' tone axis in `ui/chip.tsx`. */
+export type StatusTone = 'ok' | 'busy' | 'bad' | 'warn' | 'gate' | 'neutral' | undefined;
+
+/**
+ * `pausing` reads as a state the operator asked for and is waiting on. Neutral
+ * grey made an armed pause look identical to an idle run, which is half the
+ * reason pressing Pause felt like nothing had happened.
+ */
+export const RUN_STATUS_TONE: Record<RunStatus, StatusTone> = {
+  running: 'busy',
+  finished: 'ok',
+  halted: 'bad',
+  // The halt is already a fact while lanes drain — same colour as the ending
+  // it becomes, not a softer one that would read as "still deciding".
+  halting: 'bad',
+  waiting: 'warn',
+  // Not `bad`: parked is not a failure, it is a queue of questions. The run did
+  // everything it could without someone.
+  parked: 'warn',
+  paused: undefined,
+  pausing: 'warn',
+  stopping: 'warn',
+  interrupted: 'warn',
+  frozen: 'warn',
+  // Not `warn`: nothing is wrong and nobody is being asked for anything. The run
+  // is in a line behind another plan's scope and will start itself.
+  queued: 'busy',
+};
+
+export const PHASE_STATUS_TONE: Record<PhaseStatus, StatusTone> = {
+  done: 'ok',
+  running: 'busy',
+  verifying: 'busy',
+  failed: 'bad',
+  parked: 'warn',
+  interrupted: 'warn',
+  gated: 'warn',
+  'awaiting-verification': 'warn',
+  // In a line behind another scope, not stuck and not asking for anything.
+  queued: 'busy',
+  skipped: undefined,
+  pending: undefined,
+};
+
+/* ------------------------------------------------------------------ *
+ * QA verdicts
+ * ------------------------------------------------------------------ */
+
+export const QA_RESULT_HELP: Record<'pass' | 'fail' | 'waived' | 'pending', StatusHelp> = {
+  pass: {
+    means: 'A fresh-context QA session read the diff cold, ran the checks, and confirmed the phase.',
+    then: 'Nothing to do.',
+  },
+  fail: {
+    means: 'QA recorded a failure — a verdict, not bookkeeping: every dependent phase stays gated on it.',
+    then: 'Repair with AI re-runs QA properly; never hand-edit the verdict away.',
+  },
+  waived: {
+    means: 'The gate was turned on after this phase finished, so its QA was deliberately skipped.',
+    then: 'Nothing to do — QA it later if you want the confidence.',
+  },
+  pending: {
+    means: 'QA gating is on and this phase has not been reviewed yet.',
+    then: 'Run QA from the phase page when it is done.',
+  },
+};
+
+export function qaResultTitle(result: string | undefined): string | undefined {
+  return line(QA_RESULT_HELP[result as keyof typeof QA_RESULT_HELP]);
+}

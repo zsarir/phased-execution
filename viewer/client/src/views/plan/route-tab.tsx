@@ -6,6 +6,7 @@ import { RouteMap } from '@/components/dag';
 import { MarkdownInline, plainText } from '@/components/markdown';
 import { PromptCard } from '@/components/prompt-card';
 import { api } from '@/lib/api';
+import { boardStateTitle } from '@/lib/status-vocab';
 import { keys } from '@/lib/queries';
 import { pad2, weight } from '@/lib/format';
 import { navigate, phaseHref } from '@shared/routes.js';
@@ -76,7 +77,7 @@ function DeparturesBoard({ detail }: { detail: PlanDetail }) {
                 <TD className="font-mono text-2xs text-ink-faint">{phase.row?.repos ?? '—'}</TD>
                 <TD>
                   <div className="flex flex-wrap gap-1">
-                    {phase.gated && <Chip tone="gate">gated</Chip>}
+                    {phase.gated && <Chip tone="gate" title={boardStateTitle('gated')}>gated</Chip>}
                     {phase.lock && !phase.lock.expired && (
                       <Chip tone="busy" title={phase.lock.owner}>locked</Chip>
                     )}

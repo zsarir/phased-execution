@@ -33,6 +33,7 @@ import { etaLabel, etaTitle, relativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { phaseHref, planHref } from '@shared/routes.js';
 import type { ChipProps } from '@/components/ui';
+import { runStatusTitle } from '@/lib/status-vocab';
 import { SORTS, concerns, type PlanRow, type SortId } from './model';
 
 /* ------------------------------------------------------------------ *
@@ -53,7 +54,12 @@ export function RunChip({ row, className }: { row: PlanRow; className?: string }
   const { status, activePhase, outcome } = row.run;
   return (
     <a href={planHref(row.slug, 'run')} className={cn('shrink-0 rounded-sm', className)}>
-      <Chip tone={RUN_TONE[outcome] ?? 'neutral'} dot={outcome === 'live'} mono>
+      <Chip
+        tone={RUN_TONE[outcome] ?? 'neutral'}
+        dot={outcome === 'live'}
+        mono
+        title={runStatusTitle(status)}
+      >
         {status}{activePhase != null ? ` P${activePhase}` : ''}
       </Chip>
     </a>
@@ -130,7 +136,11 @@ export function PlanCard({ row, index }: { row: PlanRow; index: number }) {
         </a>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           {!row.isPlan && <Chip>{row.kind === 'orphan-handoffs' ? 'handoffs only' : row.kind}</Chip>}
-          {row.isPlan && row.status !== 'active' && row.status !== 'unknown' && <Chip>{row.status}</Chip>}
+          {row.isPlan && row.status !== 'active' && row.status !== 'unknown' && (
+            <Chip title={"The plan's own frontmatter status — set by hand when a plan is finished or shelved."}>
+              {row.status}
+            </Chip>
+          )}
           <RunChip row={row} />
         </div>
       </div>

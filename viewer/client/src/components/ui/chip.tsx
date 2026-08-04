@@ -1,7 +1,9 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import type { HTMLAttributes } from 'react';
 import { cn } from '@/lib/cn';
-import { boardStateTitle } from '@/lib/status-vocab';
+import {
+  PHASE_STATUS_TONE, RUN_STATUS_TONE, boardStateTitle, phaseStatusTitle, runStatusTitle,
+} from '@/lib/status-vocab';
 
 /**
  * The tone variants are real classes, not a colour passed in as a prop.
@@ -129,4 +131,46 @@ export function StateChip({
       {label ?? (board ? STATE_BOARD : STATE_LABEL)[resolved]}
     </Chip>
   );
+}
+
+/**
+ * Dress a bare status WORD in its badge's own clothes — class and hover title.
+ *
+ * For the Guide's status tables: the words there are inline code in markdown,
+ * and markdown cannot colour them. This answers "how would the app paint this
+ * word?" from the same tone maps and vocabulary the real chips use, so the
+ * glossary and the badges can never drift. Board states (and their departures
+ * spellings — Departed, Boarding, Held…) get the state classes; run and phase
+ * words get their tone. Unknown words get null, never a guess.
+ */
+export function decorateStatusWord(word: string): { className: string; title: string } | null {
+  if ((PHASE_STATES as readonly string[]).includes(word)) {
+    return {
+      className: cn(chipVariants({ tone: 'state', mono: true }), `state-${word}`),
+      title: boardStateTitle(word) ?? '',
+    };
+  }
+  const spelled = (Object.entries(STATE_BOARD) as [PhaseState, string][])
+    .find(([, board]) => board === word)?.[0];
+  if (spelled) {
+    return {
+      className: cn(chipVariants({ tone: 'state' }), `state-${spelled}`),
+      title: boardStateTitle(spelled) ?? '',
+    };
+  }
+  const runTitle = runStatusTitle(word);
+  if (runTitle) {
+    return {
+      className: cn(chipVariants({ tone: RUN_STATUS_TONE[word as keyof typeof RUN_STATUS_TONE] ?? 'neutral', mono: true })),
+      title: runTitle,
+    };
+  }
+  const phaseTitle = phaseStatusTitle(word);
+  if (phaseTitle) {
+    return {
+      className: cn(chipVariants({ tone: PHASE_STATUS_TONE[word as keyof typeof PHASE_STATUS_TONE] ?? 'neutral', mono: true })),
+      title: phaseTitle,
+    };
+  }
+  return null;
 }

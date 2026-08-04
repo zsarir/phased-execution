@@ -21,7 +21,7 @@ import {
   TBody, TD, TH, THead, TR, Table, TableWrap,
 } from '@/components/ui';
 import {
-  api, type PhaseEta, type PhaseRecord, type PhaseScope, type PhaseStatus, type PhaseView,
+  api, type PhaseEta, type PhaseRecord, type PhaseScope, type PhaseView,
   type QueueEntry, type RunState, type TerminalSession,
 } from '@/lib/api';
 import { duration, elapsed, money, pad2, relativeTime } from '@/lib/format';
@@ -41,7 +41,7 @@ import { Bot, Gauge } from 'lucide-react';
 
 import { scopeOfRow } from '@shared/scope.js';
 import { ScopeChips } from '@/components/scope-chips';
-import { phaseStatusTitle } from '@/lib/status-vocab';
+import { PHASE_STATUS_TONE, boardStateTitle, phaseStatusTitle } from '@/lib/status-vocab';
 import { cn } from '@/lib/cn';
 
 /**
@@ -94,20 +94,8 @@ const ORDER = BOARD_ORDER as string[];
 /** The Repos cell as scope tokens, never empty — a blank cell means `all`. */
 const scopeOf = scopeOfRow as (cell: string | undefined) => string[];
 
-const PHASE_TONE: Record<PhaseStatus, 'ok' | 'busy' | 'bad' | 'warn' | undefined> = {
-  done: 'ok',
-  running: 'busy',
-  verifying: 'busy',
-  failed: 'bad',
-  parked: 'warn',
-  interrupted: 'warn',
-  gated: 'warn',
-  'awaiting-verification': 'warn',
-  // In a line behind another scope, not stuck and not asking for anything.
-  queued: 'busy',
-  skipped: undefined,
-  pending: undefined,
-};
+// Single-sourced with the words' own explanations in `lib/status-vocab.ts`.
+const PHASE_TONE = PHASE_STATUS_TONE;
 
 /**
  * What this console can hand to a Claude session, and what is already on it.
@@ -306,7 +294,7 @@ function PhaseRows({
             {p.title}
           </a>
           <div className="mt-0.5 flex flex-wrap items-center gap-1">
-            {p.gated && <Chip tone="gate">gated</Chip>}
+            {p.gated && <Chip tone="gate" title={boardStateTitle('gated')}>gated</Chip>}
             {/* The row's own record, not the mirror pointer: with two lanes
                 live, `activePhase` names only the lowest one. */}
             {running && <Chip tone="busy">running now</Chip>}

@@ -32,7 +32,7 @@ import {
 import { LoadMeter, RunStrip } from '@/components/charts';
 import { duration, money, relativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
-import { runStatusTitle } from '@/lib/status-vocab';
+import { phaseStatusTitle, runStatusTitle } from '@/lib/status-vocab';
 import { planHref } from '@shared/routes.js';
 import type { ChipProps } from '@/components/ui';
 import type { PhaseRecord } from '@/lib/api';
@@ -118,7 +118,7 @@ function PhaseLine({ phase }: { phase: PhaseRecord }) {
     <li className="flex min-w-0 flex-col gap-0.5 border-l-2 border-rule py-1 pl-2.5">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <span className="font-mono text-2xs tabular-nums text-ink-faint">P{phase.phase}</span>
-        <Chip tone={PHASE_TONE[phase.status] ?? 'neutral'}>{phase.status}</Chip>
+        <Chip tone={PHASE_TONE[phase.status] ?? 'neutral'} title={phaseStatusTitle(phase.status)}>{phase.status}</Chip>
         <span className="min-w-0 truncate font-mono text-2xs text-ink-faint">{facts.join(' · ')}</span>
       </div>
       {verify && !verify.ok && (

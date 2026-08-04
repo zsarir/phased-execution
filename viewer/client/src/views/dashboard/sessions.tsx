@@ -123,7 +123,10 @@ function SessionRow({
       </button>
 
       {failed && (
-        <Chip tone="bad">
+        <Chip
+          tone="bad"
+          title="How the process ended — a non-zero exit or a signal. The record stays until dismissed, so claude --resume still works from it."
+        >
           {session.exited?.signal ? `signal ${session.exited.signal}` : `exit ${session.exited?.code}`}
         </Chip>
       )}

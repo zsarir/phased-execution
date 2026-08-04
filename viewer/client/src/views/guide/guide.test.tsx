@@ -14,7 +14,7 @@
  */
 
 import { homedir, hostname, userInfo } from 'node:os';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { GUIDE_SECTIONS } from '@shared/route-meta.js';
@@ -134,3 +134,26 @@ describe('the guide view', () => {
     expect(within(panel).getAllByRole('table').length).toBeGreaterThan(0);
   });
 });
+
+  it('paints the reference glossary words as their real badges, with the hover help', async () => {
+    renderGuide(['guide', 'reference']);
+    const panel = await screen.findByRole('tabpanel');
+
+    // The decoration runs in an effect after the sanitizer fills the DOM.
+    await waitFor(() => {
+      const halted = [...panel.querySelectorAll('code')].find((el) => el.textContent === 'halted');
+      expect(halted, 'the glossary names halted as inline code').toBeTruthy();
+      expect(halted!.className, 'painted with the run chip\'s own bad tone').toContain('border-blocked');
+      expect(halted!.getAttribute('title')).toMatch(/must not be automated past/);
+    });
+
+    // The departures spellings too — the words the board actually shows.
+    const departed = [...panel.querySelectorAll('strong')].find((el) => el.textContent === 'Departed');
+    expect(departed, 'Departed appears bold in the board table').toBeTruthy();
+    expect(departed!.className).toContain('state-done');
+    expect(departed!.getAttribute('title')).toMatch(/finished and verified/);
+
+    // A code word that is NOT a status stays a plain code span.
+    const flag = [...panel.querySelectorAll('code')].find((el) => el.textContent?.startsWith('--allow'));
+    if (flag) expect(flag.className).not.toContain('border-');
+  });
