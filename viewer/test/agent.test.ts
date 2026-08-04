@@ -158,6 +158,52 @@ test('the composed plan prompt walks Mode 1 end to end and carries the brief', (
   assert.match(text, /\/design-review/);
   assert.equal(built.launch.label, 'Plan: Add rate limiting to the public API.');
   assert.equal(built.launch.meta?.intent, 'plan');
+  // The prompt matches the mode it is launched in: present first, write after
+  // approval. Without both halves the session can scaffold and commit a plan
+  // nobody has read, which is the decision the wizard exists to put in front
+  // of a person.
+  assert.match(text, /starts in PLAN MODE/);
+  assert.match(text, /write nothing until the operator approves/);
+  assert.ok(
+    text.indexOf('After the operator approves') < text.indexOf('new-plan.sh'),
+    'the scaffold step is on the far side of the approval',
+  );
+});
+
+test('a plan session starts in plan mode without anyone asking for it', () => {
+  const built = buildAgentLaunch({ kind: 'claude', intent: 'plan', brief: 'ship it' }, CTX);
+  assert.equal(built.ok, true);
+  if (!built.ok) return;
+
+  const { args } = built.launch;
+  assert.equal(args[args.indexOf('--permission-mode') + 1], 'plan');
+  assert.equal(built.launch.meta?.permissionMode, 'plan',
+    'meta reports the mode the process actually runs under, so the page can label it');
+});
+
+test('an explicit permission mode beats the plan default — the form is a real choice', () => {
+  for (const mode of ['acceptEdits', 'manual'] as const) {
+    const built = buildAgentLaunch(
+      { kind: 'claude', intent: 'plan', brief: 'ship it', permissionMode: mode },
+      CTX,
+    );
+    assert.equal(built.ok, true);
+    if (!built.ok) return;
+    const { args } = built.launch;
+    assert.equal(args[args.indexOf('--permission-mode') + 1], mode);
+    assert.equal(built.launch.meta?.permissionMode, mode);
+    assert.equal(args.filter((a) => a === '--permission-mode').length, 1,
+      'one mode flag, never the default alongside the override');
+  }
+});
+
+test('the plan default is the plan intent’s alone — a bare session still has none', () => {
+  const built = buildAgentLaunch({ kind: 'claude', prompt: 'just talk to me' }, CTX);
+  assert.equal(built.ok, true);
+  if (!built.ok) return;
+  assert.ok(!built.launch.args.includes('--permission-mode'),
+    'the CLI’s own default stays an omission for every other session');
+  assert.equal(built.launch.meta?.permissionMode, undefined);
 });
 
 test('the committed template is neutral — the scrub patterns find nothing', () => {

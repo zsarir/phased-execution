@@ -14,6 +14,9 @@ import { useSkills } from '@/lib/queries';
 import { Button } from '@/components/ui';
 import { SkillPicker } from '../run/skill-picker';
 import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS } from '../run/defaults';
+// The wizard offers the same list and the tab chip reads it back, so it lives
+// in its own module — see the note there.
+import { MODES } from './modes';
 
 export interface LaunchBody {
   model?: string;
@@ -23,18 +26,6 @@ export interface LaunchBody {
   skills?: string[];
   resume?: string;
 }
-
-/**
- * What the CLI can be STARTED as. `''` is the CLI's own default (ask first);
- * the vocabulary is the runner's, which spells that default as an omission.
- */
-const MODES: readonly { value: string; label: string }[] = [
-  { value: '', label: 'Default — ask before acting' },
-  { value: 'acceptEdits', label: 'Accept edits — file changes auto-approved' },
-  { value: 'plan', label: 'Plan mode — read-only until a plan is approved' },
-  { value: 'auto', label: 'Auto — the CLI decides what needs asking' },
-  { value: 'dontAsk', label: 'Don’t ask — refuse rather than prompt' },
-];
 
 const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
 

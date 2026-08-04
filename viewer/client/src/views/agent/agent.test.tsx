@@ -213,6 +213,37 @@ describe('sessions', () => {
     expect(screen.queryByText('Terminal 1')).not.toBeInTheDocument();
   });
 
+  it('says which mode the open session was LAUNCHED in, both ways', async () => {
+    // No mode on the record is the CLI's own default, which is an omission
+    // rather than a value — the chip still has to name it.
+    await openPage({ segments: ['agent', 'c1'], query: {}, path: 'agent/c1' });
+    expect(await screen.findByText(/launched in default/i)).toBeInTheDocument();
+
+    const planned = { ...CLAUDE, meta: { ...CLAUDE.meta, permissionMode: 'plan' } };
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [planned] });
+    await openPage({ segments: ['agent', 'c1'], query: {}, path: 'agent/c1' });
+    expect(await screen.findByText(/launched in plan/i)).toBeInTheDocument();
+  });
+
+  it('the mode chip admits it is a launch record, and offers the shortcut', async () => {
+    await openPage({ segments: ['agent', 'c1'], query: {}, path: 'agent/c1' });
+
+    // The honesty is the point: ⇧Tab changes the mode inside the session and
+    // tells nothing out here, so a label read as live would be wrong within a
+    // keystroke.
+    const chip = await screen.findByText(/launched in default/i);
+    expect(chip).toHaveAttribute('title', expect.stringMatching(/does not update this label/i));
+    expect(screen.getByText('⇧Tab')).toBeInTheDocument();
+    expect(screen.getByText(/cycles permission modes/i)).toBeInTheDocument();
+  });
+
+  it('no session open, no launch record to report', async () => {
+    await openPage();
+    // The launcher, not a session — a chip here would be about nothing.
+    expect(await screen.findByRole('button', { name: /start session/i })).toBeInTheDocument();
+    expect(screen.queryByText(/launched in/i)).not.toBeInTheDocument();
+  });
+
   it('counts the cap across BOTH kinds', async () => {
     const shells = Array.from({ length: 7 }, (_, i) => ({ ...SHELL, id: `s${i}` }));
     terminal.mockResolvedValue({ ...TERMINALS, sessions: [CLAUDE, ...shells] });
@@ -294,11 +325,37 @@ describe('the plan wizard', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /start authoring/i }));
 
+    // `permissionMode: 'plan'` without anyone choosing it: the form opens on it
+    // and the server defaults to it, so a wizard session explores and presents
+    // the phase graph before it writes the plan file.
     await waitFor(() => expect(agentTicket).toHaveBeenCalledWith({
       intent: 'plan', brief: 'Ship a cart API.', model: 'opus', effort: 'max',
+      permissionMode: 'plan',
     }));
     await waitFor(() => expect(window.location.hash).toBe('#/agent/a1'));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('the permission select is a real choice, and the CLI default is expressible', async () => {
+    const { NewPlanWizard } = await import('./wizard');
+    mount(<NewPlanWizard onClose={() => {}} />);
+
+    const select = await screen.findByLabelText(/permissions/i);
+    expect(select).toHaveValue('plan');
+
+    fireEvent.change(screen.getByPlaceholderText(/what should this plan achieve/i), {
+      target: { value: 'Ship a cart API.' },
+    });
+    // `''` is the launcher's spelling of the CLI default, and it reaches the
+    // server as an omission — which for a plan session means "apply the plan
+    // default", i.e. the opposite of what was picked. `manual` is the CLI's
+    // documented alias for `default`, so the choice survives the trip.
+    fireEvent.change(select, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /start authoring/i }));
+
+    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith(
+      expect.objectContaining({ permissionMode: 'manual' }),
+    ));
   });
 
   it('needs an open source directory before it can author anywhere', async () => {

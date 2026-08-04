@@ -164,6 +164,18 @@ export function buildAgentLaunch(
     return bad('bypass IS the permission mode — send one or the other, not both.');
   }
 
+  /**
+   * A plan-authoring session starts in plan mode unless told otherwise.
+   *
+   * The wizard's whole shape is "read the repository, then PRESENT a plan" —
+   * and until this default existed the session could scaffold and commit
+   * `docs/plans/<slug>.md` before anyone had read a word of it. Plan mode makes
+   * the CLI itself hold the write until the operator approves in the terminal,
+   * which is where they already are. An explicit `permissionMode` still wins:
+   * the form offers the choice, so choosing must mean something.
+   */
+  const effectiveMode = planIntent ? (permissionMode ?? 'plan') : permissionMode;
+
   const prompt = str(body.prompt)?.trim();
   if (prompt && Buffer.byteLength(prompt) > MAX_AGENT_PROMPT_BYTES) {
     return bad('the prompt is too long (16 KB max).');
@@ -258,7 +270,7 @@ export function buildAgentLaunch(
   // Guarded is the absence of the flag — the CLI's own "ask before acting",
   // which is what a person watching a terminal is there for.
   if (profile === 'bypass') argv.push('--permission-mode', 'bypassPermissions');
-  else if (permissionMode) argv.push('--permission-mode', permissionMode);
+  else if (effectiveMode) argv.push('--permission-mode', effectiveMode);
   if (model) argv.push('--model', model);
   if (effort) argv.push('--effort', effort);
   if (label) argv.push('--name', label.slice(0, 80));
@@ -272,9 +284,10 @@ export function buildAgentLaunch(
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
     // What the session is actually running under, not what was asked for: the
-    // page that shows "bypass" must be reading the resolved argv's mode.
+    // page that shows "bypass" — or "plan", which a wizard session gets without
+    // asking — must be reading the resolved argv's mode.
     ...(profile === 'bypass' ? { permissionMode: 'bypassPermissions' }
-      : permissionMode ? { permissionMode } : {}),
+      : effectiveMode ? { permissionMode: effectiveMode } : {}),
     claudeSessionId,
     ...(planIntent ? { intent: 'plan' as const } : {}),
     // The linkage P2 built the session-exit announce policy around: a session
@@ -310,9 +323,19 @@ export function phasedExecutionSkillId(skills: SkillInfo[]): string {
 
 /**
  * The wizard's boot prompt: the skill's own Mode 1, spelled as steps, with
- * one deliberate override — step 6 stops instead of rolling into the root
- * phase, because in this product flow the phases are run from the console
- * once the operator has read the plan.
+ * two deliberate overrides.
+ *
+ * The first is the ending — step 6 stops instead of rolling into the root
+ * phase, because in this product flow the phases are run from the console once
+ * the operator has read the plan.
+ *
+ * The second is the beginning, and it is the reason the session is launched
+ * `--permission-mode plan`: the phase list IS the decision, and a plan file
+ * that is scaffolded, filled and committed before anyone has read it is a
+ * decision taken on the operator's behalf. So the prompt is written in the two
+ * halves plan mode already enforces — explore and present, then (once approved,
+ * which is also when plan mode exits) write. The steps are unchanged; what
+ * changed is which side of the approval each one is on.
  *
  * Everything interpolated is machine-local (the scripts directory) or the
  * operator's own words (the brief); the committed template itself must stay
@@ -324,13 +347,20 @@ export function planPrompt(brief: string, skillId: string, scriptsDir: string): 
     "You are in the repository this plan is for; the skill's helper scripts live at:",
     scriptsDir,
     '',
-    "Follow the skill's own Mode 1 procedure end to end, in this session:",
+    'This session starts in PLAN MODE: first explore and PRESENT the plan for approval —',
+    'write nothing until the operator approves and plan mode exits.',
+    '',
+    'Before approval — read and decide, change nothing on disk:',
     '',
     '1. Pick the session budget for the model that will EXECUTE the phases (the skill\'s',
     '   references/sizing.md) and author the FEWEST phases that fit it.',
-    '2. Draft the plan in the shape references/plan-format.md requires. The "## Phase graph"',
-    '   table is machine-read: every phase lists every dependency, plus Size tags (S/M/L),',
-    '   exit criteria, and the blocking-vs-simultaneous callout.',
+    '2. Work out the plan in the shape references/plan-format.md requires, and present it:',
+    '   the "## Phase graph" table is machine-read, so every phase lists every dependency,',
+    '   plus Size tags (S/M/L), exit criteria, and the blocking-vs-simultaneous callout.',
+    '   Present that table, the session budget, and anything the brief left open.',
+    '',
+    'After the operator approves the plan:',
+    '',
     `3. Scaffold the file first: bash ${scriptsDir}/new-plan.sh <slug> — then fill the`,
     '   template in at docs/plans/<slug>.md.',
     `4. Sanity-check: bash ${scriptsDir}/phase-graph.sh <slug> (every phase listed, the`,

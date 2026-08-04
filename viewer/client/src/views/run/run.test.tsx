@@ -20,7 +20,7 @@ import { DEFAULTS, EFFORTS, MODELS, effortAlias, isLive, modelAlias } from './de
 import { LiveConsole } from './console';
 import { displayState } from './phase-table';
 import { seedSkills } from './controls';
-import { phaseProgress } from './header';
+import { RunHeader, RunTiles, phaseProgress } from './header';
 import { phaseActions } from '@shared/phase-model.js';
 import type { RunState } from '@/lib/api';
 
@@ -229,5 +229,49 @@ describe('phaseProgress — a running phase against its estimate', () => {
   it('renders nothing at all without an estimate', () => {
     expect(phaseProgress(60_000, undefined)).toBeNull();
     expect(phaseProgress(60_000, 0)).toBeNull();
+  });
+});
+
+/**
+ * The header's icons are decoration, and decoration that reaches the
+ * accessibility tree stops being decoration: the phase clock would announce
+ * itself as "timer 12m" and every text query for the time would start matching
+ * an icon too. So the property worth holding is not which glyph was chosen —
+ * it is that none of them adds a word.
+ */
+describe('the run header emphasis', () => {
+  const RUN = {
+    id: 'r1', slug: 'demo', status: 'running', model: 'opus', effort: 'max',
+    autonomy: 'keep-going', spentUsd: 0,
+    createdAt: '2026-08-04T10:00:00Z', updatedAt: '2026-08-04T10:20:00Z',
+    activePhase: 2,
+    child: { pid: 1, phase: 2, sessionId: 's', startedAt: '2026-08-04T10:10:00Z' },
+  } as unknown as RunState;
+
+  it('gives the phase clock the weight, and the icons no voice', () => {
+    const { container } = render(<RunHeader run={RUN} live={false} eta={null} />);
+
+    // The clock is still exactly the time — an icon that announced itself
+    // would land inside this accessible text.
+    const clock = screen.getByTitle(/How long the phase running now has been going/);
+    expect(clock.textContent?.trim()).toMatch(/^\d/);
+    // ...and it is the biggest thing on the line, which is the whole change.
+    expect(clock.className).toMatch(/text-base|text-lg/);
+    expect(clock.className).toMatch(/font-semibold/);
+
+    for (const svg of container.querySelectorAll('svg')) {
+      expect(svg).toHaveAttribute('aria-hidden');
+    }
+  });
+
+  it('the model tile still reads as its model, icons and all', () => {
+    const { container } = render(<RunTiles run={RUN} phases={[]} />);
+
+    expect(screen.getByText('Model')).toBeInTheDocument();
+    expect(screen.getByText('opus')).toBeInTheDocument();
+    expect(screen.getByText(/max effort · keep-going/)).toBeInTheDocument();
+    for (const svg of container.querySelectorAll('svg')) {
+      expect(svg).toHaveAttribute('aria-hidden');
+    }
   });
 });

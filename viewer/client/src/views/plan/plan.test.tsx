@@ -295,6 +295,66 @@ describe('the plan surface renders its parts', () => {
     expect(await screen.findByText(/No phase 99 in this plan/)).toBeInTheDocument();
   });
 
+  /* The boot prompt used to exist only on `ready` and `in-progress`, which sent
+     anyone with a legitimate reason to read the others — re-running a phase,
+     seeing what a finished session was told — to the CLI to print it by hand.
+     It is on every state now; what changes with the state is the warning above
+     it and whether it starts open. */
+  describe('the boot prompt', () => {
+    it('is open with no caution on the one phase that can actually start', async () => {
+      renderPlan(['demo', 'phase', '2']);
+      expect(await screen.findByText('Boot prompt — phase 2')).toBeInTheDocument();
+      // Open: the engine's text is already on screen, no Show button.
+      expect(await screen.findByText(/Start phase 2\./)).toBeInTheDocument();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it('a departed phase keeps its prompt, collapsed, and says so', async () => {
+      renderPlan(['demo', 'phase', '1']);
+      expect(await screen.findByText('Boot prompt — phase 1')).toBeInTheDocument();
+      // The caution's own words, not the bare state: "Departed" is also the
+      // board word on the state chip beside it.
+      expect(screen.getByText(/kept for reference/i)).toBeInTheDocument();
+      // Collapsed costs nothing: the card does not fetch until it is opened.
+      // (Scoped to THIS phase — the engine mock is shared across the file, so
+      // "never called" would be an assertion about the other tests.)
+      expect(screen.getByRole('button', { name: 'Show' })).toBeInTheDocument();
+      expect(vi.mocked(api.prompt)).not.toHaveBeenCalledWith('demo', 1);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show' }));
+      expect(await screen.findByText(/Start phase 2\./)).toBeInTheDocument();
+      expect(vi.mocked(api.prompt)).toHaveBeenCalledWith('demo', 1);
+    });
+
+    it('a waiting phase warns that a session booted now stops at the checks', async () => {
+      renderPlan(['demo', 'phase', '3']);
+      expect(await screen.findByText('Boot prompt — phase 3')).toBeInTheDocument();
+      expect(screen.getByText(/stops at the lock and board checks/i)).toBeInTheDocument();
+      // The caution is OUTSIDE the collapse — hidden behind the same toggle it
+      // would reach only someone who had already decided to look.
+      expect(screen.getByRole('button', { name: 'Show' })).toBeInTheDocument();
+    });
+
+    it('names the lock for a phase somebody else is already on', async () => {
+      const inProgress = DETAIL.phases.map((p) => (p.phase === 2
+        ? { ...p, state: 'in-progress' }
+        : p));
+      vi.mocked(api.plan).mockResolvedValue({ ...DETAIL, phases: inProgress });
+      renderPlan(['demo', 'phase', '2']);
+
+      expect(await screen.findByText(/phase-lock will refuse a second one/i)).toBeInTheDocument();
+    });
+
+    it('a gate outranks the state — it is what actually holds the phase', async () => {
+      const gated = DETAIL.phases.map((p) => (p.phase === 2 ? { ...p, gated: true } : p));
+      vi.mocked(api.plan).mockResolvedValue({ ...DETAIL, phases: gated });
+      renderPlan(['demo', 'phase', '2']);
+
+      // `ready` on the board, but the gate is the wall a booted session hits.
+      expect(await screen.findByText(/stops at the gate check/i)).toBeInTheDocument();
+    });
+  });
+
   it('renders a handoff body as markdown', async () => {
     renderPlan(['demo', 'handoff', '1']);
     expect(await screen.findByText('Scaffolded it.')).toBeInTheDocument();

@@ -13,6 +13,7 @@
  * work that is not happening; the clock holds where it stood and says so.
  */
 
+import { Bot, Clock, Gauge, Timer } from 'lucide-react';
 import { Chip, Tile } from '@/components/ui';
 import { elapsed, etaLabel, etaPoint, etaTitle, money, relativeTime } from '@/lib/format';
 import { useNow } from '@/lib/clock';
@@ -117,9 +118,18 @@ export function RunHeader({
             <span className="font-display text-sm">phase {run.activePhase}</span>
           )
         )}
+        {/* The biggest thing on the line, because it is the figure people come
+            back to the page for. It was `text-sm` beside four other `text-sm`
+            spans, which made "how long has this been going" something you had
+            to find rather than something you saw. Size and weight only — the
+            colour still carries the one distinction it always did, stopped
+            versus counting. */}
         {phaseMs != null && (
           <span
-            className={cn('font-mono text-sm tabular-nums', frozenAt ? 'text-ink-faint' : 'text-ink')}
+            className={cn(
+              'inline-flex items-center gap-1.5 font-mono text-base font-semibold tabular-nums md:text-lg',
+              frozenAt ? 'text-ink-faint' : 'text-ink',
+            )}
             title={frozenAt
               ? 'The session is stopped where it stood, so this clock is stopped too.'
               : lanes.length > 1
@@ -129,6 +139,7 @@ export function RunHeader({
                 ? `How long phase ${lanes[0]}, the earliest of ${lanes.length} running, has been going`
                 : 'How long the phase running now has been going'}
           >
+            <Timer size={16} className="shrink-0 text-ink-faint" aria-hidden />
             {elapsed(phaseMs)}
           </span>
         )}
@@ -144,7 +155,13 @@ export function RunHeader({
         <span>
           run <code className="font-mono">{run.id}</code>
         </span>
-        <span title={`started ${new Date(run.createdAt).toLocaleString()}`}>
+        {/* The whole run, under the phase and visibly secondary to it: on a plan
+            that has been going for days the phase clock is what changed. */}
+        <span
+          className="inline-flex items-center gap-1"
+          title={`started ${new Date(run.createdAt).toLocaleString()}`}
+        >
+          <Clock size={11} aria-hidden />
           {ticking ? 'running for' : 'ran for'} {elapsed(Math.max(0, runMs))}
         </span>
         {/* A range rather than a countdown, and hedged by where the rate came
@@ -187,10 +204,24 @@ export function RunTiles({ run, phases }: { run: RunState; phases: PhaseRecord[]
           </>
         }
       />
+      {/* The only tile whose value is a word rather than a number, so it read as
+          the quiet one in a row of figures — while being the setting most worth
+          noticing before you decide anything about the run. The icons give the
+          word the weight the digits get for free. */}
       <Tile
         label="Model"
-        value={run.model}
-        hint={`${run.effort ?? 'default'} effort · ${run.autonomy}`}
+        value={
+          <span className="inline-flex items-center gap-2">
+            <Bot size={20} className="shrink-0 text-ink-faint" aria-hidden />
+            {run.model}
+          </span>
+        }
+        hint={
+          <span className="inline-flex items-center gap-1">
+            <Gauge size={11} className="shrink-0" aria-hidden />
+            {`${run.effort ?? 'default'} effort · ${run.autonomy}`}
+          </span>
+        }
       />
       {limits?.utilization != null ? (
         <Tile

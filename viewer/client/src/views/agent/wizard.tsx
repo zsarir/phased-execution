@@ -21,9 +21,12 @@ import { Sparkles } from 'lucide-react';
 import { api, type TerminalState } from '@/lib/api';
 import { keys, useConsoleState, useSkills } from '@/lib/queries';
 import { navigate } from '@/router';
-import { Button, Dialog, DialogClose, DialogContent, DialogFooter, toast } from '@/components/ui';
+import {
+  Button, Dialog, DialogClose, DialogContent, DialogFooter, toast, type ButtonProps,
+} from '@/components/ui';
 import { SkillPicker } from '../run/skill-picker';
 import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS } from '../run/defaults';
+import { MODES, PLAN_MODE } from './modes';
 
 const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
 
@@ -32,12 +35,20 @@ const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:op
  * console itself writes nothing here — the claude session does, with the
  * operator watching. The scaffold-only button keeps its own gate beside this.
  */
-export function NewPlanWizardButton({ allowAgent }: { allowAgent: boolean }) {
+export function NewPlanWizardButton({ allowAgent, variant = 'action' }: {
+  allowAgent: boolean;
+  /**
+   * Primary where authoring IS the page's action (the Plans toolbar, a quiet
+   * dashboard with nothing ready) and secondary where something else already
+   * is — two action-weight buttons side by side name no first move.
+   */
+  variant?: ButtonProps['variant'];
+}) {
   const [open, setOpen] = useState(false);
   if (!allowAgent) return null;
   return (
     <>
-      <Button size="sm" variant="action" onClick={() => setOpen(true)}>
+      <Button size="sm" variant={variant} onClick={() => setOpen(true)}>
         <Sparkles size={14} aria-hidden /> New plan with AI
       </Button>
       {open && <NewPlanWizard onClose={() => setOpen(false)} />}
@@ -53,6 +64,9 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
   const [brief, setBrief] = useState('');
   const [model, setModel] = useState<string>(DEFAULTS.model);
   const [effort, setEffort] = useState<string>(DEFAULTS.effort);
+  // The server applies this same default for `intent: 'plan'`; opening on it
+  // here only means the operator is never shown one mode and given another.
+  const [mode, setMode] = useState<string>(PLAN_MODE);
   const [chosen, setChosen] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -64,6 +78,12 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
         brief: brief.trim(),
         model,
         effort,
+        // `''` is the launcher's spelling of "the CLI's own default", and it
+        // reaches the server as an omission — which for a plan session means
+        // "apply the plan-mode default", i.e. the opposite of what was picked.
+        // `manual` is the CLI's documented alias for `default`, so choosing it
+        // is how this form says the default OUT LOUD and stays a real choice.
+        permissionMode: mode || 'manual',
         ...(chosen.length ? { skills: chosen } : {}),
       });
       // Same two rules as every session the console opens: seed the list from
@@ -86,9 +106,10 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
       <DialogContent
         title="New plan with AI"
-        description={'A Claude session opens in the Agent terminal, invokes the phased-execution '
-          + 'skill’s plan mode, scaffolds docs/plans/<slug>.md, validates it and commits — '
-          + 'you answer its questions in the terminal.'}
+        description={'A Claude session opens in the Agent terminal and invokes the phased-execution '
+          + 'skill’s plan mode. It presents the phase graph for your approval first, then scaffolds '
+          + 'docs/plans/<slug>.md, validates it and commits — you answer its questions, and approve, '
+          + 'in the terminal.'}
       >
         <div className="flex flex-col gap-3">
           <label className="flex flex-col gap-1 text-sm">
@@ -103,7 +124,7 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
             />
           </label>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <label className="flex flex-col gap-1 text-sm">
               <span className="text-2xs uppercase tracking-wide text-ink-faint">Model</span>
               <select className={field} value={model} onChange={(event) => setModel(event.target.value)}>
@@ -119,7 +140,21 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
                 ))}
               </select>
             </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-2xs uppercase tracking-wide text-ink-faint">Permissions</span>
+              <select className={field} value={mode} onChange={(event) => setMode(event.target.value)}>
+                {MODES.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
+              </select>
+            </label>
           </div>
+
+          <p className="text-2xs text-ink-faint">
+            {mode === PLAN_MODE
+              ? 'In plan mode the session explores and presents the plan first — it writes docs/plans/'
+                + '<slug>.md only after you approve it in the terminal.'
+              : 'Outside plan mode the session may scaffold and commit the plan file before you have '
+                + 'read it.'}
+          </p>
 
           {rootOpen ? (
             <SkillPicker

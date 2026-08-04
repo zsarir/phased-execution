@@ -16,7 +16,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClientConfig } from '@/lib/queries';
 import type { HealthIssue, RunState } from '@/lib/api';
@@ -167,6 +167,44 @@ describe('the dashboard', () => {
 
     expect(await screen.findByText(/Nothing is running/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText(/alpha phase 2/)).toBeTruthy());
+  });
+
+  /* Authoring a plan was reachable only from the Plans list — the one page you
+     have no reason to open when the dashboard has just told you nothing is
+     running. The card is on the dashboard now, and it is DISABLED rather than
+     absent without the flag: a gap reads as "this console cannot make plans",
+     when the truth is that it can and was started without `--allow-agent`. */
+  describe('starting a new plan', () => {
+    it('offers the card, and opens the wizard', async () => {
+      state.mockResolvedValue({
+        autopilot: true, allowRun: true, allowWrites: true, allowAgent: true, unread: 0,
+        root: { label: 'hub', path: '/hub', ok: true, planCount: 9 },
+        repo: { available: true, branch: 'main', dirty: [] },
+      });
+      const { default: DashboardView } = await import('./index');
+      mount(<DashboardView />);
+
+      // The card renders before `/api/state` answers, and renders DISABLED
+      // while it has no capability to go on — so the wait is for the button to
+      // become enabled, not merely to exist.
+      await waitFor(() => expect(
+        screen.getAllByRole('button', { name: /new plan with ai/i })[0],
+      ).toBeEnabled());
+
+      fireEvent.click(screen.getAllByRole('button', { name: /new plan with ai/i })[0]);
+      expect(await screen.findByPlaceholderText(/what should this plan achieve/i))
+        .toBeInTheDocument();
+    });
+
+    it('without --allow-agent the card stays, disabled, and names the flag', async () => {
+      // `allowAgent` is absent from the base state above.
+      const { default: DashboardView } = await import('./index');
+      mount(<DashboardView />);
+
+      expect(await screen.findByText('New plan')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /new plan with ai/i })).toBeDisabled();
+      expect(screen.getByText('--allow-agent')).toBeInTheDocument();
+    });
   });
 
   it('shows the live run with its phase instead of the quiet state', async () => {

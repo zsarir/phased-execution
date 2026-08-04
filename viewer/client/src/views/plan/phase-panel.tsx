@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import {
   Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip, Empty, KeyValue, StateChip,
+  type Severity,
 } from '@/components/ui';
 import { Markdown, MarkdownInline } from '@/components/markdown';
 import { PromptCard } from '@/components/prompt-card';
@@ -56,6 +57,7 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
   }
 
   const stateOf = (n: number) => detail.phases.find((p) => p.phase === n)?.state ?? 'unknown';
+  const banner = promptBanner(view);
 
   return (
     <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] lg:items-start">
@@ -120,13 +122,20 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
           </CardBody>
         </Card>
 
-        {(view.state === 'ready' || view.state === 'in-progress') && (
-          <PromptCard
-            title={`Boot prompt — phase ${view.phase}`}
-            queryKey={keys.prompt(slug, view.phase)}
-            load={() => api.prompt(slug, view.phase)}
-          />
-        )}
+        {/* Every state, not just the two that can start. The prompt was hidden
+            on a done or waiting phase because booting one is usually the wrong
+            move — but "usually wrong" is a thing to SAY, and hiding it instead
+            sent the one reader who legitimately needed it (re-running a phase,
+            reading what a finished session was told, preparing the next one) to
+            the CLI to print it by hand. Collapsed everywhere but `ready`, so the
+            page still leads with the phase that can actually go. */}
+        <PromptCard
+          title={`Boot prompt — phase ${view.phase}`}
+          collapsed={view.state !== 'ready'}
+          {...(banner ? { banner } : {})}
+          queryKey={keys.prompt(slug, view.phase)}
+          load={() => api.prompt(slug, view.phase)}
+        />
         {detail.summary.qaMode === 'on' && view.state === 'done' && (
           <PromptCard
             title={`QA brief — phase ${view.phase}`}
@@ -257,6 +266,61 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
       </div>
     </div>
   );
+}
+
+/**
+ * What to say above a boot prompt for a phase that is not `ready`.
+ *
+ * The prompt itself is always the engine's, byte for byte, whatever state the
+ * phase is in — so this is the console's one honest addition: what booting a
+ * session on it right now would actually run into. Each line names the wall
+ * rather than the rule, because the walls are real and checkable (a lock, the
+ * board, a gate) and an operator who knows which one they are about to hit can
+ * decide for themselves whether that is what they meant.
+ *
+ * `ready` returns nothing: there is nothing to warn about, and a banner on
+ * every card would train people to stop reading them.
+ */
+export function promptBanner(
+  view: { state: string; gated?: boolean },
+): { severity: Severity; text: string } | undefined {
+  // Checked before the state, because a gated phase can read as `ready` on the
+  // board while the thing actually holding it is the gate.
+  if (view.gated && view.state !== 'done') {
+    return {
+      severity: 'warn',
+      text: 'This phase is gated — a session booted now stops at the gate check until it clears.',
+    };
+  }
+  switch (view.state) {
+    case 'ready':
+      return undefined;
+    case 'in-progress':
+      return {
+        severity: 'warn',
+        text: 'A session is already on this phase — phase-lock will refuse a second one. '
+          + 'Take it over deliberately (--force) or pick another phase.',
+      };
+    case 'done':
+      return {
+        severity: 'info',
+        text: 'This phase has departed — the prompt is kept for reference, and for re-running it '
+          + 'on purpose.',
+      };
+    case 'stuck':
+    case 'blocked':
+      return {
+        severity: 'warn',
+        text: 'This phase is blocked — prefer the recovery actions, which brief a session on what '
+          + 'went wrong, over booting a fresh one that will not know.',
+      };
+    default:
+      return {
+        severity: 'warn',
+        text: 'Dependencies are not met — a session booted now stops at the lock and board checks '
+          + 'its own boot prompt tells it to run.',
+      };
+  }
 }
 
 /**

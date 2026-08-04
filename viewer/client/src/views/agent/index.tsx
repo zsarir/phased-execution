@@ -27,6 +27,7 @@ import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // importable module in this shared chunk renames it and precaches xterm.
 import { EndedBanner, SessionGone, TerminalPane } from '../terminal/pane';
 import { Launcher, type LaunchBody } from './launcher';
+import { MODE_TITLE, modeName } from './modes';
 import { NewPlanWizardButton } from './wizard';
 
 export default function AgentView({ route }: { route: Route }) {
@@ -211,9 +212,27 @@ export default function AgentView({ route }: { route: Route }) {
         <span className="shrink-0"><NewPlanWizardButton allowAgent={allowed} /></span>
 
         {open && (
-          <Chip mono className="ml-auto hidden shrink-0 md:inline-flex" title={open.cwd}>
-            {(size ?? open).cols}×{(size ?? open).rows}
-          </Chip>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* What the process was STARTED under. ⇧Tab changes the mode inside
+                the session and tells nothing out here, so the chip is a record
+                of the launch and the title says exactly that — a label that
+                silently went stale would be worse than no label. */}
+            <Chip mono title={MODE_TITLE}>
+              launched in {modeName(open.meta?.permissionMode)}
+            </Chip>
+            {/* The shortcut itself, where someone reading the chip is already
+                looking. Desktop only: a phone has no ⇧Tab to press, and the
+                keybar under the terminal already offers the button. */}
+            <span className="hidden items-center gap-1.5 text-2xs text-ink-faint md:flex">
+              <kbd className="rounded border border-rule bg-surface-raised px-1 py-0.5 font-mono text-2xs">
+                ⇧Tab
+              </kbd>
+              cycles permission modes
+            </span>
+            <Chip mono className="hidden md:inline-flex" title={open.cwd}>
+              {(size ?? open).cols}×{(size ?? open).rows}
+            </Chip>
+          </div>
         )}
       </div>
 

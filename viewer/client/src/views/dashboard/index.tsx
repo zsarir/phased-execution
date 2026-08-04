@@ -39,6 +39,7 @@ import type { PlanSummaryFull } from '@/lib/api';
 import { Page } from '../_page';
 import { AllQuiet, AttentionRow, LiveStrip, demands } from './now';
 import { useDemandActions } from './actions';
+import { NewPlanCard } from './new-plan-card';
 import { PlanStrips } from './plan-strips';
 import { SessionsCard } from './sessions';
 
@@ -154,7 +155,13 @@ export default function DashboardView() {
             ? <Skeleton className="h-16" />
             : (runs ?? []).some((r) => ['running', 'waiting', 'pausing', 'stopping', 'frozen'].includes(r.status))
               ? <LiveStrip runs={runs ?? []} />
-              : <AllQuiet next={nextWithTitle(next, bySlug)} allowRun={Boolean(state?.allowRun)} />}
+              : (
+                <AllQuiet
+                  next={nextWithTitle(next, bySlug)}
+                  allowRun={Boolean(state?.allowRun)}
+                  allowAgent={state?.allowAgent === true}
+                />
+              )}
           {/* Directly under the run, because it answers the same question: an
               agent session left working overnight is as much "what is running
               now" as an autopilot phase, and nothing else on the console lists
@@ -253,6 +260,10 @@ export default function DashboardView() {
               </CardBody>
             </Card>
           )}
+
+          {/* Beside the console's own card, because both answer "what can this
+              machine do for me" rather than "what is this plan doing". */}
+          <NewPlanCard allowAgent={state?.allowAgent === true} />
 
           <ConsoleCard state={state} stale={stale} stalled={stats?.stalled ?? []} />
         </div>

@@ -22,6 +22,9 @@ import {
 import { phaseHref, planHref } from '@shared/routes.js';
 import type { HealthIssue, RunState, TerminalSession } from '@/lib/api';
 import { isLive } from '../run/defaults';
+// Data + dialog only — the wizard never imports the pane, so this does not drag
+// xterm into the dashboard chunk. See the note at the top of `agent/wizard.tsx`.
+import { NewPlanWizardButton } from '../agent/wizard';
 
 /* ------------------------------------------------------------------ *
  * Live
@@ -539,9 +542,17 @@ function IssueLine({ issue }: { issue: HealthIssue }) {
 export function AllQuiet({
   next,
   allowRun,
+  allowAgent = false,
 }: {
   next?: { slug: string; phase: number; title?: string };
   allowRun: boolean;
+  /**
+   * Without it the authoring button is simply absent here — a quiet card is not
+   * the place to explain a missing flag. The dashboard's New plan card, which
+   * is a capability inventory, is where the disabled version and its reason
+   * live.
+   */
+  allowAgent?: boolean;
 }) {
   return (
     <Card className="state-ready flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5 md:px-4">
@@ -557,21 +568,28 @@ export function AllQuiet({
           )
           : <span className="block text-2xs text-ink-muted">Nothing is ready to start either.</span>}
       </span>
-      {next && (
-        <span className="flex shrink-0 gap-2">
-          <Button size="sm" variant="action" asChild>
-            <a href="#/ready">
-              <Play size={13} aria-hidden />
-              Open the board
-            </a>
-          </Button>
-          {allowRun && (
-            <Button size="sm" asChild>
-              <a href={planHref(next.slug, 'run')}>Run it</a>
+      {/* Outside the `next` gate: with nothing ready, authoring the next plan is
+          the ONLY move left, and that is exactly when this card used to offer
+          nothing at all. */}
+      <span className="flex shrink-0 flex-wrap gap-2">
+        {next && (
+          <>
+            <Button size="sm" variant="action" asChild>
+              <a href="#/ready">
+                <Play size={13} aria-hidden />
+                Open the board
+              </a>
             </Button>
-          )}
-        </span>
-      )}
+            {allowRun && (
+              <Button size="sm" asChild>
+                <a href={planHref(next.slug, 'run')}>Run it</a>
+              </Button>
+            )}
+          </>
+        )}
+        {/* Primary only when there is no next move to be primary instead. */}
+        <NewPlanWizardButton allowAgent={allowAgent} variant={next ? 'default' : 'action'} />
+      </span>
     </Card>
   );
 }

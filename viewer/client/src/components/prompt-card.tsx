@@ -12,6 +12,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Banner, Button, Card, CardHeader, CopyButton, Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import type { Severity } from '@/components/ui';
 
 export interface PromptCardProps {
   title: string;
@@ -19,11 +20,24 @@ export interface PromptCardProps {
   queryKey: readonly unknown[];
   load: () => Promise<string>;
   note?: string;
+  /**
+   * What the reader needs to know BEFORE they copy this.
+   *
+   * A boot prompt is always technically valid — the scripts print it whatever
+   * the phase is doing — so the thing that makes it safe or pointless to paste
+   * is context the card cannot see: another session already on this phase,
+   * dependencies not met, a gate not cleared. The caller knows; this renders
+   * it above the prompt rather than beside the card, where it would be read
+   * after the copy button had already been pressed.
+   */
+  banner?: { severity: Severity; text: string };
   collapsed?: boolean;
   className?: string;
 }
 
-export function PromptCard({ title, queryKey, load, note, collapsed = false, className }: PromptCardProps) {
+export function PromptCard({
+  title, queryKey, load, note, banner, collapsed = false, className,
+}: PromptCardProps) {
   const [open, setOpen] = useState(!collapsed);
 
   // `enabled: open` is why a collapsed card is free: the engine is shelled out
@@ -45,6 +59,15 @@ export function PromptCard({ title, queryKey, load, note, collapsed = false, cla
             : <Button size="sm" onClick={() => setOpen(true)}>Show</Button>}
         </div>
       </CardHeader>
+
+      {/* Outside the `open` gate on purpose: the caution is the reason the card
+          is collapsed, so hiding it behind the same toggle would show it only
+          to someone who had already decided to look. */}
+      {banner && (
+        <div className="px-3 pb-2">
+          <Banner severity={banner.severity}>{banner.text}</Banner>
+        </div>
+      )}
 
       {open && (
         <div className="min-w-0">
