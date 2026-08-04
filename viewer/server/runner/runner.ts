@@ -256,6 +256,8 @@ export class Runner {
   private freezeTimer: NodeJS.Timeout | null = null;
   /** Set when a freeze was escalated, so the dead child is not read as a crash. */
   private checkpointed = false;
+  /** Set while `recover` drives a single session rather than the phase loop. */
+  private recovering = false;
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
@@ -263,6 +265,36 @@ export class Runner {
 
   current(): RunState | null { return this.state; }
   busy(): boolean { return this.driving !== null; }
+
+  /**
+   * Whether what is driving is a recovery rather than the phase loop.
+   *
+   * Both set `driving`, and they answer differently to exactly one control:
+   * there is no phase boundary in a recovery for a Pause to wait at. See `pause`.
+   */
+  recoveringNow(): boolean { return this.recovering; }
+
+  /**
+   * Why a control aimed at a named phase cannot act, or null when it can.
+   *
+   * Naming a phase is not decoration. A control tapped on a phone reaches this
+   * server whole seconds later, by which time the phase it was aimed at may
+   * have ended — and freezing whatever started next is a different act from the
+   * one that was asked for. Naming nothing still means "whatever is running",
+   * which is what every caller before per-phase controls did, so this answers
+   * null and changes nothing for them.
+   */
+  phaseMismatch(phase?: number | null): string | null {
+    if (phase == null) return null;
+    const running = this.state?.child?.phase ?? null;
+    if (running == null) {
+      return this.driving
+        ? `phase ${phase} has no session running just now — the run is between phases, or verifying`
+        : `phase ${phase} has nothing running to act on`;
+    }
+    if (running !== phase) return `phase ${phase} is not the one running — phase ${running} is`;
+    return null;
+  }
   /** Resolves once the loop has stopped driving. */
   async wait(): Promise<void> { await this.driving; }
 
@@ -408,10 +440,17 @@ export class Runner {
     this.settingsPath = this.armSettings(state.id);
     this.record('run.recover', { mode: options.mode, phase: options.phase, by: options.by ?? 'console' }, options.phase);
     this.persist();
+    // Before the work starts, not after it finishes. `runRecovery` can spend
+    // minutes inside a spawn, and until this emit existed the console showed
+    // the halted run — cleared status, cleared halt, all of it invisible —
+    // for the whole of that. The `finally` emit below still reports the end.
+    this.emit('run', { state });
 
     onShutdown('runner', () => this.checkpointForShutdown());
+    this.recovering = true;
     this.driving = this.runRecovery(options).finally(() => {
       this.driving = null;
+      this.recovering = false;
       offShutdown('runner');
       this.deps.approvals?.disarm();
       this.persist();
@@ -471,26 +510,54 @@ export class Runner {
       : closeoutPrompt(state.slug, phase, board.states[phase] ?? 'unknown');
 
     this.record('phase.resume-instruction', { sessionId, instruction: instruction.slice(0, 2_000) }, phase);
-    const outcome = await spawn({
-      prompt,
-      cwd: state.root,
-      model: record.model ?? state.model,
-      effort: record.effort ?? state.effort,
-      name: `${state.slug} p${phase} recover`,
-      resume: sessionId,
-      budgetUsd: state.phaseBudgetUsd,
-      maxTurns: CLOSEOUT_MAX_TURNS,
-      settings: this.settingsPath ?? undefined,
-      permissionProfile: this.profile(),
-      partialMessages: this.deps.stream?.partialMessages ?? true,
-      subagentText: this.deps.stream?.subagentText ?? true,
-      hookEvents: this.deps.stream?.hookEvents ?? true,
-      onHandle: (handle) => { this.handle = handle; },
-      env: { ...process.env, PE_OWNER: `autopilot/${state.id}` },
-      signal: this.abort?.signal,
-      onPid: (pid) => { this.childPid = pid; },
-      onEvent: (event) => this.onStream(phase, event),
-    });
+    // A resumed phase IS running, and nothing said so. The record kept whatever
+    // terminal status it had halted on, so the header clock never started, the
+    // dashboard counted the run as stopped, and the runs list showed a finished
+    // run with a live session underneath it. The phase clock reads `startedAt`,
+    // which is left alone when the phase already has one — this is a second
+    // stretch of the same phase, not a new one.
+    record.status = 'running';
+    record.startedAt ??= new Date().toISOString();
+    this.persist();
+    this.emit('phase', { phase, status: 'running', model: record.model ?? state.model });
+    this.emit('run', { state });
+
+    let outcome;
+    try {
+      outcome = await spawn({
+        prompt,
+        cwd: state.root,
+        model: record.model ?? state.model,
+        effort: record.effort ?? state.effort,
+        name: `${state.slug} p${phase} recover`,
+        resume: sessionId,
+        budgetUsd: state.phaseBudgetUsd,
+        maxTurns: CLOSEOUT_MAX_TURNS,
+        settings: this.settingsPath ?? undefined,
+        permissionProfile: this.profile(),
+        partialMessages: this.deps.stream?.partialMessages ?? true,
+        subagentText: this.deps.stream?.subagentText ?? true,
+        hookEvents: this.deps.stream?.hookEvents ?? true,
+        onHandle: (handle) => { this.handle = handle; },
+        env: { ...process.env, PE_OWNER: `autopilot/${state.id}` },
+        signal: this.abort?.signal,
+        // The same wiring `attempt` uses, and for the same reason: `state.child`
+        // is what Freeze and Stop signal, and what the console reads to know a
+        // session is alive. Recorded here it was a bare pid nobody else could
+        // see, so a recovery could not be frozen or stopped at all.
+        onPid: (pid) => {
+          this.childPid = pid;
+          state.child = { pid, phase, sessionId, startedAt: new Date().toISOString() };
+          this.persist();
+          this.emit('run', { state });
+        },
+        onEvent: (event) => this.onStream(phase, event),
+      });
+    } finally {
+      this.childPid = null;
+      this.handle = null;
+      state.child = null;
+    }
 
     state.spentUsd += outcome.costUsd;
     record.costUsd += outcome.costUsd;
@@ -619,6 +686,13 @@ export class Runner {
    */
   pause(by = 'console'): boolean {
     if (!this.state || !this.driving) return false;
+    // A recovery is one session, not the phase loop — and `pausing` is a word
+    // only the loop reads. Arming it here lit the Pause button, changed the
+    // badge to "pausing", and stopped precisely nothing, which is the failure
+    // this method's own comment calls the worst of the three. Freeze stops a
+    // recovery where it stands, and Stop ends it; there is no boundary for a
+    // Pause to wait for, so saying no is the honest answer.
+    if (this.recovering) return false;
     if (this.state.status === 'pausing') return true;
     this.state.status = 'pausing';
     this.state.pause = {
@@ -698,7 +772,10 @@ export class Runner {
       const record = phaseRecord(state, state.activePhase);
       record.frozenMs = (record.frozenMs ?? 0) + frozenMs;
     }
-    state.status = 'running';
+    // Same rule as the wait-until disposition: a pause armed while the session
+    // was frozen is still a pause, and thawing is not taking it back — that is
+    // what `resumePause` is for.
+    state.status = state.pause ? 'pausing' : 'running';
     state.freeze = null;
     this.record('run.thawed', { pid, frozenMs }, state.activePhase ?? undefined);
     this.persist();
@@ -940,6 +1017,11 @@ export class Runner {
     record.note = 'skipped by the operator';
     this.record('phase.skip', {}, phase);
     this.persist();
+    // `record()` alone reaches the console as `run:journal`, which is
+    // stream-only and invalidates nothing: the row this just changed went on
+    // showing its old status until something else happened to emit. Every
+    // action that edits the record says so at the moment it acts.
+    this.emit('run', { state: this.state });
   }
 
   /**
@@ -980,9 +1062,9 @@ export class Runner {
    * is live, because the alternative is a caller that has to check first and
    * will eventually forget to.
    */
-  note(event: string, data: Record<string, unknown> = {}): void {
+  note(event: string, data: Record<string, unknown> = {}, phase?: number): void {
     if (!this.state) return;
-    this.record(event, data);
+    this.record(event, data, phase);
   }
 
   /** Clear a phase's terminal state so the loop will pick it up again. */
@@ -995,6 +1077,10 @@ export class Runner {
     this.state.halt = null;
     this.record('phase.retry-requested', {}, phase);
     this.persist();
+    // See `skip`. Retry is the one this was reported against: the halt banner
+    // stayed on screen, the phase still read `failed`, and the only way to
+    // learn the retry had been accepted was to reload the page.
+    this.emit('run', { state: this.state });
   }
 
   /* ---------------------------------------------------------------- *
@@ -1026,6 +1112,13 @@ export class Runner {
         }
 
         const board = await this.board();
+        // Re-read, because `board()` is a `phase-graph.sh` subprocess and the
+        // whole gap between the check at the top of this loop and here is time
+        // an operator can press Pause in. They did, repeatedly, and watched the
+        // next phase start anyway: the flag was set a few hundred milliseconds
+        // after the only line that read it. Going back to the top rather than
+        // breaking here keeps ONE piece of pause bookkeeping, up there.
+        if (state.status === 'pausing') continue;
         if (board.error) { this.halt(`the engine could not read the plan: ${board.error}`); break; }
 
         const outstanding = [...board.ready, ...board.waiting, ...board.inProgress, ...board.stuck];
@@ -1113,6 +1206,10 @@ export class Runner {
   private async runPhase(phase: number, board: Board): Promise<boolean> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
+    // Where the run was pointing before this call. Everything between here and
+    // the spawn is an await, so a phase can still turn out not to start — and
+    // one that never starts must not leave the run claiming to be on it.
+    const wasActive = state.activePhase;
     state.activePhase = phase;
 
     /* ---- gate ---- */
@@ -1159,6 +1256,23 @@ export class Runner {
     const extraSkills = [...(state.skills ?? []), ...(state.phaseOptions?.[String(phase)]?.skills ?? [])];
     const prompt = engineText + skillDirective(extraSkills);
     if (extraSkills.length) this.record('phase.skills', { skills: [...new Set(extraSkills)] }, phase);
+
+    /* ---- the last chance to not start ----
+     * The gate check, the lock check and the boot prompt are three subprocesses
+     * — seconds, sometimes more. A pause armed during them used to be read only
+     * after the session had already been spawned, which is the same defect as
+     * the one at the top of `drive` and needs the same answer in the one place
+     * that can still act on it: immediately before the phase is marked running.
+     * `true` because the run carries on to the loop top, which owns every piece
+     * of pause bookkeeping and will stop there. */
+    if (state.status === 'pausing' || this.abort?.signal.aborted) {
+      state.activePhase = wasActive;
+      await this.release(phase, owner);
+      this.record('phase.not-started', {
+        reason: state.status === 'pausing' ? 'a pause was armed before it started' : 'the run was stopped',
+      }, phase);
+      return true;
+    }
 
     /* ---- what this phase runs as ---- */
     const chosen = this.optionsFor(phase);
@@ -1370,7 +1484,11 @@ export class Runner {
           this.persist();
           await this.sleep(Math.max(0, disposition.at.getTime() - this.now().getTime()));
           if (this.abort?.signal.aborted) return { carryOn: false, completed: false };
-          state.status = 'running';
+          // A wait can be hours, which makes it the likeliest place for a pause
+          // to be armed — and writing `running` unconditionally is how one got
+          // thrown away. `state.pause` is the durable record of the request;
+          // the status word is derived from it, never the other way round.
+          state.status = state.pause ? 'pausing' : 'running';
           state.waitUntil = null;
           continue;
         }
@@ -1609,7 +1727,15 @@ export class Runner {
         onHandle: (handle) => { this.handle = handle; },
         env: { ...process.env, PE_OWNER: `autopilot/${state.id}` },
         signal: this.abort?.signal,
-        onPid: (pid) => { this.childPid = pid; },
+        // As in `attempt` and `resumeWithInstruction`: a closeout is a live
+        // session like any other, and one the console could not freeze or stop
+        // because nothing recorded its child.
+        onPid: (pid) => {
+          this.childPid = pid;
+          state.child = { pid, phase, sessionId: record.sessionId ?? '', startedAt: new Date().toISOString() };
+          this.persist();
+          this.emit('run', { state });
+        },
         onEvent: (event) => this.onStream(phase, event),
       });
     } catch (error) {
@@ -1617,6 +1743,7 @@ export class Runner {
     } finally {
       this.childPid = null;
       this.handle = null;
+      state.child = null;
     }
 
     state.spentUsd += outcome.costUsd;

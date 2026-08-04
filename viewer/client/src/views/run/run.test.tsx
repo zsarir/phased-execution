@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { NO_ACTIVITY, activity, fold, toLine } from './console-model';
 import { DEFAULTS, EFFORTS, MODELS, effortAlias, isLive, modelAlias } from './defaults';
 import { LiveConsole } from './console';
+import { displayState } from './phase-table';
 import { phaseActions } from '@shared/phase-model.js';
 
 describe('DEFAULTS', () => {
@@ -122,6 +123,29 @@ describe('LiveConsole', () => {
     expect(screen.queryByText('hmm')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Detail \(2\)/ })).toBeInTheDocument();
     expect(screen.getByText(/1 lines/)).toBeInTheDocument();
+  });
+});
+
+describe('displayState — Boarding is not what a phase being worked on says', () => {
+  // "Boarding" is the departures word for the engine's `ready`, which is read
+  // from handoff files. Retry a phase and the board goes on saying it for as
+  // long as it takes the session to write one — an hour is normal — while the
+  // run has demonstrably started work. The row showed only the stale word.
+  it('shows the live phase as in progress while the run is on it', () => {
+    expect(displayState('ready', { active: true, live: true })).toBe('in-progress');
+    expect(displayState('waiting', { active: true, live: true })).toBe('in-progress');
+  });
+
+  it('never overrules the board on done — that is the board reporting work finished', () => {
+    expect(displayState('done', { active: true, live: true })).toBe('done');
+  });
+
+  it('leaves every other row exactly as the board reported it', () => {
+    expect(displayState('ready', { active: false, live: true })).toBe('ready');
+    // Not live: the run is stopped, paused or belongs to another console, so
+    // there is no fresher fact to prefer and the board is all there is.
+    expect(displayState('ready', { active: true, live: false })).toBe('ready');
+    expect(displayState('blocked', { active: false, live: false })).toBe('blocked');
   });
 });
 

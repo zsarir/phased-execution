@@ -1046,7 +1046,8 @@ export const api = {
   runStart: (slug: string, options?: RunSettings) => post<RunEnvelope>(`/api/run/${q(slug)}/start`, options),
   runPause: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/pause`),
   runResume: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/resume`),
-  runStop: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/stop`),
+  runStop: (slug: string, phase?: number) =>
+    post<RunEnvelope>(`/api/run/${q(slug)}/stop`, phase ? { phase } : undefined),
   runSkip: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/skip`, { phase }),
   runRetry: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/retry`, { phase }),
   runRecheck: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/recheck`, { phase }),
@@ -1056,8 +1057,14 @@ export const api = {
   phaseDiagnosis: (slug: string, phase: number | string) =>
     request<PhaseDiagnosis>(`/api/run/${q(slug)}/diagnosis/${q(String(phase))}`),
   runSettings: (slug: string, patch: RunSettings) => post<RunEnvelope>(`/api/run/${q(slug)}/settings`, patch),
-  runFreeze: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/freeze`),
-  runThaw: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/thaw`),
+  // `phase` is optional on all five per-session controls: omitted means "the
+  // session that is running", which is what they meant before a run could hold
+  // more than one. Naming it makes the server refuse rather than act on
+  // whichever phase is running by the time the request lands.
+  runFreeze: (slug: string, phase?: number) =>
+    post<RunEnvelope>(`/api/run/${q(slug)}/freeze`, phase ? { phase } : undefined),
+  runThaw: (slug: string, phase?: number) =>
+    post<RunEnvelope>(`/api/run/${q(slug)}/thaw`, phase ? { phase } : undefined),
   // Dismissing a stopped run's card, and putting it back. By run id, because
   // the card belongs to the run that raised it — not to whichever run of that
   // plan happens to be newest.
@@ -1065,10 +1072,10 @@ export const api = {
     post<RunEnvelope>(`/api/run/${q(slug)}/resolve`, { runId, ...(note ? { note } : {}) }),
   runUnresolve: (slug: string, runId: string) =>
     post<RunEnvelope>(`/api/run/${q(slug)}/unresolve`, { runId }),
-  runAsk: (slug: string, question: string, key: string) =>
-    post<AskResult>(`/api/run/${q(slug)}/ask`, { question, key }),
-  runSteer: (slug: string, instruction: string, key: string) =>
-    post<AskResult>(`/api/run/${q(slug)}/steer`, { instruction, key }),
+  runAsk: (slug: string, question: string, key: string, phase?: number) =>
+    post<AskResult>(`/api/run/${q(slug)}/ask`, { question, key, ...(phase ? { phase } : {}) }),
+  runSteer: (slug: string, instruction: string, key: string, phase?: number) =>
+    post<AskResult>(`/api/run/${q(slug)}/steer`, { instruction, key, ...(phase ? { phase } : {}) }),
 
   approvals: () => request<Approval[]>('/api/approvals'),
   decide: (id: string, decision: string, reason?: string, remember?: string, rule?: string) =>

@@ -461,6 +461,30 @@ export function neverAutoApproves(command: string): boolean {
   return commandSegments(command).some((segment) => NEVER_AUTO.test(segment));
 }
 
+/** How many words deep to look inside a wrapper. Long enough for any real one. */
+const WRAPPED_WORDS = 40;
+
+/**
+ * Candidate payloads hidden inside a wrapper `stripWrappers` refuses to peel.
+ *
+ * `watch`, `setsid`, `flock` and `find -exec` are deliberately not peelable:
+ * their arguments vary enough that a formal strip would be a guess, and a guess
+ * that answers "safe" is the worst possible answer. But refusing to guess left
+ * the wall unable to see a denied command hidden one word in — `flock /tmp/l
+ * git push` matched no deny rule, because rules match the START of a command.
+ *
+ * So this does the one thing that cannot make the wall weaker: it offers every
+ * suffix of the line as a candidate. A rule matching any of them is a rule that
+ * would have matched the payload had it been written on its own. It can only
+ * ever turn an allow into a deny — never the reverse.
+ */
+export function wrappedPayloads(command: string): string[] {
+  const words = command.trim().split(/\s+/).slice(0, WRAPPED_WORDS);
+  const out: string[] = [];
+  for (let i = 1; i < words.length; i++) out.push(words.slice(i).join(' '));
+  return out;
+}
+
 /**
  * What to do with one tool call, before any human is involved.
  *
@@ -472,6 +496,7 @@ export function neverAutoApproves(command: string): boolean {
  */
 export function classifyTool(
   toolName: string, input: unknown, policy: AutopilotPolicy,
+  profile: PermissionProfile = 'guarded',
 ): 'deny' | 'ask' | 'allow' {
   const subjects: unknown[] = [input];
   const command = toolName === 'Bash' ? (input as { command?: unknown } | null)?.command : null;
@@ -489,9 +514,58 @@ export function classifyTool(
   if (hits(policy.always ?? [])) return 'allow';
   if (hits(policy.ask)) return 'ask';
   // A command whose real payload is hidden inside a wrapper gets a person,
-  // never a default yes.
-  if (typeof command === 'string' && neverAutoApproves(command)) return 'ask';
+  // never a default yes — but only where a person is what this run asked for.
+  //
+  // `profilePolicy` empties the ask list for trusted and bypass, and this
+  // fallback sat below it answering 'ask' regardless: on a bypass run, where
+  // nobody is watching by definition, the card went up, waited out the hook's
+  // full hour, and timed out into a deny. The CLI renders that deny with its
+  // own canned wording — "The user doesn't want to proceed with this tool use"
+  // — so a standing configuration read as a person refusing the work, and the
+  // run parked. A profile that says "stop asking me" has to reach here too.
+  if (typeof command === 'string' && neverAutoApproves(command)) {
+    if (profile === 'guarded') return 'ask';
+    // Letting the wrapper run is a decision about who is watching, never about
+    // the wall — so before the benefit of the doubt is given, the deny list gets
+    // a second look at what the wrapper is carrying. See `wrappedPayloads`.
+    if (hitsHidden(command, toolName, policy.deny)) return 'deny';
+  }
   return 'allow';
+}
+
+/** Whether any rule matches something a wrapper is carrying. See `wrappedPayloads`. */
+function hitsHidden(command: string, toolName: string, rules: string[]): boolean {
+  const payloads = wrappedPayloads(command);
+  return rules.some((rule) => payloads.some((c) => ruleMatches(rule, toolName, { command: c })));
+}
+
+/**
+ * The deny rule that stopped a call, for saying so out loud.
+ *
+ * `classifyTool` answers what to do; this answers which line of policy decided
+ * it, which is what turns "not approved" into something an operator can go and
+ * edit. Returns null when nothing in the deny list matches.
+ */
+export function matchedDenyRule(
+  toolName: string, input: unknown, policy: AutopilotPolicy,
+): string | null {
+  const subjects: unknown[] = [input];
+  const command = toolName === 'Bash' ? (input as { command?: unknown } | null)?.command : null;
+  if (typeof command === 'string') {
+    for (const segment of commandSegments(command)) subjects.push({ command: segment });
+  }
+  const direct = policy.deny.find(
+    (rule) => subjects.some((subject) => ruleMatches(rule, toolName, subject)),
+  );
+  if (direct) return direct;
+  // A deny reached by looking inside a wrapper still has to be able to name
+  // itself, or the reply says "blocked by the deny list" and cannot say which
+  // line — the one thing the operator will ask next.
+  if (typeof command !== 'string') return null;
+  const payloads = wrappedPayloads(command);
+  return policy.deny.find(
+    (rule) => payloads.some((c) => ruleMatches(rule, toolName, { command: c })),
+  ) ?? null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -953,6 +1027,21 @@ export class Approvals {
     const presented = Buffer.from(header.replace(/^Bearer\s+/i, ''));
     if (presented.length !== this.token.length) return false;
     return timingSafeEqual(presented, this.token);
+  }
+
+  /**
+   * WHICH run a hook call belongs to, rather than merely whether it is genuine.
+   *
+   * One armed run today, so this is `verify` carrying the id instead of a
+   * boolean — and it is a separate method precisely because that will stop
+   * being true. Everything downstream currently answers a hook against "the
+   * current run", which is the assumption a runner pool breaks: two live runs,
+   * one hook endpoint, and a call classified under the wrong run's profile.
+   * Callers that thread this now need no second change when the lookup becomes
+   * a map.
+   */
+  runIdFor(header: string | undefined): string | null {
+    return this.verify(header) ? this.runId : null;
   }
 
   armed(): boolean { return this.token !== null; }

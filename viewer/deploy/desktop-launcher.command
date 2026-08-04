@@ -4,7 +4,9 @@
 # Starts the local console for phased-execution plans and opens it in your
 # browser. This window IS the server: closing it (or Ctrl-C) stops it.
 #
-# Three knobs, edit below:
+# Five knobs, edit below. The four switches are four separate decisions on
+# purpose — each opens a different door, and a wider one is never implied by a
+# narrower one:
 #   ROOT   the repository to read (any directory with docs/plans; you can also
 #          switch source directories inside the app)
 #   WRITES --allow-writes lets the app scaffold plans/handoffs, record QA and
@@ -17,10 +19,24 @@
 #          (git push, terraform apply, sudo, publishing — enforced inside Claude
 #          Code itself) and per-run dollar budgets you set in the app. Blank it
 #          out to watch runs without being able to start one.
+#   TERM   --allow-terminal opens the Terminal page: a real shell in the browser,
+#          running as you. Unlike a run, nothing supervises it — the policy is
+#          whatever the person typing knows. Blank it out to keep the page off.
+#   AGENT  --allow-agent opens the Agent page: interactive `claude` sessions in
+#          that terminal, watched by the person in front of them rather than by
+#          the console's policy. Narrower than TERM (the console builds the argv
+#          from allowlisted fields, and the CLI still asks before it acts) and
+#          wider than RUNS (no deny-list settings file, no approval hook in front
+#          of it) — so it is its own switch, not a reading of either. Without it
+#          the app answers "Agent sessions are disabled".
 
 ROOT="$HOME/work/hub"
 WRITES="--allow-writes"
 RUNS="--allow-run"
+# Not `TERM`: that name already belongs to the terminal type every program on
+# this machine reads, and overwriting it here breaks the console's own shell.
+TERM_FLAG="--allow-terminal"
+AGENT="--allow-agent"
 PORT=4123
 
 set -uo pipefail
@@ -68,8 +84,13 @@ if STATE=$(curl -s -m 2 "http://127.0.0.1:$PORT/api/state"); then
   want() { [ -n "$1" ] && echo true || echo false; }
 
   MISMATCH=""
-  [ "$(field allowRun)"    != "$(want "$RUNS")" ]   && MISMATCH="$MISMATCH  runs:   running=$(field allowRun) wanted=$(want "$RUNS")\n"
-  [ "$(field allowWrites)" != "$(want "$WRITES")" ] && MISMATCH="$MISMATCH  writes: running=$(field allowWrites) wanted=$(want "$WRITES")\n"
+  [ "$(field allowRun)"      != "$(want "$RUNS")" ]       && MISMATCH="$MISMATCH  runs:     running=$(field allowRun) wanted=$(want "$RUNS")\n"
+  [ "$(field allowWrites)"   != "$(want "$WRITES")" ]     && MISMATCH="$MISMATCH  writes:   running=$(field allowWrites) wanted=$(want "$WRITES")\n"
+  # Checked for the same reason as the other two: a console started without
+  # these looks identical until you open Terminal or Agent and are told the
+  # page is disabled — which reads as a broken app rather than as a flag.
+  [ "$(field allowTerminal)" != "$(want "$TERM_FLAG")" ]  && MISMATCH="$MISMATCH  terminal: running=$(field allowTerminal) wanted=$(want "$TERM_FLAG")\n"
+  [ "$(field allowAgent)"    != "$(want "$AGENT")" ]      && MISMATCH="$MISMATCH  agent:    running=$(field allowAgent) wanted=$(want "$AGENT")\n"
 
   if [ -z "$MISMATCH" ]; then
     echo "Phase Console is already running on port $PORT — opening it."
@@ -138,6 +159,8 @@ echo "  source   ${ROOT:-choose one in the browser}"
 echo "  viewer   $VIEWER"
 echo "  writes   ${WRITES:-off (read-only)}"
 echo "  runs     ${RUNS:-off} ${RUNS:+— this console may spawn Claude sessions that edit $ROOT}"
+echo "  terminal ${TERM_FLAG:-off} ${TERM_FLAG:+— the Terminal page opens a real shell as you}"
+echo "  agent    ${AGENT:-off} ${AGENT:+— the Agent page runs interactive claude sessions}"
 echo
 echo "Close this window (or press Ctrl-C) to stop the server."
 echo
@@ -155,7 +178,7 @@ echo
 
 # ---- run in the foreground so this window owns the server ------------------
 if [ -n "$ROOT" ]; then
-  exec node "$VIEWER/server/index.ts" --root "$ROOT" --port "$PORT" $WRITES $RUNS
+  exec node "$VIEWER/server/index.ts" --root "$ROOT" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT
 else
-  exec node "$VIEWER/server/index.ts" --port "$PORT" $WRITES $RUNS
+  exec node "$VIEWER/server/index.ts" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT
 fi

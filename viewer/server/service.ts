@@ -61,7 +61,7 @@ import {
   isVerdict, qaKey, type QaFacts, type QaRequest,
 } from './qa-session.ts';
 import {
-  Approvals, classifyTool, loadPolicy, loadPolicyFor, policyExtras, addPolicyRules,
+  Approvals, classifyTool, matchedDenyRule, loadPolicy, loadPolicyFor, policyExtras, addPolicyRules,
   editPolicy, planPolicyPath, notifyOutOfBand, profilePolicy, suggestedRule,
   parseRule, inertRules, HOOK_TOOLS, WRAPPERS_NOT_STRIPPED,
   PERMISSION_PROFILES, PROFILE_LABELS,
@@ -151,6 +151,18 @@ export type LockRelease = {
   owner: string | null;
   detail?: string;
 };
+
+/**
+ * What became of a run control that can refuse for a reason worth showing.
+ *
+ * `RunState | null` could say "it did not happen" and never why, so the route
+ * had a single sentence for every refusal — "nothing is running for this plan"
+ * — printed just as readily when something WAS running and the operator had
+ * simply aimed at a phase that finished while their tap was in flight.
+ */
+export type ControlResult =
+  | { ok: true; run: RunState | null }
+  | { ok: false; reason: string };
 
 /** A forward action the console can offer on a phase that is not done. */
 export type RecoveryAction = {
@@ -1960,9 +1972,14 @@ export class Service {
     return state;
   }
 
-  async stopRun(slug: string): Promise<RunState | null> {
+  async stopRun(slug: string, phase?: number | null): Promise<RunState | null> {
     const live = this.runner.current();
     if (live?.slug === slug && this.runner.busy()) {
+      // A Stop aimed at a phase that is no longer the one running would end a
+      // session the operator never looked at. Refusing is the only safe answer
+      // — and a Stop is the most expensive control here to get wrong.
+      const mismatch = this.runner.phaseMismatch(phase);
+      if (mismatch) throw new Error(mismatch);
       await this.runner.stop();
       return this.runner.current();
     }
@@ -1988,6 +2005,12 @@ export class Service {
    */
   pauseRun(slug: string, by = 'console'): RunState | null {
     const live = this.runner.current();
+    // A recovery is driving one session with no phase loop behind it, so there
+    // is no boundary to pause at. Falling through to the checkpoint edit here
+    // would write `pausing` to disk for a run that will never read it — the
+    // same button-that-does-nothing this method was rewritten to eliminate,
+    // arrived at from the other direction.
+    if (live?.slug === slug && this.runner.recoveringNow()) return null;
     if (live?.slug === slug && this.runner.pause(by)) return this.runner.current();
     return this.editStoredRun(slug, (state) => {
       if (!IN_FLIGHT.includes(state.status)) return;
@@ -2016,20 +2039,26 @@ export class Service {
    * all — and the honest answer is to say so rather than to write the question
    * somewhere it will never be read.
    */
-  askRun(slug: string, question: string, by = 'console', key?: string): AskResult {
+  askRun(slug: string, question: string, by = 'console', key?: string, phase?: number | null): AskResult {
     const live = this.runner.current();
     if (!live || live.slug !== slug) {
       return { ok: false, reason: `nothing is running for ${slug} in this console` };
     }
+    const mismatch = this.runner.phaseMismatch(phase);
+    if (mismatch) return { ok: false, reason: mismatch };
     return this.runner.ask(question, by, key);
   }
 
   /** The same channel, said as an instruction rather than a question. */
-  steerRun(slug: string, instruction: string, by = 'console', key?: string): AskResult {
+  steerRun(
+    slug: string, instruction: string, by = 'console', key?: string, phase?: number | null,
+  ): AskResult {
     const live = this.runner.current();
     if (!live || live.slug !== slug) {
       return { ok: false, reason: `nothing is running for ${slug} in this console` };
     }
+    const mismatch = this.runner.phaseMismatch(phase);
+    if (mismatch) return { ok: false, reason: mismatch };
     return this.runner.steer(instruction, by, key);
   }
 
@@ -2041,16 +2070,26 @@ export class Service {
    * another console or to nothing, and signalling a pid we do not own is not a
    * fallback, it is a different and much worse action.
    */
-  freezeRun(slug: string, by = 'console'): RunState | null {
+  freezeRun(slug: string, by = 'console', phase?: number | null): ControlResult {
     const live = this.runner.current();
-    if (live?.slug !== slug || !this.runner.freeze(by)) return live?.slug === slug ? live : null;
-    return this.runner.current();
+    if (live?.slug !== slug) return { ok: false, reason: `nothing is running for ${slug} in this console` };
+    const mismatch = this.runner.phaseMismatch(phase);
+    if (mismatch) return { ok: false, reason: mismatch };
+    if (!this.runner.freeze(by)) {
+      return { ok: false, reason: `nothing is running for ${slug} in this console that could be frozen` };
+    }
+    return { ok: true, run: this.runner.current() };
   }
 
-  thawRun(slug: string): RunState | null {
+  thawRun(slug: string, phase?: number | null): ControlResult {
     const live = this.runner.current();
-    if (live?.slug !== slug || !this.runner.thaw()) return live?.slug === slug ? live : null;
-    return this.runner.current();
+    if (live?.slug !== slug) return { ok: false, reason: `nothing is running for ${slug} in this console` };
+    const mismatch = this.runner.phaseMismatch(phase);
+    if (mismatch) return { ok: false, reason: mismatch };
+    if (!this.runner.thaw()) {
+      return { ok: false, reason: `nothing is frozen for ${slug} in this console` };
+    }
+    return { ok: true, run: this.runner.current() };
   }
 
   /** Change model, autonomy or budgets on a run in flight; applies next phase. */
@@ -2705,8 +2744,19 @@ export class Service {
    * model so a denial reads as a decision it can work around rather than an
    * unexplained failure.
    */
-  async decideToolUse(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async decideToolUse(
+    body: Record<string, unknown>, runId?: string | null,
+  ): Promise<Record<string, unknown>> {
     const run = this.runner.current();
+    // The token says which run this call came from. With one runner that is
+    // always the live one — so today this only ever asserts — but reading "the
+    // current run" is exactly what a runner pool breaks, and a hook answered
+    // under another run's profile is a bug that appears only under concurrency
+    // and is close to unreadable when it does. The id is threaded now; the
+    // lookup that uses it lands with the pool.
+    if (runId && run && run.id !== runId) {
+      log.warn('hook.run-mismatch', { runId, live: run.id, note: 'answered against the live run' });
+    }
     const toolName = String(body.tool_name ?? 'unknown');
     const input = body.tool_input;
     const phase = run?.activePhase ?? null;
@@ -2725,8 +2775,17 @@ export class Service {
     // here without troubling anyone. Only what the policy marks `ask` becomes a
     // card — a queue that fills up with `find docs -type f` is a queue nobody
     // reads, and one nobody reads trains the answer "yes".
-    const verdict = classifyTool(toolName, input, policy);
+    const verdict = classifyTool(toolName, input, policy, profile);
     if (verdict !== 'ask') {
+      // A veto is a decision this console made, and it was the one decision it
+      // never wrote down: the deny happened inside a hook reply and left no
+      // trace, so a phase that quietly worked around a blocked command was
+      // unexplainable afterwards. Named rule included — "which line stopped
+      // this" is the only question an operator asks next.
+      const rule = verdict === 'deny' ? matchedDenyRule(toolName, input, policy) : null;
+      if (verdict === 'deny') {
+        this.runner.note('phase.tool-denied', { tool: toolName, rule }, phase ?? undefined);
+      }
       return {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
@@ -2735,7 +2794,14 @@ export class Service {
             ? (profile === 'guarded'
               ? 'not on the autopilot ask list'
               : `this run is on the ${profile} profile — only the deny list stops it`)
-            : 'on the autopilot deny list — a person must run this themselves',
+            // Worded against what the model does with it. The old text was
+            // close enough to the CLI's own rejection wording that a session
+            // read standing policy as a person refusing its work, apologised,
+            // and tried a way around it. This says whose decision it is, that
+            // it will not change on a retry, and what to do instead.
+            : `blocked by the console's deny list${rule ? ` (rule: ${rule})` : ''}. `
+              + 'This is standing policy, not a person rejecting your work — do not retry the '
+              + 'command or look for a way around it; note it in your handoff and carry on.',
         },
       };
     }

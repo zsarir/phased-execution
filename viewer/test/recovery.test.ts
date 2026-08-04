@@ -262,6 +262,115 @@ test('resume carries the operator\'s words to the session that stalled', async (
   } finally { h.cleanup(); }
 });
 
+test('a resumed phase reads as running, with a child, while the session is up', async () => {
+  // The "nothing happens when I resume" reports. `resumeWithInstruction` left
+  // the phase record on whatever terminal status it had halted with and never
+  // set `state.child`, so for the whole length of the session the run showed a
+  // finished phase with no live child under it: no header clock, no Freeze, no
+  // Stop, and a dashboard that counted the run as over while it was working.
+  const h = harness();
+  try {
+    const log: SpawnLog = [];
+    const seen: { status: string; childPhase: number | null; startedAt?: string }[] = [];
+    const events: string[] = [];
+    const runner = new Runner({
+      scriptsDir: h.scriptsDir,
+      verify: async () => GREEN,
+      verificationText: () => 'run those commands.',
+      approvals: new Approvals(),
+      origin: 'http://127.0.0.1:4123',
+      onEvent: (event) => events.push(event),
+      spawn: async (request: SpawnRequest) => {
+        log.push({ prompt: request.prompt, resume: request.resume, maxTurns: request.maxTurns });
+        request.onPid?.(process.pid);
+        // Read from INSIDE the session — the only moment the claim is about.
+        if (request.resume) {
+          const live = runner.current()!;
+          seen.push({
+            status: live.phases['1'].status,
+            childPhase: live.child?.phase ?? null,
+            startedAt: live.phases['1'].startedAt,
+          });
+          writeFileSync(h.handoff, 'status: complete');
+        }
+        return {
+          signal: { subtype: 'success' as const, code: 0, text: 'done' },
+          sessionId: 'sid-1', costUsd: 0, turns: 1, resultText: 'ok', durationMs: 1, argv: [],
+        };
+      },
+    });
+
+    const started = await runner.start({ slug: 'demo', root: h.root, autonomy: 'keep-going' });
+    await runner.wait();
+
+    const before = events.length;
+    await runner.recover({
+      slug: 'demo', root: h.root, runId: started.id, phase: 1, mode: 'resume',
+      instruction: 'finish it', by: 'operator',
+    });
+    // Emitted at the moment the operator acted, not when the work finished: the
+    // run below can take minutes, and the console showed the halt for all of it.
+    assert.ok(events.slice(before).includes('run:run'), 'recover says so before it starts working');
+
+    await runner.wait();
+
+    assert.equal(seen.length, 1, 'the resumed session ran');
+    assert.equal(seen[0].status, 'running', 'the phase says it is running while it is');
+    assert.equal(seen[0].childPhase, 1, 'and the live child is on record, so Freeze and Stop can reach it');
+    assert.ok(seen[0].startedAt, 'the header clock has something to count from');
+    // And it is cleaned up: a child left on the record is a Stop button aimed
+    // at a pid that has gone.
+    assert.equal(runner.current()!.child, null, 'the child is cleared when the session ends');
+  } finally { h.cleanup(); }
+});
+
+test('a pause is refused during a recovery, which has no boundary to stop at', async () => {
+  // Arming it did light the button and change the badge, and `runRecovery` has
+  // no loop that ever reads `pausing` — the "button that answers yes and does
+  // nothing" this console fixed everywhere else, arrived at from a new
+  // direction. Freeze stops a recovery; Stop ends it; Pause cannot.
+  const h = harness();
+  try {
+    let inSession: () => void = () => {};
+    const entered = new Promise<void>((resolve) => { inSession = resolve; });
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+
+    const runner = new Runner({
+      scriptsDir: h.scriptsDir,
+      verify: async () => GREEN,
+      verificationText: () => 'run those commands.',
+      approvals: new Approvals(),
+      origin: 'http://127.0.0.1:4123',
+      spawn: async (request: SpawnRequest) => {
+        if (request.resume) { inSession(); await held; writeFileSync(h.handoff, 'status: complete'); }
+        return {
+          signal: { subtype: 'success' as const, code: 0, text: 'done' },
+          sessionId: 'sid-1', costUsd: 0, turns: 1, resultText: 'ok', durationMs: 1, argv: [],
+        };
+      },
+    });
+
+    const started = await runner.start({ slug: 'demo', root: h.root, autonomy: 'keep-going' });
+    await runner.wait();
+
+    void runner.recover({
+      slug: 'demo', root: h.root, runId: started.id, phase: 1, mode: 'resume',
+      instruction: 'finish it', by: 'operator',
+    });
+    await entered;
+
+    assert.equal(runner.recoveringNow(), true, 'this is a recovery, not the phase loop');
+    assert.equal(runner.pause('tester'), false, 'and it says no rather than arming a flag nothing reads');
+    assert.equal(runner.current()!.status, 'running', 'the badge does not change either');
+    assert.ok(!runner.current()!.pause, 'nothing was armed');
+
+    release();
+    await runner.wait();
+    assert.equal(runner.recoveringNow(), false);
+  } finally { h.cleanup(); }
+});
+
 test('recovery refuses a phase no run ever reached', async () => {
   const h = harness();
   try {

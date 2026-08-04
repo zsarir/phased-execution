@@ -35,6 +35,28 @@ import {
 } from '@shared/phase-model.js';
 import { cn } from '@/lib/cn';
 
+/**
+ * The state to paint in the Status cell, which is not always the board's.
+ *
+ * The board reads handoff files, so a phase this run is working on right now
+ * still reads `ready` — "Boarding" — until its handoff lands, which can be an
+ * hour later. Two vocabularies for two different facts, and the row showed only
+ * the stale one: retry a phase and the console went on calling it Boarding
+ * while a session was demonstrably running in it, which is the report this
+ * exists for.
+ *
+ * So where this run is live and on this phase, the run's fact is the fresher
+ * one and wins. Never against `done` — that is the board saying the work is
+ * finished, and the run record has never been allowed to overrule it (see this
+ * file's header). Exported because it is a rule about whose word counts, and a
+ * rule like that should be checkable without rendering a table.
+ */
+export function displayState(
+  boardState: string, { active, live }: { active: boolean; live: boolean },
+): string {
+  return active && live && boardState !== 'done' ? 'in-progress' : boardState;
+}
+
 /** A plan phase joined to whatever this run recorded against it. */
 interface MergedPhase extends PhaseView {
   record?: PhaseRecord;
@@ -221,6 +243,8 @@ function PhaseRows({
   const recovering = liveRecovery(recovery?.sessions, { slug, phase: p.phase });
   const reviewing = liveQa(recovery?.sessions, { slug, phase: p.phase });
 
+  const showing = displayState(p.state, { active: isActive, live });
+
   return (
     <>
       <TR className={cn(isActive && 'bg-progress/8', p.state === 'done' && 'text-ink-faint')}>
@@ -244,7 +268,14 @@ function PhaseRows({
         </TD>
         <TD>
           <div className="flex flex-wrap items-center gap-1">
-            <StateChip state={p.state} board />
+            <StateChip
+              state={showing}
+              board
+              title={showing !== p.state
+                ? `This run is working on phase ${p.phase} now. The board still reads `
+                  + `"${p.state}" and catches up when the phase's handoff lands.`
+                : undefined}
+            />
             <QaVerdict qa={p.qa} />
           </div>
         </TD>

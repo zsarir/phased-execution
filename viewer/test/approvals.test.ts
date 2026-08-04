@@ -485,6 +485,52 @@ test('what a wrapper hides never auto-approves', async () => {
   assert.equal(neverAutoApproves('git status'), false);
 });
 
+test('a wrapper asks under guarded and runs under the profiles that said stop asking', async () => {
+  // The "The user doesn't want to proceed with this tool use" reports, at their
+  // cause. `profilePolicy` empties the ask list for trusted and bypass, and
+  // this fallback sat below it answering 'ask' in every profile — so a bypass
+  // run, where by definition nobody is watching, raised a card, waited out the
+  // hook's full hour, and timed out into a deny. The CLI renders that deny with
+  // its own canned human-rejection wording, so standing configuration read as a
+  // person refusing the work, and the run parked.
+  const { profilePolicy } = await import('../server/runner/approvals.ts');
+  const base = loadPolicy('/nowhere');
+  const wrapped = 'flock /tmp/l ./job.sh';
+
+  assert.equal(
+    classifyTool('Bash', { command: wrapped }, profilePolicy(base, 'guarded'), 'guarded'), 'ask',
+    'guarded still gets a person for a command whose real payload is hidden',
+  );
+  for (const profile of ['trusted', 'bypass'] as const) {
+    assert.equal(
+      classifyTool('Bash', { command: wrapped }, profilePolicy(base, profile), profile), 'allow',
+      `${profile} asked this console to stop asking, and that has to reach here too`,
+    );
+    // The wall is not a preference, and no profile moves it — a wrapper around
+    // something on the deny list is still denied.
+    assert.equal(
+      classifyTool('Bash', { command: 'flock /tmp/l git push origin main' },
+        profilePolicy(base, profile), profile), 'deny',
+      `${profile} must not reach a remote by hiding it inside a wrapper`,
+    );
+  }
+
+  // Unstated means guarded: every caller that predates the profile argument
+  // keeps the behaviour it had, which is the conservative one.
+  assert.equal(classifyTool('Bash', { command: wrapped }, base), 'ask');
+});
+
+test('a denial names the rule that made it, so it can be argued with', async () => {
+  const { matchedDenyRule } = await import('../server/runner/approvals.ts');
+  const base = loadPolicy('/nowhere');
+
+  const rule = matchedDenyRule('Bash', { command: 'git push origin main' }, base);
+  assert.ok(rule, 'a denied command must be able to say which line stopped it');
+  assert.match(String(rule), /push/, 'and the rule it names is the one about pushing');
+  assert.equal(matchedDenyRule('Bash', { command: 'git status' }, base), null,
+    'nothing to name when nothing denied it');
+});
+
 /* ------------------------------------------------------------------ *
  * Profiles
  * ------------------------------------------------------------------ */

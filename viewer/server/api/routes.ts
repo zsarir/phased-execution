@@ -150,6 +150,19 @@ function numberOrNull(value: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/**
+ * The phase a run control was aimed at, when it named one.
+ *
+ * Absent means "whatever is running", which is what every control meant before
+ * they could be aimed — so an omitted or unusable value must read as null and
+ * never as phase 0. The service compares it against the live child and refuses
+ * by name rather than acting on whichever phase happens to be running now.
+ */
+function targetPhase(body: Record<string, unknown>): number | null {
+  const n = Number(body.phase);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 /** A phase list from a browser: whole positive integers only, deduped, capped. */
 function phaseList(value: unknown): number[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -232,7 +245,13 @@ export async function handleApi(
       json(res, 401, { error: 'bad or expired run token' });
       return true;
     }
-    json(res, 200, await service.decideToolUse(await readBody(req)));
+    // Authentication is unchanged — `verify` above still decides that. This
+    // asks the second question the same token can answer: WHICH run sent it, so
+    // the decision is made under that run's profile rather than under whichever
+    // run happens to be current. One runner makes those the same; a pool does
+    // not, and threading the id now is what keeps that change to one place.
+    const hookRunId = service.approvals.runIdFor(req.headers.authorization);
+    json(res, 200, await service.decideToolUse(await readBody(req), hookRunId));
     return true;
   }
 
@@ -865,8 +884,10 @@ export async function handleApi(
             const by = typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console';
             const key = idempotencyKey(req, body);
             const sent = verb === 'ask'
-              ? service.askRun(slug, String(body.question ?? ''), by, key)
-              : service.steerRun(slug, String(body.instruction ?? body.question ?? ''), by, key);
+              ? service.askRun(slug, String(body.question ?? ''), by, key, targetPhase(body))
+              : service.steerRun(
+                slug, String(body.instruction ?? body.question ?? ''), by, key, targetPhase(body),
+              );
             json(res, sent.ok ? 200 : 409, sent);
             return true;
           }
@@ -876,16 +897,37 @@ export async function handleApi(
           // on-disk fallback: a null run here means this console is not the one
           // driving, which the client reports rather than papering over.
           case 'freeze': {
-            const run = service.freezeRun(slug, typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console');
-            json(res, run ? 200 : 409, run ? { run } : { error: `nothing is running for ${slug} in this console` });
+            const done = service.freezeRun(
+              slug,
+              typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
+              targetPhase(body),
+            );
+            // `?.ok === false` rather than `!done.ok`: a refusal now carries the
+            // reason the operator needs, and the optional chain keeps a service
+            // that answers nothing at all reading as "it happened" exactly as
+            // it did before this returned a result object.
+            json(res, done?.ok === false ? 409 : 200,
+              done?.ok === false ? { error: done.reason } : { run: done?.run });
             return true;
           }
           case 'thaw': {
-            const run = service.thawRun(slug);
-            json(res, run ? 200 : 409, run ? { run } : { error: `nothing is running for ${slug} in this console` });
+            const done = service.thawRun(slug, targetPhase(body));
+            json(res, done?.ok === false ? 409 : 200,
+              done?.ok === false ? { error: done.reason } : { run: done?.run });
             return true;
           }
-          case 'stop': json(res, 200, { run: await service.stopRun(slug) }); return true;
+          case 'stop': {
+            // The one control that cannot be taken back, so a phase named in
+            // the body is checked before anything is signalled — see
+            // `Service.stopRun`. Same 409-with-a-reason shape the recovery
+            // verbs use for a refusal.
+            try {
+              json(res, 200, { run: await service.stopRun(slug, targetPhase(body)) });
+            } catch (error) {
+              json(res, 409, { error: (error as Error)?.message ?? 'the run could not be stopped' });
+            }
+            return true;
+          }
           // Dismissing a stopped run's card, and taking that back. Addressed by
           // run id rather than "this plan's run": the card belongs to the run
           // that raised it, which on a plan that has run since is not the

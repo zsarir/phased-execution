@@ -45,6 +45,8 @@ type Repo = {
   setGate: (phase: number, text: string) => void;
   setLockRefused: (yes: boolean) => void;
   setLintFail: (yes: boolean) => void;
+  /** Make the board read slow, so a control can be pressed while it is in flight. */
+  setSlowBoard: (yes: boolean) => void;
   cleanup: () => void;
 };
 
@@ -68,6 +70,10 @@ slug="$1"; shift
 mode="\${1:-}"; arg="\${2:-}"
 case "$mode" in
   --memory-block)
+    # The real board is a subprocess taking a noticeable moment. Stretching it
+    # on demand is what makes the gap between "the loop checked for a pause" and
+    # "the loop started a phase" long enough to press a button inside.
+    [ -f "$S/slow-board" ] && sleep 1
     d=""; r=""; w=""; found=0
     for p in ${PHASES.join(' ')}; do
       if grep -qx "$p" "$S/done" 2>/dev/null; then d="$d$p,"
@@ -115,6 +121,7 @@ echo "VALIDATE OK"
     setGate: (phase, text) => writeFileSync(join(state, `gate-${phase}`), `${text}\n`),
     setLockRefused: (yes) => yes ? writeFileSync(join(state, 'lock-refused'), '') : rmSync(join(state, 'lock-refused'), { force: true }),
     setLintFail: (yes) => yes ? writeFileSync(join(state, 'lint-fail'), '') : rmSync(join(state, 'lint-fail'), { force: true }),
+    setSlowBoard: (yes) => yes ? writeFileSync(join(state, 'slow-board'), '') : rmSync(join(state, 'slow-board'), { force: true }),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -916,6 +923,58 @@ test('a cancelled pause lets the run carry on', async () => {
   r.cleanup();
 });
 
+test('a pause armed while the board is being read starts no phase at all', async () => {
+  // The reported defect, reproduced at its actual cause. `drive` read the pause
+  // flag once at the top of the loop and then awaited `board()` — a
+  // `phase-graph.sh` subprocess — before spawning. A Pause pressed inside that
+  // gap was set a few hundred milliseconds after the only line that read it, so
+  // the next phase started anyway and the operator watched the thing they had
+  // just stopped begin new work.
+  const r = repo();
+  const seen: number[] = [];
+  r.setSlowBoard(true);
+  const { instance } = runner(r, workingSession(r, seen));
+
+  // `start` returns as soon as the loop is driving; the first board read is
+  // still in flight, which is exactly the window this is about.
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.deepEqual(seen, [], 'the board read has not finished, so nothing has started yet');
+
+  assert.equal(instance.pause('tester'), true);
+  await instance.wait();
+
+  assert.deepEqual(seen, [], 'no phase was spawned after the pause was armed');
+  assert.equal(instance.current()!.status, 'paused');
+  assert.equal(instance.current()!.pause, null, 'a pause that has arrived is no longer pending');
+  r.cleanup();
+});
+
+test('thawing a frozen session does not take back a pause that was already armed', async () => {
+  // Pause, then Freeze, then Continue. `thaw` wrote `running` unconditionally,
+  // which silently discarded a request the operator had already made and never
+  // took back — Cancel pause is the control for that, and they did not press it.
+  const r = repo();
+  let pid = 0;
+  const held = realChildSession(r, (p) => { pid = p; });
+  const { instance } = runner(r, held.spawn);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+
+  assert.equal(instance.pause('tester'), true);
+  assert.equal(instance.freeze('tester'), true, 'freezing a run that is already pausing still works');
+  assert.equal(instance.current()!.pause?.by, 'tester', 'the pause request outlives the freeze');
+
+  assert.equal(instance.thaw(), true);
+  assert.equal(instance.current()!.status, 'pausing', 'still pausing — thaw is not Cancel pause');
+  assert.notEqual(procState(pid), 'T', 'and the child is scheduled again');
+
+  held.release();
+  await instance.wait();
+  assert.equal(instance.current()!.status, 'paused');
+  r.cleanup();
+});
+
 test('pausing a run nothing is driving reports that it did nothing', async () => {
   const r = repo();
   const { instance } = runner(r, workingSession(r));
@@ -1234,6 +1293,32 @@ test('a freeze held too long checkpoints, and Continue resumes that session', as
 
   assert.equal(resumed[0], 'session-to-resume-0001', 'the checkpointed session was picked up');
   assert.equal(resumed[1], undefined, 'and offered exactly once — a reused id is refused by the CLI');
+  r.cleanup();
+});
+
+test('retry and skip say so the moment they act, not at the next thing that happens', async () => {
+  // Both edited the run record and then emitted only `run:journal`, which is
+  // marked stream-only and invalidates no query. The row went on showing the
+  // old status — a retried phase still read `failed`, under a halt banner that
+  // had already been cleared — until something unrelated happened to emit. The
+  // only way to see the truth was to reload the page.
+  const r = repo();
+  const { instance, events } = runner(r, workingSession(r));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const from = events.length;
+  instance.retry(1);
+  const afterRetry = events.slice(from).map((e) => e.event);
+  assert.ok(afterRetry.includes('run:run'), `retry must emit run:run, got ${afterRetry.join(', ')}`);
+  assert.equal(instance.current()!.phases['1'].status, 'pending', 'and the state it emitted is the new one');
+
+  const beforeSkip = events.length;
+  instance.skip(2);
+  assert.ok(
+    events.slice(beforeSkip).map((e) => e.event).includes('run:run'),
+    'skip must emit run:run too',
+  );
   r.cleanup();
 });
 
