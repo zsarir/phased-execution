@@ -57,6 +57,18 @@ export const keys = {
   runs: () => ['runs'] as const,
   run: (slug: string) => ['run', slug] as const,
   /**
+   * Admission, and it is deliberately NOT under `['run', slug]`.
+   *
+   * Both answer questions about *other* plans: what is holding the scope this
+   * phase wants, and what would collide if it started now. `run:queue` — the one
+   * event that moves them — is not slug-scoped precisely because a grant released
+   * on plan A is what unblocks plan B, so these have to be reachable without
+   * knowing whose release it was. `['scopes']` as a bare prefix invalidates every
+   * plan's answer at once, which is what a release actually changes.
+   */
+  queue: () => ['queue'] as const,
+  scopes: (slug: string) => ['scopes', slug] as const,
+  /**
    * Deliberately NOT under `['run', slug]`.
    *
    * Everything else about a plan hangs off its prefix so one event refreshes the
@@ -172,8 +184,10 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
      running is a change to a run; `state` because the header's "2 of 3
      running, 1 queued" is read from `/api/state`. Deliberately NOT
      slug-scoped: a grant released on one plan is precisely what unblocks
-     another, and the plan that needs to hear about it is the other one. */
-  'run:queue': { invalidate: [keys.runs(), keys.state()] },
+     another, and the plan that needs to hear about it is the other one —
+     which is also why `['scopes']` is invalidated as a bare prefix rather
+     than for the slug the event happens to name. */
+  'run:queue': { invalidate: [keys.runs(), keys.state(), keys.queue(), ['scopes']] },
 
   /* ---- the firehose ----
      These two arrive many times a second while a phase is talking. The run view
@@ -461,6 +475,39 @@ export function useRuns(enabled = true) {
     queryFn: api.runs,
     enabled,
     placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * What holds a scope, and what is waiting behind it.
+ *
+ * `keepPreviousData` because the answer is a live thing that moves while it is
+ * being read: without it the queue card blanks on every admission, which is the
+ * exact moment somebody is looking at it.
+ */
+export function useQueue(enabled = true) {
+  return useQuery({
+    queryKey: keys.queue(),
+    queryFn: api.queue,
+    enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * This plan's phases, their declared scopes, and what each would collide with.
+ *
+ * Answered from the plan's Repos column plus every live lock across every plan,
+ * so it is the one call that can say *why* a phase is not starting. Cheap enough
+ * to hold open on the run page; refreshed by `run:queue` for every plan at once.
+ */
+export function useRunScopes(slug: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: keys.scopes(slug ?? ''),
+    queryFn: () => api.runScopes(slug!),
+    enabled: Boolean(slug) && enabled,
+    placeholderData: keepPreviousData,
+    retry: false,
   });
 }
 

@@ -37,7 +37,24 @@ export const RUN_TONE: Record<RunStatus, 'ok' | 'busy' | 'bad' | 'warn' | undefi
   stopping: 'warn',
   interrupted: 'warn',
   frozen: 'warn',
+  // Not `warn`: nothing is wrong and nobody is being asked for anything. The run
+  // is in a line behind another plan's scope and will start itself.
+  queued: 'busy',
 };
+
+/**
+ * The phases this run holds a live session on, lowest first.
+ *
+ * `children` is the pool's own record and the answer whenever it is there.
+ * `child` is a mirror of one lane kept for every reader written before lanes
+ * existed — including a run recorded by an older console, which is why it is the
+ * fallback rather than dead weight.
+ */
+export function livePhases(run: RunState): number[] {
+  const lanes = run.children ? Object.values(run.children) : [];
+  const phases = lanes.length ? lanes.map((lane) => lane.phase) : run.child ? [run.child.phase] : [];
+  return [...new Set(phases)].sort((a, b) => a - b);
+}
 
 export function RunHeader({
   run,
@@ -61,19 +78,38 @@ export function RunHeader({
     ? null
     : (frozenAt ?? (ticking ? now : Date.parse(run.updatedAt))) - startedAt;
 
+  // Which phases this run holds a session on right now. `children` is the full
+  // set; `child` is the mirror of the lowest-numbered one, and the fallback for a
+  // run recorded before the pool existed.
+  const lanes = livePhases(run);
+
   return (
     <header className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone={RUN_TONE[run.status]}>{run.status}</Chip>
-        {run.activePhase != null && (
-          <span className="font-display text-sm">phase {run.activePhase}</span>
+        {lanes.length > 1 ? (
+          <>
+            <span className="font-display text-sm">phases {lanes.join(', ')}</span>
+            <Chip tone="busy" title="This run is driving several phases whose scopes do not overlap">
+              {lanes.length} sessions
+            </Chip>
+          </>
+        ) : (
+          run.activePhase != null && (
+            <span className="font-display text-sm">phase {run.activePhase}</span>
+          )
         )}
         {phaseMs != null && (
           <span
             className={cn('font-mono text-sm tabular-nums', frozenAt ? 'text-ink-faint' : 'text-ink')}
             title={frozenAt
               ? 'The session is stopped where it stood, so this clock is stopped too.'
-              : 'How long the phase running now has been going'}
+              : lanes.length > 1
+                // The mirror is the lowest-numbered lane, so with several running
+                // this is the oldest of them — saying "the phase" would be a
+                // claim about whichever one the reader happens to be watching.
+                ? `How long phase ${lanes[0]}, the earliest of ${lanes.length} running, has been going`
+                : 'How long the phase running now has been going'}
           >
             {elapsed(phaseMs)}
           </span>

@@ -51,6 +51,14 @@ describe('isLive', () => {
     for (const s of ['finished', 'halted', 'paused', 'interrupted']) expect(isLive(s)).toBe(false);
     expect(isLive(undefined)).toBe(false);
   });
+
+  it('counts queued as live too, read from the other end', () => {
+    // It holds no child and no lock — which is exactly why the SERVER keeps it
+    // out of its own `IN_FLIGHT` — but a loop is behind it, sitting in
+    // `admit()`. The client's question is "do the controls for a running run
+    // apply", and for a queued one they do: Start would 409.
+    expect(isLive('queued')).toBe(true);
+  });
 });
 
 describe('plan-prose aliases', () => {

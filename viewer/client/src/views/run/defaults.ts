@@ -84,8 +84,16 @@ export const AUTONOMY_LABEL: Record<Autonomy, string> = {
  * child holding a warm session, so the controls that act on one — Stop, Steer,
  * Continue — all still apply, and treating it as idle would offer a Start button
  * that refuses because a run is already in progress.
+ *
+ * `queued` belongs for the same reason read from the other end: it holds no child
+ * and no lock — which is exactly why the server keeps it out of its own
+ * `IN_FLIGHT` — but a loop IS behind it, sitting in `admit()`. Left out, a queued
+ * run fell through `outcomeOf`'s tail and the fleet called it **interrupted**,
+ * while its plan offered a Start button the server answers with a 409.
  */
-export const LIVE_STATUSES = ['running', 'waiting', 'pausing', 'stopping', 'frozen'] as const;
+export const LIVE_STATUSES = [
+  'running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued',
+] as const;
 
 export const isLive = (status: string | undefined): boolean =>
   (LIVE_STATUSES as readonly string[]).includes(status ?? '');

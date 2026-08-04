@@ -66,14 +66,14 @@ const phases = (...records: { phase: number; status: string; [k: string]: unknow
  * The vocabulary
  * ------------------------------------------------------------------ */
 
-describe('collapsing ten statuses into five outcomes', () => {
+describe('collapsing every status into five outcomes', () => {
   it('maps every status the runner can write', () => {
     const all = [
-      'running', 'waiting', 'pausing', 'stopping', 'frozen',
+      'running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued',
       'paused', 'parked', 'halted', 'finished', 'interrupted',
     ];
     expect(all.map(outcomeOf)).toEqual([
-      'live', 'live', 'live', 'live', 'live',
+      'live', 'live', 'live', 'live', 'live', 'live',
       'attention', 'attention', 'halted', 'finished', 'interrupted',
     ]);
   });
@@ -83,6 +83,13 @@ describe('collapsing ten statuses into five outcomes', () => {
     // still holds a warm child, so it belongs with what is running.
     expect(outcomeOf('paused')).toBe('attention');
     expect(outcomeOf('frozen')).toBe('live');
+  });
+
+  it('does not report a queued run as one that died', () => {
+    // `outcomeOf` ends in a bare `return 'interrupted'`, so a status missing
+    // from `LIVE_STATUSES` is not merely uncategorised — it is actively
+    // mislabelled as a run that stopped without saying why.
+    expect(outcomeOf('queued')).toBe('live');
   });
 });
 

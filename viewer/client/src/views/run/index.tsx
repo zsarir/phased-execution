@@ -19,30 +19,39 @@
  *   before each refetch. Nothing here calls `refresh()`; the cache is
  *   invalidated by `EVENT_EFFECTS` and re-renders when the answer changes.
  * - **The firehose stays out of the cache.** `run:stream` is subscribed to
- *   directly (`useRunStream`) and appended.
+ *   directly (`useSessionStream`, inside each `SessionPanes`) and appended.
  * - **The monolith is eight modules.** This one is composition and the two
  *   things that genuinely need to live at the top: the `act()` wrapper and the
  *   `busy` label it drives.
+ *
+ * ## One window per session
+ *
+ * The page had one console because a run had one session. It can now drive
+ * several phases at once, so the console is a tab strip: a **Run** tab carrying
+ * the whole run's narration, and one tab per live or queued lane, each owning its
+ * own console, task list and tool log (`session-panes.tsx`). Two sessions'
+ * sentences in one window is a page that is wrong with nothing on it to say so.
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { Empty, Spinner, toast } from '@/components/ui';
-import { api, type PlanDetail } from '@/lib/api';
+import { useCallback, useState } from 'react';
 import {
-  useApprovals, useAuth, useConsoleState, useRun, useSessions, useSkills, useTranscript,
+  Empty, Spinner, Tabs, TabsContent, TabsList, TabsTrigger, toast,
+} from '@/components/ui';
+import { api, type PlanDetail, type QueueEntry, type RunState } from '@/lib/api';
+import {
+  useApprovals, useAuth, useConsoleState, useQueue, useRun, useRunScopes, useSessions, useSkills,
 } from '@/lib/queries';
 import { keys } from '@/lib/queries';
 import { classifyRun, liveRecovery, type RecoveryClass } from '@/lib/recovery';
 import { startRecovery } from '@/lib/start-recovery';
 import { useQueryClient } from '@tanstack/react-query';
 import { isLive } from './defaults';
-import { ActivityPanels } from './activity';
 import { ApprovalQueue, type Decide } from './approvals';
-import { AskBox } from './ask-box';
 import { Controls } from './controls';
-import { LiveConsole, useLiveLines, useRunStream } from './console';
+import { LiveConsole } from './console';
 import { RunHeader, RunTiles } from './header';
 import { PhaseTable } from './phase-table';
+import { QueuedPane, SessionPanes, laneId, lanesOf, queueEntryFor } from './session-panes';
 import { AuthCard, RunStatusStack, StaleServerNote, looksLikeAuthFailure } from './status';
 import { RunHistory } from './history';
 
@@ -67,18 +76,18 @@ export function RunView({ detail }: { detail: PlanDetail }) {
   const { data: skills } = useSkills(enabled);
 
   const [busy, setBusy] = useState('');
-  const { lines, activity, record, clear, hydrate } = useLiveLines();
 
   const run = detailRun?.run ?? null;
   const live = isLive(run?.status);
 
-  // Replay before the live stream matters, so the window is populated on arrival
-  // rather than waiting for the next thing to happen — which, on a run that
-  // already finished, is never.
-  const { data: transcript } = useTranscript(slug, run?.id, enabled && Boolean(run));
-  useEffect(() => { hydrate(transcript); }, [transcript, hydrate]);
-
-  useRunStream(record, enabled);
+  // Admission — the only place an answer to "why is this not running" can come
+  // from, because the answer is always about some OTHER plan. The queue is asked
+  // for only when this run actually has a phase in it: on the ordinary page
+  // nothing renders the answer, and a request whose result is never read is a
+  // request that should not have been made.
+  const queuedHere = lanesOf(run).some((lane) => lane.queued);
+  const { data: admission } = useQueue(enabled && queuedHere);
+  const { data: scopes } = useRunScopes(slug, enabled && Boolean(run));
 
   const approvals = (queue ?? []).filter((a) => a.status === 'pending');
 
@@ -216,6 +225,8 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           live={live}
           allowRun={allowRun}
           onAct={act}
+          queue={admission?.entries}
+          scopes={scopes?.scopes}
           recovery={{
             allowAgent,
             authFailure,
@@ -242,24 +253,133 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           and it carries the ask box, the one control on this page that is only
           useful *while* you are watching. The task list and the tool log are
           the summary of what it said, so they read after it. */}
-      <LiveConsole
-        lines={lines}
-        onClear={clear}
-        subtitle={run?.activePhase != null ? `phase ${run.activePhase} · ${run.model}` : run?.status ?? 'idle'}
-        footer={
-          <AskBox
-            slug={slug}
-            enabled={Boolean(allowRun && live && run?.activePhase != null)}
-            allowRun={allowRun}
-            phase={run?.activePhase}
-          />
-        }
-      />
-
-      <ActivityPanels activity={activity} live={live} />
+      {run ? (
+        <SessionTabs
+          slug={slug}
+          run={run}
+          live={live}
+          allowRun={allowRun}
+          enabled={enabled}
+          entries={admission?.entries}
+          scopes={scopes?.scopes}
+        />
+      ) : (
+        <LiveConsole lines={[]} subtitle="idle" />
+      )}
 
       <RunHistory history={history} />
     </div>
+  );
+}
+
+/**
+ * One tab per session, and one for the run itself.
+ *
+ * The page used to have a single console because a run had a single session. It
+ * now drives up to `maxParallel` phases whose scopes do not overlap, and the
+ * honest rendering of that is one window each: a phase's console, task list and
+ * tool log are about that phase, and merging two of them produces a page that is
+ * wrong in a way nothing on it can show.
+ *
+ * The **Run** tab is deliberately kept and deliberately first. It is the whole
+ * run's narration — every lane, unfiltered — which is what this page showed
+ * before, what a deep link lands on, and the right view when the question is
+ * "what is this run doing" rather than "what is phase 6 doing".
+ *
+ * Tab state is in the page, not the route: `#/plan/:slug/run` addresses the run,
+ * and a lane is a thing that exists for twenty minutes. A URL that outlived its
+ * tab would be a link to a pane that is not there.
+ */
+function SessionTabs({
+  slug,
+  run,
+  live,
+  allowRun,
+  enabled,
+  entries,
+  scopes,
+}: {
+  slug: string;
+  run: RunState;
+  live: boolean;
+  allowRun: boolean;
+  enabled: boolean;
+  entries?: QueueEntry[] | undefined;
+  scopes?: { phase: number; scope: string[]; conflicts: string[] }[] | undefined;
+}) {
+  const [picked, setPicked] = useState('run');
+  const lanes = lanesOf(run);
+
+  // A lane ends while you are reading it — that is the normal case, not an edge
+  // one. Falling back to Run beats leaving the tab list pointing at a pane that
+  // no longer has a trigger, which Radix renders as no panel at all.
+  const ids = new Set(['run', ...lanes.map(laneId)]);
+  const value = ids.has(picked) ? picked : 'run';
+
+  return (
+    <Tabs value={value} onValueChange={setPicked}>
+      <TabsList>
+        <TabsTrigger value="run">
+          Run
+          {lanes.length > 1 && (
+            <span className="ml-1.5 font-mono text-2xs text-ink-faint tabular-nums">
+              {lanes.length}
+            </span>
+          )}
+        </TabsTrigger>
+        {lanes.map((lane) => (
+          <TabsTrigger key={laneId(lane)} value={laneId(lane)}>
+            Phase {lane.phase}
+            {lane.queued && <span className="ml-1.5 text-2xs text-ink-faint">queued</span>}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+
+      {/* `forceMount` on every panel, with the hiding done here.
+          A pane that unmounts drops its SSE subscription, so glancing at another
+          lane would silently cost every line the first one printed while you
+          were away — and the replay endpoint cannot fill that gap, because it is
+          fetched once and those lines are newer than it. */}
+      <TabsContent value="run" forceMount hidden={value !== 'run'}>
+        <SessionPanes
+          slug={slug}
+          runId={run.id}
+          live={live}
+          allowRun={allowRun}
+          enabled={enabled}
+          title="Session console"
+          subtitle={run.activePhase != null ? `phase ${run.activePhase} · ${run.model}` : run.status}
+          askPhase={run.activePhase}
+        />
+      </TabsContent>
+
+      {lanes.map((lane) => (
+        <TabsContent
+          key={laneId(lane)}
+          value={laneId(lane)}
+          forceMount
+          hidden={value !== laneId(lane)}
+        >
+          {lane.queued ? (
+            <QueuedPane
+              phase={lane.phase}
+              entry={queueEntryFor(entries, slug, lane.phase)}
+              scope={scopes?.find((s) => s.phase === lane.phase)?.scope}
+            />
+          ) : (
+            <SessionPanes
+              slug={slug}
+              runId={run.id}
+              phase={lane.phase}
+              live={live}
+              allowRun={allowRun}
+              enabled={enabled}
+              subtitle={`${lane.status} · ${run.model}`}
+            />
+          )}
+        </TabsContent>
+      ))}
+    </Tabs>
   );
 }
 

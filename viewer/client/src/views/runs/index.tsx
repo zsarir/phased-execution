@@ -20,29 +20,43 @@
  * idle one collapses it to a line naming the last run — expandable, and only
  * then is the transcript fetched.
  *
+ * ## Every live session, not the one that happened to be first
+ *
+ * The console watched a single run, which was the whole truth until a pool could
+ * drive several at once — and then it was a page about "every run there has ever
+ * been" that could show exactly one of the two that were live, with nothing on
+ * screen admitting the other existed. It is a tab strip now, one per live lane
+ * across every plan, labelled `slug · P<n>` because two tabs reading "Phase 5"
+ * here are two different plans.
+ *
+ * The single console survives for the case that has no lane: a finished run you
+ * picked in order to re-read it.
+ *
  * ## What is not re-implemented here
  *
- * The approval queue, the auth card, the activity panels, the console and its two
- * hooks, and the ask box are all Phase 4's, imported from `views/run/*`. What is
- * specific to "every run at once" is picking the one worth watching, and the
- * fleet itself.
+ * The approval queue, the auth card, and the session panes (console, panels, ask
+ * box) all come from `views/run/*`. What is specific to "every run at once" is
+ * picking which lane to watch, and the fleet itself.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Radio } from 'lucide-react';
-import { api, type RunState } from '@/lib/api';
+import { api, type QueueEntry, type RunState } from '@/lib/api';
 import {
-  keys, useApprovals, useAuth, useConsoleState, useRuns, useTranscript,
+  keys, useApprovals, useAuth, useConsoleState, useQueue, useRuns,
 } from '@/lib/queries';
 import { usePrefs } from '@/lib/prefs';
 import { relativeTime } from '@/lib/format';
-import { Banner, Card, Chip, Empty, Skeleton, toast } from '@/components/ui';
-import { ActivityPanels } from '../run/activity';
+import {
+  Banner, Card, Chip, Empty, Skeleton, Tabs, TabsContent, TabsList, TabsTrigger, toast,
+} from '@/components/ui';
 import { ApprovalQueue, type Decide } from '../run/approvals';
-import { AskBox } from '../run/ask-box';
-import { LiveConsole, useLiveLines, useRunStream } from '../run/console';
+import { LiveConsole } from '../run/console';
 import { isLive } from '../run/defaults';
+import {
+  QueuedPane, SessionPanes, crossLaneId, lanesAcross, queueEntryFor, type Lane,
+} from '../run/session-panes';
 import { AuthCard, StaleServerNote, looksLikeAuthFailure } from '../run/status';
 import { Page } from '../_page';
 import { Controls } from './controls';
@@ -75,9 +89,8 @@ export default function RunsView() {
   const { data: auth } = useAuth(enabled);
 
   const [watchId, setWatchId] = useState<string | undefined>();
+  const [tab, setTab] = useState<string | undefined>();
   const [local, setLocal] = useState({ query: '', plan: '' });
-
-  const { lines, activity, record, clear, hydrate } = useLiveLines();
 
   // The run worth watching: whichever one you picked, else the live one, else
   // the most recent. `useRuns` returns them newest-first, so `[0]` is the
@@ -92,14 +105,24 @@ export default function RunsView() {
   // every visit.
   const consoleOpen = Boolean(active) || prefs.runsConsole;
 
-  const { data: transcript } = useTranscript(
-    watching?.slug,
-    watching?.id,
-    enabled && Boolean(watching) && consoleOpen,
-  );
-  useEffect(() => { hydrate(transcript); }, [transcript, hydrate]);
+  /* ---------------- every live session, whoever owns it ---------------- */
 
-  useRunStream(record, enabled);
+  /**
+   * This page's question is "every run there has ever been", so its console has
+   * to reach every session there is now — including two plans running at once,
+   * which the single watched console could not express at all. It showed one
+   * run's lines and no way to know the others existed.
+   */
+  const lanes = useMemo(
+    () => lanesAcross((runs ?? []).filter((r) => isLive(r.status))),
+    [runs],
+  );
+  const { data: admission } = useQueue(enabled && lanes.some((l) => l.queued));
+
+  // A pick of a FINISHED run is a request to read that one, and there is no lane
+  // for it — so the old single console survives exactly for that, and for a page
+  // with nothing live at all.
+  const replaying = picked && !isLive(picked.status) ? picked : lanes.length ? undefined : watching;
 
   const approvals = (queue ?? []).filter((a) => a.status === 'pending');
 
@@ -133,8 +156,12 @@ export default function RunsView() {
     })();
   }, [client]);
 
+  // Clearing the tab is what makes Watch mean anything once there are several:
+  // with a tab explicitly chosen, the pick would set `watchId` and change
+  // nothing on screen. Cleared, the derivation below follows the pick.
   const onWatch = useCallback((row: RunRow) => {
     setWatchId(row.id);
+    setTab(undefined);
     setPrefs({ runsConsole: true });
   }, [setPrefs]);
 
@@ -235,21 +262,34 @@ export default function RunsView() {
         {consoleOpen
           ? (
             <div className="flex flex-col gap-3">
-              <ActivityPanels activity={activity} live={Boolean(active)} />
-              <LiveConsole
-                lines={lines}
-                onClear={clear}
-                title="Session console"
-                subtitle={consoleSubtitle(active, watching)}
-                footer={active ? (
-                  <AskBox
-                    slug={active.slug}
-                    enabled={allowRun && active.activePhase != null}
+              {replaying
+                ? (
+                  <SessionPanes
+                    slug={replaying.slug}
+                    runId={replaying.id}
+                    live={isLive(replaying.status)}
                     allowRun={allowRun}
-                    phase={active.activePhase}
+                    enabled={enabled}
+                    title="Session console"
+                    subtitle={consoleSubtitle(active, replaying)}
+                    askPhase={isLive(replaying.status) ? replaying.activePhase : null}
                   />
-                ) : undefined}
-              />
+                )
+                : lanes.length ? (
+                  <LaneTabs
+                    lanes={lanes}
+                    picked={tab}
+                    onPick={setTab}
+                    preferredRunId={picked && isLive(picked.status) ? picked.id : undefined}
+                    allowRun={allowRun}
+                    enabled={enabled}
+                    entries={admission?.entries}
+                  />
+                )
+                // Opened on a source that has never run anything: an empty tab
+                // strip is a thinner nothing than the console saying what it
+                // would show, and that copy is the whole point of opening it.
+                : <LiveConsole lines={[]} title="Session console" subtitle="idle" />}
               {!active && (
                 <button
                   type="button"
@@ -321,8 +361,86 @@ export default function RunsView() {
   );
 }
 
+/**
+ * Every live session on the machine, one tab each.
+ *
+ * Labelled `slug · P<n>` rather than by phase alone, because on this page two
+ * tabs reading "Phase 5" are two different plans — the fact the run page can take
+ * for granted and this one cannot.
+ *
+ * `forceMount` for the reason it is used on the run page: a pane that unmounts
+ * unsubscribes, and the lines it misses while hidden are newer than the replay
+ * that would otherwise have covered them.
+ */
+function LaneTabs({
+  lanes,
+  picked,
+  onPick,
+  preferredRunId,
+  allowRun,
+  enabled,
+  entries,
+}: {
+  lanes: readonly Lane[];
+  picked: string | undefined;
+  onPick: (id: string) => void;
+  /** The run the fleet's Watch button asked for, until a tab is chosen by hand. */
+  preferredRunId: string | undefined;
+  allowRun: boolean;
+  enabled: boolean;
+  entries?: QueueEntry[] | undefined;
+}) {
+  const ids = lanes.map(crossLaneId);
+  const preferred = preferredRunId
+    ? ids[lanes.findIndex((lane) => lane.runId === preferredRunId)]
+    : undefined;
+  const value = picked && ids.includes(picked) ? picked : preferred ?? ids[0] ?? '';
+
+  return (
+    <Tabs value={value} onValueChange={onPick}>
+      <TabsList>
+        {lanes.map((lane) => (
+          <TabsTrigger key={crossLaneId(lane)} value={crossLaneId(lane)}>
+            <span className="font-mono">{lane.slug}</span>
+            <span className="ml-1.5 text-ink-faint">P{lane.phase}</span>
+            {lane.queued && <span className="ml-1.5 text-2xs text-ink-faint">queued</span>}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+
+      {lanes.map((lane) => (
+        <TabsContent
+          key={crossLaneId(lane)}
+          value={crossLaneId(lane)}
+          forceMount
+          hidden={value !== crossLaneId(lane)}
+        >
+          {lane.queued ? (
+            <QueuedPane
+              phase={lane.phase}
+              entry={queueEntryFor(entries, lane.slug, lane.phase)}
+            />
+          ) : (
+            <SessionPanes
+              slug={lane.slug}
+              runId={lane.runId}
+              phase={lane.phase}
+              live
+              allowRun={allowRun}
+              enabled={enabled}
+              title={`${lane.slug} · phase ${lane.phase}`}
+              subtitle={lane.status}
+            />
+          )}
+        </TabsContent>
+      ))}
+    </Tabs>
+  );
+}
+
 /** What the console is showing: the live run, the one you picked, or nothing. */
 function consoleSubtitle(active: RunState | undefined, watching: RunState | undefined): string {
+  if (watching && !isLive(watching.status)) return `${watching.slug} · ${watching.id} · ${watching.status}`;
   if (active) return `${active.slug} · phase ${active.activePhase ?? '?'} · ${active.model}`;
   if (watching) return `${watching.slug} · ${watching.id} · ${watching.status}`;
   return 'idle';

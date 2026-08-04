@@ -21,7 +21,8 @@ import {
   TBody, TD, TH, THead, TR, Table, TableWrap,
 } from '@/components/ui';
 import {
-  api, type PhaseRecord, type PhaseStatus, type PhaseView, type RunState, type TerminalSession,
+  api, type PhaseRecord, type PhaseScope, type PhaseStatus, type PhaseView, type QueueEntry,
+  type RunState, type TerminalSession,
 } from '@/lib/api';
 import { duration, money, pad2, relativeTime } from '@/lib/format';
 import { useDiagnosis } from '@/lib/queries';
@@ -29,10 +30,12 @@ import { classifyPhase, liveRecovery, type RecoveryClass } from '@/lib/recovery'
 import { canQa, liveQa } from '@/lib/qa';
 import { QaButton, QaVerdict } from '@/components/qa-launcher';
 import { RecoveryButton } from './status';
+import { queueEntryFor, waitingLabel } from './session-panes';
 import { phaseHref } from '@shared/routes.js';
 import {
   BOARD_ORDER, boardCounts, fellOverToAnotherModel, mergePhases, phaseActions,
 } from '@shared/phase-model.js';
+import { scopeOfRow } from '@shared/scope.js';
 import { cn } from '@/lib/cn';
 
 /**
@@ -79,6 +82,11 @@ const actionsFor = phaseActions as (
 ) => Actions;
 const fellOver = fellOverToAnotherModel as (record: PhaseRecord | undefined) => boolean;
 const ORDER = BOARD_ORDER as string[];
+/** The Repos cell as scope tokens, never empty — a blank cell means `all`. */
+const scopeOf = scopeOfRow as (cell: string | undefined) => string[];
+
+/** Scope chips shown before the row starts eliding. The rest go in the title. */
+const SCOPE_SHOWN = 2;
 
 const PHASE_TONE: Record<PhaseStatus, 'ok' | 'busy' | 'bad' | 'warn' | undefined> = {
   done: 'ok',
@@ -89,6 +97,8 @@ const PHASE_TONE: Record<PhaseStatus, 'ok' | 'busy' | 'bad' | 'warn' | undefined
   interrupted: 'warn',
   gated: 'warn',
   'awaiting-verification': 'warn',
+  // In a line behind another scope, not stuck and not asking for anything.
+  queued: 'busy',
   skipped: undefined,
   pending: undefined,
 };
@@ -121,6 +131,8 @@ export function PhaseTable({
   allowRun,
   onAct,
   recovery,
+  queue,
+  scopes,
 }: {
   slug: string;
   run: RunState | null;
@@ -129,6 +141,10 @@ export function PhaseTable({
   allowRun: boolean;
   onAct: (label: string, fn: () => Promise<unknown>) => Promise<void>;
   recovery?: PhaseRecovery;
+  /** The admission queue, for the phases of this plan that are in it. */
+  queue?: QueueEntry[] | undefined;
+  /** Per-phase scope + what it would collide with if started now. */
+  scopes?: PhaseScope[] | undefined;
 }) {
   if (!planPhases.length) {
     return (
@@ -172,6 +188,11 @@ export function PhaseTable({
                 <TH scope="col">#</TH>
                 <TH scope="col">Phase</TH>
                 <TH scope="col">Status</TH>
+                {/* What the phase touches — the Repos cell of the plan's own
+                    graph, which is what decides whether two phases may run at
+                    the same time. It has been parsed by the server since before
+                    there was concurrency and shown nowhere. */}
+                <TH scope="col">Repos</TH>
                 <TH scope="col">This run</TH>
                 <TH scope="col" className="text-right">Cost</TH>
                 <TH scope="col" className="text-right">Turns</TH>
@@ -192,6 +213,8 @@ export function PhaseTable({
                   allowRun={allowRun}
                   onAct={onAct}
                   recovery={recovery}
+                  entry={queueEntryFor(queue, slug, p.phase)}
+                  conflicts={scopes?.find((s) => s.phase === p.phase)?.conflicts}
                 />
               ))}
             </TBody>
@@ -217,6 +240,8 @@ function PhaseRows({
   allowRun,
   onAct,
   recovery,
+  entry,
+  conflicts,
 }: {
   phase: MergedPhase;
   slug: string;
@@ -225,6 +250,8 @@ function PhaseRows({
   allowRun: boolean;
   onAct: (label: string, fn: () => Promise<unknown>) => Promise<void>;
   recovery?: PhaseRecovery;
+  entry?: QueueEntry | undefined;
+  conflicts?: string[] | undefined;
 }) {
   const r = p.record;
   const isActive = run?.activePhase === p.phase;
@@ -244,6 +271,9 @@ function PhaseRows({
   const reviewing = liveQa(recovery?.sessions, { slug, phase: p.phase });
 
   const showing = displayState(p.state, { active: isActive, live });
+  // The record is what THIS run is doing; the entry is the scheduler's own view.
+  // Either alone is enough to say the phase is in a line.
+  const queued = r?.status === 'queued' || Boolean(entry);
 
   return (
     <>
@@ -278,6 +308,27 @@ function PhaseRows({
             />
             <QaVerdict qa={p.qa} />
           </div>
+          {/* "Queued" alone is the same non-answer `pausing` used to be. What
+              makes the wait bearable is WHAT it is behind, and that is the one
+              thing the payload exists to carry. */}
+          {queued && (
+            <div className="mt-0.5">
+              <Chip
+                tone="busy"
+                title={entry?.waitingOn.length
+                  ? entry.waitingOn
+                    .map((h) => `${h.slug}${h.phase != null ? ` P${h.phase}` : ''}`
+                      + (h.overlaps.length ? ` — overlaps ${h.overlaps.join(', ')}` : ''))
+                    .join('\n')
+                  : 'Waiting on the scheduler for a scope something else is holding'}
+              >
+                {waitingLabel(entry)}
+              </Chip>
+            </div>
+          )}
+        </TD>
+        <TD>
+          <ScopeChips tokens={scopeOf(p.row?.repos)} conflicts={conflicts} />
         </TD>
         <TD className="text-2xs">
           {r ? (
@@ -376,7 +427,7 @@ function PhaseRows({
       {hasNote && (
         <TR>
           <TD />
-          <TD colSpan={7}>
+          <TD colSpan={8}>
             {r?.note && <div className="text-2xs text-ink-faint">{r.note}</div>}
             {r?.verification && (
               <div className={cn('text-2xs', r.verification.ok ? 'text-done' : 'text-blocked')}>
@@ -404,6 +455,42 @@ function PhaseRows({
         </TR>
       )}
     </>
+  );
+}
+
+/**
+ * What a phase touches, and therefore what it cannot run beside.
+ *
+ * Read from the plan's Repos cell through the same `shared/scope.js` the lock
+ * files and `phase-lock.sh conflicts` use — one reading, three consumers, so a
+ * chip here and a refusal in bash can never disagree about what `packages/cart-api`
+ * overlaps. A blank cell is `all`, which is the honest rendering of "this might
+ * touch anything": it is why the phase runs alone, and it used to be invisible.
+ *
+ * Elided rather than wrapped: a plan with five repos per phase turns this column
+ * into the widest one on the page, and the full list is a hover away.
+ */
+function ScopeChips({
+  tokens,
+  conflicts,
+}: {
+  tokens: string[];
+  conflicts?: string[] | undefined;
+}) {
+  const shown = tokens.slice(0, SCOPE_SHOWN);
+  const hidden = tokens.length - shown.length;
+  const title = tokens.join(', ')
+    + (conflicts?.length ? `\n\nwould collide with: ${conflicts.join(', ')}` : '');
+
+  return (
+    <div className="flex flex-wrap items-center gap-1" title={title}>
+      {shown.map((token) => (
+        <Chip key={token} mono tone={token === 'all' ? 'warn' : undefined}>
+          {token}
+        </Chip>
+      ))}
+      {hidden > 0 && <span className="font-mono text-2xs text-ink-faint">+{hidden}</span>}
+    </div>
   );
 }
 

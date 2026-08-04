@@ -112,6 +112,82 @@ export function useRunStream(
   }, [record, enabled]);
 }
 
+/** Which session's events a pane wants: one run, optionally one of its lanes. */
+export interface SessionFilter {
+  runId: string;
+  /** Omitted on the aggregate pane: every lane of the run, as before. */
+  phase?: number | undefined;
+}
+
+/**
+ * The same three subscriptions, narrowed to ONE session.
+ *
+ * `useRunStream` was written when there was one runner and therefore one session:
+ * every `run:stream` on the wire belonged to the only thing running, so appending
+ * all of them was right. With a runner pool and per-phase lanes it stopped being
+ * right in the way that is hardest to notice — nothing errors, the console simply
+ * shows two sessions' sentences spliced into one paragraph, and the reader has no
+ * way to tell which half is which.
+ *
+ * Every payload has carried `{runId, slug}` since before the pool, and the three
+ * events read here also carry `phase` (`runner.ts` `emit()` stamps the first two
+ * on everything; `stream`/`phase`/`verify` pass the third). So the fix is a
+ * predicate, not a protocol: the events were always separable.
+ *
+ * **The phase filter is also what keeps the panels honest.** `activity()` clears
+ * the task list on `phase`+`running` — a new phase is a new session with a new
+ * list. Unfiltered, phase 7 starting wipes phase 6's panel while phase 6 is still
+ * working in the tab next door. Filtering here means the reset can only be fired
+ * by the pane's own phase, so `console-model.js` needs no notion of lanes at all.
+ */
+export function useSessionStream(
+  record: (event: string, data: Record<string, unknown>) => void,
+  enabled: boolean,
+  filter: SessionFilter,
+): void {
+  const { runId, phase } = filter;
+  useEffect(() => {
+    if (!enabled || !runId) return undefined;
+    const as = (name: 'stream' | 'phase' | 'verify') => (data: unknown) => {
+      if (!data || typeof data !== 'object') return;
+      const payload = data as Record<string, unknown>;
+      if (payload.runId !== runId) return;
+      // `!= null`, not truthy: phase 0 is a legitimate phase number, and `phase`
+      // being absent from a payload is not the same as it being another lane's.
+      if (phase != null && payload.phase !== phase) return;
+      record(name, payload);
+    };
+    const offs = [
+      onSse('run:stream', as('stream')),
+      onSse('run:phase', as('phase')),
+      onSse('run:verify', as('verify')),
+    ];
+    return () => { for (const off of offs) off(); };
+  }, [record, enabled, runId, phase]);
+}
+
+/**
+ * A recorded run's events, narrowed to one lane before they are replayed.
+ *
+ * The transcript endpoint is per-run, and deliberately stays that way: it is one
+ * append-only file per run, and splitting it per phase would mean a fetch per tab
+ * of a payload that is already up to 4 MB. Filtering the replay here costs one
+ * pass over an array the client has anyway.
+ *
+ * Entries with no `phase` at all — the run-level narration — are kept, because
+ * dropping them would leave a lane's replay starting mid-sentence.
+ */
+export function forPhase(
+  entries: TranscriptEntry[] | undefined,
+  phase: number | undefined,
+): TranscriptEntry[] | undefined {
+  if (!entries || phase == null) return entries;
+  return entries.filter((entry) => {
+    const at = entry.data?.phase;
+    return at == null || at === phase;
+  });
+}
+
 /** How close to the bottom still counts as "following the tail". */
 const FOLLOW_SLACK = 40;
 

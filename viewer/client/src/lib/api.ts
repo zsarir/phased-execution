@@ -572,11 +572,18 @@ export type RunStatus =
   // unknown status simply had no entry for it: the one status meaning "waiting
   // on you" was drawn as the one meaning nothing in particular.
   | 'parked'
+  // `queued` — admitted to the scheduler and waiting for a scope something else
+  // is holding. A loop IS behind it (that is what is awaiting admission), but it
+  // has spawned nothing and holds no lock. See `server/runner/state.ts`.
+  | 'queued'
   | 'halted' | 'finished' | 'stopping' | 'interrupted';
 
 export type PhaseStatus =
   | 'pending' | 'gated' | 'running' | 'verifying' | 'done'
-  | 'failed' | 'interrupted' | 'skipped' | 'parked' | 'awaiting-verification';
+  | 'failed' | 'interrupted' | 'skipped' | 'parked'
+  /** Waiting on the scheduler for a scope that something else is holding. */
+  | 'queued'
+  | 'awaiting-verification';
 
 export type Autonomy = 'halt-on-everything' | 'keep-going';
 export type PermissionProfile = 'guarded' | 'trusted' | 'bypass';
@@ -628,6 +635,14 @@ export interface PhaseOptions {
   skills?: string[];
 }
 
+/** One live `claude -p` process: which phase it is on, and the session it holds. */
+export interface ChildRef {
+  pid: number;
+  phase: number;
+  sessionId: string;
+  startedAt: string;
+}
+
 export interface RunState {
   id: string;
   slug: string;
@@ -645,7 +660,20 @@ export interface RunState {
   createdAt: string;
   updatedAt: string;
   activePhase: number | null;
-  child: { pid: number; phase: number; sessionId: string; startedAt: string } | null;
+  /**
+   * The mirror lane, and every reader written before the pool.
+   *
+   * One run can drive several disjoint-scope phases at once, so this is the
+   * LOWEST-numbered live lane rather than "the" child — chosen for stability, so
+   * it does not flip between lanes on every write. It is load-bearing, not
+   * legacy: `reconcileRun` and every console built before lanes answer "is
+   * something running" from it. `children` is the full picture.
+   */
+  child: ChildRef | null;
+  /** Every live lane, keyed by phase — STRING keys, like `phases`. */
+  children?: Record<string, ChildRef>;
+  /** How many lanes this run may hold at once. Never more than the console's cap. */
+  maxParallel?: number;
   waitUntil: string | null;
   halt: { at: string; reason: string; phase?: number } | null;
   pause: { requestedAt: string; afterPhase: number | null; by: string } | null;
