@@ -73,6 +73,42 @@ export function resetServiceWorkerForTests(): void {
 }
 
 /**
+ * Pull the newest interface into THIS tab, deterministically.
+ *
+ * The missing path, learned the hard way: the update toast offers once per
+ * page-mount, a dismissal leaves no second chance, and restarting the SERVER
+ * changes nothing in the browser — the worker keeps serving the old bundle,
+ * by design. An operator who "restarted and still sees the old app" had
+ * nothing to press. This is that button's engine: check for a new worker,
+ * and when one is waiting, activate it and reload.
+ *
+ * `reload` is injectable only as a test seam — jsdom cannot navigate.
+ */
+export async function applyUpdateNow(
+  reload: () => void = () => window.location.reload(),
+): Promise<'reloading' | 'current' | 'unsupported'> {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return 'unsupported';
+  const reg = await registerServiceWorker();
+  if (!reg) return 'unsupported';
+  try { await reg.update(); } catch { /* offline — judge from what is already here */ }
+  const waiting = reg.waiting;
+  if (!waiting) return 'current';
+  await new Promise<void>((resolve) => {
+    const once = () => {
+      navigator.serviceWorker.removeEventListener('controllerchange', once);
+      resolve();
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', once);
+    waiting.postMessage({ type: 'SKIP_WAITING' });
+    // The takeover is near-instant; the timer only covers a worker that dies
+    // between the message and the switch, so the button can never hang.
+    setTimeout(once, 3_000);
+  });
+  reload();
+  return 'reloading';
+}
+
+/**
  * Registers at boot, and offers an update when one is waiting.
  *
  * Mounted once, by the shell.
@@ -140,10 +176,21 @@ export function useServiceWorker(): void {
       void reg.update().catch(() => { /* offline, or the server is gone */ });
     });
 
+    // …and one per return to the tab. A console left open across a deploy
+    // never re-checked, so the person who deployed was the person the toast
+    // most reliably missed.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || !registration || cancelled) return;
+      void registration.update().catch(() => { /* offline */ });
+      if (registration.waiting && navigator.serviceWorker.controller) offer(registration.waiting);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       cancelled = true;
       if (offered !== null) dismissToast(offered);
       if (registration && onUpdateFound) registration.removeEventListener('updatefound', onUpdateFound);
+      document.removeEventListener('visibilitychange', onVisible);
       navigator.serviceWorker?.removeEventListener('controllerchange', onControllerChange);
     };
   }, []);

@@ -244,3 +244,45 @@ describe('the online signal', () => {
     expect(screen.getByTestId('online').textContent).toBe('true');
   });
 });
+
+describe('applyUpdateNow — the deterministic path the toast is not', () => {
+  it('reports current when no worker is waiting, and touches nothing', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(container.register).toHaveBeenCalled());
+
+    const { applyUpdateNow } = await import('./pwa');
+    const reload = vi.fn();
+    await expect(applyUpdateNow(reload)).resolves.toBe('current');
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('activates a waiting worker and reloads once it takes over', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(container.register).toHaveBeenCalled());
+
+    const waiting = fakeWorker();
+    registration.waiting = waiting;
+    const { applyUpdateNow } = await import('./pwa');
+    const reload = vi.fn();
+    const done = applyUpdateNow(reload);
+    await waitFor(() => expect(waiting.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' }));
+    act(() => { container.emit('controllerchange'); });
+    await expect(done).resolves.toBe('reloading');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('returning to the tab re-checks for an update', () => {
+  it('offers a worker that finished waiting while the tab was hidden', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(container.register).toHaveBeenCalled());
+    expect(screen.getByTestId('count').textContent).toBe('0');
+
+    // The deploy happened while the operator was elsewhere.
+    registration.waiting = fakeWorker();
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+
+    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('1'));
+    expect(registration.update.mock.calls.length).toBeGreaterThan(1);
+  });
+});

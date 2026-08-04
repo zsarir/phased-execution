@@ -14,8 +14,10 @@ import { useConsoleState } from '@/lib/queries';
 import { weight } from '@/lib/format';
 import { navigate } from '@/router';
 import {
-  Banner, Button, ButtonGroup, Card, CardBody, CardHeader, CardTitle, KeyValue, Skeleton,
+  Banner, Button, ButtonGroup, Card, CardBody, CardHeader, CardTitle, KeyValue, Skeleton, toast,
 } from '@/components/ui';
+import { useState } from 'react';
+import { applyUpdateNow } from '@/lib/pwa';
 import { Page } from '../_page';
 import { PolicyCard } from './policy';
 import { RestartButton } from './restart';
@@ -93,6 +95,15 @@ export default function SettingsView() {
               client and nothing else, so a server fix you already have looks like it did not work
               until this process is replaced.
             </p>
+            <div className="border-t border-rule pt-3">
+              <UpdateInterfaceButton />
+              <p className="mt-2 text-2xs text-ink-faint">
+                The other half of the same coin: restarting the SERVER does not update open
+                tabs. The interface is cached by a service worker and swaps only when you
+                approve — usually via the &ldquo;new version&rdquo; toast. If that toast is
+                gone, this pulls the newest build into this tab now.
+              </p>
+            </div>
             <div className="border-t border-rule pt-3">
               <ShutdownButton />
             </div>
@@ -234,5 +245,35 @@ export default function SettingsView() {
         </Banner>
       )}
     </Page>
+  );
+}
+
+/**
+ * The client-side twin of Restart. The server button replaces the PROCESS;
+ * this replaces the BUNDLE THIS TAB RUNS — the half a service-worker app
+ * hides, and the half "I restarted and it still looks old" is actually about.
+ */
+function UpdateInterfaceButton() {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      size="sm"
+      disabled={busy}
+      onClick={() => {
+        setBusy(true);
+        void applyUpdateNow().then((result) => {
+          if (result === 'current') {
+            toast('This tab already runs the newest interface.', 'ok');
+            setBusy(false);
+          } else if (result === 'unsupported') {
+            toast('No service worker here (dev server, or an unsupported browser) — a plain reload already gets the newest build.', 'info');
+            setBusy(false);
+          }
+          // 'reloading' needs nothing: the page is replacing itself.
+        });
+      }}
+    >
+      {busy ? 'Checking…' : 'Get the latest interface'}
+    </Button>
   );
 }
