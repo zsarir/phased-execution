@@ -150,6 +150,40 @@ test('a failed verification is sent to diagnose, not to re-run', () => {
   assert.match(text, /blocked/, 'says what to do when it cannot be made green');
 });
 
+test('PIN: a halted-verification briefing quotes the END of the failing command\'s output', () => {
+  // The one fact a repair session cannot get anywhere else. It has no
+  // transcript of the phase, and the failure it is being sent to fix happened
+  // after that session exited — so if the tail is not in this prompt, the
+  // session's first move is to re-run the suite and wait for it.
+  //
+  // Pinned rather than left to the general "carries the failure output"
+  // assertion above, because the two ways it silently regresses are subtle: a
+  // `tail()` that keeps the HEAD of the log (all setup noise, no failure), and
+  // an `assemble()` drop-rank change that sheds evidence before the board.
+  const log = `${'  installing dependencies…\n'.repeat(400)}FAIL cart.test.ts\n  expected 3, got 2`;
+  const text = recoveryPrompt(facts({
+    class: 'halted-verification',
+    diagnosis: {
+      ...facts().diagnosis,
+      verification: {
+        ok: false,
+        reason: '1 of 2 command(s) failed',
+        ran: [
+          { command: 'npm run lint', ok: true, code: 0, output: 'ok' },
+          { command: 'npm test', ok: false, code: 1, output: log },
+        ],
+        notRun: [],
+      },
+    },
+  }));
+
+  assert.ok(text.includes('$ npm test'), 'names the failing command');
+  assert.ok(text.includes('exit 1'), 'and what it exited with');
+  assert.ok(text.includes('expected 3, got 2'), 'and the END of the log, which is where the failure is');
+  assert.ok(!text.includes('$ npm run lint'), 'the commands that PASSED are not evidence of anything');
+  assert.ok(Buffer.byteLength(text) <= MAX_RECOVERY_PROMPT_BYTES);
+});
+
 test('a missing handoff is a closeout, and says not to redo the work', () => {
   const text = recoveryPrompt(facts({
     class: 'halted-missing-handoff',
@@ -517,6 +551,29 @@ test('minting is refused while the autopilot is driving', async () => {
       // It says what to do instead, which is the difference between a refusal
       // and a dead end.
       assert.match(refused.error, /pause or stop it/i);
+    }
+  } finally { cleanup(); }
+});
+
+test('the driving-run refusal asks about the TARGET plan, not "the" run', async () => {
+  // Both arms refuse today — one console, one working tree — but they refuse for
+  // different reasons, and phase 4 keeps only the first. A check written as
+  // "is anything busy" would then refuse a recovery on alpha because beta was
+  // mid-phase, and the wording would blame the wrong plan either way.
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    (svc as never as { runner: Record<string, unknown> }).runner.busy = () => true;
+    (svc as never as { runner: Record<string, unknown> }).runner.current =
+      () => ({ slug: 'beta', status: 'running', id: 'run-2' });
+
+    const refused = await svc.resolveRecovery({ class: 'halted-verification', slug: 'alpha', phase: 2 });
+    assert.equal(refused.ok, false);
+    if (!refused.ok) {
+      assert.equal(refused.status, 409);
+      assert.match(refused.error, /beta is mid-run/, 'it names the plan that is actually running');
+      assert.match(refused.error, /shares this working tree/,
+        'and gives the reason phase 4 will replace with a scope check, not the one about alpha');
     }
   } finally { cleanup(); }
 });

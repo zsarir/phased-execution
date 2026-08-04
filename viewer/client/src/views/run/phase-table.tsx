@@ -475,6 +475,17 @@ function PhaseDiagnosis({
             <dd>
               <code className="font-mono">{data.boardState}</code>
             </dd>
+            {data.verifiedIn && (
+              <>
+                {/* Which directory the commands ran in. A suite that passed in
+                    the wrong one looks exactly like a suite that passed. */}
+                <dt className="text-ink-faint">Verified in</dt>
+                <dd>
+                  <code className="font-mono">{data.verifiedIn}</code>
+                  {data.verifiedIn === '.' ? ' (the repository root)' : ''}
+                </dd>
+              </>
+            )}
             {data.lock && (
               <>
                 <dt className="text-ink-faint">Lock</dt>

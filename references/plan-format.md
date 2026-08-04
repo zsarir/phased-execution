@@ -107,7 +107,17 @@ memory: project_<slug>      # or pre-existing project_<other> when reusing an ex
      Mirror the one-line summary into the Phase-graph table's `Exit criteria` column.
    - **Verification:** the concrete commands/tests proving each exit criterion — runnable, not narrative.
      **Phase-finish runs these green before handing off** (Mode 3 step 1). Add a deterministic test for
-     every criterion you can; flag any that can only be reasoned about.
+     every criterion you can; flag any that can only be reasoned about. Before relying on a CLI flag's
+     semantics in one of these commands, re-check the tool's current docs and note the check in the
+     handoff — a flag that changed meaning turns a green verification into a claim about nothing.
+   - **Verify in:** *(optional)* the directory those commands mean, **relative to the repo root** — e.g.
+     `- **Verify in:** packages/cart-api`. Omit it and they run at the root, which is right for a
+     single-repo plan and wrong for a monorepo phase: `docker compose run … -v "$PWD:/app"` at the
+     superproject mounts the whole monorepo. The autopilot honours this and records where it ran; a path
+     that escapes the root or does not exist falls back to the root with a `phase.verify-in-missing`
+     journal line. When a verification fails and the phase's Repos column names one repo that IS a
+     directory near the root, the halt suggests this bullet — it never picks a directory on its own,
+     because a wrongly-guessed cwd verifies the wrong tree and reports green.
    - **Handoff must record:** what Phase N+1 needs to start cold.
    ```
 

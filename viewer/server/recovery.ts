@@ -662,7 +662,7 @@ function discipline(facts: RecoveryFacts): string {
  * over budget — lowest first, so evidence goes before the board, the board
  * before the identifiers, and the instructions never.
  */
-type Block = { text: string; drop?: number };
+export type Block = { text: string; drop?: number };
 
 function keep(text: string): Block {
   return { text };
@@ -708,20 +708,29 @@ export function assemble(blocks: Block[], limit = MAX_RECOVERY_PROMPT_BYTES): st
  * Small formatters
  * ------------------------------------------------------------------ */
 
+/*
+ * Exported because `runner/failure-context.ts` builds the same kind of thing
+ * for a different reader — a phase's own next attempt rather than a repair
+ * session — and the two must trim a log the same way. A second `tail()` that
+ * cut mid-codepoint or kept the head instead of the end would be a difference
+ * nobody chose. Importing them keeps this file a leaf (the dependency points
+ * INTO here, never out).
+ */
+
 /** Collapse to one line and cap it — a reason field can contain a whole log. */
-function oneLine(text: string, max: number): string {
+export function oneLine(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
 /** The END of a log is where the failure is; the beginning is setup. */
-function tail(text: string, maxBytes: number): string {
+export function tail(text: string, maxBytes: number): string {
   const trimmed = text.trimEnd();
   if (Buffer.byteLength(trimmed) <= maxBytes) return trimmed;
   const cut = Buffer.from(trimmed).subarray(-maxBytes).toString('utf8').replace(/^�+/, '');
   return `…${cut.slice(cut.indexOf('\n') + 1)}`;
 }
 
-function indent(text: string): string {
+export function indent(text: string): string {
   return text.split('\n').map((line) => `  | ${line}`).join('\n');
 }

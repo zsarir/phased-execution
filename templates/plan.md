@@ -74,7 +74,9 @@ it is in fact committed at sha XXXXXXX. Use `git log` as the source of truth; ig
   1. <e.g. "POST /x with an empty body returns HTTP 400">
   2. <…>
 - **Verification:** the runnable command/test that proves each exit criterion above — phase-finish runs
-  these green before handing off.
+  these green before handing off. Re-check a CLI flag's current docs before relying on its semantics.
+  <!-- Monorepo? Add "- **Verify in:** <repo-relative dir>" to run them somewhere other than the root.
+       Omitted = the root. A missing or escaping path falls back to the root and journals it. -->
 - **Handoff must record:** what Phase 2 needs to start cold
 
 ### Phase 2 — TODO

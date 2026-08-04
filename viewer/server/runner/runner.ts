@@ -25,9 +25,9 @@
 
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 
 import { log } from '../log.ts';
 import { onShutdown, offShutdown } from '../lifecycle.ts';
@@ -36,9 +36,11 @@ import { skillDirective } from '../skills.ts';
 import { classify, fallbackChain, nextModel, type Disposition } from './errors.ts';
 import { markFor, spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
 import { verifyPhase } from './verify.ts';
+import { failureContext } from './failure-context.ts';
 import {
   loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
-  type Autonomy, type PhaseOptions, type RunState, type PhaseStatus, type VerifySummary,
+  type Autonomy, type PhaseOptions, type PhaseRecord, type RunState, type PhaseStatus,
+  type VerifySummary,
 } from './state.ts';
 import { Journal } from './journal.ts';
 import { Transcript } from './transcript.ts';
@@ -57,6 +59,18 @@ export type RunnerDeps = {
   verify?: typeof verifyPhase;
   /** The plan's `**Verification:**` text for a phase, from the service's store. */
   verificationText: (slug: string, phase: number) => Promise<string | undefined> | string | undefined;
+  /**
+   * The plan's `**Verify in:**` path for a phase — where those commands mean to
+   * be run, relative to the run's root. Read from the same store and for the
+   * same reason: the plan is the only thing that knows.
+   */
+  verifyIn?: (slug: string, phase: number) => Promise<string | undefined> | string | undefined;
+  /**
+   * The phase's Repos cell, as tokens. Used only to SUGGEST a `Verify in:` when
+   * a verification fails and the plan already says which repo the phase is
+   * about — never to choose a directory. See `verifyHint`.
+   */
+  phaseRepos?: (slug: string, phase: number) => Promise<string[] | undefined> | string[] | undefined;
   /**
    * The plan's own `**Model:**` / `**Effort:**` bullets for a phase.
    *
@@ -119,6 +133,14 @@ export type RecoverOptions = {
 
 /** Per phase: one first try, plus room for a model switch, a resume and a retry. */
 const MAX_ATTEMPTS = 4;
+/**
+ * Per verification command. Half an hour, stated here rather than left to
+ * `verify.ts`'s default, because the number is a statement about what a phase's
+ * verification IS: a full suite, often a build, sometimes a container. At the
+ * old default a slow-but-green check came back red at fifteen minutes and
+ * halted a phase that had done nothing wrong.
+ */
+const VERIFY_TIMEOUT_MS = 30 * 60_000;
 /** Give a stopped session time to run its own SessionEnd hooks before SIGKILL. */
 const SIGTERM_GRACE_MS = 15_000;
 /**
@@ -425,6 +447,13 @@ export class Runner {
     if (!record) throw new Error(`Run ${options.runId} never reached phase ${options.phase}.`);
 
     this.state = state;
+    // Why it stopped, kept before the banner is cleared. The clear below is for
+    // the console's benefit — a run being worked on must not go on looking
+    // stopped — and it used to take the reason with it, so the session opened to
+    // fix a halt was the one thing on the machine that could not read what the
+    // halt said. Only this phase's own halt: a stop recorded against another
+    // phase explains nothing here.
+    const haltedWith = state.halt?.phase === options.phase ? state.halt.reason : null;
     // A forward action supersedes the halt that was showing. The reason stays in
     // the journal; what it must not do is keep the run looking stopped while
     // this works.
@@ -448,7 +477,7 @@ export class Runner {
 
     onShutdown('runner', () => this.checkpointForShutdown());
     this.recovering = true;
-    this.driving = this.runRecovery(options).finally(() => {
+    this.driving = this.runRecovery({ ...options, haltedWith }).finally(() => {
       this.driving = null;
       this.recovering = false;
       offShutdown('runner');
@@ -459,7 +488,7 @@ export class Runner {
     return state;
   }
 
-  private async runRecovery(options: RecoverOptions): Promise<void> {
+  private async runRecovery(options: RecoverOptions & { haltedWith?: string | null }): Promise<void> {
     const state = this.state!;
     const record = phaseRecord(state, options.phase);
     const owner = `autopilot/${state.id}`;
@@ -472,7 +501,8 @@ export class Runner {
       }
 
       if (options.mode === 'resume') {
-        const said = await this.resumeWithInstruction(options.phase, options.instruction ?? '');
+        const said = await this.resumeWithInstruction(
+          options.phase, options.instruction ?? '', options.haltedWith);
         if (said) { this.halt(said, options.phase); return; }
       }
 
@@ -495,7 +525,9 @@ export class Runner {
   }
 
   /** Resume the phase's session with the operator's own words. Returns a refusal. */
-  private async resumeWithInstruction(phase: number, instruction: string): Promise<string | null> {
+  private async resumeWithInstruction(
+    phase: number, instruction: string, haltedWith?: string | null,
+  ): Promise<string | null> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
     const sessionId = record.sessionId ?? record.resumeSessionId;
@@ -505,9 +537,17 @@ export class Runner {
 
     const spawn = this.deps.spawn ?? spawnClaude;
     const board = await this.board();
-    const prompt = instruction.trim()
-      ? `${instruction.trim()}\n\n---\n\n${closeoutPrompt(state.slug, phase, board.states[phase] ?? 'unknown')}`
-      : closeoutPrompt(state.slug, phase, board.states[phase] ?? 'unknown');
+    // The operator's words first — they are the newest fact and the reason this
+    // resume exists — then what the phase already knows went wrong, then the
+    // closeout procedure. A resumed session has the earlier transcript in its
+    // own context, but not the runner's verdict on it: the verification ran
+    // AFTER that session exited, so the failure it is being asked to fix is
+    // something it has never seen.
+    const prompt = [
+      instruction.trim(),
+      this.retryContext(record, haltedWith),
+      closeoutPrompt(state.slug, phase, board.states[phase] ?? 'unknown'),
+    ].filter(Boolean).join('\n\n---\n\n');
 
     this.record('phase.resume-instruction', { sessionId, instruction: instruction.slice(0, 2_000) }, phase);
     // A resumed phase IS running, and nothing said so. The record kept whatever
@@ -1254,7 +1294,17 @@ export class Runner {
     // decides what a boot prompt says about the plan — including the plan's own
     // skills line. This is the operator adding to it for one run.
     const extraSkills = [...(state.skills ?? []), ...(state.phaseOptions?.[String(phase)]?.skills ?? [])];
-    const prompt = engineText + skillDirective(extraSkills);
+    // A retry used to get the SAME prompt as the first attempt, because the
+    // engine's boot prompt describes the job and the job did not change. So a
+    // second session opened knowing everything about what to do and nothing
+    // about the eleven failures the first one left behind — and re-derived them
+    // by running the suite again, or did not, and wrote the same code twice.
+    //
+    // Between the engine's text and the skill directive, so the plan still
+    // speaks first and the directive still has the last word.
+    const context = this.retryContext(record);
+    const prompt = engineText + (context ? `\n\n${context}\n` : '') + skillDirective(extraSkills);
+    if (context) this.record('phase.retry-context', { bytes: Buffer.byteLength(context) }, phase);
     if (extraSkills.length) this.record('phase.skills', { skills: [...new Set(extraSkills)] }, phase);
 
     /* ---- the last chance to not start ----
@@ -1306,6 +1356,29 @@ export class Runner {
     } finally {
       await this.release(phase, owner);
     }
+  }
+
+  /**
+   * What the previous attempt(s) at this phase left behind, as prompt text.
+   *
+   * One method rather than two call sites building it, because the retry path
+   * and the resume path must tell the session the same story — they differ in
+   * what surrounds the context, never in the context itself.
+   *
+   * `halt` is passed in rather than read off the run, because by the time any
+   * of this is assembled `state.halt` is always null: `retry()`, `recover()` and
+   * a resumed `start()` all clear the banner first, deliberately — a run being
+   * worked on must not go on looking stopped. The caller that still has the
+   * reason hands it over; the callers that never had one pass nothing. Whoever
+   * passes it must have checked it belongs to THIS phase: a stop recorded
+   * against phase 3 would open phase 5's session with an authoritative account
+   * of a failure in code it is not about to touch.
+   */
+  private retryContext(record: PhaseRecord, halt?: string | null): string {
+    // Nothing has run yet: no attempt, no verdict, no closing words. There is
+    // no story to tell and a header promising one would be a lie.
+    if (!(record.attempts > 0 || record.verification || record.said)) return '';
+    return failureContext(record, halt);
   }
 
   /**
@@ -1569,16 +1642,30 @@ export class Runner {
     /* 1. the plan's own verification commands */
     const text = await this.deps.verificationText(state.slug, phase);
     const verify = this.deps.verify ?? verifyPhase;
+    const cwd = await this.verifyCwd(phase);
     const verification = await verify(text, {
-      cwd: state.root,
+      cwd,
+      // Explicit, and longer than the 15-minute default: a real phase's
+      // verification is a full suite, sometimes a container build, and the
+      // default turned a slow-but-passing check into a red one that proved
+      // nothing. Still bounded — a wedged command must end.
+      timeoutMs: VERIFY_TIMEOUT_MS,
       signal: this.abort?.signal ?? undefined,
       onStart: (command, index, total) => {
         this.emit('verify', { phase, command, index, total });
       },
     });
     record.verification = verification;
+    // Against the RESOLVED root, the same base `verifyCwd` measured from.
+    // `state.root` can be a symlinked path (`/var/…` → `/private/var/…` on
+    // macOS), and relating a resolved path to an unresolved one yields a string
+    // of `../..` that names the right directory and reads as an escape.
+    record.verifiedIn = relative(resolve(state.root), cwd) || '.';
     this.record('phase.verify', {
       ok: verification.ok, reason: verification.reason,
+      // Where they ran. A verification that passed in the wrong directory and
+      // one that passed in the right one are indistinguishable without this.
+      cwd: record.verifiedIn,
       ran: verification.ran.map((r) => ({ command: r.command, code: r.code, ms: r.ms })),
       notRun: verification.notRun,
     }, phase);
@@ -1594,7 +1681,8 @@ export class Runner {
       state.consecutiveFailures++;
       this.halt(
         `phase ${phase} did not verify: ${broke.length} of ${verification.ran.length} command(s) failed `
-        + `— ${broke.map((r) => r.command).join(', ')}`,
+        + `— ${broke.map((r) => r.command).join(', ')}`
+        + await this.verifyHint(phase),
         phase,
       );
       return false;
@@ -1634,6 +1722,109 @@ export class Runner {
     this.record('phase.done', { costUsd: record.costUsd, attempts: record.attempts }, phase);
     this.emit('phase', { phase, status: 'done' });
     return true;
+  }
+
+  /**
+   * Where this phase's verification commands mean to be run.
+   *
+   * The root unless the plan says otherwise. `**Verify in:**` exists because
+   * verification runs `bash -c` with the cwd the console was opened on, and in
+   * a monorepo that is the superproject: a plan whose phase lives in one
+   * submodule had its suite run against the whole tree, and one real plan's
+   * `docker compose run … -v "$PWD:/app"` mounted the entire monorepo into a
+   * container and hung there.
+   *
+   * Two ways to be refused, both falling back to the root rather than failing
+   * the phase — a plan with a typo in one bullet should still get verified:
+   *
+   *  · It escapes the root. `../../etc` is not a directory this console gets to
+   *    run commands in, whatever the plan says. The plan file is editable by
+   *    anyone who can open the repo, so this is a boundary, not a typo check.
+   *  · It is not there. A path that named a directory when the plan was written
+   *    and does not now is exactly the case where running in it silently would
+   *    be worst — bash would inherit the parent's cwd and nobody would be told.
+   *
+   * Both journal `phase.verify-in-missing`, because a verification that ran
+   * somewhere other than where the plan said must never be silent.
+   */
+  private async verifyCwd(phase: number): Promise<string> {
+    const state = this.state!;
+    const root = resolve(state.root);
+    const declared = (await this.deps.verifyIn?.(state.slug, phase))?.trim();
+    if (!declared) return root;
+
+    const target = resolve(root, declared);
+    const inside = target === root || target.startsWith(`${root}/`);
+    if (!inside) {
+      this.record('phase.verify-in-missing', {
+        declared, reason: 'it resolves outside the repository root', usedRoot: true,
+      }, phase);
+      return root;
+    }
+
+    try {
+      if (!statSync(target).isDirectory()) throw new Error('not a directory');
+    } catch {
+      this.record('phase.verify-in-missing', {
+        declared, reason: 'no such directory under the repository root', usedRoot: true,
+      }, phase);
+      return root;
+    }
+    return target;
+  }
+
+  /**
+   * A sentence to add to a verification halt when the plan looks like it meant
+   * a different directory — or `''`, which is the usual answer.
+   *
+   * Deliberately a HINT and never an automatic cwd. A silently-chosen directory
+   * that happens to be wrong verifies the wrong tree and reports green, which is
+   * strictly worse than the failure it would be papering over: the phase would
+   * be marked done on the strength of a suite that never looked at its code.
+   * So the console says what it noticed and lets a person write it into the
+   * plan, where it is reviewable and where the next run will read it too.
+   *
+   * All three conditions have to hold, and each one is a way of not guessing:
+   *  · the plan does not already say (otherwise this is contradicting it);
+   *  · the Repos cell names exactly ONE repo (with two, the plan must choose);
+   *  · exactly one directory near the root has that name (with two, so is this).
+   */
+  private async verifyHint(phase: number): Promise<string> {
+    const state = this.state!;
+    if ((await this.deps.verifyIn?.(state.slug, phase))?.trim()) return '';
+
+    const repos = (await this.deps.phaseRepos?.(state.slug, phase)) ?? [];
+    if (repos.length !== 1) return '';
+
+    const matches = this.subdirsNamed(basename(repos[0]));
+    if (matches.length !== 1) return '';
+
+    return `. This phase's Repos column names \`${repos[0]}\`, and the commands ran in `
+      + `\`${relative(resolve(state.root), await this.verifyCwd(phase)) || '.'}\` — if they should run `
+      + `in \`${matches[0]}\`, add \`- **Verify in:** ${matches[0]}\` to the plan's §Phase ${phase}`;
+  }
+
+  /**
+   * Directories at most two levels below the root with this name, relative to
+   * the root. Two levels because that is where a submodule of a monorepo lives
+   * (`packages/cart-api`) — deeper is a `node_modules` crawl, and a match found
+   * six levels down would not be what a Repos column meant anyway.
+   */
+  private subdirsNamed(name: string): string[] {
+    const root = resolve(this.state!.root);
+    const found: string[] = [];
+    const scan = (dir: string, depth: number): void => {
+      let entries;
+      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+        const full = join(dir, entry.name);
+        if (entry.name === name) found.push(relative(root, full));
+        if (depth > 0) scan(full, depth - 1);
+      }
+    };
+    scan(root, 1);
+    return found;
   }
 
   /**

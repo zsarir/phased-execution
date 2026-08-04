@@ -616,6 +616,190 @@ test('a red verification halts before the board is even consulted', async () => 
   r.cleanup();
 });
 
+/* ------------------------------------------------------------------ *
+ * Where the verification commands run
+ * ------------------------------------------------------------------ */
+
+/** A runner that also knows the plan's `**Verify in:**` for every phase. */
+function verifyInRunner(r: Repo, spawn: SpawnFn, verification: string, verifyIn: string | undefined) {
+  const events: { event: string; data: Record<string, unknown> }[] = [];
+  const instance = new Runner({
+    scriptsDir: r.scripts,
+    spawn,
+    verificationText: () => verification,
+    verifyIn: () => verifyIn,
+    onEvent: (event, data) => events.push({ event, data }),
+  });
+  return { instance, events };
+}
+
+/** The payloads of every journal line with this name — `emit` nests them one deep. */
+const journalled = (
+  events: { event: string; data: Record<string, unknown> }[], name: string,
+) => events
+  .filter((e) => e.event === 'run:journal' && e.data.event === name)
+  .map((e) => (e.data.data ?? {}) as Record<string, unknown>);
+
+test('verification runs where the plan says, and the run records where that was', async () => {
+  // It ran with cwd = the root the console was opened on. In a monorepo that is
+  // the superproject, so one real plan's `docker compose run … -v "$PWD:/app"`
+  // mounted the WHOLE monorepo into the container and hung there. The plan knew
+  // which directory it meant; it had no way to say so.
+  const r = repo();
+  mkdirSync(join(r.root, 'services', 'api'), { recursive: true });
+
+  const { instance } = verifyInRunner(r, workingSession(r), '`pwd`', 'services/api');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const record = instance.current()!.phases['1'];
+  assert.equal(record.verifiedIn, 'services/api', 'the run says where it verified');
+  assert.match(record.verification!.ran[0].output!, /services\/api$/,
+    'and the command really ran there — this is `pwd` reporting for itself');
+  r.cleanup();
+});
+
+test('a Verify in: that escapes the root is refused, and the refusal is journalled', async () => {
+  // The plan file is editable by anyone who can open the repo, so this is a
+  // boundary rather than a typo check: `../../etc` is not a directory this
+  // console gets to run commands in, whatever a plan says.
+  const r = repo();
+  const { instance, events } = verifyInRunner(r, workingSession(r), '`pwd`', '../../etc');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const record = instance.current()!.phases['1'];
+  assert.equal(record.verifiedIn, '.', 'it fell back to the root rather than failing the phase');
+  const refusals = journalled(events, 'phase.verify-in-missing');
+  assert.ok(refusals.length >= 1, 'a verification that ran somewhere else must never be silent');
+  assert.match(String(refusals[0].reason), /outside the repository root/);
+  r.cleanup();
+});
+
+test('a Verify in: naming a directory that is not there falls back, loudly', async () => {
+  // The worst case for silence: a path that named a directory when the plan was
+  // written and does not now. bash would inherit the parent's cwd and nobody
+  // would be told which tree had actually been verified.
+  const r = repo();
+  const { instance, events } = verifyInRunner(r, workingSession(r), '`pwd`', 'services/api');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  assert.equal(instance.current()!.phases['1'].verifiedIn, '.');
+  assert.match(
+    String(journalled(events, 'phase.verify-in-missing')[0].reason),
+    /no such directory/,
+  );
+  r.cleanup();
+});
+
+/** A runner that knows both the plan's `Verify in:` and its Repos column. */
+function hintRunner(r: Repo, repos: string[] | undefined, verifyIn?: string) {
+  const instance = new Runner({
+    scriptsDir: r.scripts,
+    spawn: workingSession(r),
+    verificationText: () => '`false`',
+    verifyIn: () => verifyIn,
+    phaseRepos: () => repos,
+  });
+  return instance;
+}
+
+test('a failed verification suggests the Repos column\'s directory — as a hint, never a cwd', async () => {
+  // A silently-chosen directory that happens to be wrong verifies the wrong tree
+  // and reports GREEN, which is worse than the failure it papers over. So the
+  // console says what it noticed and a person writes it into the plan.
+  const r = repo();
+  mkdirSync(join(r.root, 'packages', 'cart-api'), { recursive: true });
+
+  const instance = hintRunner(r, ['cart-api']);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const reason = instance.current()!.halt!.reason;
+  assert.match(reason, /did not verify/, 'it is still a failure, not a suggestion');
+  assert.match(reason, /Repos column names `cart-api`/);
+  assert.match(reason, /- \*\*Verify in:\*\* packages\/cart-api/, 'names the bullet to add, and where');
+  assert.equal(instance.current()!.phases['1'].verifiedIn, '.',
+    'and it still ran at the root — the hint changed nothing about this run');
+  r.cleanup();
+});
+
+test('no hint when the plan already says where to verify', async () => {
+  const r = repo();
+  mkdirSync(join(r.root, 'packages', 'cart-api'), { recursive: true });
+  const instance = hintRunner(r, ['cart-api'], 'packages/cart-api');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  assert.doesNotMatch(instance.current()!.halt!.reason, /Repos column/,
+    'the plan has answered — repeating the question would be contradicting it');
+  r.cleanup();
+});
+
+test('no hint when the answer would be a guess', async () => {
+  // Two repos: the plan must choose. Two matching directories: so must a person.
+  // A repo named in the plan with no directory at all: nothing to suggest.
+  for (const [repos, dirs] of [
+    [['cart-api', 'cart-web'], [['packages', 'cart-api'], ['packages', 'cart-web']]],
+    [['api'], [['services', 'api'], ['vendor', 'api']]],
+    [['api'], []],
+    [undefined, [['services', 'api']]],
+  ] as [string[] | undefined, string[][]][]) {
+    const r = repo();
+    for (const parts of dirs) mkdirSync(join(r.root, ...parts), { recursive: true });
+
+    const instance = hintRunner(r, repos);
+    await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+    await instance.wait();
+
+    assert.doesNotMatch(
+      instance.current()!.halt!.reason,
+      /Repos column/,
+      `guessed for repos=${JSON.stringify(repos)} dirs=${JSON.stringify(dirs)}`,
+    );
+    r.cleanup();
+  }
+});
+
+test('verification commands get half an hour, stated rather than defaulted', async () => {
+  // At `verify.ts`'s 15-minute default a slow-but-green suite came back red and
+  // halted a phase that had done nothing wrong. A phase's verification is a full
+  // suite, often a build, sometimes a container — but still bounded, because a
+  // wedged command has to end.
+  const r = repo();
+  const seen: (number | undefined)[] = [];
+  const instance = new Runner({
+    scriptsDir: r.scripts,
+    spawn: workingSession(r),
+    verificationText: () => '`true`',
+    verify: async (_text, opts) => {
+      seen.push(opts.timeoutMs);
+      return { ok: true, reason: '1 command green', ran: [], notRun: [] };
+    },
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  assert.ok(seen.length > 0, 'verification ran');
+  for (const ms of seen) assert.equal(ms, 30 * 60_000);
+  r.cleanup();
+});
+
+test('a plan that says nothing verifies at the root, and says so', async () => {
+  const r = repo();
+  const { instance, events } = verifyInRunner(r, workingSession(r), '`true`', undefined);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  assert.equal(instance.current()!.phases['1'].verifiedIn, '.');
+  assert.equal(journalled(events, 'phase.verify-in-missing').length, 0,
+    'saying nothing is not a mistake — only a path that cannot be honoured is');
+  assert.equal(String(journalled(events, 'phase.verify')[0].cwd), '.',
+    'the journal line carries the effective cwd either way');
+  r.cleanup();
+});
+
 test('a plan left failing validate.sh halts even when the phase verified', async () => {
   const r = repo();
   r.setLintFail(true);

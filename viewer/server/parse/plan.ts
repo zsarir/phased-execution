@@ -46,6 +46,18 @@ export type PhaseDetail = {
   steps?: string;
   exitCriteria?: string;
   verification?: string;
+  /**
+   * `**Verify in:**` — the directory the verification commands mean, relative
+   * to the repository root.
+   *
+   * Verification runs `bash -c` with the cwd the console was opened on. In a
+   * monorepo that is the superproject, so a plan whose phase lives in one
+   * submodule had its suite run against the whole tree — and a real plan's
+   * `docker compose run … -v "$PWD:/app"` mounted the entire monorepo into the
+   * container and hung. The plan already knows which directory it means; until
+   * now there was no way for it to say so.
+   */
+  verifyIn?: string;
   handoffMustRecord?: string;
   /** Every labelled bullet, so nothing in an unusual plan is dropped. */
   bullets: { label: string; body: string }[];
@@ -257,6 +269,9 @@ export function parsePlan(text: string, slug: string, path: string): Plan {
       steps: bullet(bullets, 'Steps'),
       exitCriteria: bullet(bullets, 'Exit criteria'),
       verification: bullet(bullets, 'Verification'),
+      // Distinct prefixes: neither `verification` nor `verify in` starts with
+      // the other, so `bullet()`'s prefix match cannot confuse them.
+      verifyIn: bullet(bullets, 'Verify in'),
       handoffMustRecord: bullet(bullets, 'Handoff must record'),
       bullets,
       raw: block.raw,

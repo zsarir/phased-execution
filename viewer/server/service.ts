@@ -36,7 +36,7 @@ import {
   resolveBudget, weightOf, type Sizing, type PhaseAnalysis,
 } from './analysis/graph.ts';
 import {
-  planStats, portfolio, etaSamples, estimateEta, healthIssues,
+  planStats, portfolio, etaSamples, estimateEta, healthIssues, splitRepos,
   type PlanStats, type Portfolio, type PlanContext, type EtaEstimate,
 } from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
@@ -181,6 +181,8 @@ export type PhaseDiagnosis = {
   boardState: string;
   said: string | null;
   verification: VerifySummary | null;
+  /** Where the commands ran, relative to the root — `.` when it is the root. */
+  verifiedIn: string | null;
   lint: { ok: boolean; summary: string } | null;
   closeout: { at: string; ok: boolean; sessionId?: string; note?: string } | null;
   sessionId: string | null;
@@ -426,6 +428,14 @@ export class Service {
       // The plan is the only source for what proves a phase worked, exactly as
       // it is the only source for what the phase should do.
       verificationText: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verification,
+      // …and where they mean to be run. Same store, same reason.
+      verifyIn: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verifyIn,
+      // Read only to SUGGEST a `Verify in:` on a failure — never to pick a
+      // directory. The Repos column has always been there; nothing read it.
+      phaseRepos: (slug, phase) => {
+        const row = this.store?.get(slug)?.plan?.graph.find((r) => r.phase === phase);
+        return row ? splitRepos(row.repos) : undefined;
+      },
       // …and for what it should run as. These bullets have been in the plan
       // format from the start; until now nothing read them.
       phaseDefaults: (slug, phase) => {
@@ -1790,6 +1800,20 @@ export class Service {
     return this.runner.busy() ? this.runner.current()?.id ?? null : null;
   }
 
+  /**
+   * The run driving THIS plan right now, or null.
+   *
+   * One runner today, so this is `current()` with the slug checked. The point of
+   * the method is the question it asks: every caller is written against "the run
+   * for this slug" rather than "the run", so phase 4's pool replaces the body
+   * (`this.runners.get(slug)`) and no caller changes.
+   */
+  private drivingRun(slug: string): RunState | null {
+    if (!this.runner.busy()) return null;
+    const live = this.runner.current();
+    return live?.slug === slug ? live : null;
+  }
+
   /** The live run if there is one, otherwise the last one recorded on disk. */
   /**
    * The run read paths, board-aware.
@@ -2193,6 +2217,9 @@ export class Service {
       boardState: board[phase] ?? 'unknown',
       said: record.said ?? null,
       verification: record.verification ?? null,
+      // Where they ran, so "it passes on my machine" can be answered without
+      // guessing which directory the console was standing in.
+      verifiedIn: record.verifiedIn ?? null,
       lint: record.lint ?? null,
       closeout: record.closeout ?? null,
       sessionId: record.sessionId ?? record.resumeSessionId ?? null,
@@ -2265,10 +2292,26 @@ export class Service {
     // 1. The autopilot owns the working tree while it drives. A recovery
     //    session editing the same files under it is the one failure mode that
     //    corrupts work that was going to be fine.
+    //
+    //    Asked of the TARGET plan first. "Is anything running" was the same
+    //    question while there was one runner; with the pool it stops being one,
+    //    and a check written as "is the current run busy" would then refuse a
+    //    recovery on plan A because plan B was mid-phase — or, worse, allow one
+    //    because `current()` happened to answer about a third plan.
+    const own = this.drivingRun(request.slug);
+    if (own) {
+      return refuse(409,
+        `${own.slug} is mid-run (${own.status}) — pause or stop it before starting a recovery session.`);
+    }
+    //    A run on ANOTHER plan is still a refusal today, for a different reason:
+    //    one console, one working tree. Phase 4 replaces this arm with a scope
+    //    intersection — disjoint repos will be allowed to proceed — which is
+    //    why it is written separately from the one above rather than merged.
     if (this.runner.busy()) {
-      const live = this.runner.current();
-      return refuse(409, live
-        ? `${live.slug} is mid-run (${live.status}) — pause or stop it before starting a recovery session.`
+      const other = this.runner.current();
+      return refuse(409, other
+        ? `${other.slug} is mid-run (${other.status}) and shares this working tree, so a recovery `
+          + `session for ${request.slug} would edit files under it. Pause or stop it first.`
         : 'A run is in progress — pause or stop it before starting a recovery session.');
     }
 

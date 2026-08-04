@@ -190,7 +190,14 @@ export function normalisePlanStatus(raw?: string): string | undefined {
   return known.find((k) => first.startsWith(k)) ?? first.split(/\s+/)[0] ?? undefined;
 }
 
-function splitRepos(cell: string): string[] {
+/**
+ * The Repos cell as tokens. Exported since the runner needs the same reading to
+ * suggest a `Verify in:` when a phase verifies in the wrong tree — two answers
+ * to "which repos does this phase touch" would be one answer too many. Phase 3
+ * of the concurrency plan promotes this to `shared/scope.js`, where the bash
+ * side can agree with it too; until then this is the one definition.
+ */
+export function splitRepos(cell: string): string[] {
   // Parenthetical asides come off first — `api-server (+web snapshot)` is one
   // repo, and splitting on the `+` inside would invent two.
   return cell

@@ -664,6 +664,8 @@ export interface PhaseDiagnosis {
   boardState: string;
   said: string | null;
   verification: VerifySummary | null;
+  /** Where the commands ran, relative to the root — `.` when it is the root. */
+  verifiedIn: string | null;
   lint: { ok: boolean; summary: string } | null;
   closeout: { at: string; ok: boolean; sessionId?: string; note?: string } | null;
   sessionId: string | null;

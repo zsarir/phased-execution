@@ -151,6 +151,40 @@ describe('runNotes — the actions attached to a note', () => {
     expect(readOnly.find((n) => n.id === 'scoped')?.action).toBeUndefined();
   });
 
+  it('PIN: a halted verification always offers the AI a way in', () => {
+    // The capability #19 asks for — "the app can spawn a session to fix this" —
+    // is this button, and nothing else on the page leads to it. A halt card
+    // without it is the dead end the recovery work existed to remove, so the
+    // three states are pinned rather than left to the component.
+    const halted = run({
+      status: 'halted',
+      halt: { at: '2026-08-03T10:00:00Z', reason: 'phase 2 did not verify: npm test', phase: 2 },
+    });
+    const recovery = { kind: 'halted-verification' as const, allowAgent: true, onStart: () => {} };
+
+    render(<RunStatusStack run={halted} live={false} allowRun recovery={recovery} />);
+    expect(screen.getByRole('button', { name: /fix/i })).toBeEnabled();
+
+    // A console without --allow-agent says which flag turns it on. Never absent:
+    // a remedy that exists and is unavailable has to say so.
+    const off = runNotes({
+      run: halted, live: false, allowRun: true, recovery: { ...recovery, allowAgent: false },
+    });
+    expect(off.find((n) => n.id === 'halt')?.action).toBeTruthy();
+
+    // And a recovery already running is a link to it, not a second one.
+    render(
+      <RunStatusStack
+        run={halted}
+        live={false}
+        allowRun
+        recovery={{ ...recovery, runningSessionId: 'sess-9' }}
+      />,
+    );
+    expect(screen.getByRole('link', { name: /recovery running/i }))
+      .toHaveAttribute('href', '#/agent/sess-9');
+  });
+
   it('offers to re-guard only a run that is still live', () => {
     const loose = run({ permissionProfile: 'trusted' });
     expect(runNotes({ run: loose, live: true, allowRun: true, onGuard: () => {} })[0].action)

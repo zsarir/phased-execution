@@ -114,6 +114,15 @@ export type PhaseRecord = {
   note?: string;
   gate?: { clear: boolean; kind: string; detail: string };
   verification?: VerifySummary;
+  /**
+   * Where the verification commands actually ran, relative to the run's root
+   * (`.` for the root itself). Recorded because a suite that passed in the
+   * wrong directory and one that passed in the right one look identical
+   * afterwards — and for a whole class of monorepo plans the first is what was
+   * happening. Set from the plan's `**Verify in:**`, or `.` when it says
+   * nothing or names a directory that is not there.
+   */
+  verifiedIn?: string;
   lint?: { ok: boolean; summary: string };
   /**
    * The one continuation this phase is allowed when its session exits without

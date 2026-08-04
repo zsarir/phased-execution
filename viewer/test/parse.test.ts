@@ -58,6 +58,7 @@ Key files by repo.
   1. Migration round-trips.
   2. Guard lists 36 tables.
 - **Verification:** \`pytest -q\`
+- **Verify in:** services/api
 - **Handoff must record:** revision id.
 
 ### Phase 2 — Routes
@@ -154,6 +155,11 @@ test('plan parse reads the graph, phases, sizes, gates and budget', () => {
   assert.match(plan.phases[1].exitCriteria ?? '', /Migration round-trips/);
   assert.match(plan.phases[1].exitCriteria ?? '', /Guard lists 36 tables/);
   assert.equal(plan.phases[1].verification, '`pytest -q`');
+  // Two bullets whose labels share a prefix as far as "Verif". `bullet()` matches
+  // on prefix, so the pair is worth pinning: neither string starts with the
+  // other, and reading one into the other would run the suite in the wrong tree.
+  assert.equal(plan.phases[1].verifyIn, 'services/api');
+  assert.equal(plan.phases[2].verifyIn, undefined, 'a plan that says nothing means the root');
   assert.match(plan.context ?? '', /Why this exists/);
   assert.match(plan.endToEnd ?? '', /whole loop/);
   assert.equal(plan.callouts.length, 2);

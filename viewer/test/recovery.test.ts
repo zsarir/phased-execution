@@ -27,6 +27,8 @@ import { join } from 'node:path';
 import { Runner } from '../server/runner/runner.ts';
 import { Approvals } from '../server/runner/approvals.ts';
 import { recoveryActions } from '../server/service.ts';
+import { newRun, saveRun } from '../server/runner/state.ts';
+import { MAX_FAILURE_CONTEXT_BYTES } from '../server/runner/failure-context.ts';
 import { phaseActions } from '../shared/phase-model.js';
 import type { SpawnRequest } from '../server/runner/spawn.ts';
 import type { VerifySummary } from '../server/runner/state.ts';
@@ -321,6 +323,168 @@ test('a resumed phase reads as running, with a child, while the session is up', 
     // And it is cleaned up: a child left on the record is a Stop button aimed
     // at a pid that has gone.
     assert.equal(runner.current()!.child, null, 'the child is cleared when the session ends');
+  } finally { h.cleanup(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * What a second-chance session is told about the first one
+ * ------------------------------------------------------------------ */
+
+/** A red verification with a long log, so the tail is the only part that fits. */
+const RED_WITH_LOG: VerifySummary = {
+  ok: false,
+  reason: '`npm test` exited 1',
+  ran: [{
+    command: 'npm test',
+    ok: false,
+    code: 1,
+    ms: 12,
+    output: `${'compiling…\n'.repeat(300)}FAIL cart.test.ts\n  expected 3, got 2`,
+  }],
+  notRun: [],
+};
+
+test('a retried phase boots knowing what failed last time', async () => {
+  // It did not. A retry re-sent the engine's boot prompt verbatim — identical on
+  // attempt one and attempt four — so the second session opened knowing the job
+  // and nothing about the eleven failures the first one left behind. It either
+  // re-derived them by running the suite again, at the cost of minutes, or it
+  // did not, and wrote the same code a second time.
+  const h = harness();
+  try {
+    // The on-disk state after a failed verification: the record carries the
+    // verdict, the phase is pending again, and no handoff exists — so the board
+    // reads ready and the loop picks it up.
+    const stale = newRun({ slug: 'demo', root: h.root });
+    stale.phases['1'] = {
+      phase: 1, status: 'pending', attempts: 1, costUsd: 0.4,
+      verification: RED_WITH_LOG,
+      said: 'I ran out of turns with the suite still red.',
+    };
+    saveRun(stale);
+
+    const log: SpawnLog = [];
+    const runner = new Runner({
+      scriptsDir: h.scriptsDir,
+      verify: async () => GREEN,
+      verificationText: () => 'run those commands.',
+      spawn: async (request: SpawnRequest) => {
+        log.push({ prompt: request.prompt });
+        writeFileSync(h.handoff, 'status: complete');
+        return {
+          signal: { subtype: 'success' as const, code: 0, text: 'done' },
+          sessionId: 'sid-2', costUsd: 0, turns: 1, resultText: 'ok', durationMs: 1, argv: [],
+        };
+      },
+    });
+
+    await runner.start({ slug: 'demo', root: h.root, resumeRunId: stale.id, autonomy: 'keep-going' });
+    await runner.wait();
+
+    assert.equal(log.length, 1, 'the phase ran again');
+    const prompt = log[0].prompt;
+    assert.match(prompt, /do phase 1/, "the engine's boot prompt still leads");
+    assert.match(prompt, /\$ npm test/, 'names the command that failed');
+    assert.match(prompt, /exit 1/, 'and what it exited with');
+    assert.match(prompt, /expected 3, got 2/, 'and the END of its log, which is where the failure is');
+    assert.match(prompt, /I ran out of turns/, "and the previous session's own account");
+    assert.match(prompt, /the repository is right/,
+      'the evidence is a snapshot from before the retry; the session must be told to check it');
+
+    // The insert is an addition to a prompt, not a replacement for one.
+    const insert = prompt.slice(prompt.indexOf('What happened on the previous'));
+    assert.ok(Buffer.byteLength(insert) <= MAX_FAILURE_CONTEXT_BYTES + 200,
+      `the failure context was ${Buffer.byteLength(insert)} bytes`);
+  } finally { h.cleanup(); }
+});
+
+test('a resume prompt orders the operator\'s words, then the failure, then the closeout', async () => {
+  const h = harness();
+  try {
+    const log: SpawnLog = [];
+    const runner = new Runner({
+      scriptsDir: h.scriptsDir,
+      // Red on the first pass (the halt), green on the recheck after the resume.
+      verify: (() => {
+        let calls = 0;
+        return async () => (++calls === 1 ? RED_WITH_LOG : GREEN);
+      })(),
+      verificationText: () => 'run those commands.',
+      spawn: async (request: SpawnRequest) => {
+        log.push({ prompt: request.prompt, resume: request.resume });
+        writeFileSync(h.handoff, 'status: complete');
+        return {
+          signal: { subtype: 'success' as const, code: 0, text: 'done' },
+          sessionId: 'sid-3', costUsd: 0, turns: 1, resultText: 'ok', durationMs: 1, argv: [],
+        };
+      },
+    });
+
+    const started = await runner.start({ slug: 'demo', root: h.root, autonomy: 'keep-going' });
+    await runner.wait();
+    assert.equal(runner.current()!.status, 'halted', 'the red verification stopped it');
+
+    await runner.recover({
+      slug: 'demo', root: h.root, runId: started.id, phase: 1, mode: 'resume',
+      instruction: 'the assertion is wrong, not the code',
+    });
+    await runner.wait();
+
+    const resumed = log.find((entry) => entry.resume)!;
+    assert.ok(resumed, 'the phase session was resumed');
+    const at = (needle: string) => resumed.prompt.indexOf(needle);
+
+    assert.ok(at('the assertion is wrong, not the code') >= 0, "the operator's instruction is there");
+    assert.ok(at('$ npm test') > at('the assertion is wrong, not the code'),
+      'the newest fact — what the operator just typed — leads');
+    assert.ok(at('new-handoff.sh') > at('$ npm test'),
+      'the closeout procedure comes last, so the session reads the evidence before the paperwork');
+    assert.match(resumed.prompt, /expected 3, got 2/,
+      'a resumed session has its own transcript but NOT the verdict — verification ran after it exited');
+    // The halt reason survives a resume (unlike a retry, which clears it).
+    assert.match(resumed.prompt, /Why the run stopped: phase 1 did not verify/);
+  } finally { h.cleanup(); }
+});
+
+test('a halt recorded against another phase is never quoted at this one', async () => {
+  // `state.halt` belongs to the RUN. Quoting phase 3's failure in phase 1's
+  // prompt would open that session with an authoritative account of a bug in
+  // code it is not about to touch.
+  const h = harness();
+  try {
+    const stale = newRun({ slug: 'demo', root: h.root });
+    stale.phases['1'] = {
+      phase: 1, status: 'failed', attempts: 1, costUsd: 0,
+      sessionId: 'sid-old', said: 'ran out of turns',
+    };
+    stale.status = 'halted';
+    stale.halt = { at: new Date().toISOString(), reason: 'PHASE THREE BROKE THE MIGRATIONS', phase: 3 };
+    saveRun(stale);
+
+    const log: SpawnLog = [];
+    const runner = new Runner({
+      scriptsDir: h.scriptsDir,
+      verify: async () => GREEN,
+      verificationText: () => 'run those commands.',
+      spawn: async (request: SpawnRequest) => {
+        log.push({ prompt: request.prompt, resume: request.resume });
+        writeFileSync(h.handoff, 'status: complete');
+        return {
+          signal: { subtype: 'success' as const, code: 0, text: 'done' },
+          sessionId: 'sid-4', costUsd: 0, turns: 1, resultText: 'ok', durationMs: 1, argv: [],
+        };
+      },
+    });
+
+    await runner.recover({
+      slug: 'demo', root: h.root, runId: stale.id, phase: 1, mode: 'resume', instruction: 'carry on',
+    });
+    await runner.wait();
+
+    const resumed = log.find((entry) => entry.resume)!;
+    assert.ok(resumed, 'the phase session was resumed');
+    assert.doesNotMatch(resumed.prompt, /PHASE THREE BROKE THE MIGRATIONS/);
+    assert.match(resumed.prompt, /ran out of turns/, "…while this phase's own history is still carried");
   } finally { h.cleanup(); }
 });
 
