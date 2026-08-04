@@ -40,6 +40,7 @@ import { randomUUID } from 'node:crypto';
 
 import { EFFORTS, isEffort, PERMISSION_MODES, sanitize } from './runner/spawn.ts';
 import { MODEL_FALLBACK as MODELS } from './runner/errors.ts';
+import { recoveryLabel, recoveryPrompt, type RecoveryFacts } from './recovery.ts';
 import { skillDirective, type SkillInfo } from './skills.ts';
 import type { LaunchSpec, SessionMeta } from './terminal.ts';
 
@@ -63,6 +64,15 @@ export type AgentContext = {
   scriptsDir: string;
   /** Whether a source root is open — the plan wizard needs one to write into. */
   rootOpen: boolean;
+  /**
+   * The resolved recovery briefing, for `intent: 'recovery'`.
+   *
+   * Composed by the service (which can read the board, the run, the lock and
+   * the health issues) and passed in here rather than parsed from the body —
+   * the browser names *what* to recover, never *what the prompt says*. Absent
+   * for every other intent.
+   */
+  recovery?: RecoveryFacts;
 };
 
 /**
@@ -79,6 +89,9 @@ export type AgentContext = {
  *   resume          a claude session uuid → `--resume`, exclusive with both
  *   intent: 'plan'  the wizard: the server composes the prompt from `brief`
  *   brief           ≤ 8 KB, required (and only meaningful) with intent
+ *   intent:         a recovery: the server composes the prompt from the
+ *     'recovery'    briefing it resolved (`ctx.recovery`), and stamps
+ *                   `meta.recovery` so the exit can be checked against it
  */
 export function buildAgentLaunch(
   body: Record<string, unknown>,
@@ -100,8 +113,11 @@ export function buildAgentLaunch(
   const resume = str(body.resume);
   if (resume && !UUID_RE.test(resume)) return bad('resume must be a claude session id (a uuid).');
 
-  if (body.intent != null && body.intent !== 'plan') return bad("intent, when given, must be 'plan'.");
+  if (body.intent != null && body.intent !== 'plan' && body.intent !== 'recovery') {
+    return bad("intent, when given, must be 'plan' or 'recovery'.");
+  }
   const planIntent = body.intent === 'plan';
+  const recoveryIntent = body.intent === 'recovery';
 
   const prompt = str(body.prompt)?.trim();
   if (prompt && Buffer.byteLength(prompt) > MAX_AGENT_PROMPT_BYTES) {
@@ -112,11 +128,14 @@ export function buildAgentLaunch(
   }
   if (resume && prompt) return bad('resume and a prompt are mutually exclusive — the resumed session has its context.');
   if (resume && planIntent) return bad('resume and a plan brief are mutually exclusive.');
+  if (resume && recoveryIntent) return bad('resume and a recovery are mutually exclusive — a recovery starts fresh.');
 
   // What the first message says, and what the session gets named after.
   let text = '';
   let named = '';
   let planSkill = '';
+  let label: string | undefined;
+  let recoveryMeta: SessionMeta['recovery'];
   if (planIntent) {
     if (prompt) return bad('a plan session composes its own prompt — send the brief instead.');
     const brief = str(body.brief)?.trim();
@@ -126,15 +145,34 @@ export function buildAgentLaunch(
     planSkill = phasedExecutionSkillId(ctx.skills());
     text = planPrompt(brief, planSkill, ctx.scriptsDir);
     named = brief;
+  } else if (recoveryIntent) {
+    if (prompt) return bad('a recovery session composes its own prompt.');
+    // The service resolves the briefing before we are called; reaching here
+    // without one is a wiring bug, not something a browser can provoke.
+    const facts = ctx.recovery;
+    if (!facts) return bad('that recovery could not be resolved.');
+    if (!ctx.rootOpen) return { ok: false, status: 409, error: 'No source directory is open.' };
+    planSkill = facts.skillId;
+    text = recoveryPrompt(facts);
+    // Named from the thing it repairs, not from the prompt: `Recover <slug> P<N>`
+    // reads as a row on the board, so sessions and phases scan together.
+    label = recoveryLabel(facts);
+    recoveryMeta = {
+      kind: facts.class,
+      slug: facts.slug,
+      ...(facts.phase != null ? { phase: facts.phase } : {}),
+      ...(facts.runId ? { runId: facts.runId } : {}),
+    };
   } else if (prompt) {
     text = prompt;
     named = prompt;
   }
 
-  // The plan skill is already the subject of the composed prompt; naming it
-  // again in the directive would read as a second, competing instruction.
+  // The skill the composed prompt is already about; naming it again in the
+  // directive would read as a second, competing instruction.
+  const composed = planIntent || recoveryIntent;
   const extras = skillIds(body.skills).filter((id) =>
-    id !== planSkill && !(planIntent && (id === 'phased-execution' || id.endsWith(':phased-execution'))));
+    id !== planSkill && !(composed && (id === 'phased-execution' || id.endsWith(':phased-execution'))));
   const directive = skillDirective(extras);
   if (directive) text = text ? `${text}\n${directive}` : directive.trim();
 
@@ -143,7 +181,7 @@ export function buildAgentLaunch(
   }
 
   const claudeSessionId = resume ?? randomUUID();
-  const label = labelFor(planIntent, named);
+  label ??= labelFor(planIntent, named);
 
   const argv: string[] = [];
   if (resume) argv.push('--resume', resume);
@@ -162,6 +200,10 @@ export function buildAgentLaunch(
     ...(permissionMode ? { permissionMode } : {}),
     claudeSessionId,
     ...(planIntent ? { intent: 'plan' as const } : {}),
+    // The linkage P2 built the session-exit announce policy around: a session
+    // carrying it is always announced when it ends, and its outcome is checked
+    // against the thing it was opened to fix.
+    ...(recoveryMeta ? { intent: 'recovery' as const, recovery: recoveryMeta } : {}),
   };
 
   return {

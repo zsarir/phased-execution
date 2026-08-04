@@ -36,7 +36,7 @@ import {
   resolveBudget, weightOf, type Sizing, type PhaseAnalysis,
 } from './analysis/graph.ts';
 import {
-  planStats, portfolio, etaSamples, estimateEta,
+  planStats, portfolio, etaSamples, estimateEta, healthIssues,
   type PlanStats, type Portfolio, type PlanContext, type EtaEstimate,
 } from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
@@ -52,6 +52,11 @@ import {
 } from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
 import { checkAuth, forgetAuth, openLoginTerminal, type AuthStatus } from './runner/auth.ts';
+import {
+  RECOVERY_TITLES, recoveryKey,
+  type RecoveryClass, type RecoveryFacts, type RecoveryRequest,
+} from './recovery.ts';
+import { phasedExecutionSkillId } from './agent.ts';
 import {
   Approvals, classifyTool, loadPolicy, loadPolicyFor, policyExtras, addPolicyRules,
   editPolicy, planPolicyPath, notifyOutOfBand, profilePolicy, suggestedRule,
@@ -170,6 +175,23 @@ export type PhaseDiagnosis = {
   lock: string | null;
   actions: RecoveryAction[];
 };
+
+/** The phase's title from the plan graph, when the table has one. */
+function titleOf(rows: PhaseRow[], phase?: number): string | undefined {
+  if (phase == null) return undefined;
+  return rows.find((row) => row.phase === phase)?.title || undefined;
+}
+
+/**
+ * The owner a recovery session claims a phase as.
+ *
+ * Legible in a lock file and in `phase-lock.sh list`, which is the point: the
+ * next person to find a claim needs to know a console opened it, not decode an
+ * id. Same `<who>/<what>` shape the conventions use.
+ */
+function recoveryOwner(request: RecoveryRequest): string {
+  return request.phase != null ? `console/recover-p${request.phase}` : 'console/recover';
+}
 
 /**
  * What can still be done about a phase in this state.
@@ -527,20 +549,74 @@ export class Service {
     const recovery = session.meta?.recovery;
     if (!event.detached && !failed && !recovery) return;
 
+    // A recovery session was opened to change something specific, so its exit
+    // is answered by re-reading that thing rather than by reporting that a
+    // process ended. Async, and deliberately not awaited: the registry is
+    // emitting an event, not waiting for a verdict.
+    if (recovery) { void this.announceRecoveryOutcome(session, recovery, failed); return; }
+
     const what = session.kind === 'claude' ? 'Agent session' : 'Terminal';
     this.announce('session', {
       title: failed ? `${what} failed` : `${what} finished`,
       body: `${session.label} — ${failed ? `exited ${describeExit(session)}` : 'exited cleanly'}`
-        + (recovery ? ` · recovery for ${recovery.slug ?? recovery.kind}` : '')
         + (event.detached ? ' · nothing was attached' : ''),
       tag: tagFor('session', session.id, String(code)),
       detail: session.cwd,
     }, {
       sessionId: session.id,
       sessionKind: session.kind,
-      ...(recovery?.slug ? { slug: recovery.slug } : {}),
-      ...(recovery?.phase != null ? { phase: recovery.phase } : {}),
-      ...(recovery?.runId ? { runId: recovery.runId } : {}),
+    });
+  }
+
+  /**
+   * What the recovery achieved, checked against the board — then said.
+   *
+   * "Your recovery session ended" is the notification this feature exists to
+   * not send. The console knows what the session was for, so it can re-read
+   * the board and answer the actual question: is the phase done now?
+   *
+   * A session that crashed is still checked, because a session can commit the
+   * fix and then fall over on its way out, and the board is the evidence
+   * either way.
+   */
+  private async announceRecoveryOutcome(
+    session: SessionInfo,
+    link: { kind: string; slug?: string; phase?: number; runId?: string },
+    failed: boolean,
+  ): Promise<void> {
+    let outcome: { fixed: boolean; headline: string; detail: string };
+    try {
+      outcome = await this.recoveryOutcome(link);
+    } catch (error) {
+      // Never let a failed board read swallow the notification — the operator
+      // still needs to know the session ended.
+      outcome = {
+        fixed: false,
+        headline: `Recovery for ${link.slug ?? 'a plan'} finished`,
+        detail: `The console could not re-read the board: ${(error as Error).message}`,
+      };
+    }
+
+    this.announce('session', {
+      title: outcome.fixed ? `Recovered · ${outcome.headline}` : `Still needs you · ${outcome.headline}`,
+      body: `${outcome.detail}${failed ? ` (the session itself exited ${describeExit(session)})` : ''}`,
+      tag: tagFor('session', session.id, outcome.fixed ? 'fixed' : 'unfixed'),
+      detail: session.label,
+    }, {
+      sessionId: session.id,
+      sessionKind: session.kind,
+      ...(link.slug ? { slug: link.slug } : {}),
+      ...(link.phase != null ? { phase: link.phase } : {}),
+      ...(link.runId ? { runId: link.runId } : {}),
+    });
+
+    // The surfaces that offered the recovery re-read themselves off this.
+    this.emit('sessions', {
+      type: 'recovery-outcome',
+      session,
+      recovery: { ...link, ...outcome },
+      sessions: this.terminals.state().sessions,
+      live: this.terminals.live(),
     });
   }
 
@@ -929,18 +1005,46 @@ export class Service {
     }, { slug, phase });
   }
 
+  /**
+   * Drop every cached answer about one plan.
+   *
+   * Shared by the watcher and by `reread()`, because "the files changed" and
+   * "something we cannot see changed the files" have to forget exactly the
+   * same things — a caller that forgets one map serves a stale board from it
+   * forever, and the revision key hides the mistake.
+   */
+  private forget(slug: string): void {
+    invalidate(slug);
+    this.boards.delete(slug);
+    this.qaModes.delete(slug);
+    this.lints.delete(slug);
+    for (const key of [...this.sessionPlans.keys()]) if (key.startsWith(`${slug}::`)) this.sessionPlans.delete(key);
+    const record = this.store?.get(slug);
+    if (record) this.search.update(record);
+  }
+
+  /**
+   * Re-read one plan from disk right now, without waiting for the watcher.
+   *
+   * The watcher is debounced and a session's last commit lands milliseconds
+   * before its process exits, so "check what the recovery achieved" cannot
+   * trust the cache. Emits `changed` (so open pages re-render) but deliberately
+   * does NOT announce it: a re-read the console asked for is not news, and the
+   * outcome notification is sent separately with something to say.
+   */
+  private reread(slug: string): void {
+    const record = this.store?.get(slug);
+    if (this.store && record?.planPath) this.store.refresh([record.planPath]);
+    this.forget(slug);
+    this.portfolioCache = null;
+    this.generation++;
+    this.emit('changed', { slugs: [slug], generation: this.generation });
+  }
+
   private onChange(paths: string[]): void {
     if (!this.store) return;
     const slugs = this.store.refresh(paths);
-    for (const slug of slugs) {
-      invalidate(slug);
-      this.boards.delete(slug);
-      this.qaModes.delete(slug);
-      this.lints.delete(slug);
-      for (const key of [...this.sessionPlans.keys()]) if (key.startsWith(`${slug}::`)) this.sessionPlans.delete(key);
-      const record = this.store.get(slug);
-      if (record) this.search.update(record);
-    }
+    for (const slug of slugs) this.forget(slug);
     this.portfolioCache = null;
     this.generation++;
     void this.refreshRepoInfo();
@@ -1999,6 +2103,212 @@ export class Service {
     try {
       return readMemoryBlock(await run(this.engineOpts(), 'phase-graph.sh', [slug, '--memory-block'])).states;
     } catch { return {}; }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Recovery sessions
+   * ---------------------------------------------------------------- */
+
+  /**
+   * The live recovery session already working on a target, if there is one.
+   *
+   * Keyed by `(slug, phase)` rather than by class: two sessions repairing the
+   * same phase from different angles would edit the same files, and the second
+   * one is never what anybody meant to press. The client reads the same fact
+   * off the sessions list it already holds, so the button becomes a chip
+   * without a round trip.
+   */
+  liveRecoveryFor(link: { slug?: string; phase?: number }): SessionInfo | undefined {
+    const key = recoveryKey(link);
+    return this.terminals.state().sessions.find((session) =>
+      !session.exited && session.meta?.recovery && recoveryKey(session.meta.recovery) === key);
+  }
+
+  /**
+   * Turn "recover this" into the briefing a session can act on — or say why not.
+   *
+   * The browser names the target; every fact in the prompt is read here, from
+   * the board, the run record, the phase diagnosis, the lock file and the
+   * health issues. That split is the security property (a page cannot dictate
+   * what an agent session is told) and the honesty property: a prompt cannot
+   * claim a phase failed verification unless the recorded verification failed.
+   *
+   * Three refusals, all of them 409s that say what to do instead.
+   */
+  async resolveRecovery(
+    request: RecoveryRequest,
+  ): Promise<
+    { ok: true; facts: RecoveryFacts }
+    | { ok: false; status: number; error: string; sessionId?: string }
+  > {
+    const refuse = (status: number, error: string, sessionId?: string) =>
+      ({ ok: false as const, status, error, ...(sessionId ? { sessionId } : {}) });
+
+    const root = this.root?.path;
+    if (!root) return refuse(409, 'No source directory is open.');
+
+    const record = this.store?.get(request.slug);
+    if (!record) return refuse(404, `No plan named ${request.slug}.`);
+
+    // 1. The autopilot owns the working tree while it drives. A recovery
+    //    session editing the same files under it is the one failure mode that
+    //    corrupts work that was going to be fine.
+    if (this.runner.busy()) {
+      const live = this.runner.current();
+      return refuse(409, live
+        ? `${live.slug} is mid-run (${live.status}) — pause or stop it before starting a recovery session.`
+        : 'A run is in progress — pause or stop it before starting a recovery session.');
+    }
+
+    // 2. Signing in is the fix for an auth halt; an AI session would spend a
+    //    turn discovering it cannot authenticate and report success anyway.
+    if (request.class === 'auth-interrupted') {
+      const auth = await this.authStatus(true);
+      if (!auth.loggedIn) {
+        return refuse(409,
+          'Claude is signed out — sign in first, then continue the run. A recovery session '
+          + 'cannot authenticate for you.');
+      }
+    }
+
+    // 3. One recovery per target.
+    const already = this.liveRecoveryFor(request);
+    if (already) {
+      return refuse(409,
+        `A recovery session for ${request.slug}${request.phase != null ? ` phase ${request.phase}` : ''} `
+        + 'is already running.', already.id);
+    }
+
+    const [board, runState, diagnosis] = await Promise.all([
+      this.board(request.slug),
+      request.runId
+        ? Promise.resolve(loadRun(root, request.slug, request.runId, this.liveRunId()))
+        : this.runFor(request.slug),
+      request.phase != null ? this.phaseDiagnosis(request.slug, request.phase) : Promise.resolve(null),
+    ]);
+
+    const rows = record.plan?.graph ?? [];
+    const facts: RecoveryFacts = {
+      ...request,
+      scriptsDir: this.flags.scriptsDir,
+      skillId: phasedExecutionSkillId(this.skills()),
+      newOwner: recoveryOwner(request),
+      ...(titleOf(rows, request.phase) ? { phaseTitle: titleOf(rows, request.phase) } : {}),
+      ...(runState?.status ? { runStatus: runState.status } : {}),
+      ...(runState?.halt?.reason ? { haltReason: runState.halt.reason } : {}),
+      board: rows.length
+        ? rows.map((row) => ({
+          phase: row.phase,
+          state: board.states[row.phase] ?? 'unknown',
+          ...(row.title ? { title: row.title } : {}),
+        }))
+        : Object.entries(board.states).map(([phase, state]) => ({ phase: Number(phase), state })),
+      ...(diagnosis
+        ? {
+          diagnosis: {
+            blockedOn: diagnosis.blockedOn,
+            boardState: diagnosis.boardState,
+            said: diagnosis.said,
+            verification: diagnosis.verification,
+            lint: diagnosis.lint,
+            workingTree: diagnosis.workingTree,
+            sessionId: diagnosis.sessionId,
+            resumable: diagnosis.resumable,
+          },
+        }
+        : {}),
+    };
+
+    if (request.class === 'stale-claim-takeover') {
+      // The FILE, not the store's scan — a claim re-taken since the last scan
+      // must read as live, exactly as `releaseLock` insists.
+      const handoffsDir = this.root?.handoffsDir;
+      const lock = handoffsDir ? readLock(handoffsDir, request.slug, request.phase!) : null;
+      if (lock) {
+        facts.lockOwner = lock.owner;
+        facts.lockDetail = lock.expired
+          ? 'the lease has expired'
+          : `the lease is still live until ${lock.leaseUntil ? new Date(lock.leaseUntil).toISOString() : 'an unrecorded time'}`;
+      }
+      const detail = await this.phaseLock(request.slug, request.phase!);
+      if (detail) facts.lockDetail = detail;
+    }
+
+    if (request.class === 'plan-repair') {
+      const issues = healthIssues(await this.context(record))
+        .filter((issue) => issue.severity === 'error' || issue.severity === 'warning')
+        // A phase-scoped repair only wants that phase's issues; a plan-wide one
+        // takes them all.
+        .filter((issue) => request.phase == null || issue.phase == null || issue.phase === request.phase);
+      if (!issues.length) {
+        return refuse(409,
+          `${request.slug} has no plan errors to repair — the board and its artefacts agree.`);
+      }
+      facts.issues = issues.map((issue) => ({
+        kind: issue.kind,
+        message: issue.message,
+        severity: issue.severity,
+        ...(issue.phase != null ? { phase: issue.phase } : {}),
+      }));
+    }
+
+    return { ok: true, facts };
+  }
+
+  /**
+   * What a finished recovery session actually achieved, checked rather than
+   * assumed.
+   *
+   * The whole point of linking a session to a target is that its exit can be
+   * answered with evidence: the board is re-read, the run re-resolved, the
+   * plan re-validated. "The session ended" is not an outcome — every session
+   * ends.
+   */
+  async recoveryOutcome(link: {
+    kind: string; slug?: string; phase?: number; runId?: string;
+  }): Promise<{ fixed: boolean; headline: string; detail: string }> {
+    const slug = link.slug;
+    if (!slug || !this.root) {
+      return { fixed: false, headline: 'Recovery finished', detail: 'Nothing to check it against.' };
+    }
+
+    // The watcher may not have noticed the session's writes yet, and every
+    // engine answer is cached by revision — so ask for a fresh read before
+    // judging what the session achieved.
+    this.reread(slug);
+
+    if (link.kind === 'plan-repair') {
+      const lint = await this.lint(slug);
+      const fixed = Boolean(lint?.ok);
+      return {
+        fixed,
+        headline: fixed ? `${slug} validates` : `${slug} still has plan errors`,
+        detail: fixed
+          ? 'validate.sh exits 0 — the plan, its handoffs and its INDEX agree again.'
+          : lint?.summary ?? 'validate.sh is still red — open the plan and look.',
+      };
+    }
+
+    const phase = link.phase;
+    if (phase == null) {
+      return { fixed: false, headline: `Recovery for ${slug} finished`, detail: 'Check the board.' };
+    }
+
+    const board = await this.board(slug);
+    const state = board.states[phase] ?? 'unknown';
+    const fixed = state === 'done';
+    if (fixed) {
+      return {
+        fixed,
+        headline: `${slug} P${phase} is done`,
+        detail: `The board now reads done — ${RECOVERY_TITLES[link.kind as RecoveryClass] ?? 'the recovery'} worked.`,
+      };
+    }
+    return {
+      fixed,
+      headline: `${slug} P${phase} is still ${state}`,
+      detail: 'The recovery session ended without moving the board — inspect it before starting another.',
+    };
   }
 
   /* ---- signing in ---- */

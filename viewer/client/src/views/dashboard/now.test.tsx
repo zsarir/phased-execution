@@ -22,7 +22,7 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { HealthIssue, RunState } from '@/lib/api';
+import type { HealthIssue, RunState, TerminalSession } from '@/lib/api';
 import { AttentionRow, demands, issueHref, type Demand, type DemandAction } from './now';
 
 const halted = (over: Partial<RunState> = {}): RunState => ({
@@ -39,41 +39,49 @@ const authInterrupted = (over: Partial<RunState> = {}): RunState => ({
 
 const ids = (actions: DemandAction[]) => actions.map((a) => a.id);
 const only = (items: Demand[], id: string) => items.find((i) => i.id === id)!;
+/** By id, never by index — phase 4 inserted `start-recovery` between them. */
+const act = (actions: DemandAction[], id: string) => actions.find((a) => a.id === id)!;
 
 /* ------------------------------------------------------------------ *
  * A halted run
  * ------------------------------------------------------------------ */
 
 describe('a stopped run', () => {
-  it('offers Continue and Dismiss', () => {
+  it('offers Continue, an AI repair and Dismiss', () => {
     const [card] = demands({
-      approvals: 0, runs: [halted()], unread: 0, expiredLocks: [], allowRun: true,
+      approvals: 0, runs: [halted()], unread: 0, expiredLocks: [], allowRun: true, allowAgent: true,
     });
-    expect(ids(card.actions)).toEqual(['continue', 'dismiss']);
-    expect(card.actions[0].disabled).toBeUndefined();
-    // Both name the run they act on — a plan that has run since has more than
-    // one, and "the latest" is not the one whose card you pressed.
+    // Continue re-runs the phase as it was; the recovery reads why it broke.
+    // Dismiss stays last — it resolves the card without resolving the run.
+    expect(ids(card.actions)).toEqual(['continue', 'start-recovery', 'dismiss']);
+    expect(act(card.actions, 'continue').disabled).toBeUndefined();
+    // All of them name the run they act on — a plan that has run since has more
+    // than one, and "the latest" is not the one whose card you pressed.
     expect(card.actions.every((a) => a.target?.runId === 'r1' && a.target.slug === 'alpha')).toBe(true);
   });
 
   it('disables Continue without --allow-run, and says why, but never Dismiss', () => {
     const [card] = demands({ approvals: 0, runs: [halted()], unread: 0, expiredLocks: [] });
-    const [cont, dismiss] = card.actions;
-    expect(cont.disabled).toMatch(/--allow-run/);
+    expect(act(card.actions, 'continue').disabled).toMatch(/--allow-run/);
+    // Each remedy names the capability IT needs, not the console's worst gate.
+    expect(act(card.actions, 'start-recovery').disabled).toMatch(/--allow-agent/);
     // Deciding a card no longer deserves attention is judgement, not a
     // capability — a read-only console that cannot even do that is the dead end.
-    expect(dismiss.disabled).toBeUndefined();
+    expect(act(card.actions, 'dismiss').disabled).toBeUndefined();
   });
 
   it('leads with signing in when the halt is an auth failure', () => {
     const [card] = demands({
-      approvals: 0, runs: [authInterrupted()], unread: 0, expiredLocks: [], allowRun: true,
+      approvals: 0, runs: [authInterrupted()], unread: 0, expiredLocks: [], allowRun: true, allowAgent: true,
     });
     // Continuing before signing in is a session that reports success, spends a
     // turn and changes nothing — which is exactly how this run stopped.
-    expect(ids(card.actions)).toEqual(['login', 'recheck', 'continue', 'dismiss']);
-    expect(card.actions[0].kind).toBe('action');
-    expect(card.actions[2].kind).toBe('default');
+    expect(ids(card.actions)).toEqual(['login', 'recheck', 'continue', 'start-recovery', 'dismiss']);
+    expect(act(card.actions, 'login').kind).toBe('action');
+    expect(act(card.actions, 'continue').kind).toBe('default');
+    // And the recovery offered is the auth one — the server refuses to mint it
+    // while signed out, which is the whole point of naming the class here.
+    expect(act(card.actions, 'start-recovery').recoveryClass).toBe('auth-interrupted');
   });
 
   it('treats a signed-out console as auth-blocked whatever the reason says', () => {
@@ -104,9 +112,12 @@ describe('stale claims', () => {
       approvals: 0, runs: [], unread: 0, allowWrites: true,
       expiredLocks: [{ slug: 'alpha', phase: 1 }],
     }), 'locks');
-    expect(ids(card.actions)).toEqual(['release']);
+    // Release frees the phase; taking it over also does the work. Offered only
+    // for a single unambiguous claim — see the bulk case below.
+    expect(ids(card.actions)).toEqual(['release', 'start-recovery']);
     expect(card.actions[0].target).toEqual({ slug: 'alpha', phase: 1 });
     expect(card.actions[0].label).toContain('alpha P1');
+    expect(act(card.actions, 'start-recovery').recoveryClass).toBe('stale-claim-takeover');
   });
 
   it('offers bulk AND per-lock when there are several', () => {
@@ -196,6 +207,64 @@ describe('the plan-error card', () => {
 /* ------------------------------------------------------------------ *
  * The row itself
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * A recovery already running
+ * ------------------------------------------------------------------ */
+
+describe('a recovery already running', () => {
+  const link = (over: Record<string, unknown> = {}) =>
+    ({ kind: 'halted-verification', slug: 'alpha', phase: 6, ...over });
+
+  const recovering = (over: Partial<TerminalSession> = {}): TerminalSession => ({
+    id: 'sess-live', label: 'Recover alpha P6', kind: 'claude',
+    cwd: '/w', shell: 'claude', cols: 80, rows: 24, pid: 4242, clients: 0, createdAt: 0,
+    meta: { intent: 'recovery', recovery: link() },
+    ...over,
+  } as unknown as TerminalSession);
+
+  const cardFor = (sessions: TerminalSession[], over: { allowAgent?: boolean } = {}) => demands({
+    approvals: 0, runs: [halted()], unread: 0, expiredLocks: [], allowRun: true,
+    allowAgent: true, sessions, ...over,
+  })[0];
+
+  it('offers the session that is already working, not a second launch', () => {
+    const action = act(cardFor([recovering()]).actions, 'start-recovery');
+    expect(action.runningSessionId).toBe('sess-live');
+    expect(action.label).toBe('Recovery running');
+  });
+
+  it('is somewhere to go rather than a capability — --allow-agent does not grey it', () => {
+    const action = act(cardFor([recovering()], { allowAgent: false }).actions, 'start-recovery');
+    expect(action.runningSessionId).toBe('sess-live');
+    // The gate applies to STARTING one. Greying this would hide the very thing
+    // the operator now wants, which is that session's terminal.
+    expect(action.disabled).toBeUndefined();
+  });
+
+  it('is judged by (slug, phase) — an ended session or another target is not a duplicate', () => {
+    const cases: [string, TerminalSession][] = [
+      ['it already ended', recovering({ exited: { code: 0 } })],
+      ['another phase', recovering({ meta: { intent: 'recovery', recovery: link({ phase: 2 }) } })],
+      ['another plan', recovering({ meta: { intent: 'recovery', recovery: link({ slug: 'beta' }) } })],
+      ['not a recovery at all', recovering({ meta: { intent: 'plan' } })],
+    ];
+    for (const [why, session] of cases) {
+      const action = act(cardFor([session]).actions, 'start-recovery');
+      expect(action.runningSessionId, why).toBeUndefined();
+      expect(action.label, why).not.toBe('Recovery running');
+    }
+  });
+
+  it('renders as a link to the session, and keeps the card free of nested controls', () => {
+    const { container } = render(<AttentionRow items={[cardFor([recovering()])]} />);
+    const chip = screen.getByRole('link', { name: /Recovery running/ });
+    expect(chip.getAttribute('href')).toBe('#/agent/sess-live');
+    // A disabled button here would be the dead end this replaced.
+    expect(screen.queryByRole('button', { name: /Recovery running/ })).toBeNull();
+    expect(container.querySelectorAll('a button')).toHaveLength(0);
+  });
+});
 
 describe('the attention row', () => {
   it('renders a button per action and hands the press back with its target', () => {

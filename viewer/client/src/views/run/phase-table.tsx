@@ -20,9 +20,13 @@ import {
   Button, Card, CardBody, CardHeader, CardTitle, Chip, Empty, StateChip,
   TBody, TD, TH, THead, TR, Table, TableWrap,
 } from '@/components/ui';
-import { api, type PhaseRecord, type PhaseStatus, type PhaseView, type RunState } from '@/lib/api';
+import {
+  api, type PhaseRecord, type PhaseStatus, type PhaseView, type RunState, type TerminalSession,
+} from '@/lib/api';
 import { duration, money, pad2, relativeTime } from '@/lib/format';
 import { useDiagnosis } from '@/lib/queries';
+import { classifyPhase, liveRecovery, type RecoveryClass } from '@/lib/recovery';
+import { RecoveryButton } from './status';
 import { phaseHref } from '@shared/routes.js';
 import {
   BOARD_ORDER, boardCounts, fellOverToAnotherModel, mergePhases, phaseActions,
@@ -65,6 +69,20 @@ const PHASE_TONE: Record<PhaseStatus, 'ok' | 'busy' | 'bad' | 'warn' | undefined
   pending: undefined,
 };
 
+/**
+ * What this console can hand to a Claude session, and what is already on it.
+ *
+ * Threaded in rather than read here: the table is rendered in tests without a
+ * query client, and a component that fetches its own sessions could not be.
+ */
+export type PhaseRecovery = {
+  allowAgent: boolean;
+  sessions?: readonly TerminalSession[];
+  /** The run's halt looks like an authentication failure — one class overrides all. */
+  authFailure?: boolean;
+  onStart: (phase: number, kind: RecoveryClass) => void;
+};
+
 export function PhaseTable({
   slug,
   run,
@@ -72,6 +90,7 @@ export function PhaseTable({
   live,
   allowRun,
   onAct,
+  recovery,
 }: {
   slug: string;
   run: RunState | null;
@@ -79,6 +98,7 @@ export function PhaseTable({
   live: boolean;
   allowRun: boolean;
   onAct: (label: string, fn: () => Promise<unknown>) => Promise<void>;
+  recovery?: PhaseRecovery;
 }) {
   if (!planPhases.length) {
     return (
@@ -141,6 +161,7 @@ export function PhaseTable({
                   live={live}
                   allowRun={allowRun}
                   onAct={onAct}
+                  recovery={recovery}
                 />
               ))}
             </TBody>
@@ -165,6 +186,7 @@ function PhaseRows({
   live,
   allowRun,
   onAct,
+  recovery,
 }: {
   phase: MergedPhase;
   slug: string;
@@ -172,6 +194,7 @@ function PhaseRows({
   live: boolean;
   allowRun: boolean;
   onAct: (label: string, fn: () => Promise<unknown>) => Promise<void>;
+  recovery?: PhaseRecovery;
 }) {
   const r = p.record;
   const isActive = run?.activePhase === p.phase;
@@ -180,6 +203,14 @@ function PhaseRows({
   const can = actionsFor(p, { live, allowRun });
   const detoured = fellOver(r);
   const hasNote = Boolean(r?.note || r?.verification || can.diagnose);
+
+  // A recovery is offered for a phase that is genuinely stuck — never for one
+  // the BOARD calls done, however this run's record reads, and never while the
+  // run is live (the autopilot owns the tree, and the server refuses anyway).
+  const recoveryClass = recovery && r && !live && p.state !== 'done'
+    ? classifyPhase(r.status, run, { authFailure: recovery.authFailure ?? false })
+    : undefined;
+  const recovering = liveRecovery(recovery?.sessions, { slug, phase: p.phase });
 
   return (
     <>
@@ -261,6 +292,17 @@ function PhaseRows({
               >
                 Run only this
               </Button>
+            )}
+            {/* Last, and only when a rule cannot settle it. Retry re-runs the
+                phase unchanged and Skip abandons it; this is the middle that
+                was missing — read the evidence, fix the cause, finish. */}
+            {recoveryClass && recovery && (
+              <RecoveryButton
+                kind={recoveryClass}
+                allowAgent={recovery.allowAgent}
+                {...(recovering ? { runningSessionId: recovering.id } : {})}
+                onStart={() => recovery.onStart(p.phase, recoveryClass)}
+              />
             )}
           </div>
         </TD>

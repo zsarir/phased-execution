@@ -23,6 +23,7 @@ import { Bot, TerminalSquare, X } from 'lucide-react';
 import { api, type ConsoleState, type TerminalSession } from '@/lib/api';
 import { keys, useSessions } from '@/lib/queries';
 import { relativeTime } from '@/lib/format';
+import { phaseHref, planHref } from '@shared/routes.js';
 import { navigate } from '@/router';
 import {
   AlertDialog, AlertDialogContent, AlertDialogTrigger, Button, Card, CardBody, CardHeader,
@@ -126,7 +127,23 @@ function SessionRow({
           {session.exited?.signal ? `signal ${session.exited.signal}` : `exit ${session.exited?.code}`}
         </Chip>
       )}
-      {!dead && session.meta?.recovery && <Chip>recovery</Chip>}
+      {/* Named, and linked, on live AND ended rows. "recovery" alone said this
+          session was special without saying what it was for; the useful facts
+          are which phase it is repairing and where that phase is. */}
+      {session.meta?.recovery?.slug && (
+        <a
+          href={session.meta.recovery.phase != null
+            ? phaseHref(session.meta.recovery.slug, session.meta.recovery.phase)
+            : planHref(session.meta.recovery.slug)}
+          title={`Recovering: ${session.meta.recovery.kind}`}
+          className="shrink-0 hover:opacity-80"
+        >
+          <Chip tone={dead ? 'neutral' : 'busy'}>
+            {session.meta.recovery.slug}
+            {session.meta.recovery.phase != null ? ` P${session.meta.recovery.phase}` : ''}
+          </Chip>
+        </a>
+      )}
 
       {dead ? (
         <Button

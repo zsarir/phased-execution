@@ -22,6 +22,7 @@ import { api, type RunState } from '@/lib/api';
 import { keys } from '@/lib/queries';
 import { toast } from '@/components/ui';
 import { useReleaseLock } from '@/components/release-lock';
+import { startRecovery } from '@/lib/start-recovery';
 import type { Demand, DemandAction } from './now';
 
 export function useDemandActions(runs: readonly RunState[]): {
@@ -95,6 +96,18 @@ export function useDemandActions(runs: readonly RunState[]): {
           case 'mark-read': {
             const { changed } = await api.markNotificationsRead();
             toast(changed ? `Marked ${changed} read` : 'Nothing was unread', 'ok');
+            break;
+          }
+          case 'start-recovery': {
+            // A live one is a link, not a button — `AttentionRow` renders it as
+            // an anchor and never calls this. Reaching here means starting one.
+            if (!slug || !action.recoveryClass) throw new Error('That card is stale — reload.');
+            await startRecovery(client, {
+              recoveryClass: action.recoveryClass,
+              slug,
+              ...(action.target?.phase != null ? { phase: action.target.phase } : {}),
+              ...(runId ? { runId } : {}),
+            });
             break;
           }
         }

@@ -26,7 +26,7 @@
 import { useMemo } from 'react';
 import { ArrowRight, GitBranch, HardDrive, Radio, ShieldCheck, TerminalSquare } from 'lucide-react';
 import {
-  useApprovals, useAuth, useConsoleState, usePlanDetails, usePlans, useRuns, useStats,
+  useApprovals, useAuth, useConsoleState, usePlanDetails, usePlans, useRuns, useSessions, useStats,
 } from '@/lib/queries';
 import { plural, weight } from '@/lib/format';
 import {
@@ -85,6 +85,7 @@ export default function DashboardView() {
   // The issues themselves, not a count of them: the plan-error card names the
   // real ones now instead of rendering one hard-coded sentence for all of them.
   const { data: auth } = useAuth(runsEnabled);
+  const { data: terminals } = useSessions(state);
   const pending = (approvals ?? []).filter((a) => a.status === 'pending').length;
   const attention = demands({
     approvals: pending,
@@ -94,7 +95,11 @@ export default function DashboardView() {
     issues: stats?.issues ?? [],
     allowRun: Boolean(state?.allowRun),
     allowWrites: Boolean(state?.allowWrites),
+    allowAgent: Boolean(state?.allowAgent),
     signedOut: auth?.loggedIn === false,
+    // So a card whose recovery is already running says so instead of offering
+    // to start a second one. Same query the sessions card below reads.
+    sessions: terminals?.sessions,
   });
   const { onAction, busy } = useDemandActions(runs ?? []);
 

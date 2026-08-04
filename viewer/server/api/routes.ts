@@ -12,6 +12,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Service } from '../service.ts';
 import { agentEnabled, checkRoot, listDirs } from '../config.ts';
 import { buildAgentLaunch } from '../agent.ts';
+import { parseRecoveryRequest, type RecoveryFacts } from '../recovery.ts';
 import { isClientDisconnect, log } from '../log.ts';
 import { isEffort, PERMISSION_MODES } from '../runner/spawn.ts';
 import { isPermissionProfile, type PolicyScope } from '../runner/approvals.ts';
@@ -512,10 +513,31 @@ export async function handleApi(
 
         let launch: LaunchSpec | undefined;
         if (!sessionId && kind === 'claude') {
+          // A recovery names its target; the SERVER reads the board, the run,
+          // the diagnosis and the lock and composes the briefing from those.
+          // The browser never dictates what an agent session is told, and the
+          // three guards (autopilot driving, already recovering, signed out)
+          // live with the facts they are about.
+          let recovery: RecoveryFacts | undefined;
+          if (body.intent === 'recovery') {
+            const parsed = parseRecoveryRequest(body);
+            if (!parsed.ok) { json(res, parsed.status, { error: parsed.error }); return true; }
+            const resolved = await service.resolveRecovery(parsed.request);
+            if (!resolved.ok) {
+              json(res, resolved.status, {
+                error: resolved.error,
+                ...(resolved.sessionId ? { sessionId: resolved.sessionId } : {}),
+              });
+              return true;
+            }
+            recovery = resolved.facts;
+          }
+
           const built = buildAgentLaunch(body, {
             skills: () => service.skills(),
             scriptsDir: service.flags.scriptsDir,
             rootOpen: Boolean(service.store),
+            ...(recovery ? { recovery } : {}),
           });
           if (!built.ok) { json(res, built.status, { error: built.error }); return true; }
           launch = built.launch;

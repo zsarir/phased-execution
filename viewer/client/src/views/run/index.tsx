@@ -28,8 +28,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Empty, Spinner, toast } from '@/components/ui';
 import { api, type PlanDetail } from '@/lib/api';
-import { useApprovals, useAuth, useConsoleState, useRun, useSkills, useTranscript } from '@/lib/queries';
+import {
+  useApprovals, useAuth, useConsoleState, useRun, useSessions, useSkills, useTranscript,
+} from '@/lib/queries';
 import { keys } from '@/lib/queries';
+import { classifyRun, liveRecovery, type RecoveryClass } from '@/lib/recovery';
+import { startRecovery } from '@/lib/start-recovery';
 import { useQueryClient } from '@tanstack/react-query';
 import { isLive } from './defaults';
 import { ActivityPanels } from './activity';
@@ -78,6 +82,14 @@ export function RunView({ detail }: { detail: PlanDetail }) {
 
   const approvals = (queue ?? []).filter((a) => a.status === 'pending');
 
+  /* ---- recovery: what an AI session could put right, and whether one is on it ---- */
+  const { data: terminals } = useSessions(state);
+  const allowAgent = Boolean(state?.allowAgent);
+  const authFailure = Boolean(looksLikeAuthFailure(run, auth));
+  const haltPhase = run?.halt?.phase ?? run?.activePhase ?? undefined;
+  const haltClass = classifyRun(run, { authFailure });
+  const haltRecovery = liveRecovery(terminals?.sessions, { slug, phase: haltPhase });
+
   /**
    * Run one action, then re-read.
    *
@@ -104,6 +116,13 @@ export function RunView({ detail }: { detail: PlanDetail }) {
       void client.invalidateQueries({ queryKey: keys.plan(slug) });
     }
   }, [client, slug]);
+
+  /** Mint a recovery for this plan, through the same busy/invalidate path as everything else. */
+  const recover = useCallback((request: {
+    recoveryClass: RecoveryClass; phase?: number; runId?: string;
+  }) => {
+    void act('recovery', () => startRecovery(client, { slug, ...request }));
+  }, [act, client, slug]);
 
   const decide: Decide = useCallback((id, decision, reason, remember, rule) => {
     void act('decide', async () => {
@@ -161,6 +180,18 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           await api.runSettings(slug, { permissionProfile: 'guarded' });
           toast('Back to Guarded — the next call that matters raises a card', 'ok');
         })}
+        recovery={{
+          allowAgent,
+          ...(haltClass ? { kind: haltClass } : {}),
+          ...(haltRecovery ? { runningSessionId: haltRecovery.id } : {}),
+          onStart: haltClass
+            ? () => recover({
+              recoveryClass: haltClass,
+              ...(haltPhase != null ? { phase: haltPhase } : {}),
+              ...(run?.id ? { runId: run.id } : {}),
+            })
+            : undefined,
+        }}
       />
 
       <Controls
@@ -185,6 +216,16 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           live={live}
           allowRun={allowRun}
           onAct={act}
+          recovery={{
+            allowAgent,
+            authFailure,
+            sessions: terminals?.sessions,
+            onStart: (phase, recoveryClass) => recover({
+              recoveryClass,
+              phase,
+              ...(run?.id ? { runId: run.id } : {}),
+            }),
+          }}
         />
       ) : (
         <Empty

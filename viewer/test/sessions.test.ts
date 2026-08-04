@@ -77,7 +77,29 @@ function fire(sv: Service, event: SessionEvent): { events: string[]; announced: 
   return { events, announced };
 }
 
-test('a session ending is announced when nobody saw it, when it failed, or when it was a repair', () => {
+/**
+ * The same, for the one exit whose answer is asynchronous.
+ *
+ * A recovery session's ending is not reported, it is *checked*: the service
+ * re-reads the board before it says anything (`announceRecoveryOutcome`), so
+ * the notification lands a tick after the event that caused it. Polling rather
+ * than a fixed sleep, so this neither flakes nor waits for a timeout it does
+ * not need.
+ */
+async function fireAsync(sv: Service, event: SessionEvent): Promise<{ events: string[]; announced: string[] }> {
+  const events: string[] = [];
+  const off = sv.onEvent((name) => { events.push(name); });
+  const before = new Set(sv.inbox({ limit: 500 }).items.map((r) => r.id));
+  (sv as unknown as { onSessionEvent: (e: SessionEvent) => void }).onSessionEvent(event);
+  const fresh = () => sv.inbox({ limit: 500 }).items.filter((r) => !before.has(r.id));
+  for (let tries = 0; tries < 100 && !fresh().length; tries++) {
+    await new Promise((resolve) => { setTimeout(resolve, 5); });
+  }
+  off();
+  return { events, announced: fresh().map((r) => r.title) };
+}
+
+test('a session ending is announced when nobody saw it, when it failed, or when it was a repair', async () => {
   const sv = service();
   sv.savePreferences({ notify: defaultCategories() } as never);
 
@@ -98,17 +120,20 @@ test('a session ending is announced when nobody saw it, when it failed, or when 
   assert.deepEqual(failed.announced, ['Terminal failed']);
 
   // ---- announced: a recovery session, however it ended and whoever watched ----
-  const repair = fire(sv, {
+  // And it says what it ACHIEVED, not that it ended. With no source directory
+  // open there is no board to check it against, which is itself an honest
+  // answer — never a claim that the repair worked.
+  const repair = await fireAsync(sv, {
     type: 'exited',
     session: session({
       id: 'd3',
       exited: { code: 0 },
       exitedAt: 4,
-      meta: { intent: 'recovery', recovery: { kind: 'verify-failed', slug: 'demo', phase: 3 } },
+      meta: { intent: 'recovery', recovery: { kind: 'halted-verification', slug: 'demo', phase: 3 } },
     }),
     detached: false,
   });
-  assert.deepEqual(repair.announced, ['Agent session finished']);
+  assert.deepEqual(repair.announced, ['Still needs you · Recovery finished']);
 
   // ---- silent: a clean exit you were watching happen ----
   const watched = fire(sv, {

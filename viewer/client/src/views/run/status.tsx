@@ -51,10 +51,12 @@
  */
 
 import type { ReactNode } from 'react';
+import { Bot } from 'lucide-react';
 import { Banner, Button, Card, CardBody, CardHeader, CardTitle, StatusStack, toast, type StatusNote }
   from '@/components/ui';
 import { api, type AuthStatus, type ConsoleState, type RunState } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
+import { RECOVERY_BLURBS, RECOVERY_LABELS, type RecoveryClass } from '@/lib/recovery';
 import { useState } from 'react';
 
 /** The declared order. Index in this array IS the priority. */
@@ -94,6 +96,7 @@ export function runNotes({
   busy,
   onClearScope,
   onGuard,
+  recovery,
 }: {
   run: RunState | null;
   live: boolean;
@@ -101,6 +104,20 @@ export function runNotes({
   busy?: string;
   onClearScope?: () => void;
   onGuard?: () => void;
+  /**
+   * The AI remedy for a halt, when this console can offer one.
+   *
+   * Passed in rather than derived here so this stays a pure function of run
+   * state: which class fits is `lib/recovery.ts`'s job, whether a session is
+   * already running is the sessions list's, and minting is the page's.
+   */
+  recovery?: {
+    kind?: RecoveryClass;
+    allowAgent: boolean;
+    /** A live recovery for this halt — the button becomes a link to it. */
+    runningSessionId?: string;
+    onStart?: () => void;
+  };
 }): RunNote[] {
   const notes: RunNote[] = [];
 
@@ -115,6 +132,11 @@ export function runNotes({
           {run.halt.phase != null && <span className="text-ink-faint"> (phase {run.halt.phase})</span>}
         </>
       ),
+      // The halt is the one note whose remedy may be a whole session. Rendered
+      // here rather than in the controls strip because this is where the reason
+      // is — an operator reading "did not verify" should not have to go looking
+      // for the thing that fixes it.
+      action: recovery?.kind ? <RecoveryButton {...recovery} kind={recovery.kind} busy={busy === 'recovery'} /> : undefined,
     });
   }
 
@@ -270,6 +292,49 @@ export function runNotes({
   }
 
   return notes.sort((a, b) => NOTE_ORDER.indexOf(a.id) - NOTE_ORDER.indexOf(b.id));
+}
+
+/**
+ * Start a recovery, or go to the one already running.
+ *
+ * Three states and no fourth: a live session is a link, a permitted console is
+ * a button, and a console without `--allow-agent` is a disabled button that
+ * says which flag turns it on. Never simply absent — a remedy that exists and
+ * is unavailable has to say so, or the card is the dead end again.
+ */
+export function RecoveryButton({
+  kind,
+  allowAgent,
+  runningSessionId,
+  onStart,
+  busy,
+}: {
+  kind: RecoveryClass;
+  allowAgent: boolean;
+  runningSessionId?: string;
+  onStart?: () => void;
+  busy?: boolean;
+}) {
+  if (runningSessionId) {
+    return (
+      <Button size="sm" variant="default" asChild>
+        <a href={`#/agent/${runningSessionId}`}>
+          <Bot size={13} aria-hidden /> Recovery running
+        </a>
+      </Button>
+    );
+  }
+  return (
+    <Button
+      size="sm"
+      variant="action"
+      disabled={!allowAgent || !onStart || busy}
+      title={allowAgent ? RECOVERY_BLURBS[kind] : 'Agent sessions are disabled. Restart the console with --allow-agent.'}
+      onClick={onStart}
+    >
+      <Bot size={13} aria-hidden /> {busy ? 'Starting…' : RECOVERY_LABELS[kind]}
+    </Button>
+  );
 }
 
 /**

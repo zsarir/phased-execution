@@ -7,12 +7,27 @@
  * make a request; `queries.ts` decides when it is stale.
  */
 
+import type { RecoveryClass } from './recovery';
+
 /** Every request carries this; non-GETs additionally need a same-origin Origin,
  *  which the dev proxy rewrites (see vite.config.ts). */
 const CSRF = { 'x-phase-console': '1' } as const;
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly path: string) {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly path: string,
+    /**
+     * The parsed error body, when there was one.
+     *
+     * A refusal often carries more than a sentence — the recovery mint's 409
+     * names the session already working on that phase, so the caller can offer
+     * it instead of only saying no. Optional and untyped: every existing
+     * handler reads `message` and is unaffected.
+     */
+    readonly body?: unknown,
+  ) {
     super(message);
     this.name = 'ApiError';
   }
@@ -29,7 +44,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const message = typeof body === 'string' && body
       ? body
       : (body as { error?: string } | null)?.error ?? `Request failed (${res.status})`;
-    throw new ApiError(message, res.status, path);
+    throw new ApiError(message, res.status, path, body);
   }
   return body as T;
 }
@@ -1100,7 +1115,10 @@ export const api = {
     cols?: number; rows?: number;
     model?: string; effort?: string; permissionMode?: string;
     prompt?: string; skills?: string[]; resume?: string;
-    intent?: 'plan'; brief?: string;
+    intent?: 'plan' | 'recovery'; brief?: string;
+    /* A recovery names its TARGET and nothing else — the server reads the
+       board, the run and the diagnosis and composes the prompt itself. */
+    recoveryClass?: RecoveryClass; slug?: string; phase?: number; runId?: string;
   }) => post<TerminalTicket>('/api/terminal', { kind: 'claude', ...body }),
   terminalClose: (id: string) =>
     request<{ closed: boolean; state: TerminalState }>(`/api/terminal?id=${q(id)}`, { method: 'DELETE' }),

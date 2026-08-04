@@ -8,15 +8,19 @@
  * attention row is the only place on the page that may be amber.
  */
 
-import { AlertTriangle, Bell, ChevronRight, CircleDot, Hand, Lock, Play } from 'lucide-react';
+import { AlertTriangle, Bell, Bot, ChevronRight, CircleDot, Hand, Lock, Play } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Button, Card, Chip } from '@/components/ui';
 import { useNow } from '@/lib/clock';
 import { elapsed, money, plural } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { looksLikeAuthFailure } from '@/lib/failures';
+import {
+  RECOVERY_LABELS, classifyIssue, classifyRun, liveRecovery,
+  type RecoveryClass, type RecoveryTarget,
+} from '@/lib/recovery';
 import { phaseHref, planHref } from '@shared/routes.js';
-import type { HealthIssue, RunState } from '@/lib/api';
+import type { HealthIssue, RunState, TerminalSession } from '@/lib/api';
 import { isLive } from '../run/defaults';
 
 /* ------------------------------------------------------------------ *
@@ -108,7 +112,9 @@ export type DemandActionId =
   | 'continue' | 'dismiss'
   | 'login' | 'recheck'
   | 'release' | 'release-all'
-  | 'mark-read';
+  | 'mark-read'
+  /** Phase 4: hand what no rule can settle to a Claude session. */
+  | 'start-recovery';
 
 export interface DemandAction {
   id: DemandActionId;
@@ -119,6 +125,16 @@ export interface DemandAction {
   disabled?: string;
   /** What it acts on, when the id alone does not say. */
   target?: { slug?: string; runId?: string; phase?: number };
+  /** Which briefing to mint, on `start-recovery` only. */
+  recoveryClass?: RecoveryClass;
+  /**
+   * A live session id turns the button into a link to it.
+   *
+   * Not a disabled state: "already running" is not a missing capability, it is
+   * somewhere to go — and a greyed button would hide the one thing the operator
+   * now wants, which is that session's terminal.
+   */
+  runningSessionId?: string;
 }
 
 export interface Demand {
@@ -137,6 +153,46 @@ export interface Demand {
 /** Why an action is unavailable, in the words that say how to get it. */
 const NEEDS_RUN = 'Runs are disabled. Restart the console with --allow-run.';
 const NEEDS_WRITES = 'Writes are disabled. Restart the console with --allow-writes.';
+const NEEDS_AGENT = 'Agent sessions are disabled. Restart the console with --allow-agent.';
+
+/**
+ * The phase a run stopped on.
+ *
+ * `halt.phase` when the runner recorded one, else whatever was active. A run
+ * that halted before reaching any phase has neither, and a recovery for it is
+ * plan-wide rather than phase-scoped — which is exactly what `undefined` means
+ * downstream.
+ */
+function haltPhase(run: RunState): number | undefined {
+  return run.halt?.phase ?? run.activePhase ?? undefined;
+}
+
+/**
+ * The recovery button for a target — or the chip that says one is already
+ * working on it.
+ *
+ * One helper rather than four copies, because every surface that offers a
+ * recovery needs the same three-way answer: no class fits (offer nothing), a
+ * session is live (link to it), or the capability is off (say which flag).
+ */
+function recoveryAction(
+  kind: RecoveryClass | undefined,
+  target: RecoveryTarget & { runId?: string },
+  { allowAgent, sessions }: { allowAgent: boolean; sessions?: readonly TerminalSession[] },
+): DemandAction[] {
+  if (!kind) return [];
+  const running = liveRecovery(sessions, target);
+  return [{
+    id: 'start-recovery',
+    label: running ? 'Recovery running' : RECOVERY_LABELS[kind],
+    recoveryClass: kind,
+    target,
+    ...(running ? { runningSessionId: running.id } : {}),
+    // A live recovery is never "disabled" — the button becomes a way to go
+    // watch it. The gate only applies to starting a new one.
+    ...(running || allowAgent ? {} : { disabled: NEEDS_AGENT }),
+  }];
+}
 
 /**
  * Everything that is blocked on a person, in the order it costs to ignore.
@@ -159,7 +215,9 @@ export function demands({
   issues = [],
   allowRun = false,
   allowWrites = false,
+  allowAgent = false,
   signedOut = false,
+  sessions,
 }: {
   approvals: number;
   runs: RunState[];
@@ -169,10 +227,16 @@ export function demands({
   issues?: HealthIssue[];
   allowRun?: boolean;
   allowWrites?: boolean;
+  /** `--allow-agent` — whether a recovery session can be minted at all. */
+  allowAgent?: boolean;
   /** `claude auth status` says signed out — every run is auth-blocked. */
   signedOut?: boolean;
+  /** Live sessions, so a card that already has a recovery running says so. */
+  sessions?: readonly TerminalSession[];
 }): Demand[] {
   const out: Demand[] = [];
+  const recovery = (kind: RecoveryClass | undefined, target: RecoveryTarget & { runId?: string }) =>
+    recoveryAction(kind, target, { allowAgent, sessions });
 
   if (approvals > 0) {
     out.push({
@@ -219,6 +283,14 @@ export function demands({
           disabled: allowRun ? undefined : NEEDS_RUN,
           target,
         },
+        // The remedy for everything Continue cannot fix. Continue re-runs the
+        // phase exactly as it was, which is the right move when the halt was
+        // circumstance and the wrong one when the phase itself is broken —
+        // that second case is what this is.
+        ...recovery(
+          classifyRun(run, { authFailure: auth }),
+          { slug: run.slug, runId: run.id, ...(haltPhase(run) != null ? { phase: haltPhase(run)! } : {}) },
+        ),
         // Never gated: dismissing a card is a judgement about what deserves
         // attention, and a console that cannot even do that is the dead end.
         { id: 'dismiss', label: 'Dismiss', target },
@@ -241,7 +313,11 @@ export function demands({
           kind: 'action',
           disabled: allowWrites ? undefined : NEEDS_WRITES,
           target: expiredLocks[0],
-        }]
+        },
+        // Releasing frees the phase; taking it over also *does* it. Offered
+        // only for a single unambiguous claim — a bulk takeover would mint one
+        // session per lock, which is never what one press meant.
+        ...recovery('stale-claim-takeover', expiredLocks[0])]
         : [
           { id: 'release-all', label: `Release all ${expiredLocks.length}`, kind: 'action',
             disabled: allowWrites ? undefined : NEEDS_WRITES },
@@ -271,6 +347,11 @@ export function demands({
 
   const errors = issues.filter((issue) => issue.severity === 'error');
   if (errors.length) {
+    // One card can list errors from several plans, and a repair session works
+    // on ONE plan. Offer it only when they all belong to the same one —
+    // otherwise the card links to Statistics, where each plan has its own row.
+    const slugs = [...new Set(errors.map((issue) => issue.slug))];
+    const repairable = slugs.length === 1 ? slugs[0] : undefined;
     out.push({
       id: 'errors',
       icon: <AlertTriangle size={15} aria-hidden />,
@@ -283,7 +364,9 @@ export function demands({
         : `${[...new Set(errors.map((e) => e.slug))].join(', ')} — expand for what each one says.`,
       href: '#/stats',
       tone: 'bad',
-      actions: [],
+      actions: repairable
+        ? recovery(classifyIssue(errors[0]), { slug: repairable })
+        : [],
       issues: errors,
     });
   }
@@ -356,18 +439,31 @@ export function AttentionRow({
 
           {item.actions.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
-              {item.actions.map((action) => (
-                <Button
-                  key={`${action.id}:${action.target?.slug ?? ''}${action.target?.phase ?? ''}`}
-                  size="sm"
-                  variant={action.kind === 'action' ? 'action' : 'default'}
-                  disabled={Boolean(action.disabled) || busy === `${item.id}:${action.id}`}
-                  title={action.disabled}
-                  onClick={() => onAction?.(item, action)}
-                >
-                  {action.label}
-                </Button>
-              ))}
+              {item.actions.map((action) => {
+                const key = `${action.id}:${action.target?.slug ?? ''}${action.target?.phase ?? ''}`;
+                // A recovery already working on this becomes the way to go and
+                // watch it, not a dead grey button. It is the only action that
+                // can be *in progress somewhere else*.
+                return action.runningSessionId ? (
+                  <Button key={key} size="sm" variant="default" asChild>
+                    <a href={`#/agent/${action.runningSessionId}`}>
+                      <Bot size={13} aria-hidden />
+                      {action.label}
+                    </a>
+                  </Button>
+                ) : (
+                  <Button
+                    key={key}
+                    size="sm"
+                    variant={action.kind === 'action' ? 'action' : 'default'}
+                    disabled={Boolean(action.disabled) || busy === `${item.id}:${action.id}`}
+                    title={action.disabled}
+                    onClick={() => onAction?.(item, action)}
+                  >
+                    {action.label}
+                  </Button>
+                );
+              })}
             </div>
           )}
           {/* Said once per card rather than per button: three buttons each

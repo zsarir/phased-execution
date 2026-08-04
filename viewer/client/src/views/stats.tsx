@@ -9,7 +9,9 @@
  */
 
 import { useMemo, useState } from 'react';
-import { useConsoleState, useStats } from '@/lib/queries';
+import { useQueryClient } from '@tanstack/react-query';
+import { Bot } from 'lucide-react';
+import { useConsoleState, useSessions, useStats } from '@/lib/queries';
 import { countdown, plural, weight } from '@/lib/format';
 import { phaseHref, planHref } from '@shared/routes.js';
 import {
@@ -17,7 +19,9 @@ import {
 } from '@/components/ui';
 import { BarList, Bars, Calendar, StackBar, type ChartTone } from '@/components/charts';
 import { ReleaseAllStaleButton, ReleaseStaleButton } from '@/components/release-lock';
-import type { HealthIssue } from '@/lib/api';
+import { classifyIssue, liveRecovery } from '@/lib/recovery';
+import { startRecovery } from '@/lib/start-recovery';
+import type { HealthIssue, TerminalSession } from '@/lib/api';
 import { Page } from './_page';
 
 const SEVERITY_ORDER: Record<string, number> = { error: 0, warning: 1, info: 2 };
@@ -33,8 +37,10 @@ type Severity = 'all' | HealthIssue['severity'];
 export default function StatsView() {
   const { data: stats, isPending, error } = useStats();
   const { data: state } = useConsoleState();
+  const { data: terminals } = useSessions(state);
   const [severity, setSeverity] = useState<Severity>('all');
   const allowWrites = Boolean(state?.allowWrites);
+  const allowAgent = Boolean(state?.allowAgent);
   const expiredLocks = (stats?.activeLocks ?? []).filter((lock) => lock.expired).length;
 
   const counts = useMemo(() => {
@@ -299,6 +305,10 @@ export default function StatsView() {
                     {issue.slug}{issue.phase ? ` P${issue.phase}` : ''}
                   </a>
                   <span className="min-w-0 flex-1 text-sm text-ink-muted">{issue.message}</span>
+                  {/* Per ROW, not per card: this list mixes plans, and a repair
+                      session works on one. The row is the only place that knows
+                      which plan the operator meant. */}
+                  <RepairIssue issue={issue} allowAgent={allowAgent} sessions={terminals?.sessions} />
                 </li>
               ))}
             </ul>
@@ -336,5 +346,58 @@ export default function StatsView() {
         </Card>
       )}
     </Page>
+  );
+}
+
+/**
+ * "Repair with AI", on the row that names the problem.
+ *
+ * Offered for errors and warnings, not for info: an expired lock or a missing
+ * INDEX line has a one-click deterministic remedy elsewhere on this page, and
+ * spending a session on it would be the console recommending the expensive
+ * option for the cheap problem.
+ *
+ * Scoped to the issue's own phase when it has one, so a repair session is told
+ * about the disagreement in front of it rather than every issue in the plan.
+ */
+function RepairIssue({
+  issue,
+  allowAgent,
+  sessions,
+}: {
+  issue: HealthIssue;
+  allowAgent: boolean;
+  sessions?: readonly TerminalSession[];
+}) {
+  const client = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const kind = classifyIssue(issue);
+  if (!kind) return null;
+
+  const target = { slug: issue.slug, ...(issue.phase != null ? { phase: issue.phase } : {}) };
+  const running = liveRecovery(sessions, target);
+  if (running) {
+    return (
+      <Button size="sm" variant="default" asChild>
+        <a href={`#/agent/${running.id}`}><Bot size={12} aria-hidden /> Repair running</a>
+      </Button>
+    );
+  }
+
+  return (
+    <Button
+      size="sm"
+      disabled={!allowAgent || busy}
+      title={allowAgent
+        ? 'Opens a Claude session that repairs this until validate.sh passes.'
+        : 'Agent sessions are disabled. Restart the console with --allow-agent.'}
+      onClick={() => {
+        setBusy(true);
+        void startRecovery(client, { recoveryClass: kind, ...target })
+          .finally(() => { setBusy(false); });
+      }}
+    >
+      <Bot size={12} aria-hidden /> {busy ? 'Starting…' : 'Repair with AI'}
+    </Button>
   );
 }
