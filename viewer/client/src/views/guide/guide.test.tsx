@@ -73,14 +73,18 @@ describe('the guide section registry', () => {
     // out the name it forbids leaks it to everyone who reads the test.
     const local = [userInfo().username, hostname(), homedir()].filter((s) => s.length >= 3);
     const forbidden = [/\.ts\.net\/[a-z]/i, /\/Users\//, /\/home\/[a-z]/i];
+    // As a token, never a bare substring: this machine's hostname is `Mac`, and
+    // the guide is full of the word "machine". A leak names the identity alone.
+    const names = (body: string, secret: string) =>
+      new RegExp(`(?<![A-Za-z0-9])${secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, 'i')
+        .test(body);
 
     for (const section of SECTIONS) {
       for (const pattern of forbidden) {
         expect(section.body, `${section.id} matched ${pattern}`).not.toMatch(pattern);
       }
       for (const secret of local) {
-        expect(section.body.toLowerCase(), `${section.id} names local identity`)
-          .not.toContain(secret.toLowerCase());
+        expect(names(section.body, secret), `${section.id} names local identity`).toBe(false);
       }
       for (const found of section.body.match(addresses) ?? []) {
         expect(ALLOWED.has(found), `${section.id} names ${found}`).toBe(true);

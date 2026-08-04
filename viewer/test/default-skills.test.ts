@@ -62,10 +62,21 @@ test('anything that is not a skill id is dropped before it reaches a prompt', ()
   // These end up in a child's boot prompt as `/name`. A path traversal or a
   // space is not a skill anywhere, so naming it would only tell a session to
   // invoke something that cannot exist.
-  const flags = parseFlags([
-    '--default-skills', '../../etc/passwd,ok-name,plugin:deploy, ,two words,ok-name',
-  ]);
-  assert.deepEqual(flags.defaultSkills, ['ok-name', 'plugin:deploy']);
+  //
+  // The environment has to come out first. The flag is deliberately additive
+  // (see above), so on a machine whose launch environment already sets
+  // PHASE_CONSOLE_DEFAULT_SKILLS this asserts against that operator's list plus
+  // the flag's — green on CI, red on the console's own laptop.
+  const before = process.env.PHASE_CONSOLE_DEFAULT_SKILLS;
+  delete process.env.PHASE_CONSOLE_DEFAULT_SKILLS;
+  try {
+    const flags = parseFlags([
+      '--default-skills', '../../etc/passwd,ok-name,plugin:deploy, ,two words,ok-name',
+    ]);
+    assert.deepEqual(flags.defaultSkills, ['ok-name', 'plugin:deploy']);
+  } finally {
+    if (before !== undefined) process.env.PHASE_CONSOLE_DEFAULT_SKILLS = before;
+  }
 });
 
 /* ------------------------------------------------------------------ *

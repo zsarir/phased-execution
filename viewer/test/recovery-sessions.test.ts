@@ -361,6 +361,13 @@ test('the committed template is neutral — nothing of this machine reaches it',
   const mine = [homedir(), hostname().split('.')[0], userInfo().username]
     .filter((value) => typeof value === 'string' && value.length > 2);
 
+  // As a token, never a bare substring. This machine's hostname is `Mac`, which
+  // is a substring of the ordinary word "machine" — matched loosely, every prompt
+  // that says "this machine" reads as a leak of the host it was generated on.
+  const names = (text: string, secret: string) =>
+    new RegExp(`(?<![A-Za-z0-9])${secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, 'i')
+      .test(text);
+
   const neutral = {
     class: 'halted-verification' as const,
     slug: 'cart-api', phase: 2,
@@ -370,7 +377,7 @@ test('the committed template is neutral — nothing of this machine reaches it',
   for (const kind of RECOVERY_CLASSES) {
     const text = recoveryPrompt({ ...neutral, class: kind });
     for (const secret of mine) {
-      assert.ok(!text.toLowerCase().includes(secret.toLowerCase()), `${kind} names this machine`);
+      assert.ok(!names(text, secret), `${kind} names this machine`);
     }
     // Stronger than a blocklist, and it needs no private strings: the ONLY
     // absolute path a prompt may contain is the one the caller passed in.

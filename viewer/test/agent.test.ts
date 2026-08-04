@@ -206,6 +206,21 @@ test('the plan default is the plan intent’s alone — a bare session still has
   assert.equal(built.launch.meta?.permissionMode, undefined);
 });
 
+/**
+ * Does `text` name `secret` as a token of its own, rather than by accident?
+ *
+ * A bare `includes()` reads an identity out of any word that merely contains it,
+ * and short hostnames are the trap: this machine answers to `Mac`, which lives
+ * inside the ordinary word "machine" — so the neutrality tests failed on the one
+ * laptop the console is developed on and passed everywhere else. A real leak
+ * names the identity standing alone — a home directory, a `user@host`, a bare
+ * hostname — and every delimiter that surrounds one of those is non-alphanumeric.
+ */
+function namesLocalIdentity(text: string, secret: string): boolean {
+  const literal = secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![A-Za-z0-9])${literal}(?![A-Za-z0-9])`, 'i').test(text);
+}
+
 test('the committed template is neutral — the scrub patterns find nothing', () => {
   // Derived, never spelled out. This file ships in a public repository, and a
   // test that lists the operator's real name and employer in order to forbid
@@ -216,7 +231,7 @@ test('the committed template is neutral — the scrub patterns find nothing', ()
   for (const secret of [userInfo().username, hostname(), homedir()]) {
     // A single-character username would match everything; nothing real is that short.
     if (secret.length < 3) continue;
-    assert.ok(!text.toLowerCase().includes(secret.toLowerCase()), `template names ${secret.length} chars of local identity`);
+    assert.ok(!namesLocalIdentity(text, secret), `template names ${secret.length} chars of local identity`);
   }
   assert.ok(!/\.ts\.net\/[a-z]/i.test(text), 'template names a tailnet');
   // The structural rule the literals were a proxy for: the only absolute path a
