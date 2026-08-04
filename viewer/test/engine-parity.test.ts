@@ -21,6 +21,7 @@ import { checkRoot, safeList, SKILL_DIR } from '../server/config.ts';
 import { Store, type PlanRecord } from '../server/store.ts';
 import { run, readMemoryBlock, type PhaseState } from '../server/engine.ts';
 import { parseTestStatus } from '../server/parse/folder.ts';
+import { scopeOfRow, formatScope } from '../shared/scope.js';
 
 // Point these at a real plan library with PHASE_CONSOLE_TEST_ROOT; without it the
 // suite skips the integration tests rather than assuming anyone's directory layout.
@@ -137,11 +138,16 @@ test('deps, size and gated flags match the engine phase by phase', { skip: !avai
     const plan = record.plan!;
     await Promise.all(plan.graph.map(async (row) => {
       const opts = { scriptsDir: SCRIPTS, root: ROOT };
-      const [deps, size, gated] = await Promise.all([
+      const [deps, size, gated, repos] = await Promise.all([
         run(opts, 'phase-graph.sh', [record.slug, '--deps', String(row.phase)]),
         run(opts, 'phase-graph.sh', [record.slug, '--size', String(row.phase)]),
         run(opts, 'phase-graph.sh', [record.slug, '--gated', String(row.phase)]),
+        run(opts, 'phase-graph.sh', [record.slug, '--repos', String(row.phase)]),
       ]);
+      const jsScope = formatScope(scopeOfRow(row.repos));
+      if (repos.stdout.trim() !== jsScope) {
+        problems.push(`${record.slug} p${row.phase}: scope JS "${jsScope}" vs engine "${repos.stdout.trim()}"`);
+      }
       const engineDeps = deps.stdout.trim().split(/\s+/).filter(Boolean).map(Number).sort((a, b) => a - b);
       const jsDeps = [...row.dependsOn].sort((a, b) => a - b);
       if (engineDeps.join(',') !== jsDeps.join(',')) {
@@ -159,6 +165,39 @@ test('deps, size and gated flags match the engine phase by phase', { skip: !avai
   }
 
   assert.deepEqual(problems, [], `graph mismatches:\n  ${problems.join('\n  ')}`);
+});
+
+/**
+ * Scope is the one parity that has teeth: it decides whether two sessions are
+ * allowed to run at the same time. `phase-lock.sh` answers that in bash and the
+ * console answers it in JavaScript, so a disagreement is not a cosmetic drift —
+ * it is one side admitting a session the other would have refused. Every phase
+ * of every real plan, not a sample.
+ */
+test('every phase scopes the same way as the engine', { skip: !available && 'no source directory' }, async () => {
+  const store = new Store(checkRoot(ROOT));
+  store.scan();
+
+  const rows = store.list()
+    .filter((r) => r.plan?.phased)
+    .flatMap((r) => r.plan!.graph.map((row) => ({ slug: r.slug, row })));
+  assert.ok(rows.length > 100, `expected a real plan library, saw ${rows.length} phases`);
+
+  const problems: string[] = [];
+  const BATCH = 24;   // bounded: one subprocess per phase, hundreds of phases
+  for (let i = 0; i < rows.length; i += BATCH) {
+    await Promise.all(rows.slice(i, i + BATCH).map(async ({ slug, row }) => {
+      const result = await run({ scriptsDir: SCRIPTS, root: ROOT }, 'phase-graph.sh',
+        [slug, '--repos', String(row.phase)]);
+      const engine = result.stdout.trim();
+      const js = formatScope(scopeOfRow(row.repos));
+      if (engine !== js) problems.push(`${slug} p${row.phase} (${JSON.stringify(row.repos)}): JS "${js}" vs engine "${engine}"`);
+      // Never empty on either side: an undeclared phase must read as `all`.
+      if (!engine) problems.push(`${slug} p${row.phase}: engine returned an empty scope`);
+    }));
+  }
+
+  assert.deepEqual(problems, [], `scope mismatches:\n  ${problems.join('\n  ')}`);
 });
 
 test('handoff folders without a plan are kept as orphans', { skip: !available && 'no source directory' }, () => {

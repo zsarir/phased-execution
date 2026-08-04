@@ -185,10 +185,11 @@ prompts_tmp="$(mktemp)"
     else
       nready=$(printf '%s\n' $ready | grep -c . || true)
       if [ "$nready" -gt 1 ]; then
-        printf '> Phases **%s** are all unblocked — run them in any order, ONE session at a time (never\n' "$(echo $ready | sed 's/ /, /g')"
-        printf '> two sessions on this repo at once). If the remaining budget allows, the finishing session\n'
-        printf '> MAY continue straight into ONE of them (not a 🔒GATED one); the rest run in later sessions.\n'
-        printf '> Commit before switching sessions; never `git stash` to hand work across them.\n\n'
+        printf '> Phases **%s** are all unblocked — run them in any order. Ones with DISJOINT\n' "$(echo $ready | sed 's/ /, /g')"
+        printf '> scopes may run as concurrent sessions; ones sharing a repo run one at a time. Each boot\n'
+        printf '> prompt below states its scope and the `phase-lock.sh … conflicts` check to run first.\n'
+        printf '> If the remaining budget allows, the finishing session MAY instead continue straight into\n'
+        printf '> ONE of them (not a 🔒GATED one). Commit before switching sessions; never `git stash`.\n\n'
       else
         # Single next phase — batch-friendly whenever the remaining budget fits (gated
         # phases excepted: they always start fresh after their gates are confirmed).

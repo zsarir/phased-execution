@@ -59,17 +59,26 @@ memory: project_<slug>      # or pre-existing project_<other> when reusing an ex
 
    Follow the table with an explicit callout:
    - **Blocking:** `1 → 2 → 4` (linear chains)
-   - **Independent (run in any order, one at a time):** `3a ∥ 3b` (same dependencies, no shared files)
+   - **Independent (any order; concurrent sessions when their scopes are disjoint):** `3a ∥ 3b`
 
    Dependency rules + parse format:
    - A phase lists **every** phase that must complete first in `Depends on`. Two phases are *parallel-safe*
-     only if neither depends on the other **and** they don't edit the same files.
+     only if neither depends on the other **and** their **scopes** are disjoint (see the Repos column).
    - The `Depends on` cell accepts: a single number (`4`), a comma list (`4, 5`), a **range** (`1–7`,
      en-dash or hyphen, expands to 1…7), combinations (`1–7 (+8–10)`), or `—` for no dependencies. The
      parser keeps digits + range dashes and ignores other punctuation, so prose-y cells still parse.
    - The phase number lives in column 1; **markdown-bold cells (`| **6** |`) are tolerated**, but don't put
      a phase's number anywhere the parser could mistake it. After writing, run `scripts/phase-graph.sh
      <slug>` and confirm the parsed phase count matches the frontmatter `phases:` (it warns on mismatch).
+   - **`Repos` is the SCOPE column, and it is machine-read.** It names the repos/paths the phase touches,
+     and that is what decides whether two sessions may run at the same time — so write it for every phase,
+     not as decoration. Accepts a comma/`+`/space list, `` `backticks` ``, **bold**, parenthetical asides
+     (dropped), and paths (`packages/cart-api` stays one token; `/` never separates). `all` means it
+     touches everything. **An empty cell also means `all`** — the conservative default, and a phase that
+     runs alone for no reason. Check what the engine read with `scripts/phase-graph.sh <slug> --repos N`.
+     The cell is the ONLY declaration — nothing in the phase body overrides it. (Plans already use
+     `- **Scope …:**` bullets for prose, and reading those as repo names would silently mis-scope a
+     phase.) If a phase's real reach differs from its cell, fix the cell.
    - **Gated phases:** mark `*(GATED)*` in the `### Phase N` heading and add a
      `- **Gates (must clear first):** …` line (prose, surfaced in every boot prompt). For a
      **machine-checkable** gate, also add `- **Gate-check:** <type> <value>` — `date YYYY-MM-DD` (opens on

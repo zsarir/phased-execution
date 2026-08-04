@@ -103,11 +103,31 @@ fi
 n_ready="$(printf '%s\n' $ready | grep -c . || true)"
 
 if [ "$n_ready" -gt 1 ]; then
-  printf '\n▶  %s phases unblocked: %s — independent (any order, ONE session at a time; never two\n' "$n_ready" "$(echo $ready | sed 's/ /, /g')"
-  printf '   sessions on this repo at once). If the remaining session budget allows (your live context\n'
-  printf '   meter — references/sizing.md), you MAY continue into ONE of them in THIS session (not a\n'
-  printf '   🔒GATED one — those always start fresh after their gates are confirmed); the rest run in\n'
-  printf '   later sessions. Commit before switching sessions; never `git stash` to hand off.\n'
+  printf '\n▶  %s phases unblocked: %s — independent, and runnable in any order.\n' "$n_ready" "$(echo $ready | sed 's/ /, /g')"
+  # Which of them share a working tree? Disjoint scopes may run as SEPARATE
+  # sessions at the same time; anything overlapping is still one at a time.
+  # shellcheck source=/dev/null
+  . "$(dirname "$ENGINE")/scope.sh"
+  pairs=""; overlap=""
+  for a in $ready; do
+    for b in $ready; do
+      [ "$a" -lt "$b" ] || continue
+      sa="$(bash "$ENGINE" "$slug" --repos "$a" 2>/dev/null || echo all)"
+      sb="$(bash "$ENGINE" "$slug" --repos "$b" 2>/dev/null || echo all)"
+      if scope_intersects "$sa" "$sb"; then overlap="$overlap ${a}∩${b}"; else pairs="$pairs ${a}∥${b}"; fi
+    done
+  done
+  if [ -n "$pairs" ]; then
+    printf '   Disjoint scopes (may run as PARALLEL sessions, one session per phase):%s\n' "$pairs"
+  fi
+  if [ -n "$overlap" ]; then
+    printf '   Shared scope (SERIALIZE — never two live sessions on these):%s\n' "$overlap"
+  fi
+  printf '   Check before you start either way: `phase-lock.sh %s conflicts <N> --scope "<csv>" --git`.\n' "$slug"
+  printf '   If the remaining session budget allows (your live context meter — references/sizing.md),\n'
+  printf '   you MAY also continue into ONE of them in THIS session (not a 🔒GATED one — those always\n'
+  printf '   start fresh after their gates are confirmed). Commit before switching sessions; never\n'
+  printf '   `git stash` to hand off.\n'
 else
   # Single next phase: continue into it in THIS session whenever it fits the remaining
   # budget (only gates, a model switch, or a spent budget force a fresh session).

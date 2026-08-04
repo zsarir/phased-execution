@@ -2,10 +2,12 @@
 
 **English** · [فارسی](USAGE.fa.md)
 
-`phased-execution` **plans** large multi-phase work and **runs** it one right-sized session at a time —
-several phases usually share a session (sized to ~0.2 × the model's window in phase weight; ~200K for
-1M-class models), each phase still gets its own handoff, and a copy-pasteable boot prompt chains the
-sessions. Every phase-finish runs the phase's own **Verification commands green** before handing off.
+`phased-execution` **plans** large multi-phase work and **runs** it in right-sized sessions — several
+phases usually share a session (sized to ~0.2 × the model's window in phase weight; ~200K for 1M-class
+models), each phase still gets its own handoff, and a copy-pasteable boot prompt chains the sessions.
+Phases whose **scopes are disjoint** (the repos each touches, from the plan's Repos column) may run as
+separate sessions at the same time; anything sharing a repo runs one at a time. Every phase-finish runs
+the phase's own **Verification commands green** before handing off.
 
 **QA subagents are opt-in (off by default).** When you ask for QA — a `**QA gate:** on` line in the
 plan's §Session budget, `new-handoff.sh --qa` at a finish, or a plan that already has a

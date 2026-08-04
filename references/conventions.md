@@ -2,7 +2,7 @@
 
 Contents: Slug · Task ids · Commits · Branches · Memory · Status source of truth ·
 Phase dependencies (the DAG) · Session sizing & hygiene · Helper scripts · Locking ·
-Multi-session discipline · QA gating (opt-in) · Docs layout & repo split · Multi-repo commit atomicity
+Scoped concurrency · QA gating (opt-in) · Docs layout & repo split · Multi-repo commit atomicity
 
 ## Slug
 - kebab-case, derived from the work: `crm-import-contacts`, `submission-approval-fix`.
@@ -35,9 +35,10 @@ Keep the broad roadmap in the plan, never in the task list. (Memory: `feedback_p
   user's call; only create one when the user **explicitly asks**. This keeps a plan from scattering work
   across branches the user never wanted.
 - **When the user does ask for a branch, use exactly ONE branch for the whole plan** and commit **every**
-  phase to it — including independent phases that run in **separate sessions** (serially). They touch
-  disjoint files, so sharing one branch is safe; do **not** open a branch per phase or per session — that
-  over-branching is exactly what to avoid. One feature branch per repo (submodule) for the entire plan.
+  phase to it — including independent phases that run in **separate sessions**, whether those sessions run
+  one after another or at the same time on disjoint scopes. They touch disjoint files, so sharing one
+  branch is safe; do **not** open a branch per phase or per session — that over-branching is exactly what
+  to avoid. One feature branch per repo (submodule) for the entire plan.
 - **Record the branch in the plan** (the `## Session budget` note's `Branch:` line) so every fresh session —
   sequential or independent — checks out the SAME branch. Create the branch **once** (at plan time, if the
   user asked); later sessions `git checkout <branch>`, **never** `git checkout -b`.
@@ -63,12 +64,14 @@ when the highest-numbered phase is reached.
 - The plan is a dependency graph. A phase's `Depends on` lists **every** phase that must finish first;
   `scripts/phase-graph.sh` parses that column (numbers, comma lists, ranges like `1–7`, `—` for none).
 - **ready = not started AND every dependency `done`.** Readiness is computed from the done-*set*, so it is
-  correct under **serial** execution (one completion can unblock several phases, each run in its own session
-  one at a time) and **out-of-order** execution (finishing a deep chain like 1→4→5 before siblings 2,3 — the
-  board still shows 2,3 as not-done, and the project isn't finished until they are).
-- Two phases are **parallel-safe** only if neither depends on the other **and** they touch disjoint files.
-  Independent `ready` phases run in *separate* fresh sessions, **one at a time** (see §Multi-session
-  discipline); `next-phase-prompt.sh` lists a boot prompt for each.
+  correct however the phases are run — one completion unblocking several, sessions running side by side, or
+  **out-of-order** execution (finishing a deep chain like 1→4→5 before siblings 2,3 — the board still shows
+  2,3 as not-done, and the project isn't finished until they are).
+- Two phases are **parallel-safe** only if neither depends on the other **and** their **scopes are
+  disjoint** (§Scoped concurrency — the Repos column is the machine-readable form of "disjoint files").
+  Independent `ready` phases run in *separate* fresh sessions, simultaneously when their scopes allow it
+  and one at a time when they don't; `next-phase-prompt.sh` lists a boot prompt for each and says which
+  pairs are which.
 - `new-handoff.sh` auto-fills each handoff's `depends_on` (prerequisites) + `blocks` (dependents) from the
   graph, so every handoff is self-describing. Don't hand-edit those to disagree with the plan table.
 
@@ -101,27 +104,46 @@ run scripts from the repo root or set `DOCS_ROOT=/path/to/repo` explicitly when 
 
 ## Locking (concurrency guard)
 - A phase started in a session is **claimed**: `scripts/phase-lock.sh <slug> claim <N> --owner
-  "<account>/<session>" --git` writes `docs/handoffs/<slug>/.locks/phase-NN.lock` (owner + lease) and —
-  with `--git` — commits+pushes it so other clones see it on their next pull.
-- **`git pull` before claiming.** If the phase is already held by a live (non-expired) session, **stop and
-  ask the user**: stop the other session, `--force` take over, or start a different ready phase. Never build
-  a phase two sessions hold at once.
+  "<account>/<session>" --scope "<csv>" --git` writes `docs/handoffs/<slug>/.locks/phase-NN.lock`
+  (owner + lease + scope) and — with `--git` — commits+pushes it so other clones see it on their next pull.
+  A raced commit or push is retried (pull --rebase, up to 3×) rather than dropped.
+- **`git pull`, then ask two questions, before you build.** *Is the phase taken?* — `claim` answers it and
+  refuses a live holder. *Does anything live share my working tree?* — `phase-lock.sh <slug> conflicts <N>
+  --scope "<csv>"` answers it across **every plan** (exit 0 clear / 1 conflicts / 2 usage). On either
+  refusal **stop and ask the user**: wait, stop the other session, `--force` take over, or start a ready
+  phase with a disjoint scope. Never build a phase two sessions hold at once.
+- `claim` deliberately enforces only the *same-phase* rule, never scope. Policy belongs where it can be
+  acted on (the console's scheduler, or a session that can ask a human), and keeping `claim` unchanged is
+  what lets an older script and an older console keep working against a scoped lock.
+- `scope=` is optional in the file. **Absent means UNKNOWN, and unknown collides with everything** — a lock
+  written before scopes existed must never read as harmless.
 - Leases auto-expire (default 30 min) so a dead session's lock can be taken over; refresh by re-claiming.
   Release at phase-finish (`phase-lock.sh <slug> release <N> --owner … --git`). Cooperative, not a hard mutex.
 
-## Multi-session discipline (serial execution + working-tree safety)
-- **One session per working tree at a time.** Phases run **serially** — even independent `ready` phases run
-  one after another (in any order), each in its own fresh session. **Never run two sessions against the same
-  project working tree at once**: they overwrite each other's files mid-edit and tests fail for unrelated
-  reasons. (If you genuinely need parallelism, give each session its *own* checkout — a separate clone or a
-  `git worktree` — never share one directory.)
+## Scoped concurrency (working-tree safety)
+- **The invariant: never two live sessions whose scopes intersect. Same repo ⇒ serialized; `all` ⇒
+  exclusive; disjoint ⇒ parallel.** What makes two sessions unsafe is a shared *working tree* — they
+  overwrite each other's files mid-edit and tests fail for unrelated reasons — not the mere fact of being
+  two. So the rule is about scope, not about counting sessions.
+- **Scope = the plan's Repos column**, normalised by `shared/scope.js` (JS) and `scripts/scope.sh` (bash);
+  `phase-graph.sh <slug> --repos <N>` prints it. `all` and an *undeclared* cell touch everything. A path
+  token nests segment-wise: `packages` ∩ `packages/cart-api` collide, `api` and `api-gateway` do not.
+  Ambiguity always resolves toward colliding — a false conflict costs parallelism, a missed one corrupts a
+  tree.
+- **Two sessions on the same repo still need their own checkouts if you insist on overlapping** — a
+  separate clone or a `git worktree`, never one shared directory. The scope rule is what tells you when you
+  don't need that at all.
+- **Handoff, INDEX and lock commits in the docs repo are NOT part of a phase's scope.** Every session
+  writes there, and treating it as scope would serialise the whole system. Git's own `index.lock` plus a
+  pull-rebase retry (≤3) is the serialization; the scripts do it, and a session that races a commit or push
+  should rebase and retry rather than give up.
 - **Never `git stash` to hand work to another session.** A stash lives in one working tree and is invisible
   to any other session or clone — the classic "I stashed it but the other session can't see it" trap.
   Instead **commit** (a WIP commit is fine) and let the next session continue from the commit; squash WIP
   before the phase-finish commit.
 - **Commit before you switch, pull before you start.** End a session on a clean, committed tree; the next
-  session `git pull`s (and `phase-lock.sh … claim`s) before touching anything. The filesystem of a closed
-  session is not a channel — git is.
+  session `git pull`s (and `phase-lock.sh … conflicts` / `… claim`s) before touching anything. The
+  filesystem of a closed session is not a channel — git is.
 
 ## QA gating (opt-in — verify before dependents start)
 - **QA is opt-in, off by default.** No QA subagent runs and no `test-status.md` is created unless the plan

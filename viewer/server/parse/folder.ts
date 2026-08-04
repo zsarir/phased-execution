@@ -4,6 +4,7 @@
  */
 
 import { tableAfter, plainCell } from './markdown.ts';
+import { parseScope } from '../../shared/scope.js';
 
 export type IndexRow = { phase: number; title: string; status: string; link?: string };
 
@@ -58,6 +59,15 @@ export type Lock = {
   leaseUntil?: number;
   /** Lease elapsed — `phase-lock.sh` lets another session take it over. */
   expired: boolean;
+  /**
+   * The repos this session is working in, from the plan's Repos column.
+   *
+   * Optional because it is: a lock written before scopes existed, or by a
+   * `claim` that named none, has no `scope=` line. Absent means UNKNOWN, and
+   * every reader has to treat unknown as colliding with everything — the
+   * alternative is admitting a second session into a tree it cannot see.
+   */
+  scope?: string[];
   file: string;
 };
 
@@ -74,6 +84,8 @@ export function parseLock(text: string, file: string, now = Date.now()): Lock | 
   const leaseUntil = Number.parseInt(values.lease_until ?? '', 10);
   const claimedAt = Number.parseInt(values.claimed_at ?? '', 10);
 
+  const scope = values.scope ? parseScope(values.scope) : [];
+
   return {
     slug: values.slug ?? '',
     phase,
@@ -82,6 +94,7 @@ export function parseLock(text: string, file: string, now = Date.now()): Lock | 
     claimedAt: Number.isFinite(claimedAt) ? claimedAt * 1000 : undefined,
     leaseUntil: Number.isFinite(leaseUntil) ? leaseUntil * 1000 : undefined,
     expired: Number.isFinite(leaseUntil) ? leaseUntil * 1000 < now : false,
+    scope: scope.length ? scope : undefined,
     file,
   };
 }

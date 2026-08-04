@@ -53,3 +53,24 @@ load ../helpers/test_helper
   run pg ranges --dependents 4
   assert_contains "$output" "5"
 }
+
+@test "the row parser emits four fields without disturbing deps or titles" {
+  # The Repos column joined the parsed row after deps and titles were already
+  # load-bearing. A shifted field would corrupt the graph silently, so this
+  # asserts the older two still read correctly on a plan that fills all of them.
+  setup_docs scoped scoped
+  run pg scoped --deps 4;  [ "$output" = "1" ]
+  run pg scoped --deps 1;  [ "$output" = "" ]
+  run pg scoped --dependents 1; [ "$output" = "2 3 4 5 6 7" ]
+  run pg scoped --repos 2; [ "$output" = "api-server" ]
+  run pg scoped; assert_contains "$output" "Packages"
+}
+
+@test "an empty Repos cell does not shift the columns beside it" {
+  # Phase 5's Repos cell is a lone dash; deps, size and title must survive it.
+  setup_docs scoped scoped
+  run pg scoped --deps 5;  [ "$output" = "1" ]
+  run pg scoped --size 5;  [ "$output" = "S" ]
+  run pg scoped --repos 5; [ "$output" = "all" ]
+  run pg scoped; assert_contains "$output" "Anything"
+}

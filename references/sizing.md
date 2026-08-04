@@ -90,9 +90,11 @@ wanted model switch is one of the few boundaries that *earns* a fresh session.
 
 **At plan time (Mode 1) — minimize phase count.** Author the **fewest** phases that fit the budget:
 target `phase count ≈ ceil(total weight / budget)`, then add a boundary only where one is *earned* — an
-external gate, a deliberate model switch, or a checkpoint the user asked for. Execution is **serial**,
-so DAG fan-out and per-subsystem tidiness earn nothing: extra phases buy no parallelism, only repeated
-bootstrap + handoff ceremony (~30-40% of a typical handoff is ceremony). *Don't* author three trivial
+external gate, a deliberate model switch, or a checkpoint the user asked for. Per-subsystem tidiness earns
+nothing: extra phases mostly buy repeated bootstrap + handoff ceremony (~30-40% of a typical handoff is
+ceremony). The one split that *does* buy something is along **repo boundaries** — phases with disjoint
+scopes may run as concurrent sessions (§Scoped concurrency in `conventions.md`), so a fan-out that
+separates repos is real parallelism while a fan-out inside one repo is not. *Don't* author three trivial
 phases that should be one. A phase whose weight exceeds one session's budget is two phases.
 
 **At phase boundaries (Mode 3):** if any ready phase fits the **remaining** budget (judge with your live
@@ -102,7 +104,8 @@ keeps the cache warm. This is **batching**, and it is encouraged, not a forfeit:
 
 - **Sequential next phase** — the classic case; continue straight into it.
 - **Independent siblings (parallel-safe)** — may share a session too: execution inside one session is
-  serial, so disjoint-file siblings are safe. Pick ONE to continue into; the rest run in later sessions.
+  serial, so even same-scope siblings are safe that way. Pick ONE to continue into. The rest run in later
+  sessions — **at the same time as this one if their scopes are disjoint** (`conflicts` before each).
 - **L-size phases batch like any other** — only the summed budget decides, not the tag.
 
 Stop and open a fresh session when: the budget is spent, the next phase is **GATED** (external gates

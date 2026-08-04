@@ -65,11 +65,13 @@ operational next-session state. Memory holds durable facts. Full schemas/templat
 A plan is a **dependency graph**: each phase declares the phases that must finish before it can start.
 That makes two things possible that a linear "phase N → N+1" model can't express:
 
-- **Fan-out, run serially** — when one phase completes it may unblock *several* phases at once. They run
-  **one at a time** (in any order) — never two sessions on the same repo at once
-  (`references/conventions.md` §Multi-session discipline). Ready phases — sequential *or* independent
-  siblings — may **share one session** while the budget lasts (execution inside a session is serial, so
-  disjoint-file siblings are safe); what fan-out never permits is a *second concurrent session*.
+- **Fan-out, run by scope** — when one phase completes it may unblock *several* phases at once. What
+  decides whether they may run **at the same time** is their **scope**: the repos they touch, taken from
+  the plan's **Repos** column. The invariant: *never two live sessions whose scopes intersect; same repo
+  ⇒ serialized; `all` ⇒ exclusive; disjoint ⇒ parallel* (`references/conventions.md` §Scoped concurrency).
+  Ask before you start — `phase-lock.sh <slug> conflicts <N> --scope "<csv>"` — and **stop and ask the
+  user** on a reported hit. Ready phases may also **share one session** while the budget lasts (execution
+  inside a session is serial, so even same-scope siblings are safe that way).
 - **Out-of-order progress** — you can complete a deep chain (e.g. 1→4→5) before its siblings (2, 3). The
   system must still know 2 and 3 aren't done. "Finished" means **every** phase is `done`, never "reached
   the highest number".
@@ -93,8 +95,9 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    its budget in `references/sizing.md` and **author the fewest phases that fit it**: target
    `phase count ≈ ceil(total weight / budget)`, then add a boundary only where one is *earned* — an
    external gate, a deliberate model switch, or a checkpoint the user asked for. Never split for subsystem
-   tidiness or to mirror DAG fan-out (execution is serial, so extra phases buy no parallelism — only
-   repeated bootstrap + handoff ceremony). Don't author three trivial phases that should be one, or one
+   tidiness alone — extra phases buy repeated bootstrap + handoff ceremony. They buy real parallelism only
+   when the split falls along **repo boundaries**, since disjoint scopes may run as concurrent sessions;
+   splitting inside one repo buys none. Don't author three trivial phases that should be one, or one
    giant phase that should be three (a phase whose weight exceeds the budget is two phases). Record the
    target model + budget in a `## Session budget` note in the plan, and tag each phase's rough
    `- **Size:** S|M|L` (drives the batch engine; default is `M`). **QA is off by default** — only if the
@@ -122,7 +125,7 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
 5. **Commit** the plan (`docs/plans/<slug>.md`).
 6. **Immediately implement the root phase(s) in this same session** → switch to Mode 2. (Keep going into
    further ready phases while the budget lasts — see Mode 3 batching; whatever doesn't fit runs in later
-   sessions, one at a time, via the pasted prompts from Mode 3.)
+   sessions via the pasted prompts from Mode 3 — concurrently where their scopes are disjoint.)
 
 ### Mode 2 — `phase-start` (begin or continue a phase in a fresh session)
 1. **Bootstrap from disk only:** run `scripts/handoff-status.sh <slug>` — it prints the INDEX, per-file
@@ -136,12 +139,18 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    actually done — stop and surface that rather than building on an unfinished base (earlier-numbered phases
    may legitimately be incomplete; rely on the board, not phase numbers). Then check the plan's
    `## Session budget` target model against the model you're *actually* running — if they differ, recompute
-   the budget from `references/sizing.md` and re-batch accordingly. **Then claim the phase (concurrency
-   guard):** `git pull`, then `bash ~/.claude/skills/phased-execution/scripts/phase-lock.sh <slug> claim <N>
-   --owner "<account>/<session>" --git`. If it reports the phase is held by another live session, **stop and
-   ask the user** whether to stop that session, take over (`--force`), or pick a different ready phase —
-   never let two sessions build the same phase. The lock auto-expires (lease) and is released at
-   phase-finish. See `references/conventions.md` §Locking.
+   the budget from `references/sizing.md` and re-batch accordingly. **Then check scope, then claim
+   (concurrency guard):** `git pull`, read the phase's scope
+   (`scripts/phase-graph.sh <slug> --repos <N>` — the boot prompt already states it), then
+   ```
+   scripts/phase-lock.sh <slug> conflicts <N> --scope "<csv>" --git   # 0 = clear, 1 = collides
+   scripts/phase-lock.sh <slug> claim <N> --owner "<account>/<session>" --scope "<csv>" --git
+   ```
+   `conflicts` looks across **every plan**, because a working tree doesn't know which plan asked for it.
+   If it names a live session — or `claim` reports the phase already held — **stop and ask the user**
+   whether to wait, stop that session, take over (`--force`), or pick a ready phase with a disjoint
+   scope. Never build over a live session. The lock auto-expires (lease) and is released at phase-finish.
+   See `references/conventions.md` §Locking + §Scoped concurrency.
 3. **Reset the task list** (delete prior-phase tasks) and create THIS phase's tasks with subjects prefixed
    **`pN.taskM`** (e.g. `p2.task1 — wire endpoint`). Keep the roadmap in the plan, not the task list.
    (See `references/conventions.md` and memory `feedback_phase_task_list_reset`.)
@@ -214,9 +223,10 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
      batch past an external gate), it wants a **different model**, or — with QA `on` — it depends on this
      phase's still-unrecorded verdict. Print the script's output verbatim as the **last message of this
      session**, then **STOP**.
-   - **Several phases ready:** run them **one at a time, in any order** — never two sessions at once on
-     the same repo. Continue into ONE of them here if the budget allows; the output lists a boot prompt
-     for each of the rest.
+   - **Several phases ready:** run them in any order. Ones with **disjoint scopes** may run as separate
+     sessions at the same time (the banner names which pairs those are); ones sharing a repo run one at a
+     time. Continue into ONE of them here if the budget allows; the output lists a boot prompt for each of
+     the rest, and every prompt carries its own `conflicts` check.
    - **No phase ready but work remains:** the just-finished phase unblocked nothing yet (downstream still
      waits on other deps). The script says so; pick up any *other* phase the board shows as `ready`.
    - **Final / all done:** when the board shows every phase `done`, the script prints the closeout — run
@@ -231,7 +241,9 @@ Scripts resolve the superproject root automatically when run from inside a submo
 - `scripts/phase-graph.sh <slug>` — **the engine.** Default: the live DAG board (done / ready / waiting,
   with unmet deps, gated flags, and `SUGGESTED BATCHES:` when sizes are present). Machine modes used by the
   other scripts (and handy directly): `--ready`, `--ready-after N`, `--deps N`, `--dependents N`,
-  `--gated N`, `--boot-prompt N`, `--size N`, **`--session-plan [model|budget]`** (live-aware session
+  `--gated N`, `--boot-prompt N`, `--size N`, **`--repos N`** (phase N's SCOPE as a normalized csv, read
+  from the Repos column — never empty; an undeclared phase reads as `all`),
+  **`--session-plan [model|budget]`** (live-aware session
   grouping for a model's budget — done phases excluded, GATED/over-budget/unmet-dep groups flagged),
   **`--lint`** (structural validation: exit non-zero on a malformed row, an undefined
   dependency, or a cycle — naming each), **`--qa-mode`** (this plan's QA regime: `off` · `on <reason>` ·
@@ -255,9 +267,15 @@ Scripts resolve the superproject root automatically when run from inside a submo
 - `scripts/validate.sh <slug>` — deterministic validator: structural lint of the plan (F1/F2/F3) **plus**
   handoff body/consistency checks (valid status, required sections, `depends_on` agreeing with the graph).
   Run before trusting a board or finishing a phase.
-- `scripts/phase-lock.sh <slug> <claim|release|status|list> <N> [--owner ID] [--lease S] [--git] [--force]`
-  — cooperative phase locks (concurrency guard). Lock files at `docs/handoffs/<slug>/.locks/phase-NN.lock`;
-  `--git` pulls before checking and commits+pushes the claim so other clones see it. See conventions §Locking.
+- `scripts/phase-lock.sh <slug> <claim|release|status|list|conflicts> <N> [--owner ID] [--lease S]
+  [--scope CSV] [--git] [--force]` — cooperative phase locks (concurrency guard). Lock files at
+  `docs/handoffs/<slug>/.locks/phase-NN.lock`; `--git` pulls before checking and commits+pushes the claim
+  so other clones see it (retrying a raced commit/push up to 3×). `--scope` (or `$PE_SCOPE`) records the
+  repos the session is working in as a `scope=` line — older locks simply have none, which reads as
+  *unknown* and therefore collides with everything. **`conflicts [N] --scope "<csv>"`** is the read-only
+  question "does anything live share my working tree?", scanned across **all** plans: exit 0 clear /
+  1 conflicts (one line per holder) / 2 usage. `claim` still refuses only the same phase of the same plan —
+  scope is policy, and policy lives where it can be acted on. See conventions §Locking + §Scoped concurrency.
 - `scripts/qa-record.sh <slug> <N> <pass|fail|waived|pending> --report <rel-path>` — the deterministic,
   idempotent writer for `test-status.md` (the QA gate). The QA subagent calls it when QA is enabled; never
   hand-edit the table. (Recording a row also *activates* gating — it's a QA-on trigger.) See
@@ -292,10 +310,11 @@ The load-bearing rules a session must not get wrong; full rationale in `referenc
   plan, never re-list the roadmap. (conventions §Memory, §Docs layout)
 - **`phase-graph.sh` is the truth for done/ready/next** — never infer from phase numbers or a remembered
   cursor; "finished" means the board shows **every** phase `done`. (conventions §Status source of truth)
-- **One session per phase — claim the lock** before building; if another session holds it, ask the user how
-  to proceed. (conventions §Locking)
-- **Serial — one working tree at a time.** Never two sessions on one repo at once; **never `git stash`** to
-  hand work across sessions — commit (a WIP commit if needed) instead. (conventions §Multi-session discipline)
+- **One session per phase — check scope, then claim the lock** before building (`conflicts` then `claim
+  --scope`); if it names a live session, ask the user how to proceed. (conventions §Locking)
+- **Scope decides concurrency — one session per working *tree*.** Never two live sessions whose scopes
+  intersect; same repo ⇒ serialized; `all` ⇒ exclusive; disjoint ⇒ parallel. **Never `git stash`** to hand
+  work across sessions — commit (a WIP commit if needed) instead. (conventions §Scoped concurrency)
 - **QA is opt-in; existing gates still bind.** No QA subagent runs unless the plan enables it
   (`--qa-mode` says which regime applies). But once `test-status.md` exists — on ANY plan, old or new — a
   dependent is `ready` only when its deps are `done` **and** QA `pass`/`waived`, and a recorded `fail`

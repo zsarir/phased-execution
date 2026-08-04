@@ -13,6 +13,7 @@ import {
   indexGraph, layerGraph, unblockValue, weightOf, resolveBudget, criticalPath, remainingWork,
   type Sizing,
 } from './graph.ts';
+import { parseScope } from '../../shared/scope.js';
 
 export type PlanContext = { record: PlanRecord; board: Board; qaMode: QaMode };
 
@@ -191,20 +192,16 @@ export function normalisePlanStatus(raw?: string): string | undefined {
 }
 
 /**
- * The Repos cell as tokens. Exported since the runner needs the same reading to
- * suggest a `Verify in:` when a phase verifies in the wrong tree — two answers
- * to "which repos does this phase touch" would be one answer too many. Phase 3
- * of the concurrency plan promotes this to `shared/scope.js`, where the bash
- * side can agree with it too; until then this is the one definition.
+ * The Repos cell as *repository* names — the top segment of each scope token.
+ *
+ * The reading itself now lives in `shared/scope.js`, because the bash side has
+ * to agree with it: `phase-lock.sh` decides whether a claim collides using the
+ * same rules. What stays here is the narrower question this file and the
+ * `Verify in:` suggestion ask — "which repositories?" — where a path like
+ * `packages/cart-api` is the `packages` checkout and tallies as one.
  */
 export function splitRepos(cell: string): string[] {
-  // Parenthetical asides come off first — `api-server (+web snapshot)` is one
-  // repo, and splitting on the `+` inside would invent two.
-  return cell
-    .replace(/\([^)]*\)?/g, ' ')
-    .split(/[,+/]|\band\b/)
-    .map((s) => s.trim().toLowerCase().replace(/[^a-z0-9-]+$/, ''))
-    .filter((s) => s && s !== '—' && s !== '-' && s.length > 1 && s.length < 32);
+  return [...new Set(parseScope(cell).map((token) => token.split('/')[0]))];
 }
 
 export function healthIssues(ctx: PlanContext): HealthIssue[] {

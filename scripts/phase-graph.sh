@@ -18,6 +18,7 @@
 #   phase-graph.sh <slug> --deps N        # N's own dependencies (space-separated)
 #   phase-graph.sh <slug> --gated N       # "yes"/"no"
 #   phase-graph.sh <slug> --size N        # rough working-set size of phase N (S|M|L; default M)
+#   phase-graph.sh <slug> --repos N       # phase N's SCOPE as normalized csv (Repos column; "" → all)
 #   phase-graph.sh <slug> --boot-prompt N # full copy-paste boot prompt for phase N
 #   phase-graph.sh <slug> --session-plan [model|budget]
 #                                         # propose which REMAINING phases to batch into one session,
@@ -28,12 +29,15 @@
 # Run from the repo root that owns docs/, or set DOCS_ROOT.
 set -euo pipefail
 
-slug="${1:?usage: phase-graph.sh <slug> [--lint|--qa-mode|--qa-result N|--qa-prompt N|--gate-status N|--memory-block|--ready|--ready-after N|--dependents N|--deps N|--gated N|--size N|--boot-prompt N|--session-plan [model|budget]]}"
+slug="${1:?usage: phase-graph.sh <slug> [--lint|--qa-mode|--qa-result N|--qa-prompt N|--gate-status N|--memory-block|--ready|--ready-after N|--dependents N|--deps N|--gated N|--size N|--repos N|--boot-prompt N|--session-plan [model|budget]]}"
 mode="${2:-board}"
 arg="${3:-}"
 
 # Script dir — portable across accounts/clones (F13): never hardcode ~/.claude.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# One bash reading of the Repos column, shared with phase-lock.sh.
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/scope.sh"
 
 # F5: single source of truth for sizing + budgets. Canonical values live in
 # scripts/sizing.env (also documented in references/sizing.md); these defaults are
@@ -104,9 +108,11 @@ parse_table() {
         }
       }
       sub(/^ /, "", out)
+      repos = trim($6)                        # Repos column = the SCOPE of a phase
+      gsub(/[*`]/, "", repos); repos = trim(repos)
       # US (\037) field separator, not tab: tab is IFS-whitespace, so an empty
       # deps field between two tabs would coalesce and shift the title out.
-      print ph "\037" out "\037" title
+      print ph "\037" out "\037" title "\037" repos
     }'
 }
 
@@ -298,8 +304,8 @@ phase_status() {  # phase_status <phase>
 # Indexed arrays keyed by phase NUMBER (phases are small ints) — keeps this
 # compatible with bash 3.2 (macOS /bin/bash), which lacks associative arrays.
 declare -a PHASES=()
-declare -a DEPS=() TITLE=() STATUS=() GATED=() SIZE=()
-while IFS=$'\037' read -r ph deps title; do
+declare -a DEPS=() TITLE=() STATUS=() GATED=() SIZE=() REPOS=()
+while IFS=$'\037' read -r ph deps title repos; do
   [ -z "$ph" ] && continue
   PHASES+=("$ph")
   DEPS["$ph"]="$deps"
@@ -307,6 +313,9 @@ while IFS=$'\037' read -r ph deps title; do
   STATUS["$ph"]="$(phase_status "$ph")"
   GATED["$ph"]="$(is_gated "$ph")"
   SIZE["$ph"]="$(phase_size "$ph")"
+  # Scope, normalized once here so every consumer sees the same csv. A phase
+  # that named no repos gets `all` — it might touch anything, so it runs alone.
+  REPOS["$ph"]="$(scope_of_row "$repos")"
 done < <(parse_table)
 
 if [ "${#PHASES[@]}" -eq 0 ]; then
@@ -670,6 +679,14 @@ case "$mode" in
     echo "${GATED[$arg]:-no}"
     exit 0
     ;;
+  --repos)
+    # The phase's SCOPE: what it touches, from the plan's Repos column, as the
+    # csv `phase-lock.sh --scope` and `conflicts` speak. Never empty — an
+    # undeclared phase reads as `all`, which collides with everything.
+    [ -z "$arg" ] && { echo "usage: --repos <phase>" >&2; exit 2; }
+    echo "${REPOS[$arg]:-all}"
+    exit 0
+    ;;
   --qa-result)
     [ -z "$arg" ] && { echo "usage: --qa-result <phase>" >&2; exit 2; }
     qa_result "$arg"
@@ -846,10 +863,22 @@ case "$mode" in
     [ -n "$dep_lines" ] && printf '%s' "$dep_lines"
     printf -- '- docs/plans/%s.md §Phase %s + §Session budget (model, budget, branch)\n' "$slug" "$p"
     printf -- '- memory %s\n' "$memory_key"
-    printf 'This is a DAG plan run SERIALLY: other phases may be ready too and lower-numbered phases\n'
-    printf 'may still be unfinished — do NOT assume phases below %s are done, and do NOT open a second\n' "$p"
-    printf 'session on this repo while another is active. Run `scripts/phase-graph.sh %s` for live state.\n' "$slug"
-    printf 'Then build the p%s.task* list and implement Phase %s to its exit criteria.\n' "$p" "$p"
+    printf 'This is a DAG: other phases may be ready too and lower-numbered phases may still be\n'
+    printf 'unfinished — do NOT assume phases below %s are done. Run `scripts/phase-graph.sh %s`\n' "$p" "$slug"
+    printf 'for live state.\n'
+    sc="${REPOS[$p]:-all}"
+    printf '\nThis phase'\''s SCOPE (the repos it touches, from the plan'\''s Repos column): %s\n' "$sc"
+    printf 'Two sessions may run at once ONLY on disjoint scopes. Before implementing:\n'
+    printf -- '  1. `git pull`, then check nothing live shares your tree:\n'
+    printf -- '       bash %s/phase-lock.sh %s conflicts %s --scope "%s" --git\n' "$SCRIPT_DIR" "$slug" "$p" "$sc"
+    printf -- '     A reported conflict means STOP AND ASK the user — never build over a live session.\n'
+    printf -- '  2. Claim it:\n'
+    printf -- '       bash %s/phase-lock.sh %s claim %s --owner "<account>/<session>" --scope "%s" --git\n' "$SCRIPT_DIR" "$slug" "$p" "$sc"
+    printf 'The invariant: never two live sessions whose scopes intersect; same repo ⇒ serialized;\n'
+    printf '`all` ⇒ exclusive; disjoint ⇒ parallel. (Handoff/lock commits in the docs repo are NOT\n'
+    printf 'part of your scope — if a commit or pull races another session, pull --rebase and retry\n'
+    printf 'up to 3 times; git'\''s own index.lock is the serialization there.)\n'
+    printf '\nThen build the p%s.task* list and implement Phase %s to its exit criteria.\n' "$p" "$p"
     printf 'Stop + hand off when done.\n'
     exit 0
     ;;

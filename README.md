@@ -227,8 +227,10 @@ because a dependency of each is still open.
 
 Two consequences worth internalising:
 
-- **Finishing a phase can unblock several.** They still run **one at a time** — never two Claude
-  sessions against the same working tree — but you can pick whichever you like.
+- **Finishing a phase can unblock several.** Pick whichever you like. Whether two of them may run **at
+  the same time** depends on their **scope** — the repos each touches, from the plan's Repos column.
+  Disjoint scopes go in parallel; anything sharing a repo runs one at a time, because two Claude
+  sessions in one working tree overwrite each other mid-edit.
 - **"Finished" means every phase is done**, not "we reached the highest number". You can complete
   1 → 4 → 6 and the board will still, correctly, show 3 and 5 as unfinished.
 
@@ -615,14 +617,18 @@ Verdicts are recorded only through `scripts/qa-record.sh` — an idempotent upse
 
 Things that stop the system hurting you, all of them mechanical.
 
-**Phase locks.** Starting a phase claims it — a small lock file in your repo recording who holds it
-and a lease that auto-expires. If a second session finds the phase held by a live session, it stops
-and asks rather than building the same phase twice. Locks are committed, so they work across machines
-and accounts.
+**Phase locks.** Starting a phase claims it — a small lock file in your repo recording who holds it,
+a lease that auto-expires, and the **scope** it is working in. If a second session finds the phase held
+by a live session, it stops and asks rather than building the same phase twice. Locks are committed, so
+they work across machines and accounts.
 
-**One session per working tree.** Phases run serially even when several are ready. Two Claude sessions
-in one directory overwrite each other mid-edit and produce test failures nobody can explain. Need real
-parallelism? Give each session its own checkout or `git worktree` — never share a directory.
+**Scope decides who may run beside you.** What makes two sessions dangerous is a shared *working tree*,
+not the mere fact of being two — so the rule is about scope: *never two live sessions whose scopes
+intersect; same repo ⇒ serialized; `all` ⇒ exclusive; disjoint ⇒ parallel.* Scope comes from the plan's
+Repos column, and `phase-lock.sh <slug> conflicts <N> --scope "<csv>"` answers the question across every
+plan before you start — a working tree doesn't know which plan asked for it. Every boot prompt states
+its phase's scope and the command to check it. A phase that declares nothing counts as `all` and runs
+alone; still want to overlap two sessions on one repo? Give each its own checkout or `git worktree`.
 
 **Never stash to hand off.** A `git stash` lives in one working tree and is invisible to every other
 session and clone. Commit instead — even a WIP commit. The filesystem of a closed session is not a

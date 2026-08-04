@@ -329,6 +329,29 @@ lease_until=${future}
   assert.equal(stale?.expired, true);
 });
 
+test('a lock says what the session is working in, and an old one says nothing', () => {
+  const future = Math.floor(Date.now() / 1000) + 600;
+  const scoped = parseLock(
+    `slug=demo\nphase=3\nowner=me/session\nlease_until=${future}\nscope=api-server,packages/cart-api\n`,
+    'phase-03.lock',
+  );
+  assert.deepEqual(scoped?.scope, ['api-server', 'packages/cart-api']);
+
+  // Written before scopes existed, or by a claim that named none. Absent is
+  // UNKNOWN, not "collides with nothing" — the reader has to decide, so the
+  // parser must not invent an empty list that reads as harmless.
+  const scopeless = parseLock(`slug=demo\nphase=4\nowner=me/session\nlease_until=${future}\n`, 'phase-04.lock');
+  assert.equal(scopeless?.scope, undefined);
+  assert.equal(scopeless?.phase, 4);
+
+  // A hand-written scope goes through the same normalisation as everything else.
+  const messy = parseLock(
+    `slug=demo\nphase=5\nowner=me/session\nlease_until=${future}\nscope=API-Server, \`web-app\` (deploy)\n`,
+    'phase-05.lock',
+  );
+  assert.deepEqual(messy?.scope, ['api-server', 'web-app']);
+});
+
 test('markdown helpers split sections, bullets and fences', () => {
   const secs = sections('## One\n\na\n\n## Two\n\nb\n');
   assert.deepEqual(secs.map((s) => s.title), ['One', 'Two']);
