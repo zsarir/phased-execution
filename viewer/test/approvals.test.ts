@@ -181,12 +181,26 @@ test('the hook endpoint rejects anything but this run\'s token', () => {
   assert.equal(approvals.verify(`Bearer ${token}`), false, 'the token dies with the run');
 });
 
-test('two runs never share a token', () => {
+test('two runs never share a token, and each is only ever itself', () => {
   const approvals = new Approvals();
   const first = approvals.arm('run-1');
   const second = approvals.arm('run-2');
   assert.notEqual(first, second);
-  assert.equal(approvals.verify(`Bearer ${first}`), false, 'the previous run cannot drive the current one');
+
+  // This used to assert that arming run-2 INVALIDATED run-1's token, which was
+  // the right property while only one run could exist — a second `arm` then
+  // always meant the first run was over. With a runner pool it means the
+  // opposite: two runs are live, and retiring one of their tokens because the
+  // other started would leave a working session's hook calls unauthorised —
+  // which this hook reads as silence, and silence fails open.
+  //
+  // The property that actually mattered survives, and is stronger: a token
+  // identifies exactly one run, and can never be mistaken for another's.
+  assert.equal(approvals.runIdFor(`Bearer ${first}`), 'run-1');
+  assert.equal(approvals.runIdFor(`Bearer ${second}`), 'run-2');
+  approvals.disarm('run-1');
+  assert.equal(approvals.verify(`Bearer ${first}`), false, "a retired run's token is dead");
+  assert.equal(approvals.verify(`Bearer ${second}`), true, 'and its neighbour is untouched');
 });
 
 /* ------------------------------------------------------------------ *
@@ -776,6 +790,68 @@ test('the out-of-band notifier is environment-only, and never breaks a run', asy
   // stopping a run would be worse than no notifier at all.
   assert.doesNotThrow(() =>
     notifyOutOfBand('t', 'b', { PHASE_CONSOLE_NOTIFY: '/nonexistent/notifier' } as NodeJS.ProcessEnv));
+});
+
+/* ------------------------------------------------------------------ *
+ * Two runs, one hook endpoint
+ * ------------------------------------------------------------------ */
+
+test('two armed runs each verify as themselves, and neither is mistaken for the other', () => {
+  const broker = new Approvals({}, join(STATE_HOME, 'two-runs.json'));
+  const a = broker.arm('run-a');
+  const b = broker.arm('run-b');
+
+  assert.notEqual(a, b, 'a shared token would make the runs indistinguishable');
+  assert.equal(broker.runIdFor(`Bearer ${a}`), 'run-a');
+  assert.equal(broker.runIdFor(`Bearer ${b}`), 'run-b');
+  assert.equal(broker.runIdFor('Bearer not-a-token'), null);
+  assert.equal(broker.runIdFor(undefined), null);
+  // Each run's own settings file must keep getting its OWN token: the child
+  // loaded its `Authorization` header at startup and cannot reload it, so
+  // handing it a neighbour's would make its next hook call unauthorised.
+  assert.equal(broker.liveToken('run-a'), a);
+  assert.equal(broker.liveToken('run-b'), b);
+});
+
+test('disarming one run leaves the other verifying — the fail-open hole a pool would open', () => {
+  const broker = new Approvals({}, join(STATE_HOME, 'disarm-one.json'));
+  const a = broker.arm('run-a');
+  const b = broker.arm('run-b');
+
+  broker.disarm('run-a');
+
+  assert.equal(broker.runIdFor(`Bearer ${a}`), null, 'the finished run is retired');
+  // The one that matters. With a single token, run A finishing cleared the only
+  // token there was — and an unauthorised hook call is a FAILED hook call,
+  // which this hook treats as silence, and silence fails open. Run B would have
+  // carried on unsupervised with nothing anywhere saying so.
+  assert.equal(broker.runIdFor(`Bearer ${b}`), 'run-b', 'the live run still has a supervisor');
+  assert.equal(broker.armed(), true);
+  assert.deepEqual(broker.armedRuns(), ['run-b']);
+});
+
+test('disarming a run answers only its OWN cards', async () => {
+  const broker = new Approvals({}, join(STATE_HOME, 'disarm-cards.json'));
+  broker.arm('run-a');
+  broker.arm('run-b');
+
+  const mine = broker.request({
+    runId: 'run-a', slug: 'alpha', phase: 1, kind: 'tool', title: 'a', detail: '', evidence: [],
+  });
+  const theirs = broker.request({
+    runId: 'run-b', slug: 'beta', phase: 1, kind: 'tool', title: 'b', detail: '', evidence: [],
+  });
+
+  broker.disarm('run-a');
+
+  assert.equal((await mine.decided).decision, 'deny', "the ending run's card is answered");
+  // Settling a neighbour's card would deny a live session's work on behalf of a
+  // run that has nothing to do with it.
+  assert.equal(broker.pending().length, 1);
+  assert.equal(broker.pending()[0].runId, 'run-b');
+
+  broker.disarm();
+  assert.equal((await theirs.decided).decision, 'deny', 'and a bare disarm still means everything');
 });
 
 test.after(() => rmSync(STATE_HOME, { recursive: true, force: true }));

@@ -47,6 +47,11 @@ export const SSE_EVENTS = [
   'run:journal',
   'run:verify',
   'run:state',
+  // Admission moved: something was granted a scope, queued behind one, or
+  // released. Its own event because it changes what the console may START,
+  // which no other event describes — a phase can sit queued for minutes while
+  // nothing about any run's own state changes at all.
+  'run:queue',
 ] as const;
 
 export type SseEvent = (typeof SSE_EVENTS)[number];

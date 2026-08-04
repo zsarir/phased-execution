@@ -16,6 +16,15 @@ import { sanitiseCategories, type CategoryId } from './push/catalogue.ts';
 export const VIEWER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 export const SKILL_DIR = dirname(VIEWER_DIR);
 
+/**
+ * Lanes allowed live at once, before anyone says otherwise. See `Flags.maxSessions`.
+ *
+ * Lives here rather than in `scheduler.ts` only because of the import graph —
+ * `log.ts` reads this module, so a config that reached back into the scheduler
+ * would close a cycle. The scheduler imports it from here instead.
+ */
+export const DEFAULT_MAX_SESSIONS = 3;
+
 export type Flags = {
   root?: string;
   port: number;
@@ -56,6 +65,17 @@ export type Flags = {
   /** Logins allowed to arrive through `remoteHosts`. See `server/api/access.ts`. */
   remoteUsers: string[];
   scriptsDir: string;
+  /**
+   * How many phase sessions may be live across the whole console at once.
+   *
+   * A ceiling on the machine, not on the scheduler's judgement: scope decides
+   * whether two phases *may* overlap, and this decides how many the laptop
+   * running them can actually stand. Three is a deliberate default — each lane
+   * is a full `claude` process with its own context, and the account's usage
+   * window is shared between them, so the fourth lane usually buys throttling
+   * rather than throughput. `--max-sessions`, or `PHASE_CONSOLE_MAX_SESSIONS`.
+   */
+  maxSessions: number;
   /** Where the structured log goes. `null` disables file logging entirely. */
   logFile: string | null;
 };
@@ -89,6 +109,7 @@ export function parseFlags(argv: string[]): Flags {
     remoteHosts: [],
     remoteUsers: splitList(process.env.PHASE_CONSOLE_REMOTE_USERS),
     scriptsDir: join(SKILL_DIR, 'scripts'),
+    maxSessions: positive(process.env.PHASE_CONSOLE_MAX_SESSIONS) ?? DEFAULT_MAX_SESSIONS,
     logFile: process.env.PHASE_CONSOLE_LOG === '' ? null : (process.env.PHASE_CONSOLE_LOG ?? defaultLogFile()),
   };
   for (let i = 0; i < argv.length; i++) {
@@ -106,6 +127,7 @@ export function parseFlags(argv: string[]): Flags {
     else if (arg === '--remote') flags.remoteHosts.push(...splitList(next()));
     else if (arg === '--remote-user') flags.remoteUsers.push(...splitList(next()));
     else if (arg === '--scripts') flags.scriptsDir = resolve(expandHome(next() ?? ''));
+    else if (arg === '--max-sessions') flags.maxSessions = positive(next()) ?? flags.maxSessions;
     else if (arg === '--log-file') flags.logFile = resolve(expandHome(next() ?? ''));
     else if (arg === '--no-log-file') flags.logFile = null;
     else if (arg === '--help' || arg === '-h') { printHelp(); process.exit(0); }
@@ -127,6 +149,19 @@ export function parseFlags(argv: string[]): Flags {
  */
 export function agentEnabled(flags: Flags): boolean {
   return flags.allowAgent;
+}
+
+/**
+ * A whole number of lanes, or nothing.
+ *
+ * `--max-sessions 0` and `--max-sessions banana` both mean the caller wanted
+ * something this cannot give them, and the safe reading of both is "you did not
+ * say" rather than "run nothing at all" — a console that silently admits no
+ * phases looks exactly like a console whose scheduler is broken.
+ */
+function positive(value: string | undefined): number | undefined {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
 /** `a,b, c` and `a` both mean the same thing, and neither may contain blanks. */

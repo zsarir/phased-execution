@@ -160,3 +160,86 @@ test('an unreadable run directory is empty, not an exception', () => {
     assert.deepEqual(listRuns(dir.root, 'demo', null), []);
   } finally { dir.cleanup(); }
 });
+
+/* ------------------------------------------------------------------ *
+ * Several lanes, one crashed console
+ * ------------------------------------------------------------------ */
+
+test('every lane is reconciled, not just the one the mirror named', () => {
+  const dir = scratchRoot();
+  try {
+    // Three lanes recorded, plus the mirror pointing at one of them — exactly
+    // what the runner writes while a run drives three phases at once.
+    const state = crashedRun(dir.root, {
+      children: {
+        7: { pid: DEAD_PID, phase: 7, sessionId: 's7', startedAt: new Date().toISOString() },
+        9: { pid: DEAD_PID, phase: 9, sessionId: 's9', startedAt: new Date().toISOString() },
+        12: { pid: DEAD_PID, phase: 12, sessionId: 'abc', startedAt: new Date().toISOString() },
+      },
+    });
+    for (const phase of [7, 9]) phaseRecord(state, phase).status = 'running';
+
+    assert.equal(reconcileRun(state, null), true);
+    assert.equal(state.status, 'interrupted');
+    // All three, not one. A lane left `running` on a run nothing is driving is
+    // a phase the console goes on reporting as in flight forever.
+    for (const phase of [7, 9, 12]) {
+      const record = state.phases[String(phase)];
+      assert.equal(record.status, 'interrupted', `phase ${phase}`);
+      assert.equal(record.resumeSessionId, record.sessionId, `phase ${phase} keeps a session to resume`);
+    }
+    assert.equal(state.child, null);
+    assert.equal(state.children, undefined, 'nothing is left claiming to be alive');
+  } finally { dir.cleanup(); }
+});
+
+test('a run whose OTHER lane is still alive parks rather than being reclaimed', () => {
+  const dir = scratchRoot();
+  try {
+    // The mirror's child is gone; a second lane's is this very process, which
+    // is certainly alive. Reading only `child` would reclaim a run that still
+    // has a session editing the working tree — the exact failure `parked` is for.
+    const state = crashedRun(dir.root, {
+      children: {
+        7: { pid: process.pid, phase: 7, sessionId: 's7', startedAt: new Date().toISOString() },
+        12: { pid: DEAD_PID, phase: 12, sessionId: 'abc', startedAt: new Date().toISOString() },
+      },
+    });
+
+    assert.equal(reconcileRun(state, null), true);
+    assert.equal(state.status, 'parked');
+    assert.match(state.halt!.reason, /still running/);
+    assert.match(state.halt!.reason, new RegExp(String(process.pid)), 'and names the pid to look at');
+  } finally { dir.cleanup(); }
+});
+
+test('a run written before lanes reconciles exactly as it always did', () => {
+  const dir = scratchRoot();
+  try {
+    // No `children` key at all — which is every run file on disk today. The two
+    // recordings have to reconcile identically, or the upgrade is a regression.
+    const state = crashedRun(dir.root);
+    assert.equal(state.children, undefined);
+    assert.equal(reconcileRun(state, null), true);
+    assert.equal(state.status, 'interrupted');
+    assert.equal(state.phases['12'].status, 'interrupted');
+    assert.equal(state.child, null);
+  } finally { dir.cleanup(); }
+});
+
+test('a live-run SET keeps every one of its runs, and reclaims the rest', () => {
+  const dir = scratchRoot();
+  try {
+    const a = crashedRun(dir.root);
+    const b = crashedRun(dir.root);
+    const c = crashedRun(dir.root);
+    // A single id was the whole answer with one runner. With a pool it is a
+    // Set — and a Set compared with `===` would mark every live run as dead
+    // and reconcile a working fleet into `interrupted`.
+    const live = new Set([a.id, b.id]);
+    assert.equal(reconcileRun(a, live), false, 'still driving');
+    assert.equal(reconcileRun(b, live), false, 'also still driving');
+    assert.equal(reconcileRun(c, live), true, 'and this one genuinely is not');
+    assert.equal(c.status, 'interrupted');
+  } finally { dir.cleanup(); }
+});

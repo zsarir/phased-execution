@@ -24,15 +24,21 @@ describe('SSE → Query bridge', () => {
     expect(extra, `phantom events: ${extra.join(', ')}`).toEqual([]);
   });
 
-  it('carries the 16 wire names, run events included', () => {
-    expect(SSE_EVENTS).toHaveLength(16);
+  it('carries the 17 wire names, run events included', () => {
+    expect(SSE_EVENTS).toHaveLength(17);
     // Sessions are on the stream deliberately: the socket is a session's own
     // live channel, but the dashboard card and the nav badges do not hold it.
     expect(SSE_EVENTS).toContain('sessions');
     // The runner prefixes its own events (`server/runner/runner.ts` emits
     // `run:` + event). Listening for `phase` instead of `run:phase` is the
     // mistake this pins down.
-    for (const name of ['run:run', 'run:phase', 'run:stream', 'run:journal', 'run:verify', 'run:state']) {
+    for (const name of [
+      'run:run', 'run:phase', 'run:stream', 'run:journal', 'run:verify', 'run:state',
+      // Admission. Its own event because it changes what the console may
+      // START, which none of the others describe — a phase can sit queued for
+      // minutes while nothing about any run's own state changes at all.
+      'run:queue',
+    ]) {
       expect(SSE_EVENTS).toContain(name);
     }
     // `hello` is the handshake frame, not a change notification.

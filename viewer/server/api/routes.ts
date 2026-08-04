@@ -734,6 +734,17 @@ export async function handleApi(
       }
     }
 
+    /* ---------------- the admission queue ----------------
+     * Read-only, and unauthenticated like every other read: it says what is
+     * holding a scope and what is waiting on it. `waitingOn` is the part that
+     * matters — "queued" alone is the same non-answer `pausing` used to be,
+     * naming a thing that is not happening without naming what would have to
+     * change for it to happen. */
+    if (head === 'queue' && req.method === 'GET') {
+      json(res, 200, service.queueSnapshot());
+      return true;
+    }
+
     /* ---------------- stale claims ----------------
      * Release reads the owner out of the lock file rather than asking a person
      * to retype it — see `Service.releaseLock`. Write-class, because it removes
@@ -830,6 +841,14 @@ export async function handleApi(
           if (!Number.isFinite(phase)) { json(res, 400, { error: 'a phase number is required' }); return true; }
           const diagnosis = await service.phaseDiagnosis(slug, phase);
           json(res, diagnosis ? 200 : 404, diagnosis ?? { error: `no record of phase ${phase} in any run of ${slug}` });
+          return true;
+        }
+        // What each phase of this plan touches, and what that collides with
+        // right now. Read from the same Repos column and the same live locks
+        // admission uses, so the page cannot show one answer while the
+        // scheduler acts on another.
+        if (verb === 'scopes') {
+          json(res, 200, { scopes: service.phaseScopes(slug) });
           return true;
         }
         // `eta` rides along rather than getting an endpoint of its own: it is

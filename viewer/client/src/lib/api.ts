@@ -191,6 +191,55 @@ export interface TerminalTicket {
   session: TerminalSession;
 }
 
+/**
+ * How full the console is right now: lanes in use, lanes allowed, and anything
+ * waiting for a scope to clear.
+ *
+ * `throttledUntil` is an account-wide usage window, not a per-run one — when it
+ * is set, nothing starts anywhere, and saying so is the difference between a
+ * queue that looks stuck and one that explains itself.
+ */
+export interface Concurrency {
+  max: number;
+  live: number;
+  queued: number;
+  throttledUntil: number | null;
+}
+
+/** Who is holding a scope an entry is waiting on, and which tokens collided. */
+export interface QueueHolder {
+  kind: 'grant' | 'lock' | 'reserved';
+  slug: string;
+  phase: number | null;
+  owner: string;
+  scope: string[];
+  overlaps: string[];
+}
+
+export interface QueueEntry {
+  id: string;
+  slug: string;
+  phase: number | null;
+  runId: string;
+  scope: string[];
+  since: number;
+  waitingOn: QueueHolder[];
+  bypassed: number;
+  reserving: boolean;
+}
+
+export interface QueueSnapshot extends Concurrency {
+  grants: { id: string; slug: string; phase: number | null; runId: string; scope: string[]; at: number }[];
+  entries: QueueEntry[];
+}
+
+/** A phase's declared scope, and what it would collide with if started now. */
+export interface PhaseScope {
+  phase: number;
+  scope: string[];
+  conflicts: string[];
+}
+
 export interface ConsoleState {
   generation?: number;
   root?: RootInfo;
@@ -220,7 +269,15 @@ export interface ConsoleState {
   recentRoots?: { path: string; label: string }[];
   watcher?: { ok?: boolean; detail?: string };
   health?: unknown;
+  /**
+   * The first live run, kept for every consumer written before the pool —
+   * including an older build of this client still open in a tab.
+   */
   run?: unknown;
+  /** Every live run. What anything new should read. */
+  runs?: unknown[];
+  /** How full the console is, straight from the scheduler. */
+  concurrency?: Concurrency;
   /**
    * Server-side preferences. `notify` is the global per-category switch the
    * console consults before it announces anything at all — it is server truth
@@ -1012,6 +1069,11 @@ export interface WriteResult {
 export const api = {
   /* ---- shell ---- */
   state: () => request<ConsoleState>('/api/state'),
+  /** The admission queue: what holds a scope, and what is waiting on it. */
+  queue: () => request<QueueSnapshot>('/api/queue'),
+  /** Each phase's scope and what it would collide with if started right now. */
+  runScopes: (slug: string) =>
+    request<{ scopes: PhaseScope[] }>(`/api/run/${encodeURIComponent(slug)}/scopes`),
   plans: () => request<PlanSummary[]>('/api/plans'),
   stats: () => request<Portfolio>('/api/stats'),
   savePrefs: (patch: Record<string, unknown>) => post<unknown>('/api/prefs', patch),

@@ -946,9 +946,17 @@ export type ApprovalHooks = {
 export class Approvals {
   private waiting = new Map<string, Waiting>();
   private history: Approval[] = [];
-  private token: Buffer | null = null;
-  private tokenText: string | null = null;
-  private runId: string | null = null;
+  /**
+   * One token per live run, keyed by run id.
+   *
+   * A single token was correct while a single run could exist. With a pool it
+   * is a fail-open hole and a quiet one: run A finishing called `disarm()`,
+   * which cleared the only token there was, and run B's next hook call arrived
+   * unauthorised — and an unauthorised hook call is a failed hook call, and
+   * this hook fails open. Run B would have carried on with no supervisor at
+   * all, showing nothing wrong anywhere.
+   */
+  private tokens = new Map<string, { bytes: Buffer; text: string }>();
   private counter = 0;
   private notify: (approval: Approval) => void;
   private resolved: (approval: Approval) => void;
@@ -992,9 +1000,7 @@ export class Approvals {
    */
   arm(runId: string): string {
     const token = randomBytes(32).toString('base64url');
-    this.token = Buffer.from(token);
-    this.tokenText = token;
-    this.runId = runId;
+    this.tokens.set(runId, { bytes: Buffer.from(token), text: token });
     return token;
   }
 
@@ -1008,43 +1014,65 @@ export class Approvals {
    * failed hook call, and this hook fails open. The profile switch would
    * silently turn the supervisor off.
    */
-  liveToken(): string | null {
-    return this.tokenText;
+  liveToken(runId?: string | null): string | null {
+    if (runId) return this.tokens.get(runId)?.text ?? null;
+    // No id: the one armed run, if there is exactly one. Ambiguity answers
+    // null rather than guessing — handing run B's token to run A's settings
+    // file would authorise its hook calls under the wrong run.
+    return this.tokens.size === 1 ? [...this.tokens.values()][0].text : null;
   }
 
-  disarm(): void {
-    this.token = null;
-    this.tokenText = null;
-    this.runId = null;
+  /**
+   * Retire one run's token, and answer the cards it left up.
+   *
+   * Scoped to a run: disarming A must leave B verifying. Called with no id it
+   * still means everything, which is what a console shutdown wants.
+   */
+  disarm(runId?: string | null): void {
+    if (runId) this.tokens.delete(runId);
+    else this.tokens.clear();
     // Anything still waiting is answered rather than left hanging: a session
-    // blocked on a dead broker would sit there until the hook timed out.
-    for (const [id] of this.waiting) this.settle(id, 'deny', 'run ended', 'the run ended before this was decided');
+    // blocked on a dead broker would sit there until the hook timed out. Only
+    // this run's cards, though — another run's are still answerable, and
+    // settling them would deny a live session's work on its neighbour's behalf.
+    for (const [id, entry] of [...this.waiting]) {
+      if (runId && entry.approval.runId !== runId) continue;
+      this.settle(id, 'deny', 'run ended', 'the run ended before this was decided');
+    }
   }
 
   /** Constant-time, so a wrong token leaks nothing about the right one. */
   verify(header: string | undefined): boolean {
-    if (!this.token || !header) return false;
-    const presented = Buffer.from(header.replace(/^Bearer\s+/i, ''));
-    if (presented.length !== this.token.length) return false;
-    return timingSafeEqual(presented, this.token);
+    return this.runIdFor(header) !== null;
   }
 
   /**
    * WHICH run a hook call belongs to, rather than merely whether it is genuine.
    *
-   * One armed run today, so this is `verify` carrying the id instead of a
-   * boolean — and it is a separate method precisely because that will stop
-   * being true. Everything downstream currently answers a hook against "the
-   * current run", which is the assumption a runner pool breaks: two live runs,
-   * one hook endpoint, and a call classified under the wrong run's profile.
-   * Callers that thread this now need no second change when the lookup becomes
-   * a map.
+   * The whole point under a pool: two live runs, one hook endpoint, and a call
+   * classified under the wrong run's profile is a bug that appears only when
+   * two things run at once and is close to unreadable when it does.
+   *
+   * Every token is compared even after a match, and each comparison is
+   * constant-time. Returning early on the first hit would make the reply time
+   * a measure of *which* run matched — a weaker leak than the token itself,
+   * but a free one to avoid.
    */
   runIdFor(header: string | undefined): string | null {
-    return this.verify(header) ? this.runId : null;
+    if (!header || !this.tokens.size) return null;
+    const presented = Buffer.from(header.replace(/^Bearer\s+/i, ''));
+    let found: string | null = null;
+    for (const [runId, token] of this.tokens) {
+      if (presented.length !== token.bytes.length) continue;
+      if (timingSafeEqual(presented, token.bytes)) found ??= runId;
+    }
+    return found;
   }
 
-  armed(): boolean { return this.token !== null; }
+  armed(): boolean { return this.tokens.size > 0; }
+
+  /** Which runs currently have a token. Used by the restart/shutdown inventory. */
+  armedRuns(): string[] { return [...this.tokens.keys()]; }
 
   /* ---- the queue ---- */
 

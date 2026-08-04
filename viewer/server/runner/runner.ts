@@ -38,10 +38,14 @@ import { markFor, spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent 
 import { verifyPhase } from './verify.ts';
 import { failureContext } from './failure-context.ts';
 import {
-  loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
-  type Autonomy, type PhaseOptions, type PhaseRecord, type RunState, type PhaseStatus,
-  type VerifySummary,
+  childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
+  type Autonomy, type ChildRef, type PhaseOptions, type PhaseRecord, type RunState,
+  type PhaseStatus, type VerifySummary,
 } from './state.ts';
+import {
+  AdmissionAborted, autopilotOwner, type Scheduler, type ScopeGrant,
+} from './scheduler.ts';
+import { formatScope } from '../../shared/scope.js';
 import { Journal } from './journal.ts';
 import { Transcript } from './transcript.ts';
 import { checkAuth } from './auth.ts';
@@ -71,6 +75,23 @@ export type RunnerDeps = {
    * about — never to choose a directory. See `verifyHint`.
    */
   phaseRepos?: (slug: string, phase: number) => Promise<string[] | undefined> | string[] | undefined;
+  /**
+   * Admission control. Without one, every phase runs the moment it is ready —
+   * which is exactly what this runner did before lanes existed, and is the
+   * right behaviour for a test harness that is not exercising concurrency.
+   */
+  scheduler?: Scheduler;
+  /**
+   * The phase's scope tokens, from the plan's Repos column. What the scheduler
+   * admits against, and what the child is told it holds (`PE_SCOPE`).
+   *
+   * Distinct from `phaseRepos`, which is a repo-NAME view used only to suggest
+   * a `Verify in:`. Same cell, two readings, and conflating them would make a
+   * cosmetic hint load-bearing for concurrency.
+   */
+  phaseScope?: (slug: string, phase: number) => Promise<string[] | undefined> | string[] | undefined;
+  /** Lanes this run may fill at once. The scheduler still enforces the global cap. */
+  maxParallel?: number | (() => number);
   /**
    * The plan's own `**Model:**` / `**Effort:**` bullets for a phase.
    *
@@ -114,6 +135,8 @@ export type StartOptions = {
   skills?: string[];
   /** How much this run may do unasked. Defaults to `guarded`. */
   permissionProfile?: PermissionProfile;
+  /** Lanes this run may fill. Never above the console's own cap. */
+  maxParallel?: number;
 };
 
 /** The three ways to move a stuck phase forward without starting it over. */
@@ -258,6 +281,29 @@ export function preflight(_root: string, _configFile = join(homedir(), '.claude.
   return null;
 }
 
+/**
+ * One phase in flight: its session, its admission, and whether it is stopped.
+ *
+ * A run used to be one phase at a time, so "the child", "the handle" and "the
+ * frozen pid" could each be a single field on the runner. A run may now drive
+ * several disjoint-scope phases, and every one of those fields becomes a
+ * question that only makes sense per phase — so they live here, keyed by phase
+ * number, and the single fields survive as a MIRROR of one lane. See
+ * `syncMirror`.
+ */
+type Lane = {
+  phase: number;
+  pid: number | null;
+  handle: SpawnHandle | null;
+  grant: ScopeGrant | null;
+  /** When the operator stopped this session where it stood, and when that expires. */
+  frozen: { at: string; by: string; escalateAt: string } | null;
+  /** Armed while this lane is frozen; fires its escalation to a checkpoint. */
+  freezeTimer: NodeJS.Timeout | null;
+  /** Set when this lane's freeze was escalated, so exit 143 is not read as a crash. */
+  checkpointed: boolean;
+};
+
 export class Runner {
   private deps: RunnerDeps;
   private state: RunState | null = null;
@@ -265,6 +311,13 @@ export class Runner {
   private transcript: Transcript | null = null;
   private abort: AbortController | null = null;
   private driving: Promise<void> | null = null;
+  /**
+   * Every phase this run has in flight, keyed by phase number.
+   *
+   * The source of truth for "what is running"; `state.child`,
+   * `state.activePhase` and `state.freeze` are all derived from it.
+   */
+  private lanes = new Map<number, Lane>();
   private childPid: number | null = null;
   /** The live session, while there is one — what `/btw` talks to. */
   private handle: SpawnHandle | null = null;
@@ -274,10 +327,6 @@ export class Runner {
   private settingsPath: string | null = null;
   /** Idempotency keys of operator messages already written, newest last. */
   private injected = new Map<string, AskResult>();
-  /** Armed while a phase is frozen; fires the escalation to a checkpoint. */
-  private freezeTimer: NodeJS.Timeout | null = null;
-  /** Set when a freeze was escalated, so the dead child is not read as a crash. */
-  private checkpointed = false;
   /** Set while `recover` drives a single session rather than the phase loop. */
   private recovering = false;
 
@@ -287,6 +336,135 @@ export class Runner {
 
   current(): RunState | null { return this.state; }
   busy(): boolean { return this.driving !== null; }
+
+  /* ---------------------------------------------------------------- *
+   * Lanes
+   * ---------------------------------------------------------------- */
+
+  /** The phases with a live session right now. */
+  livePhases(): number[] { return [...this.lanes.keys()].sort((a, b) => a - b); }
+
+  /**
+   * The lane a control is aimed at: the one named, or the mirror.
+   *
+   * Naming nothing means "whatever is running", which is what every caller
+   * before lanes meant and still means when only one thing is.
+   */
+  private laneFor(phase?: number | null): Lane | undefined {
+    if (phase != null) return this.lanes.get(phase);
+    return this.mirrorLane();
+  }
+
+  /**
+   * The one lane the single-lane fields describe.
+   *
+   * Lowest phase number rather than "most recent": it has to be *stable*, or
+   * `state.child` would flip between lanes on every write and a console
+   * watching it would see a run bouncing between phases it is calmly running
+   * in parallel.
+   */
+  private mirrorLane(): Lane | undefined {
+    let chosen: Lane | undefined;
+    for (const lane of this.lanes.values()) {
+      if (!chosen || lane.phase < chosen.phase) chosen = lane;
+    }
+    return chosen;
+  }
+
+  /**
+   * Rewrite the single-lane fields from the lane table.
+   *
+   * `state.child` and `state.activePhase` are **load-bearing mirrors**, not
+   * leftovers: `reconcileRun`, every console built before lanes, and the run
+   * header all read them to answer "is something running, and what?". Dropping
+   * them in favour of `children` would make every one of those report a busy
+   * run as idle. So both recordings are kept in step here, in one place, and
+   * `children` is the complete one.
+   */
+  private syncMirror(): void {
+    const state = this.state;
+    if (!state) return;
+
+    const children: Record<string, ChildRef> = {};
+    for (const lane of this.lanes.values()) {
+      if (lane.pid == null) continue;
+      children[String(lane.phase)] = {
+        pid: lane.pid,
+        phase: lane.phase,
+        sessionId: state.phases[String(lane.phase)]?.sessionId ?? '',
+        startedAt: state.phases[String(lane.phase)]?.startedAt ?? new Date().toISOString(),
+      };
+    }
+    if (Object.keys(children).length) state.children = children;
+    else delete state.children;
+
+    const mirror = this.mirrorLane();
+    state.child = mirror?.pid != null ? children[String(mirror.phase)] ?? null : null;
+    this.childPid = state.child?.pid ?? null;
+    this.handle = mirror?.handle ?? null;
+    // A run between phases points at nothing; one driving lanes points at the
+    // mirror. Left stale, a finished phase goes on rendering a "running now"
+    // chip in the phases table.
+    if (this.lanes.size) state.activePhase = mirror?.phase ?? state.activePhase;
+    else if (!this.recovering) state.activePhase = null;
+  }
+
+  /**
+   * Record a spawned child against its lane — or, with no lane, against the
+   * single-lane fields directly.
+   *
+   * The no-lane path is not dead code: `closeout` and `resumeWithInstruction`
+   * are spawns like any other, and both can be reached on a run whose lane
+   * table has already been torn down.
+   */
+  private attachPid(phase: number, pid: number | null): void {
+    const lane = this.lanes.get(phase);
+    if (lane) { lane.pid = pid; this.syncMirror(); return; }
+    const state = this.state;
+    this.childPid = pid;
+    if (!state) return;
+    state.child = pid == null
+      ? null
+      : {
+        pid, phase,
+        sessionId: state.phases[String(phase)]?.sessionId ?? '',
+        startedAt: new Date().toISOString(),
+      };
+  }
+
+  private attachHandle(phase: number, handle: SpawnHandle | null): void {
+    const lane = this.lanes.get(phase);
+    if (lane) { lane.handle = handle; this.syncMirror(); return; }
+    this.handle = handle;
+  }
+
+  /** How many phases of THIS run may be in flight. The scheduler caps the fleet. */
+  private maxLanes(): number {
+    const max = typeof this.deps.maxParallel === 'function'
+      ? this.deps.maxParallel()
+      : this.deps.maxParallel;
+    const wanted = this.state?.maxParallel ?? max ?? 1;
+    return Math.max(1, wanted);
+  }
+
+  /**
+   * The shutdown-handler key for a run.
+   *
+   * Named per run because the registry is name-keyed: with a pool, two runners
+   * registering `'runner'` would evict each other's checkpoint handler, and the
+   * evicted one would be the run that silently failed to checkpoint on the way
+   * out.
+   */
+  private shutdownKey(runId: string): string { return `runner:${runId}`; }
+
+  /** What this phase touches, for admission and for the child's `PE_SCOPE`. */
+  private async scopeFor(phase: number): Promise<string[]> {
+    const state = this.state!;
+    const declared = await this.deps.phaseScope?.(state.slug, phase);
+    // Saying nothing means it could touch anything — the same fail-safe
+    // `scopeOfRow` takes on an empty Repos cell.
+    return declared?.length ? declared : ['all'];
+  }
 
   /**
    * Whether what is driving is a recovery rather than the phase loop.
@@ -308,14 +486,20 @@ export class Runner {
    */
   phaseMismatch(phase?: number | null): string | null {
     if (phase == null) return null;
-    const running = this.state?.child?.phase ?? null;
-    if (running == null) {
+    // Asked of the lane table, not of the mirror. With several phases in
+    // flight, `state.child` names one of them — so a control correctly aimed
+    // at a live lane that happens not to be the mirror would be refused with
+    // "phase 5 is not the one running", while phase 5 was running perfectly.
+    if (this.lanes.has(phase)) return null;
+    const running = this.livePhases();
+    if (!running.length) {
       return this.driving
         ? `phase ${phase} has no session running just now — the run is between phases, or verifying`
         : `phase ${phase} has nothing running to act on`;
     }
-    if (running !== phase) return `phase ${phase} is not the one running — phase ${running} is`;
-    return null;
+    return running.length === 1
+      ? `phase ${phase} is not the one running — phase ${running[0]} is`
+      : `phase ${phase} is not one of the ones running — phases ${running.join(', ')} are`;
   }
   /** Resolves once the loop has stopped driving. */
   async wait(): Promise<void> { await this.driving; }
@@ -376,6 +560,14 @@ export class Runner {
       // to the run, not to one press of the button.
       if (options.phaseOptions) this.state.phaseOptions = { ...options.phaseOptions };
       if (options.skills) this.state.skills = [...options.skills];
+      if (options.maxParallel !== undefined) {
+        if (options.maxParallel > 0) this.state.maxParallel = options.maxParallel;
+        else delete this.state.maxParallel;
+      }
+      // A run resumed from disk may carry lanes recorded by the console that
+      // died. Nothing is behind them now — `adopt` has already ruled on the
+      // dangerous case — so they must not present as live for a second longer.
+      delete this.state.children;
     }
 
     this.journal = new Journal(this.state.root, this.state.slug, this.state.id);
@@ -407,10 +599,16 @@ export class Runner {
     });
     this.persist();
 
-    onShutdown('runner', () => this.checkpointForShutdown());
+    const runId = this.state.id;
+    onShutdown(this.shutdownKey(runId), () => this.checkpointForShutdown());
     this.driving = this.drive().finally(() => {
       this.driving = null;
-      offShutdown('runner');
+      offShutdown(this.shutdownKey(runId));
+      // Every grant and every pending admission this run held. The loop was
+      // the only thing making them real, and it has ended — leaving them would
+      // hold this run's scope against every other plan until the process died.
+      this.deps.scheduler?.releaseRun(runId);
+      this.deps.approvals?.disarm(runId);
     });
     return this.state;
   }
@@ -475,13 +673,14 @@ export class Runner {
     // for the whole of that. The `finally` emit below still reports the end.
     this.emit('run', { state });
 
-    onShutdown('runner', () => this.checkpointForShutdown());
+    onShutdown(this.shutdownKey(state.id), () => this.checkpointForShutdown());
     this.recovering = true;
     this.driving = this.runRecovery({ ...options, haltedWith }).finally(() => {
       this.driving = null;
       this.recovering = false;
-      offShutdown('runner');
-      this.deps.approvals?.disarm();
+      offShutdown(this.shutdownKey(state.id));
+      this.deps.approvals?.disarm(state.id);
+      this.deps.scheduler?.releaseRun(state.id);
       this.persist();
       this.emit('run', { state });
     });
@@ -491,7 +690,33 @@ export class Runner {
   private async runRecovery(options: RecoverOptions & { haltedWith?: string | null }): Promise<void> {
     const state = this.state!;
     const record = phaseRecord(state, options.phase);
-    const owner = `autopilot/${state.id}`;
+    const owner = autopilotOwner(state.id);
+
+    // A recovery spawns a session that edits the working tree exactly as a
+    // phase does, and until now it was the one path that started one without
+    // asking anybody. That was invisible while a single runner made it
+    // impossible for anything else to be running; with a pool it is a second
+    // agent in a tree another plan is mid-phase on.
+    let grant: ScopeGrant | null = null;
+    try {
+      grant = await this.admit(options.phase, 'recovery');
+    } catch (error) {
+      if (error instanceof AdmissionAborted) {
+        this.record('phase.recovery-cancelled', { phase: options.phase }, options.phase);
+        state.status = 'paused';
+        return;
+      }
+      throw error;
+    }
+
+    // A recovery is one session, but it is still a session: giving it a lane
+    // is what lets Freeze and Stop reach it, and what puts its child in
+    // `children` so a console restart reconciles it like any other.
+    const lane: Lane = {
+      phase: options.phase, pid: null, handle: null, grant,
+      frozen: null, freezeTimer: null, checkpointed: false,
+    };
+    this.lanes.set(options.phase, lane);
 
     try {
       if (options.mode !== 'recheck') {
@@ -518,10 +743,74 @@ export class Runner {
       this.halt(`the recovery of phase ${options.phase} failed: ${(error as Error)?.message ?? error}`, options.phase);
     } finally {
       await this.release(options.phase, owner);
+      this.deps.scheduler?.release(lane.grant);
+      this.clearFreezeTimer(lane);
+      this.lanes.delete(options.phase);
+      this.syncMirror();
       this.childPid = null;
       this.handle = null;
       state.child = null;
+      delete state.children;
     }
+  }
+
+  /**
+   * Ask the scheduler for this phase's scope, recording the wait.
+   *
+   * With no scheduler wired the answer is immediate and unconditional, which
+   * is what every test harness that is not about concurrency wants — and what
+   * this runner did before admission existed.
+   */
+  private async admit(phase: number, kind: 'phase' | 'recovery'): Promise<ScopeGrant | null> {
+    const state = this.state!;
+    const scheduler = this.deps.scheduler;
+    if (!scheduler) return null;
+
+    const scope = await this.scopeFor(phase);
+    const request = {
+      slug: state.slug,
+      phase,
+      runId: state.id,
+      scope,
+      signal: this.abort?.signal,
+    };
+
+    // Asked BEFORE joining the queue, so "queued" is visible for the whole
+    // wait rather than inferred afterwards. Only when it genuinely blocks —
+    // announcing a queue for an admission that is free would put a `queued`
+    // badge on every phase the console ever starts.
+    const blockers = scheduler.wouldBlock(request);
+    if (blockers.length) {
+      const record = phaseRecord(state, phase);
+      if (kind === 'phase') record.status = 'queued';
+      // The run's own durable shadow of the queue. Deliberately NOT in
+      // `IN_FLIGHT`: a queued run has done nothing, so a console restart may
+      // re-adopt it rather than reconciling it into `interrupted`.
+      state.status = 'queued';
+      this.record('phase.queued', {
+        scope: formatScope(scope),
+        waitingOn: blockers.map((holder) => ({
+          slug: holder.slug, phase: holder.phase, owner: holder.owner, overlaps: holder.overlaps,
+        })),
+      }, phase);
+      this.emit('phase', { phase, status: 'queued', scope, waitingOn: blockers });
+      this.persist();
+      this.emit('run', { state });
+    }
+
+    const grant = await scheduler.admit(request);
+    if (blockers.length) {
+      // Back to running: the wait is over, and a run left reading `queued`
+      // while its session works would be the same lie in the other direction.
+      state.status = state.pause ? 'pausing' : 'running';
+      this.record('phase.admitted', {
+        scope: formatScope(scope), waitedMs: Date.now() - Date.parse(state.updatedAt),
+      }, phase);
+      this.emit('phase', { phase, status: 'running', scope });
+      this.persist();
+      this.emit('run', { state });
+    }
+    return grant;
   }
 
   /** Resume the phase's session with the operator's own words. Returns a refusal. */
@@ -578,25 +867,27 @@ export class Runner {
         partialMessages: this.deps.stream?.partialMessages ?? true,
         subagentText: this.deps.stream?.subagentText ?? true,
         hookEvents: this.deps.stream?.hookEvents ?? true,
-        onHandle: (handle) => { this.handle = handle; },
-        env: { ...process.env, PE_OWNER: `autopilot/${state.id}` },
+        onHandle: (handle) => { this.attachHandle(phase, handle); },
+        env: {
+          ...process.env,
+          PE_OWNER: autopilotOwner(state.id),
+          PE_SCOPE: formatScope(this.lanes.get(phase)?.grant?.scope ?? await this.scopeFor(phase)),
+        },
         signal: this.abort?.signal,
         // The same wiring `attempt` uses, and for the same reason: `state.child`
         // is what Freeze and Stop signal, and what the console reads to know a
         // session is alive. Recorded here it was a bare pid nobody else could
         // see, so a recovery could not be frozen or stopped at all.
         onPid: (pid) => {
-          this.childPid = pid;
-          state.child = { pid, phase, sessionId, startedAt: new Date().toISOString() };
+          this.attachPid(phase, pid);
           this.persist();
           this.emit('run', { state });
         },
         onEvent: (event) => this.onStream(phase, event),
       });
     } finally {
-      this.childPid = null;
-      this.handle = null;
-      state.child = null;
+      this.attachPid(phase, null);
+      this.attachHandle(phase, null);
     }
 
     state.spentUsd += outcome.costUsd;
@@ -664,7 +955,11 @@ export class Runner {
   private rearmSettings(): void {
     const { approvals, origin } = this.deps;
     if (!approvals || !origin || !this.state) return;
-    const token = approvals.liveToken();
+    // This run's token, named. With a pool, "the live token" is a question with
+    // several answers, and rewriting our settings file with a neighbour's would
+    // make every subsequent hook call from our child unauthorised — which this
+    // hook reads as silence, and silence fails open.
+    const token = approvals.liveToken(this.state.id);
     if (!token) return;
     try {
       this.settingsPath = this.writeSettings(this.state.id, token, origin);
@@ -684,30 +979,44 @@ export class Runner {
    * parks, loudly, with the pid to look at.
    */
   private adopt(state: RunState): string | null {
-    const child = state.child;
-    if (!child) return null;
+    // Every lane the last console recorded, however it spelled them. Checking
+    // only `state.child` would let a run whose mirror happened to have exited
+    // start a second session on a phase another child is still writing.
+    const children = childrenOf(state);
+    if (!children.length) return null;
 
-    const record = phaseRecord(state, child.phase);
-    if (pidAlive(child.pid)) {
+    const alive = children.filter((child) => pidAlive(child.pid));
+    if (alive.length) {
+      const first = alive[0];
       state.status = 'parked';
       state.halt = {
         at: new Date().toISOString(),
-        reason: `a session from an earlier console is still running (pid ${child.pid}, phase ${child.phase}). `
-          + 'Let it finish or stop it, then start this run again.',
-        phase: child.phase,
+        reason: alive.length === 1
+          ? `a session from an earlier console is still running (pid ${first.pid}, phase ${first.phase}). `
+            + 'Let it finish or stop it, then start this run again.'
+          : `${alive.length} sessions from an earlier console are still running (`
+            + `${alive.map((child) => `pid ${child.pid}, phase ${child.phase}`).join('; ')}). `
+            + 'Let them finish or stop them, then start this run again.',
+        phase: first.phase,
       };
-      record.status = 'running';
-      this.record('run.adopt.alive', { pid: child.pid, phase: child.phase }, child.phase);
+      for (const child of alive) phaseRecord(state, child.phase).status = 'running';
+      this.record('run.adopt.alive', {
+        pids: alive.map((child) => child.pid), phases: alive.map((child) => child.phase),
+      }, first.phase);
       return state.halt.reason;
     }
 
     state.child = null;
+    delete state.children;
     // The phase may in fact have completed — the child could have written its
     // handoff and exited in the moment the console was gone. The board says so
     // or it does not; either way this is checked, never assumed.
-    record.status = 'interrupted';
-    record.note = `the console stopped while phase ${child.phase} was running (pid ${child.pid})`;
-    this.record('run.adopt.interrupted', { pid: child.pid, phase: child.phase }, child.phase);
+    for (const child of children) {
+      const record = phaseRecord(state, child.phase);
+      record.status = 'interrupted';
+      record.note = `the console stopped while phase ${child.phase} was running (pid ${child.pid})`;
+      this.record('run.adopt.interrupted', { pid: child.pid, phase: child.phase }, child.phase);
+    }
     return null;
   }
 
@@ -760,11 +1069,16 @@ export class Runner {
    *
    * Held too long it converts to a checkpoint instead — see `FREEZE_ESCALATE_MS`.
    */
-  freeze(by = 'console'): boolean {
+  freeze(by = 'console', phase?: number | null): boolean {
     const state = this.state;
     if (!state || !this.driving) return false;
-    if (state.status === 'frozen') return true;
-    const pid = this.childPid;
+    // The lane named, or the mirror when nothing was named. A run with three
+    // lanes has three answers to "freeze it", and picking the wrong one stops
+    // a session the operator never looked at.
+    const lane = this.laneFor(phase);
+    if (!lane) return false;
+    if (lane.frozen) return true;
+    const pid = lane.pid;
     if (!pid || !pidAlive(pid)) return false;
 
     try { process.kill(pid, 'SIGSTOP'); } catch (error) {
@@ -772,30 +1086,31 @@ export class Runner {
       return false;
     }
 
-    const phase = state.activePhase;
+    const at = new Date().toISOString();
+    const escalateAt = new Date(this.now().getTime() + FREEZE_ESCALATE_MS).toISOString();
+    lane.frozen = { at, by, escalateAt };
     state.status = 'frozen';
-    state.freeze = {
-      at: new Date().toISOString(),
-      phase,
-      pid,
-      by,
-      escalateAt: new Date(this.now().getTime() + FREEZE_ESCALATE_MS).toISOString(),
-    };
-    this.record('run.frozen', { pid, phase, by, escalateAt: state.freeze.escalateAt }, phase ?? undefined);
+    // The single-lane mirror, same contract as `state.child`: it describes the
+    // lane that was frozen most recently, and `lane.frozen` is the complete
+    // record every control actually acts on.
+    state.freeze = { at, phase: lane.phase, pid, by, escalateAt };
+    this.record('run.frozen', { pid, phase: lane.phase, by, escalateAt }, lane.phase);
     this.persist();
     this.emit('run', { state });
 
-    this.freezeTimer = setTimeout(() => this.escalateFreeze(), FREEZE_ESCALATE_MS);
-    this.freezeTimer.unref?.();
+    lane.freezeTimer = setTimeout(() => this.escalateFreeze(lane), FREEZE_ESCALATE_MS);
+    lane.freezeTimer.unref?.();
     return true;
   }
 
   /** Let a frozen session carry on, mid-token, in the same process. */
-  thaw(): boolean {
+  thaw(phase?: number | null): boolean {
     const state = this.state;
-    if (!state || state.status !== 'frozen') return false;
-    const pid = state.freeze?.pid;
-    this.clearFreezeTimer();
+    if (!state) return false;
+    const lane = phase != null ? this.lanes.get(phase) : this.frozenLane();
+    if (!lane?.frozen) return false;
+    const pid = lane.pid;
+    this.clearFreezeTimer(lane);
 
     if (pid && pidAlive(pid)) {
       try { process.kill(pid, 'SIGCONT'); } catch (error) {
@@ -807,20 +1122,37 @@ export class Runner {
     // Frozen time is not work time. Left in, an hour on the kitchen table would
     // show up as an hour the phase spent thinking, and every throughput figure
     // built on it would be wrong.
-    const frozenMs = state.freeze ? Math.max(0, this.now().getTime() - Date.parse(state.freeze.at)) : 0;
-    if (frozenMs && state.activePhase != null) {
-      const record = phaseRecord(state, state.activePhase);
+    const frozenMs = Math.max(0, this.now().getTime() - Date.parse(lane.frozen.at));
+    if (frozenMs) {
+      const record = phaseRecord(state, lane.phase);
       record.frozenMs = (record.frozenMs ?? 0) + frozenMs;
     }
+    lane.frozen = null;
     // Same rule as the wait-until disposition: a pause armed while the session
     // was frozen is still a pause, and thawing is not taking it back — that is
-    // what `resumePause` is for.
-    state.status = state.pause ? 'pausing' : 'running';
-    state.freeze = null;
-    this.record('run.thawed', { pid, frozenMs }, state.activePhase ?? undefined);
+    // what `resumePause` is for. Only back to `running` once NOTHING is frozen:
+    // with lanes, thawing one of two still leaves a session stopped.
+    const stillFrozen = this.frozenLane();
+    state.status = stillFrozen ? 'frozen' : state.pause ? 'pausing' : 'running';
+    state.freeze = stillFrozen
+      ? {
+        at: stillFrozen.frozen!.at,
+        phase: stillFrozen.phase,
+        pid: stillFrozen.pid ?? 0,
+        by: stillFrozen.frozen!.by,
+        escalateAt: stillFrozen.frozen!.escalateAt,
+      }
+      : null;
+    this.record('run.thawed', { pid, frozenMs }, lane.phase);
     this.persist();
     this.emit('run', { state });
     return true;
+  }
+
+  /** Any lane the operator has stopped where it stands. */
+  private frozenLane(): Lane | undefined {
+    for (const lane of this.lanes.values()) if (lane.frozen) return lane;
+    return undefined;
   }
 
   /**
@@ -828,16 +1160,22 @@ export class Runner {
    * closed laptop: stop the child, keep its session id, and leave the phase
    * pending so Continue re-runs it with `--resume` rather than from scratch.
    */
-  private escalateFreeze(): void {
+  private escalateFreeze(target?: Lane): void {
     const state = this.state;
-    this.freezeTimer = null;
-    if (!state || state.status !== 'frozen') return;
-    const pid = state.freeze?.pid;
-    const phase = state.freeze?.phase ?? state.activePhase;
-    const record = phase != null ? phaseRecord(state, phase) : null;
+    // The timer names its lane; a caller that does not — the test that drives
+    // this directly rather than waiting fifteen real minutes — means "the one
+    // that is frozen", which is what it meant when there could only be one.
+    const lane = target ?? this.frozenLane();
+    if (!lane) return;
+    lane.freezeTimer = null;
+    if (!state || !lane.frozen) return;
+    const pid = lane.pid;
+    const phase = lane.phase;
+    const record = phaseRecord(state, phase);
     const sessionId = record?.sessionId;
 
-    this.checkpointed = true;
+    lane.checkpointed = true;
+    lane.frozen = null;
     if (pid && pidAlive(pid)) {
       // SIGCONT first, or SIGTERM is queued against a stopped process and its
       // own SessionEnd hooks never run.
@@ -854,10 +1192,16 @@ export class Runner {
         : 'frozen too long and checkpointed, but the session reported no id to resume — '
           + 'Continue starts this phase again from its boot prompt';
     }
+    lane.pid = null;
+    this.syncMirror();
     state.freeze = null;
-    state.child = null;
-    state.status = 'paused';
-    state.halt = null;
+    // Only when this was the last thing running. With another lane still live,
+    // writing `paused` here would tell the console the run had stopped while a
+    // session carried on editing under it.
+    if (!this.lanes.size || [...this.lanes.values()].every((other) => other.pid == null)) {
+      state.status = 'paused';
+      state.halt = null;
+    }
     this.record('run.freeze-escalated', {
       pid, phase, sessionId: sessionId ?? null, afterMs: FREEZE_ESCALATE_MS,
     }, phase ?? undefined);
@@ -865,10 +1209,10 @@ export class Runner {
     this.emit('run', { state });
   }
 
-  private clearFreezeTimer(): void {
-    if (!this.freezeTimer) return;
-    clearTimeout(this.freezeTimer);
-    this.freezeTimer = null;
+  private clearFreezeTimer(lane: Lane): void {
+    if (!lane.freezeTimer) return;
+    clearTimeout(lane.freezeTimer);
+    lane.freezeTimer = null;
   }
 
   /** Take back a pause that has not been reached yet. */
@@ -907,21 +1251,37 @@ export class Runner {
       return;
     }
     this.stopRequested = true;
-    // A stopped process cannot act on SIGTERM: the signal is queued and its own
-    // SessionEnd hooks never run, so a frozen phase stopped from the console
-    // would sit there until SIGKILL. Wake it first, then ask it to stop.
-    this.clearFreezeTimer();
-    const frozenPid = this.state.freeze?.pid;
-    if (frozenPid && pidAlive(frozenPid)) {
-      try { process.kill(frozenPid, 'SIGCONT'); } catch { /* already gone */ }
+    // Every lane, not just the mirror. A Stop that killed one of three sessions
+    // and reported the run stopped would leave two agents editing a tree with
+    // no supervisor and no console claiming responsibility for them.
+    const lanes = [...this.lanes.values()];
+    let wasFrozen = false;
+    for (const lane of lanes) {
+      this.clearFreezeTimer(lane);
+      // A stopped process cannot act on SIGTERM: the signal is queued and its
+      // own SessionEnd hooks never run, so a frozen phase stopped from the
+      // console would sit there until SIGKILL. Wake it first, then ask it to
+      // stop.
+      if (lane.frozen) wasFrozen = true;
+      lane.frozen = null;
+      if (lane.pid && pidAlive(lane.pid)) {
+        try { process.kill(lane.pid, 'SIGCONT'); } catch { /* already gone */ }
+      }
     }
     this.state.freeze = null;
     this.state.status = 'stopping';
-    this.record('run.stop-requested', { pid: this.childPid ?? undefined, wasFrozen: Boolean(frozenPid) });
+    this.record('run.stop-requested', {
+      pids: lanes.map((lane) => lane.pid).filter((pid): pid is number => pid != null),
+      phases: lanes.map((lane) => lane.phase),
+      wasFrozen,
+    });
     this.persist();
+    // Aborts the spawns AND every admission still queued — a stopped run must
+    // not leave an entry in the queue that would start a session later.
     this.abort?.abort();
-    if (this.childPid) {
-      const pid = this.childPid;
+    for (const lane of lanes) {
+      const pid = lane.pid;
+      if (!pid) continue;
       setTimeout(() => {
         if (pidAlive(pid)) {
           log.warn('runner.sigkill', { pid, note: 'child ignored SIGTERM' });
@@ -945,16 +1305,16 @@ export class Runner {
    * cache?" reads as a new instruction and can quietly redirect the phase; the
    * preamble says what it is and what to do after answering.
    */
-  ask(question: string, by = 'console', key?: string): AskResult {
-    return this.inject('ask', question, by, key);
+  ask(question: string, by = 'console', key?: string, phase?: number | null): AskResult {
+    return this.inject('ask', question, by, key, phase);
   }
 
   /**
    * Tell the phase to do something differently. See `frameSteer` for why this
    * is a separate verb rather than an Ask with different words.
    */
-  steer(instruction: string, by = 'console', key?: string): AskResult {
-    return this.inject('steer', instruction, by, key);
+  steer(instruction: string, by = 'console', key?: string, phase?: number | null): AskResult {
+    return this.inject('steer', instruction, by, key, phase);
   }
 
   /**
@@ -966,7 +1326,9 @@ export class Runner {
    * for the model to answer and, before the close rule was rewritten, a
    * permanent leak in the counter that decided when stdin closed.
    */
-  private inject(kind: 'ask' | 'steer', body: string, by: string, key?: string): AskResult {
+  private inject(
+    kind: 'ask' | 'steer', body: string, by: string, key?: string, targetPhase?: number | null,
+  ): AskResult {
     const text = body.trim();
     if (!text) return { ok: false, reason: kind === 'ask' ? 'nothing to ask' : 'nothing to say' };
     if (text.length > 8_000) return { ok: false, reason: 'that is longer than a message' };
@@ -978,7 +1340,11 @@ export class Runner {
       if (seen) return { ...seen, repeated: true };
     }
 
-    const handle = this.handle;
+    // The named lane's stdin, not "the" session's. With three phases running,
+    // a question typed under phase 5 that arrived at phase 2's session would
+    // be answered confidently by the wrong agent about the wrong work.
+    const lane = this.laneFor(targetPhase);
+    const handle = lane?.handle ?? (targetPhase == null ? this.handle : null);
     if (!handle?.open()) {
       return {
         ok: false,
@@ -998,7 +1364,7 @@ export class Runner {
     const result: AskResult = { ok: true, mark: `${kind}:${id}` };
     if (key) this.remember(key, result);
 
-    const phase = this.state?.activePhase ?? undefined;
+    const phase = lane?.phase ?? this.state?.activePhase ?? undefined;
     // Two event names, on purpose: a journal that records a course correction
     // as a question cannot later explain why the phase changed direction.
     this.record(kind === 'ask' ? 'phase.asked' : 'phase.steered', {
@@ -1129,15 +1495,63 @@ export class Runner {
 
   private async drive(): Promise<void> {
     const state = this.state!;
+    /**
+     * The lanes this loop is waiting on, keyed by phase.
+     *
+     * Never rejects — `laneOf` converts a throw into a settled lane, because
+     * `Promise.race` rejecting on one lane would abandon every other lane
+     * still holding a live session.
+     */
+    const inFlight = new Map<number, Promise<{ phase: number; carryOn: boolean }>>();
+    /** Something said stop. Admit nothing more; let what is running finish. */
+    let stopping = false;
+
+    /**
+     * Wait for the next lane to settle. The only place the loop advances.
+     *
+     * The empty guard is not defensive clutter: `Promise.race([])` returns a
+     * promise that never settles, so one wrong path into here would hang the
+     * loop forever with no error, no log line and a run that reads `running`
+     * for as long as the console lives.
+     */
+    const settleOne = async (): Promise<void> => {
+      if (!inFlight.size) return;
+      const done = await Promise.race(inFlight.values());
+      inFlight.delete(done.phase);
+      this.persist();
+      if (!done.carryOn) stopping = true;
+    };
+
+    /**
+     * Drain before concluding anything.
+     *
+     * Every ending below — paused, halted, finished, out of budget — is a
+     * statement about the whole run, and making it while a lane is still
+     * editing a repository would be false. So each one waits its turn: with a
+     * single lane this is exactly the old `break`, and with several it is the
+     * difference between "the run stopped" and "the run stopped, and two
+     * sessions carried on writing without a supervisor".
+     */
+    const draining = async (): Promise<boolean> => {
+      if (!inFlight.size) return false;
+      await settleOne();
+      return true;
+    };
+
     try {
       while (true) {
         if (this.abort?.signal.aborted) {
+          if (await draining()) continue;
           state.status = 'paused';
           state.pause = null;
           state.finishedReason ??= 'stopped by the operator';
           break;
         }
         if (state.status === 'pausing') {
+          // A pause stops ADMITTING. What is already running is left to finish
+          // — that is what "after this phase" has always meant, and with lanes
+          // it means after all of them.
+          if (await draining()) continue;
           state.status = 'paused';
           this.record('run.paused', { afterPhase: state.pause?.afterPhase ?? null });
           state.finishedReason = state.pause?.afterPhase != null
@@ -1146,7 +1560,12 @@ export class Runner {
           state.pause = null;
           break;
         }
+        if (stopping) {
+          if (await draining()) continue;
+          break;
+        }
         if (state.runBudgetUsd && state.spentUsd >= state.runBudgetUsd) {
+          if (await draining()) continue;
           this.halt(`the run budget of $${state.runBudgetUsd} is spent`);
           break;
         }
@@ -1159,7 +1578,11 @@ export class Runner {
         // after the only line that read it. Going back to the top rather than
         // breaking here keeps ONE piece of pause bookkeeping, up there.
         if (state.status === 'pausing') continue;
-        if (board.error) { this.halt(`the engine could not read the plan: ${board.error}`); break; }
+        if (board.error) {
+          if (await draining()) continue;
+          this.halt(`the engine could not read the plan: ${board.error}`);
+          break;
+        }
 
         const outstanding = [...board.ready, ...board.waiting, ...board.inProgress, ...board.stuck];
         // A run asked for specific phases is finished when THOSE are settled —
@@ -1168,7 +1591,16 @@ export class Runner {
         const asked = state.onlyPhases?.length ? new Set(state.onlyPhases) : null;
         const candidates = board.ready
           .filter((p) => !asked || asked.has(p))
-          .filter((p) => !SETTLED.includes(phaseRecord(state, p).status));
+          .filter((p) => !SETTLED.includes(phaseRecord(state, p).status))
+          // A phase this loop is already driving is not a candidate to start
+          // again. The board cannot know — it reads handoffs, and a phase in
+          // flight has not written one yet.
+          .filter((p) => !inFlight.has(p));
+
+        // Nothing to start, but something is running: it may be about to make
+        // more phases ready. Concluding "finished" here is the fastest way to
+        // stop a plan one phase in.
+        if (!candidates.length && await draining()) continue;
 
         if (asked && !candidates.length) {
           state.status = 'finished';
@@ -1213,9 +1645,14 @@ export class Runner {
           break;
         }
 
-        const carryOn = await this.runPhase(candidates[0], board);
-        this.persist();
-        if (!carryOn) break;
+        // Fill every free lane this run is allowed, then wait for the first to
+        // settle. One lane makes this exactly what it was: start a phase, wait
+        // for it, go round again.
+        for (const phase of candidates) {
+          if (inFlight.size >= this.maxLanes()) break;
+          inFlight.set(phase, this.laneOf(phase, board));
+        }
+        await settleOne();
       }
     } catch (error) {
       // A throw in here would otherwise be an unhandled rejection, which is one
@@ -1223,14 +1660,20 @@ export class Runner {
       log.error('runner.crashed', { error });
       this.halt(`the runner itself failed: ${(error as Error)?.message ?? error}`);
     } finally {
+      // Whatever is left is not running any more, whichever way the loop left.
+      for (const lane of this.lanes.values()) this.clearFreezeTimer(lane);
+      this.lanes.clear();
+      this.syncMirror();
       state.child = null;
+      delete state.children;
       this.childPid = null;
-      this.clearFreezeTimer();
+      this.handle = null;
       // A freeze cannot outlive the loop that would have thawed it.
       state.freeze = null;
       // The token dies with the loop. Anything still waiting on a decision is
-      // answered rather than left holding a socket nobody is watching.
-      this.deps.approvals?.disarm();
+      // answered rather than left holding a socket nobody is watching — this
+      // run's cards only, because another run's are still answerable.
+      this.deps.approvals?.disarm(state.id);
       // …and neither does the question it was asking. A phase left reading
       // `awaiting-verification` on a run that has stopped goes on presenting as
       // "Waiting on you" — a card whose broker is disarmed, whose run is over,
@@ -1240,6 +1683,25 @@ export class Runner {
       this.persist();
       this.emit('run', { state });
     }
+  }
+
+  /**
+   * One lane, as a promise that always settles.
+   *
+   * `Promise.race` is how the loop waits, and a race rejects the moment ANY
+   * racer does — which would drop the loop out of its `while` while other
+   * lanes still held live sessions, with nothing left to reap them. So a lane
+   * that throws becomes a lane that finished badly.
+   */
+  private laneOf(phase: number, board: Board): Promise<{ phase: number; carryOn: boolean }> {
+    return this.runPhase(phase, board).then(
+      (carryOn) => ({ phase, carryOn }),
+      (error: unknown) => {
+        log.error('runner.lane.crashed', { phase, error });
+        this.halt(`phase ${phase} failed inside the runner: ${(error as Error)?.message ?? error}`, phase);
+        return { phase, carryOn: false };
+      },
+    );
   }
 
   /** Returns false when the run must stop. */
@@ -1264,6 +1726,56 @@ export class Runner {
       return true;
     }
 
+    /* ---- admission ----
+     * Before the lock belt-check, and deliberately so. The lock answers "is
+     * this PHASE taken"; admission answers "may anything touch these REPOS
+     * right now", which is the larger question and the one that can make a
+     * phase wait rather than fail. Asking it after the gate keeps a gated
+     * phase from occupying a queue slot it was never going to use. */
+    let grant: ScopeGrant | null = null;
+    try {
+      grant = await this.admit(phase, 'phase');
+    } catch (error) {
+      if (!(error instanceof AdmissionAborted)) throw error;
+      // Stopped while it waited. Nothing started, so nothing is owed an
+      // explanation beyond the journal — and the phase stays startable.
+      state.activePhase = wasActive;
+      if (record.status === 'queued') record.status = 'pending';
+      this.record('phase.not-started', {
+        reason: 'the run was stopped while this phase waited for its scope',
+      }, phase);
+      return true;
+    }
+
+    // The lane exists from here on, so every control can find this phase even
+    // before its child has a pid — and so the `finally` below has exactly one
+    // place to undo all of it.
+    const lane: Lane = {
+      phase, pid: null, handle: null, grant, frozen: null, freezeTimer: null, checkpointed: false,
+    };
+    this.lanes.set(phase, lane);
+
+    try {
+      return await this.runPhaseAdmitted(phase, board, lane, wasActive);
+    } finally {
+      this.deps.scheduler?.release(lane.grant);
+      this.clearFreezeTimer(lane);
+      this.lanes.delete(phase);
+      this.syncMirror();
+      this.persist();
+    }
+  }
+
+  /**
+   * The phase itself, once its scope is held. Split out so the grant, the lane
+   * and the mirror are released in exactly one place however this returns.
+   */
+  private async runPhaseAdmitted(
+    phase: number, board: Board, lane: Lane, wasActive: number | null,
+  ): Promise<boolean> {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+
     /* ---- lock ----
      * Checked, not claimed. The boot prompt already tells the session to claim
      * its own phase, and a lock the runner took first is a lock the session
@@ -1273,7 +1785,7 @@ export class Runner {
      *
      * So the entity doing the work holds the lock. The runner only looks, so it
      * can park rather than start a session that would immediately stop. */
-    const owner = `autopilot/${state.id}`;
+    const owner = autopilotOwner(state.id);
     const status = await this.script('phase-lock.sh', [state.slug, 'status', String(phase)]);
     const holder = /held by (\S+)/.exec(status.stdout)?.[1];
     if (holder && holder !== owner) {
@@ -1342,7 +1854,7 @@ export class Runner {
     this.emit('phase', { phase, status: 'running', model: record.model, effort: record.effort });
 
     /* ---- the session, with the error policy driving retries ---- */
-    const settled = await this.attempt(phase, prompt, record.model!, owner, chosen);
+    const settled = await this.attempt(phase, prompt, record.model!, owner, lane, chosen);
     if (!settled.carryOn) { await this.release(phase, owner); return false; }
     if (!settled.completed) { await this.release(phase, owner); return true; }
 
@@ -1418,7 +1930,8 @@ export class Runner {
    * Every disposition from `classify` is handled here and nowhere else.
    */
   private async attempt(
-    phase: number, prompt: string, model: string, owner: string, chosen: PhaseOptions = {},
+    phase: number, prompt: string, model: string, owner: string, lane: Lane,
+    chosen: PhaseOptions = {},
   ): Promise<{ carryOn: boolean; completed: boolean }> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
@@ -1470,7 +1983,7 @@ export class Runner {
         partialMessages: this.deps.stream?.partialMessages ?? true,
         subagentText: this.deps.stream?.subagentText ?? true,
         hookEvents: this.deps.stream?.hookEvents ?? true,
-        onHandle: (handle) => { this.handle = handle; },
+        onHandle: (handle) => { lane.handle = handle; this.syncMirror(); },
         // The child must know it IS the lock holder. Without this the runner
         // claims the phase as `autopilot/<runId>`, the session it spawns reads
         // a lock owned by a stranger, and — correctly, per the skill's own
@@ -1478,25 +1991,38 @@ export class Runner {
         // supervisor deadlocks against its own worker. Sharing PE_OWNER makes
         // phase-lock.sh report the lock as the session's own, so it refreshes
         // instead of stopping, while everyone else still sees it held.
-        env: { ...process.env, PE_OWNER: owner },
+        //
+        // PE_SCOPE rides along for the same reason one level up: the session
+        // claims its own lock, and a claim that names no scope writes a lock
+        // every other reader has to treat as colliding with everything.
+        env: {
+          ...process.env,
+          PE_OWNER: owner,
+          PE_SCOPE: formatScope(lane.grant?.scope ?? await this.scopeFor(phase)),
+        },
         signal: this.abort?.signal,
         onPid: (pid) => {
-          this.childPid = pid;
-          state.child = { pid, phase, sessionId: record.sessionId ?? '', startedAt: new Date().toISOString() };
+          lane.pid = pid;
+          // Writes `children[phase]` AND the single-lane `state.child` mirror.
+          // Both, always: see `syncMirror`.
+          this.syncMirror();
           this.persist();
         },
         onEvent: (event) => this.onStream(phase, event),
       });
 
-      this.childPid = null;
-      this.handle = null;
-      state.child = null;
+      lane.pid = null;
+      lane.handle = null;
+      this.syncMirror();
       state.spentUsd += outcome.costUsd;
       record.costUsd += outcome.costUsd;
       record.turns = (record.turns ?? 0) + outcome.turns;
       // Wall-clock minus whatever the operator held it for. A phase frozen over
-      // lunch did not take an extra hour to think.
-      const frozenNow = state.freeze ? Math.max(0, this.now().getTime() - Date.parse(state.freeze.at)) : 0;
+      // lunch did not take an extra hour to think. Read off THIS lane: with
+      // several running, `state.freeze` may be describing a different phase,
+      // and subtracting its held time here would credit one phase with a pause
+      // that happened to another.
+      const frozenNow = lane.frozen ? Math.max(0, this.now().getTime() - Date.parse(lane.frozen.at)) : 0;
       if (frozenNow) record.frozenMs = (record.frozenMs ?? 0) + frozenNow;
       record.durationMs = (record.durationMs ?? 0) + Math.max(0, outcome.durationMs - frozenNow);
       if (outcome.sessionId) record.sessionId = outcome.sessionId;
@@ -1518,8 +2044,9 @@ export class Runner {
       // A freeze that ran past its threshold ended this child on purpose. The
       // phase record is already `pending` with a session to resume, and reading
       // exit 143 as a crash here would overwrite both.
-      if (this.checkpointed) {
-        this.checkpointed = false;
+      if (lane.checkpointed) {
+        lane.checkpointed = false;
+        lane.frozen = null;
         state.freeze = null;
         state.finishedReason = record.resumeSessionId
           ? `phase ${phase} was frozen past ${Math.round(FREEZE_ESCALATE_MS / 60_000)} minutes and `
@@ -1553,6 +2080,11 @@ export class Runner {
         case 'wait-until': {
           state.status = 'waiting';
           state.waitUntil = disposition.at.toISOString();
+          // The usage window belongs to the ACCOUNT, not to this run. Without
+          // telling the scheduler, every other lane and every other plan would
+          // discover the same closed window one session at a time, each paying
+          // a turn to be told to come back at the same moment.
+          this.deps.scheduler?.throttle(disposition.at.getTime());
           this.record('run.waiting', { until: state.waitUntil, reason: disposition.reason });
           this.persist();
           await this.sleep(Math.max(0, disposition.at.getTime() - this.now().getTime()));
@@ -1718,7 +2250,12 @@ export class Runner {
     record.status = 'done';
     record.endedAt = new Date().toISOString();
     state.consecutiveFailures = 0;
-    state.activePhase = null;
+    // Not a flat `null`: with another lane still running, clearing the pointer
+    // here would tell the console the run was between phases while a session
+    // was mid-edit. `syncMirror` moves it to whatever is still live, and only
+    // clears it when nothing is.
+    if (this.lanes.size > 1) this.syncMirror();
+    else state.activePhase = null;
     this.record('phase.done', { costUsd: record.costUsd, attempts: record.attempts }, phase);
     this.emit('phase', { phase, status: 'done' });
     return true;
@@ -1915,15 +2452,18 @@ export class Runner {
         partialMessages: this.deps.stream?.partialMessages ?? true,
         subagentText: this.deps.stream?.subagentText ?? true,
         hookEvents: this.deps.stream?.hookEvents ?? true,
-        onHandle: (handle) => { this.handle = handle; },
-        env: { ...process.env, PE_OWNER: `autopilot/${state.id}` },
+        onHandle: (handle) => { this.attachHandle(phase, handle); },
+        env: {
+          ...process.env,
+          PE_OWNER: autopilotOwner(state.id),
+          PE_SCOPE: formatScope(this.lanes.get(phase)?.grant?.scope ?? await this.scopeFor(phase)),
+        },
         signal: this.abort?.signal,
         // As in `attempt` and `resumeWithInstruction`: a closeout is a live
         // session like any other, and one the console could not freeze or stop
         // because nothing recorded its child.
         onPid: (pid) => {
-          this.childPid = pid;
-          state.child = { pid, phase, sessionId: record.sessionId ?? '', startedAt: new Date().toISOString() };
+          this.attachPid(phase, pid);
           this.persist();
           this.emit('run', { state });
         },
@@ -1932,9 +2472,8 @@ export class Runner {
     } catch (error) {
       return { ran: false, note: `the closeout session could not be started: ${(error as Error)?.message ?? error}` };
     } finally {
-      this.childPid = null;
-      this.handle = null;
-      state.child = null;
+      this.attachPid(phase, null);
+      this.attachHandle(phase, null);
     }
 
     state.spentUsd += outcome.costUsd;
@@ -2153,7 +2692,11 @@ export class Runner {
       // within the first second, so take it there.
       if (event.sessionId && record.sessionId !== event.sessionId) {
         record.sessionId = event.sessionId;
-        if (this.state.child?.phase === phase) this.state.child.sessionId = event.sessionId;
+        // Rewrites `children[phase]` and the mirror together, so a checkpoint
+        // taken a moment later can hand this id to `--resume` whichever of the
+        // two a reader consults.
+        if (this.lanes.has(phase)) this.syncMirror();
+        else if (this.state.child?.phase === phase) this.state.child.sessionId = event.sessionId;
         changed = true;
       }
       if (event.model && record.actualModel !== event.model) {
@@ -2236,9 +2779,12 @@ export class Runner {
    */
   private async checkpointForShutdown(): Promise<void> {
     if (!this.state) return;
-    this.record('run.console-shutdown', { pid: this.childPid ?? undefined, phase: this.state.activePhase });
+    this.record('run.console-shutdown', {
+      pids: this.livePhases().map((phase) => this.lanes.get(phase)?.pid).filter(Boolean),
+      phases: this.livePhases(),
+    });
     this.persist();
-    if (!this.childPid) return;
+    if (!this.livePhases().length && !this.childPid) return;
     this.abort?.abort();
     await this.driving;
     this.persist();

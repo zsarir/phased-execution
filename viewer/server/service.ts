@@ -44,6 +44,8 @@ import {
   Runner, applySettings,
   type AskResult, type RecoverMode, type RunSettingsPatch, type StartOptions,
 } from './runner/runner.ts';
+import { Scheduler, type LockView } from './runner/scheduler.ts';
+import { formatScope, scopeOfRow, scopesIntersect } from '../shared/scope.js';
 import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
 import {
@@ -356,8 +358,14 @@ export class Service {
   /** Monotonic id per emitted event, so a client can say what it already saw. */
   eventCursor = 0;
   private eventLog: LiveEvent[] = [];
-  /** The last run+status announced, so a halt is not announced on every poll. */
-  private notifiedRun: { id: string; status: string } | null = null;
+  /**
+   * The last status announced per run, so a halt is not announced on every poll.
+   *
+   * Keyed by run id rather than a single slot: with two runs live, one halting
+   * and the other merely persisting would take turns overwriting the slot, and
+   * every write would look like a change worth waking somebody for.
+   */
+  private notifiedRun = new Map<string, string>();
   /** Per phase, the last status pushed — a re-render is not a second event. */
   private notifiedPhase = new Map<string, string>();
   /** Which phases were ready last time, so "became ready" means became. */
@@ -372,7 +380,21 @@ export class Service {
    */
   private toolsSeen = new Set<string>();
 
-  readonly runner: Runner;
+  /**
+   * One runner per plan, created on demand and kept.
+   *
+   * Keyed by slug because that is what every control is addressed by, and
+   * because it is the guard: a second run of the SAME plan is the one kind of
+   * concurrency that is never safe — two loops driving one phase graph, both
+   * reading the same handoffs — so it answers 409, while a second run of a
+   * DIFFERENT plan is exactly what the scheduler exists to allow.
+   *
+   * Kept after the run ends rather than deleted: the runner holds the last
+   * `RunState` it drove, which is what the console reads between runs.
+   */
+  private runners = new Map<string, Runner>();
+  /** Admission control shared by every runner in the pool. See `scheduler.ts`. */
+  readonly scheduler: Scheduler;
   readonly approvals: Approvals;
   readonly push: Push;
   readonly notifications: Notifications;
@@ -421,29 +443,21 @@ export class Service {
         });
       },
     });
-    this.runner = new Runner({
-      scriptsDir: flags.scriptsDir,
-      approvals: this.approvals,
-      origin: `http://${flags.host}:${flags.port}`,
-      // The plan is the only source for what proves a phase worked, exactly as
-      // it is the only source for what the phase should do.
-      verificationText: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verification,
-      // …and where they mean to be run. Same store, same reason.
-      verifyIn: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verifyIn,
-      // Read only to SUGGEST a `Verify in:` on a failure — never to pick a
-      // directory. The Repos column has always been there; nothing read it.
-      phaseRepos: (slug, phase) => {
-        const row = this.store?.get(slug)?.plan?.graph.find((r) => r.phase === phase);
-        return row ? splitRepos(row.repos) : undefined;
-      },
-      // …and for what it should run as. These bullets have been in the plan
-      // format from the start; until now nothing read them.
-      phaseDefaults: (slug, phase) => {
-        const detail = this.store?.get(slug)?.plan?.phases[phase];
-        if (!detail) return undefined;
-        return { model: modelAlias(detail.model), effort: effortOf(detail.effort) };
-      },
-      onEvent: (event, data) => this.onRunnerEvent(event, data),
+    this.scheduler = new Scheduler({
+      max: () => this.flags.maxSessions,
+      // Every lock on disk, across every plan the store has scanned — which is
+      // how a session this console never started (a human in a terminal, a
+      // bash worker) gets a say in what the autopilot is allowed to begin.
+      locks: () => this.allLocks(),
+      // A lock with no `scope=` line: recover what the plan says that phase
+      // touches rather than reading it as `all`. See `SchedulerDeps.scopeFor`.
+      scopeFor: (slug, phase) => this.scopeOf(slug, phase),
+      onChange: (snapshot) => this.emit('run:queue', {
+        max: snapshot.max,
+        live: snapshot.live,
+        queued: snapshot.queued,
+        throttledUntil: snapshot.throttledUntil,
+      }),
     });
     // A fault anywhere in the process reaches the browser as a health event,
     // so a degraded console announces itself instead of looking healthy.
@@ -456,6 +470,186 @@ export class Service {
         body: `${state.kind}: ${state.message}`,
         tag: tagFor('health', state.kind, state.message),
       });
+    });
+  }
+
+  /* ---------------------------------------------------------------- *
+   * The runner pool
+   * ---------------------------------------------------------------- */
+
+  /** The runner for a plan, made on first use. See `runners`. */
+  runnerFor(slug: string): Runner {
+    const existing = this.runners.get(slug);
+    if (existing) return existing;
+    const made = this.makeRunner();
+    this.runners.set(slug, made);
+    return made;
+  }
+
+  /** The runner DRIVING this plan right now, or null. */
+  private liveRunner(slug: string): Runner | null {
+    const runner = this.runners.get(slug);
+    return runner?.busy() ? runner : null;
+  }
+
+  /** Every runner with a loop behind it, in no particular order. */
+  private liveRunners(): Runner[] {
+    return [...this.runners.values()].filter((runner) => runner.busy());
+  }
+
+  /**
+   * Every run this process is genuinely driving.
+   *
+   * A Set rather than an id, because that is what it now is. Every read of a
+   * run passes through it: a `running` status on disk is a claim by a process
+   * that may have been killed since, and this is the only thing that says
+   * whether anything is behind it.
+   */
+  private liveRunIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const runner of this.liveRunners()) {
+      const id = runner.current()?.id;
+      if (id) ids.add(id);
+    }
+    return ids;
+  }
+
+  /** Every live run's state, first-started first. */
+  runStates(): RunState[] {
+    return this.liveRunners()
+      .map((runner) => runner.current())
+      .filter((state): state is RunState => Boolean(state))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  /**
+   * The run a verified hook token belongs to.
+   *
+   * Null when the token names nothing this console drives — a run that ended
+   * between the child's call and this lookup. Answering `guarded` in that case
+   * is the fail-safe direction: the strictest profile, never a neighbour's.
+   */
+  private runBytoken(runId?: string | null): RunState | null {
+    if (!runId) return null;
+    for (const runner of this.liveRunners()) {
+      const state = runner.current();
+      if (state?.id === runId) return state;
+    }
+    return null;
+  }
+
+  /** The runner driving a given run id, for controls that arrive by id. */
+  private runnerByRunId(runId: string): Runner | null {
+    for (const runner of this.liveRunners()) {
+      if (runner.current()?.id === runId) return runner;
+    }
+    return null;
+  }
+
+  /** How full the console is: the header's answer, and `/api/queue`'s summary. */
+  concurrency(): { max: number; live: number; queued: number; throttledUntil: number | null } {
+    const snapshot = this.scheduler.snapshot();
+    return {
+      max: snapshot.max,
+      // Lanes, not runs. One run driving three phases is three sessions on this
+      // machine, and the cap is about sessions.
+      live: snapshot.live,
+      queued: snapshot.queued,
+      throttledUntil: snapshot.throttledUntil,
+    };
+  }
+
+  /**
+   * The queue, in full — what is holding a scope and what is waiting on it.
+   *
+   * `waitingOn` carries the holder of each collision, because "queued" on its
+   * own is the same unhelpful non-answer `status: pausing` used to be: it says
+   * a thing is not happening without saying what would have to change.
+   */
+  queueSnapshot(): ReturnType<Scheduler['snapshot']> {
+    return this.scheduler.snapshot();
+  }
+
+  /**
+   * Each phase of a plan, its declared scope, and what that scope collides with.
+   *
+   * Read straight off the same two sources admission uses — the Repos column
+   * and the live locks — so the page cannot show one answer while the
+   * scheduler acts on another.
+   */
+  phaseScopes(slug: string): { phase: number; scope: string[]; conflicts: string[] }[] {
+    const rows = this.store?.get(slug)?.plan?.graph ?? [];
+    const locks = this.allLocks().filter((lock) => !lock.expired);
+    const grants = this.scheduler.snapshot().grants;
+    return rows.map((row) => {
+      const scope = scopeOfRow(row.repos);
+      const conflicts: string[] = [];
+      for (const lock of locks) {
+        if (lock.slug === slug && lock.phase === row.phase) continue;
+        const other = lock.scope?.length ? lock.scope : this.scopeOf(lock.slug, lock.phase) ?? ['all'];
+        if (scopesIntersect(other, scope)) conflicts.push(`${lock.slug} phase ${lock.phase} (${lock.owner})`);
+      }
+      for (const grant of grants) {
+        if (grant.slug === slug && grant.phase === row.phase) continue;
+        if (scopesIntersect(grant.scope, scope)) {
+          conflicts.push(`${grant.slug}${grant.phase == null ? '' : ` phase ${grant.phase}`} (running)`);
+        }
+      }
+      return { phase: row.phase, scope, conflicts: [...new Set(conflicts)] };
+    });
+  }
+
+  /** Every lock on disk, across every plan — the scheduler's view of the world. */
+  private allLocks(): LockView[] {
+    const out: LockView[] = [];
+    for (const record of this.store?.list() ?? []) {
+      for (const lock of record.locks) {
+        out.push({
+          slug: record.slug, phase: lock.phase, owner: lock.owner,
+          expired: lock.expired, scope: lock.scope,
+        });
+      }
+    }
+    return out;
+  }
+
+  /** What a phase's Repos column says it touches. Undefined for an unknown plan. */
+  private scopeOf(slug: string, phase: number): string[] | undefined {
+    const row = this.store?.get(slug)?.plan?.graph.find((r) => r.phase === phase);
+    return row ? scopeOfRow(row.repos) : undefined;
+  }
+
+  private makeRunner(): Runner {
+    const flags = this.flags;
+    return new Runner({
+      scriptsDir: flags.scriptsDir,
+      approvals: this.approvals,
+      scheduler: this.scheduler,
+      maxParallel: () => this.flags.maxSessions,
+      origin: `http://${flags.host}:${flags.port}`,
+      // The plan is the only source for what proves a phase worked, exactly as
+      // it is the only source for what the phase should do.
+      verificationText: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verification,
+      // …and where they mean to be run. Same store, same reason.
+      verifyIn: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verifyIn,
+      // Read only to SUGGEST a `Verify in:` on a failure — never to pick a
+      // directory. The Repos column has always been there; nothing read it.
+      phaseRepos: (slug, phase) => {
+        const row = this.store?.get(slug)?.plan?.graph.find((r) => r.phase === phase);
+        return row ? splitRepos(row.repos) : undefined;
+      },
+      // The same cell, read as SCOPE: what admission decides on and what the
+      // child is told it holds. Kept separate from `phaseRepos` above so a
+      // cosmetic hint can never become the thing concurrency rests on.
+      phaseScope: (slug, phase) => this.scopeOf(slug, phase),
+      // …and for what it should run as. These bullets have been in the plan
+      // format from the start; until now nothing read them.
+      phaseDefaults: (slug, phase) => {
+        const detail = this.store?.get(slug)?.plan?.phases[phase];
+        if (!detail) return undefined;
+        return { model: modelAlias(detail.model), effort: effortOf(detail.effort) };
+      },
+      onEvent: (event, data) => this.onRunnerEvent(event, data),
     });
   }
 
@@ -762,11 +956,44 @@ export class Service {
     this.watcher.start([check.plansDir, check.handoffsDir]);
     void this.refreshRepoInfo();
     void this.warm();
+    void this.readoptQueued();
     return check;
+  }
+
+  /**
+   * Pick up runs that were waiting for a scope when the console went away.
+   *
+   * The ONE status this is safe for, and the reason `queued` is not in
+   * `IN_FLIGHT`: a queued run has spawned nothing, edited nothing and holds no
+   * lock — it was a pending promise in a process that no longer exists. There
+   * is no half-finished work to reason about, so continuing it is the same act
+   * as having started it a moment later, which is what the operator asked for.
+   *
+   * Anything else stays exactly as `reconcileRun` left it. A run that was
+   * mid-phase gets `interrupted` or `parked` and waits for a person, because
+   * the thing that makes those unsafe to resume automatically — a session that
+   * may still be running, a tree that may be half-edited — is precisely what a
+   * queued run does not have.
+   */
+  private async readoptQueued(): Promise<void> {
+    if (!this.flags.allowRun || !this.root?.ok) return;
+    for (const record of this.store?.list() ?? []) {
+      const state = latestRun(this.root.path, record.slug, this.liveRunIds());
+      if (state?.status !== 'queued') continue;
+      try {
+        log.info('run.readopt-queued', { slug: record.slug, runId: state.id });
+        await this.startRun(record.slug, { resumeRunId: state.id });
+      } catch (error) {
+        log.warn('run.readopt-failed', { slug: record.slug, runId: state.id, error });
+      }
+    }
   }
 
   close(): void {
     this.watcher.stop();
+    // Nothing is admitted after this point, and every pending admission is
+    // rejected rather than left holding a promise nobody will settle.
+    this.scheduler.close();
     // Every pty is a child process of this one. Leaving them behind would leave
     // orphaned login shells holding the source directory open.
     this.terminals.close();
@@ -813,7 +1040,11 @@ export class Service {
     // Restart has always killed every pty — `shutdown()` calls `service.close()`
     // — and has never said so. The inventory rides along so its dialog can.
     const sessions = this.sessionInventory();
-    const state = this.runner.current();
+    // Every busy plan, not "the" one: a restart aborts all of them, and a
+    // dialog that named one while three were running would understate what
+    // pressing it costs by two.
+    const running = this.runStates();
+    const state = running[0] ?? null;
     // `hasShutdownWork()` is the real test rather than a status on disk: the
     // runner registers its handler exactly while it is driving, and drops it
     // the moment the loop returns. A `running` row left by a killed process
@@ -823,10 +1054,14 @@ export class Service {
     if (busy) {
       return {
         ok: false,
-        reason: state
-          ? `${state.slug} is mid-run (${state.status}) — restarting would abort the session it is driving `
-            + 'and expire every card it is waiting on, unanswerably'
-          : 'a run is checkpointing — restarting now would cut it in half',
+        reason: running.length > 1
+          ? `${running.length} plans are mid-run (${running.map((r) => `${r.slug} ${r.status}`).join(', ')}) `
+            + '— restarting would abort every session they are driving and expire every card they are '
+            + 'waiting on, unanswerably'
+          : state
+            ? `${state.slug} is mid-run (${state.status}) — restarting would abort the session it is driving `
+              + 'and expire every card it is waiting on, unanswerably'
+            : 'a run is checkpointing — restarting now would cut it in half',
         supervisor: supervision, busy, run: state ? { slug: state.slug, status: state.status } : null,
         sessions,
       };
@@ -865,7 +1100,7 @@ export class Service {
     sessions: ReturnType<Service['sessionInventory']>;
     restartHint: string;
   } {
-    const state = this.runner.current();
+    const state = this.runStates()[0] ?? null;
     const supervision = supervisor();
     const stop = stopPlan(supervision);
     return {
@@ -1025,10 +1260,14 @@ export class Service {
     // Dedupe on the run *and* its status. Keying on the run alone — which this
     // did — meant a run announced once as parked could later halt, or finish,
     // in silence.
-    if (this.notifiedRun?.id === state.id && this.notifiedRun.status === state.status) return;
+    // Per RUN, not one slot for the console. With two runs live, a single slot
+    // makes each announcement erase the other's memory of itself — so the same
+    // halt is announced again on the next event, and again, for as long as its
+    // neighbour keeps persisting.
+    if (this.notifiedRun.get(state.id) === state.status) return;
 
     const push = (category: 'halted' | 'parked' | 'finished', title: string, body: string) => {
-      this.notifiedRun = { id: state.id, status: state.status };
+      this.notifiedRun.set(state.id, state.status);
       this.announce(category, {
         title, body, tag: tagFor('run', state.id, state.status),
       }, { slug: state.slug, runId: state.id });
@@ -1716,9 +1955,15 @@ export class Service {
     const added = flatten(edit.add);
     const removed = flatten(edit.remove);
     if (!added.length && !removed.length) return;
-    this.runner.note('policy.edited', {
-      scope, by: edit.by ?? 'console', ...(added.length ? { added } : {}), ...(removed.length ? { removed } : {}),
-    });
+    // Every live run's journal. A policy edit changes what each of them is
+    // allowed to do from its very next tool call, so recording it in one run's
+    // journal and not the others would leave the rest unexplainable.
+    for (const runner of this.liveRunners()) {
+      runner.note('policy.edited', {
+        scope, by: edit.by ?? 'console',
+        ...(added.length ? { added } : {}), ...(removed.length ? { removed } : {}),
+      });
+    }
   }
 
   state() {
@@ -1754,7 +1999,15 @@ export class Service {
       // The agent gate, same shape — the nav-level fact; the richer answer
       // still lives on `/api/terminal` (`agentAllowed` beside `allowed`).
       allowAgent: agentEnabled(this.flags),
-      run: this.runner.current(),
+      // The FIRST live run, kept exactly as it was so every consumer written
+      // before the pool — including an older client still open in a browser
+      // tab — goes on reading a run rather than suddenly reading nothing.
+      run: this.runStates()[0] ?? null,
+      // …and all of them, which is the honest answer. New consumers read this.
+      runs: this.runStates(),
+      // What the scheduler is doing, so a header can say "2 of 3 running, 1
+      // queued" instead of leaving a queued phase looking like a stalled one.
+      concurrency: this.concurrency(),
       scriptsDir: this.flags.scriptsDir,
       sizing: this.sizing,
       generation: this.generation,
@@ -1783,7 +2036,17 @@ export class Service {
     const record = this.store?.get(slug);
     if (!record) throw new Error(`No plan named ${slug}.`);
     if (!record.plan?.phased) throw new Error(`${slug} has no phase graph — there is nothing to run.`);
-    const state = await this.runner.start({ ...options, slug, root: this.root.path });
+    // The one concurrency that is never safe: two loops driving one phase
+    // graph. `Runner.start` throws on its own second call, so this is the
+    // message rather than the guard — but a bare "a run is already in
+    // progress" would now be read as "the console is busy", which is exactly
+    // the thing that stopped being true.
+    if (this.liveRunner(slug)) {
+      throw new Error(
+        `${slug} is already running in this console. Pause or stop it first — `
+        + 'another plan can start beside it, but one plan cannot run twice.');
+    }
+    const state = await this.runnerFor(slug).start({ ...options, slug, root: this.root.path });
     this.emit('run:state', { state });
     return state;
   }
@@ -1796,22 +2059,19 @@ export class Service {
    * whether anything is behind it, and reads that skip it report corpses as
    * live runs — which is precisely what a Stop button then fails to stop.
    */
-  private liveRunId(): string | null {
-    return this.runner.busy() ? this.runner.current()?.id ?? null : null;
+  private liveRunId(): Set<string> {
+    return this.liveRunIds();
   }
 
   /**
    * The run driving THIS plan right now, or null.
    *
-   * One runner today, so this is `current()` with the slug checked. The point of
-   * the method is the question it asks: every caller is written against "the run
-   * for this slug" rather than "the run", so phase 4's pool replaces the body
-   * (`this.runners.get(slug)`) and no caller changes.
+   * Every caller was written against "the run for this slug" rather than "the
+   * run" precisely so the pool could replace the body without touching one of
+   * them. This is that replacement.
    */
   private drivingRun(slug: string): RunState | null {
-    if (!this.runner.busy()) return null;
-    const live = this.runner.current();
-    return live?.slug === slug ? live : null;
+    return this.liveRunner(slug)?.current() ?? null;
   }
 
   /** The live run if there is one, otherwise the last one recorded on disk. */
@@ -1828,7 +2088,7 @@ export class Service {
    * two hundred runs across twelve plans costs twelve cache hits.
    */
   async runFor(slug: string): Promise<RunState | null> {
-    const live = this.runner.current();
+    const live = this.runners.get(slug)?.current();
     if (live && live.slug === slug) return live;
     if (!this.root) return null;
     const state = latestRun(this.root.path, slug, this.liveRunId());
@@ -1848,7 +2108,7 @@ export class Service {
    * be paying for an answer nobody asked for.
    */
   runIdFor(slug: string): string | undefined {
-    const live = this.runner.current();
+    const live = this.runners.get(slug)?.current();
     if (live && live.slug === slug) return live.id;
     return this.root ? latestRun(this.root.path, slug, this.liveRunId())?.id : undefined;
   }
@@ -1997,15 +2257,15 @@ export class Service {
   }
 
   async stopRun(slug: string, phase?: number | null): Promise<RunState | null> {
-    const live = this.runner.current();
-    if (live?.slug === slug && this.runner.busy()) {
+    const runner = this.liveRunner(slug);
+    if (runner) {
       // A Stop aimed at a phase that is no longer the one running would end a
       // session the operator never looked at. Refusing is the only safe answer
       // — and a Stop is the most expensive control here to get wrong.
-      const mismatch = this.runner.phaseMismatch(phase);
+      const mismatch = runner.phaseMismatch(phase);
       if (mismatch) throw new Error(mismatch);
-      await this.runner.stop();
-      return this.runner.current();
+      await runner.stop();
+      return runner.current();
     }
     return this.editStoredRun(slug, (state) => {
       if (!IN_FLIGHT.includes(state.status)) return;
@@ -2028,14 +2288,14 @@ export class Service {
    * left behind. It goes through the same door they do now.
    */
   pauseRun(slug: string, by = 'console'): RunState | null {
-    const live = this.runner.current();
+    const runner = this.liveRunner(slug);
     // A recovery is driving one session with no phase loop behind it, so there
     // is no boundary to pause at. Falling through to the checkpoint edit here
     // would write `pausing` to disk for a run that will never read it — the
     // same button-that-does-nothing this method was rewritten to eliminate,
     // arrived at from the other direction.
-    if (live?.slug === slug && this.runner.recoveringNow()) return null;
-    if (live?.slug === slug && this.runner.pause(by)) return this.runner.current();
+    if (runner?.recoveringNow()) return null;
+    if (runner?.pause(by)) return runner.current();
     return this.editStoredRun(slug, (state) => {
       if (!IN_FLIGHT.includes(state.status)) return;
       state.status = 'pausing';
@@ -2045,8 +2305,8 @@ export class Service {
 
   /** Take back a pause that has not been reached yet. */
   resumePause(slug: string): RunState | null {
-    const live = this.runner.current();
-    if (live?.slug === slug && this.runner.resumePause()) return this.runner.current();
+    const runner = this.liveRunner(slug);
+    if (runner?.resumePause()) return runner.current();
     return this.editStoredRun(slug, (state) => {
       if (state.status !== 'pausing') return;
       state.status = 'running';
@@ -2064,26 +2324,28 @@ export class Service {
    * somewhere it will never be read.
    */
   askRun(slug: string, question: string, by = 'console', key?: string, phase?: number | null): AskResult {
-    const live = this.runner.current();
-    if (!live || live.slug !== slug) {
+    const runner = this.liveRunner(slug);
+    if (!runner) {
       return { ok: false, reason: `nothing is running for ${slug} in this console` };
     }
-    const mismatch = this.runner.phaseMismatch(phase);
+    const mismatch = runner.phaseMismatch(phase);
     if (mismatch) return { ok: false, reason: mismatch };
-    return this.runner.ask(question, by, key);
+    // The phase goes through to the lane, so a question typed under one
+    // running phase cannot be answered by a different one's session.
+    return runner.ask(question, by, key, phase);
   }
 
   /** The same channel, said as an instruction rather than a question. */
   steerRun(
     slug: string, instruction: string, by = 'console', key?: string, phase?: number | null,
   ): AskResult {
-    const live = this.runner.current();
-    if (!live || live.slug !== slug) {
+    const runner = this.liveRunner(slug);
+    if (!runner) {
       return { ok: false, reason: `nothing is running for ${slug} in this console` };
     }
-    const mismatch = this.runner.phaseMismatch(phase);
+    const mismatch = runner.phaseMismatch(phase);
     if (mismatch) return { ok: false, reason: mismatch };
-    return this.runner.steer(instruction, by, key);
+    return runner.steer(instruction, by, key, phase);
   }
 
   /**
@@ -2095,37 +2357,37 @@ export class Service {
    * fallback, it is a different and much worse action.
    */
   freezeRun(slug: string, by = 'console', phase?: number | null): ControlResult {
-    const live = this.runner.current();
-    if (live?.slug !== slug) return { ok: false, reason: `nothing is running for ${slug} in this console` };
-    const mismatch = this.runner.phaseMismatch(phase);
+    const runner = this.liveRunner(slug);
+    if (!runner) return { ok: false, reason: `nothing is running for ${slug} in this console` };
+    const mismatch = runner.phaseMismatch(phase);
     if (mismatch) return { ok: false, reason: mismatch };
-    if (!this.runner.freeze(by)) {
+    if (!runner.freeze(by, phase)) {
       return { ok: false, reason: `nothing is running for ${slug} in this console that could be frozen` };
     }
-    return { ok: true, run: this.runner.current() };
+    return { ok: true, run: runner.current() };
   }
 
   thawRun(slug: string, phase?: number | null): ControlResult {
-    const live = this.runner.current();
-    if (live?.slug !== slug) return { ok: false, reason: `nothing is running for ${slug} in this console` };
-    const mismatch = this.runner.phaseMismatch(phase);
+    const runner = this.liveRunner(slug);
+    if (!runner) return { ok: false, reason: `nothing is running for ${slug} in this console` };
+    const mismatch = runner.phaseMismatch(phase);
     if (mismatch) return { ok: false, reason: mismatch };
-    if (!this.runner.thaw()) {
+    if (!runner.thaw(phase)) {
       return { ok: false, reason: `nothing is frozen for ${slug} in this console` };
     }
-    return { ok: true, run: this.runner.current() };
+    return { ok: true, run: runner.current() };
   }
 
   /** Change model, autonomy or budgets on a run in flight; applies next phase. */
   configureRun(slug: string, patch: RunSettingsPatch, by = 'console'): RunState | null {
-    const live = this.runner.current();
-    if (live?.slug === slug && this.runner.configure(patch, by)) return this.runner.current();
+    const runner = this.liveRunner(slug);
+    if (runner?.configure(patch, by)) return runner.current();
     return this.editStoredRun(slug, (state) => { applySettings(state, patch); });
   }
 
   retryPhase(slug: string, phase: number): RunState | null {
-    const live = this.runner.current();
-    if (live?.slug === slug && this.runner.busy()) { this.runner.retry(phase); return live; }
+    const runner = this.liveRunner(slug);
+    if (runner) { runner.retry(phase); return runner.current(); }
     return this.editStoredRun(slug, (state) => {
       const record = phaseRecord(state, phase);
       record.status = 'pending';
@@ -2137,8 +2399,8 @@ export class Service {
   }
 
   skipPhase(slug: string, phase: number): RunState | null {
-    const live = this.runner.current();
-    if (live?.slug === slug && this.runner.busy()) { this.runner.skip(phase); return live; }
+    const runner = this.liveRunner(slug);
+    if (runner) { runner.skip(phase); return runner.current(); }
     return this.editStoredRun(slug, (state) => {
       const record = phaseRecord(state, phase);
       record.status = 'skipped';
@@ -2159,8 +2421,11 @@ export class Service {
   async recoverPhase(
     slug: string, phase: number, mode: RecoverMode, opts: { instruction?: string; by?: string } = {},
   ): Promise<RunState | null> {
-    if (this.runner.busy()) {
-      throw new Error('A run is in progress. Pause or stop it before recovering a phase.');
+    // Asked of THIS plan. Another plan being mid-run is no longer a reason to
+    // refuse — the scheduler admits the recovery against its scope, and holds
+    // it if the trees actually overlap.
+    if (this.liveRunner(slug)) {
+      throw new Error(`${slug} is in progress. Pause or stop it before recovering a phase.`);
     }
     const root = this.root?.path;
     if (!root) throw new Error('No repository is open.');
@@ -2171,7 +2436,7 @@ export class Service {
       .find((run) => run.phases[String(phase)]);
     if (!target) throw new Error(`No run of ${slug} has a record for phase ${phase}.`);
 
-    return this.runner.recover({
+    return this.runnerFor(slug).recover({
       slug, root, runId: target.id, phase, mode,
       instruction: opts.instruction,
       by: opts.by ?? 'console',
@@ -2190,9 +2455,8 @@ export class Service {
   async phaseDiagnosis(slug: string, phase: number): Promise<PhaseDiagnosis | null> {
     const root = this.root?.path;
     if (!root) return null;
-    const run = this.runner.current()?.slug === slug
-      ? this.runner.current()!
-      : listRuns(root, slug).find((r) => r.phases[String(phase)]);
+    const run = this.runners.get(slug)?.current()
+      ?? listRuns(root, slug).find((r) => r.phases[String(phase)]);
     if (!run) return null;
 
     const record = run.phases[String(phase)];
@@ -2303,16 +2567,23 @@ export class Service {
       return refuse(409,
         `${own.slug} is mid-run (${own.status}) — pause or stop it before starting a recovery session.`);
     }
-    //    A run on ANOTHER plan is still a refusal today, for a different reason:
-    //    one console, one working tree. Phase 4 replaces this arm with a scope
-    //    intersection — disjoint repos will be allowed to proceed — which is
-    //    why it is written separately from the one above rather than merged.
-    if (this.runner.busy()) {
-      const other = this.runner.current();
-      return refuse(409, other
-        ? `${other.slug} is mid-run (${other.status}) and shares this working tree, so a recovery `
-          + `session for ${request.slug} would edit files under it. Pause or stop it first.`
-        : 'A run is in progress — pause or stop it before starting a recovery session.');
+    //    A run on ANOTHER plan is a refusal only when it shares this one's
+    //    tree. That used to be unconditional — one console, one working tree —
+    //    and it is the arm phase 4 replaced with a scope intersection: two
+    //    plans in different repositories have no way to collide, and refusing
+    //    them bought nothing but a serialised operator.
+    const wanted = request.phase != null
+      ? this.scopeOf(request.slug, request.phase) ?? ['all']
+      : ['all'];
+    for (const other of this.runStates()) {
+      const held = this.scheduler.granted(other.id);
+      // A run holding no grant yet is between phases: nothing is editing
+      // anything, so there is nothing to collide with.
+      const overlapping = held.filter((grant) => scopesIntersect(grant.scope, wanted));
+      if (!overlapping.length) continue;
+      return refuse(409,
+        `${other.slug} is mid-run (${other.status}) in ${formatScope(overlapping[0].scope)}, which a `
+        + `recovery session for ${request.slug} would edit under. Pause or stop it first.`);
     }
 
     // 2. Signing in is the fix for an auth halt; an AI session would spend a
@@ -2524,12 +2795,18 @@ export class Service {
       return refuse(404, `${request.slug} has no phase ${request.phase}.`);
     }
 
-    if (this.runner.busy()) {
-      const live = this.runner.current();
-      return refuse(409, live
-        ? `${live.slug} is mid-run (${live.status}) — a review reads the working tree and runs the `
-          + 'phase\'s tests, so pause or stop it first.'
-        : 'A run is in progress — pause or stop it before starting a review.');
+    // Same reasoning as `resolveRecovery`: only a run whose scope overlaps the
+    // phase under review actually threatens it. A review runs the phase's
+    // tests in its tree, so an overlapping run is a genuine refusal — and a
+    // disjoint one is not the console's business.
+    const reviewing = this.scopeOf(request.slug, request.phase) ?? ['all'];
+    for (const live of this.runStates()) {
+      const overlapping = this.scheduler.granted(live.id)
+        .filter((grant) => scopesIntersect(grant.scope, reviewing));
+      if (!overlapping.length) continue;
+      return refuse(409,
+        `${live.slug} is mid-run (${live.status}) in ${formatScope(overlapping[0].scope)} — a review `
+        + 'reads the working tree and runs the phase\'s tests, so pause or stop it first.');
     }
 
     const building = this.liveRecoveryFor({ slug: request.slug, phase: request.phase });
@@ -2790,15 +3067,16 @@ export class Service {
   async decideToolUse(
     body: Record<string, unknown>, runId?: string | null,
   ): Promise<Record<string, unknown>> {
-    const run = this.runner.current();
-    // The token says which run this call came from. With one runner that is
-    // always the live one — so today this only ever asserts — but reading "the
-    // current run" is exactly what a runner pool breaks, and a hook answered
-    // under another run's profile is a bug that appears only under concurrency
-    // and is close to unreadable when it does. The id is threaded now; the
-    // lookup that uses it lands with the pool.
-    if (runId && run && run.id !== runId) {
-      log.warn('hook.run-mismatch', { runId, live: run.id, note: 'answered against the live run' });
+    // The token says WHICH run this call came from, and with a pool that is the
+    // only thing that does. Answering under "the current run" would classify a
+    // call from a `guarded` run against a `bypass` neighbour's profile — a bug
+    // that appears only when two things run at once, and is close to
+    // unreadable when it does.
+    const run = this.runBytoken(runId);
+    if (runId && !run) {
+      log.warn('hook.run-unknown', {
+        runId, note: 'the token names a run this console is not driving — answered as guarded',
+      });
     }
     const toolName = String(body.tool_name ?? 'unknown');
     const input = body.tool_input;
@@ -2827,7 +3105,9 @@ export class Service {
       // this" is the only question an operator asks next.
       const rule = verdict === 'deny' ? matchedDenyRule(toolName, input, policy) : null;
       if (verdict === 'deny') {
-        this.runner.note('phase.tool-denied', { tool: toolName, rule }, phase ?? undefined);
+        // The journal of the run that was actually denied, found by token.
+        this.runnerByRunId(run?.id ?? '')?.note(
+          'phase.tool-denied', { tool: toolName, rule }, phase ?? undefined);
       }
       return {
         hookSpecificOutput: {
@@ -2867,7 +3147,10 @@ export class Service {
     // open — so it is told no, and the run is parked rather than left to treat
     // that no as a judgement about the work. See `Runner.park`.
     if (by === 'timeout') {
-      this.runner.park(
+      // The run that asked, not whichever one happens to be first. Parking a
+      // neighbour because this one's card timed out would stop a plan that had
+      // done nothing wrong.
+      this.runnerByRunId(run?.id ?? '')?.park(
         `an approval went unanswered: ${toolName} — ${describeToolInput(input)}`,
         phase,
       );
@@ -2900,7 +3183,7 @@ export class Service {
     if (status) evidence.push({ label: 'Working tree', body: status });
     if (diff) evidence.push({ label: 'Uncommitted changes', body: diff });
 
-    const run = this.runner.current();
+    const run = this.runStates()[0] ?? null;
     const record = phase === null ? undefined : run?.phases[String(phase)];
     if (record?.verification?.ran.length) {
       evidence.push({

@@ -40,21 +40,28 @@ const flags = {
 type Noted = { event: string; data: Record<string, unknown>; phase?: number };
 
 /**
- * A service whose live run is whatever this test says it is.
+ * A service driving one run, which is whatever this test says it is.
  *
  * `decideToolUse` reads four things off the run — its id, its slug, the phase
  * it is on and its profile — so standing one up beats driving a real session to
  * reach one branch of a classifier.
+ *
+ * Since the runner pool landed, the run has to be reachable the way the real
+ * lookup finds it: by run id, through `runners`. `busy()` is what makes a
+ * runner count as live — a stub without it is a service that reads as driving
+ * nothing, which sends every call to the `guarded` fallback and hangs the
+ * bypass tests on a card nobody is going to answer.
  */
 function serviceOn(profile: string): { service: InstanceType<typeof Service>; noted: Noted[] } {
   const service = new Service(flags as never);
   const noted: Noted[] = [];
-  (service as unknown as { runner: unknown }).runner = {
+  (service as unknown as { runners: Map<string, unknown> }).runners.set('demo', {
+    busy: () => true,
     current: () => ({ id: 'r1', slug: 'demo', activePhase: 2, permissionProfile: profile }),
     note: (event: string, data: Record<string, unknown>, phase?: number) =>
       noted.push({ event, data, phase }),
     park: () => {},
-  };
+  });
   return { service, noted };
 }
 

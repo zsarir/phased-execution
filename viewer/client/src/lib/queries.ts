@@ -168,6 +168,12 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
   'run:phase': { invalidate: [keys.runs()], slugScoped: 'both' },
   'run:verify': { slugScoped: 'run' },
   'run:state': { invalidate: [keys.runs(), keys.plans()], slugScoped: 'both' },
+  /* Admission moved. `runs` because a phase crossing between queued and
+     running is a change to a run; `state` because the header's "2 of 3
+     running, 1 queued" is read from `/api/state`. Deliberately NOT
+     slug-scoped: a grant released on one plan is precisely what unblocks
+     another, and the plan that needs to hear about it is the other one. */
+  'run:queue': { invalidate: [keys.runs(), keys.state()] },
 
   /* ---- the firehose ----
      These two arrive many times a second while a phase is talking. The run view

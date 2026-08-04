@@ -2037,3 +2037,51 @@ test('an untrusted workspace no longer blocks a run', async () => {
   assert.deepEqual(seen, [1], 'the phase ran rather than parking on a stale premise');
   r.cleanup();
 });
+
+/* ------------------------------------------------------------------ *
+ * The admission endpoints
+ * ------------------------------------------------------------------ */
+
+test('the queue is readable without a flag, and says what each entry is waiting on', async () => {
+  const snapshot = {
+    max: 3,
+    live: 1,
+    queued: 1,
+    throttledUntil: null,
+    grants: [{ id: 'g1', slug: 'alpha', phase: 1, runId: 'r1', scope: ['api'], at: 0 }],
+    entries: [{
+      id: 'e1', slug: 'beta', phase: 2, runId: 'r2', scope: ['api'], since: 0,
+      bypassed: 0, reserving: false,
+      waitingOn: [{
+        kind: 'grant', slug: 'alpha', phase: 1, owner: 'autopilot/r1',
+        scope: ['api'], overlaps: ['api'],
+      }],
+    }],
+  };
+  // No `--allow-run`, no console header: reading the queue changes nothing, and
+  // a queue only the console can see is one nobody checks from a phone.
+  const { status, payload } = await call('/api/queue', {
+    overrides: { queueSnapshot: () => snapshot },
+  });
+  assert.equal(status, 200);
+  const body = payload as typeof snapshot;
+  assert.equal(body.max, 3);
+  assert.equal(body.queued, 1);
+  // The part that matters: "queued" alone is the same non-answer `pausing`
+  // used to be — it names something that is not happening without naming what
+  // would have to change for it to happen.
+  assert.equal(body.entries[0].waitingOn[0].owner, 'autopilot/r1');
+  assert.deepEqual(body.entries[0].waitingOn[0].overlaps, ['api']);
+});
+
+test("a plan's phase scopes are readable, with what each one would collide with", async () => {
+  const scopes = [
+    { phase: 1, scope: ['api'], conflicts: ['beta phase 3 (running)'] },
+    { phase: 2, scope: ['docs'], conflicts: [] },
+  ];
+  const { status, payload } = await call('/api/run/demo/scopes', {
+    overrides: { phaseScopes: (slug: string) => (slug === 'demo' ? scopes : []) },
+  });
+  assert.equal(status, 200);
+  assert.deepEqual((payload as { scopes: unknown }).scopes, scopes);
+});

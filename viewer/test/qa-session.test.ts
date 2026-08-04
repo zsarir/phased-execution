@@ -500,7 +500,6 @@ function service(root: string, over: Record<string, unknown> = {}) {
   // sends real notifications to real phones.
   svc.push.announce = (() => {}) as typeof svc.push.announce;
   assert.equal(svc.open(root).ok, true);
-  (svc as never as { runner: Record<string, unknown> }).runner.busy = () => false;
   OPEN.set(root, [...(OPEN.get(root) ?? []), svc]);
   return svc;
 }
@@ -511,9 +510,21 @@ test('a review is refused while the autopilot is driving', async () => {
   const { root, cleanup } = scratch({ handoffs: [1, 2] });
   try {
     const svc = service(root);
-    (svc as never as { runner: Record<string, unknown> }).runner.busy = () => true;
-    (svc as never as { runner: Record<string, unknown> }).runner.current =
-      () => ({ slug: 'alpha', status: 'running', id: 'run-1' });
+    // A driving run in the pool, holding a scope the phase under review is
+    // inside. Since the runner pool landed, "busy" alone is not the refusal —
+    // an overlapping SCOPE is, because a review runs the phase's tests in the
+    // tree the run is editing.
+    (svc as never as { runners: Map<string, unknown> }).runners.set('alpha', {
+      busy: () => true,
+      current: () => ({ slug: 'alpha', status: 'running', id: 'run-1' }),
+      note: () => {},
+      park: () => {},
+    });
+    // Awaited: `admit` resolves on a microtask even when the scope is free, so
+    // firing and forgetting asks about a grant that does not exist yet.
+    await (svc as never as {
+      scheduler: { admit: (r: unknown) => Promise<unknown> };
+    }).scheduler.admit({ slug: 'alpha', phase: 1, runId: 'run-1', scope: ['all'] });
 
     const refused = await svc.resolveQa({ slug: 'alpha', phase: 2 });
     assert.equal(refused.ok, false);

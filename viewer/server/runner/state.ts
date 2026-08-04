@@ -43,21 +43,42 @@ export type RunStatus =
   | 'finished'
   /** A stop was requested; the child is being wound down. */
   | 'stopping'
+  /**
+   * Admitted to the queue and waiting for a scope to clear.
+   *
+   * Deliberately NOT in `IN_FLIGHT`: a queued run has, by definition, done
+   * nothing — no child, no session, no edit to any working tree — so there is
+   * nothing for `reconcileRun` to reclaim and nothing a restart interrupts.
+   * That is what makes it the one status `Service.open()` may re-adopt by
+   * itself. See the scheduler's "no own persistence" note: the pending
+   * `admit()` promises ARE the queue, and this is their durable shadow.
+   */
+  | 'queued'
   /** Nothing is driving this run any more, and nothing recorded why. */
   | 'interrupted';
 
 export type PhaseStatus =
   | 'pending' | 'gated' | 'running' | 'verifying' | 'done'
   | 'failed' | 'interrupted' | 'skipped' | 'parked'
+  /** Waiting on the scheduler for a scope that something else is holding. */
+  | 'queued'
   /** Verified as far as a machine can; the rest is a question for a person. */
   | 'awaiting-verification';
 
-/** Terminal for this run: the loop will not pick these up again by itself. */
+/**
+ * Terminal for this run: the loop will not pick these up again by itself.
+ *
+ * `queued` is absent on purpose — it is the opposite of settled. A queued phase
+ * is one the loop is actively waiting to start, and listing it here would make
+ * `drive()` filter it out of its own candidate list the moment it was admitted.
+ */
 export const SETTLED: readonly PhaseStatus[] = ['done', 'skipped', 'failed', 'parked', 'interrupted'];
 
 /**
  * Statuses that assert work is in flight — each one a claim made by a process
  * that can be killed between writing it and acting on it.
+ *
+ * `queued` is not one of them: it claims the opposite. See `RunStatus`.
  */
 export const IN_FLIGHT: readonly RunStatus[] = ['running', 'pausing', 'stopping', 'waiting', 'frozen'];
 
@@ -175,6 +196,25 @@ export type RunResolution = {
  */
 export const RESOLVABLE: readonly RunStatus[] = ['halted', 'interrupted'];
 
+/** One live session, as the checkpoint records it. */
+export type ChildRef = { pid: number; phase: number; sessionId: string; startedAt: string };
+
+/**
+ * Every lane a run has open, however the checkpoint spells it.
+ *
+ * The single `child` and the `children` map are two recordings of the same
+ * fact, and a run written by an older console only has the first. Reading them
+ * through one function is what keeps "reconcile a one-lane run" and "reconcile
+ * a three-lane run" the same code path — the alternative is two orphan checks
+ * that drift, and the one that drifts is the one that leaves a live session
+ * editing a tree nobody is watching.
+ */
+export function childrenOf(state: RunState): ChildRef[] {
+  const lanes = state.children ? Object.values(state.children) : [];
+  if (lanes.length) return lanes;
+  return state.child ? [state.child] : [];
+}
+
 export type Autonomy = 'halt-on-everything' | 'keep-going';
 
 /**
@@ -221,8 +261,29 @@ export type RunState = {
   createdAt: string;
   updatedAt: string;
   activePhase: number | null;
-  /** Set while a child is alive, so a restarted console can tell what it interrupted. */
-  child: { pid: number; phase: number; sessionId: string; startedAt: string } | null;
+  /**
+   * Set while a child is alive, so a restarted console can tell what it
+   * interrupted.
+   *
+   * **A MIRROR of one live lane, and load-bearing as such.** A run may now
+   * drive several phases at once (`children`), but this field is what every
+   * console built before lanes reads to answer "is something running, and
+   * what?" — including `reconcileRun`'s own orphan check, the freeze/stop
+   * paths, and any older build of this client still open in a browser tab.
+   * Dropping it in favour of `children` alone would make all of them report a
+   * busy run as idle, which is the one lie this file exists to prevent. So the
+   * runner writes BOTH: `children[phase]` for every live lane, and this for
+   * whichever lane is currently the mirror. See `Runner.attempt`.
+   */
+  child: ChildRef | null;
+  /**
+   * Every live lane, keyed by phase number as a string.
+   *
+   * Absent on a run written before lanes existed, which is exactly why every
+   * reader spells it `children ?? {child}` — one lane recorded the old way and
+   * one recorded the new way must reconcile identically.
+   */
+  children?: Record<string, ChildRef>;
   waitUntil: string | null;
   halt: { at: string; reason: string; phase?: number } | null;
   /**
@@ -262,6 +323,16 @@ export type RunState = {
   phaseOptions?: Record<string, PhaseOptions>;
   /** Skills every phase of this run invokes, on top of the plan's own. */
   skills?: string[];
+  /**
+   * How many phases of THIS run may be in flight at once.
+   *
+   * Absent means the console's own `--max-sessions`. A run may ask for fewer
+   * — a plan whose phases share a repo gains nothing from lanes and an
+   * operator may simply want to watch one thing at a time — but never for
+   * more: the scheduler's global cap is about the machine, and a run does not
+   * get to raise it.
+   */
+  maxParallel?: number;
   /**
    * How much this run may do without stopping to ask — `guarded` (the default
    * and what every run did before profiles existed), `trusted`, or `bypass`.
@@ -331,6 +402,7 @@ export type NewRunOptions = {
   phaseOptions?: Record<string, PhaseOptions>;
   skills?: string[];
   permissionProfile?: PermissionProfile;
+  maxParallel?: number;
 };
 
 export function newRun(opts: NewRunOptions): RunState {
@@ -379,6 +451,7 @@ export function newRun(opts: NewRunOptions): RunState {
     ...(opts.onlyPhases?.length ? { onlyPhases: [...opts.onlyPhases] } : {}),
     ...(opts.phaseOptions ? { phaseOptions: { ...opts.phaseOptions } } : {}),
     ...(opts.skills?.length ? { skills: [...opts.skills] } : {}),
+    ...(opts.maxParallel && opts.maxParallel > 0 ? { maxParallel: opts.maxParallel } : {}),
     // **Absent still means `guarded` when reading**, and that does not change:
     // a run file written before profiles existed must not become trusted because
     // the default moved under it. So `guarded` is the one value written as an
@@ -414,6 +487,24 @@ export function saveRun(state: RunState): void {
  * ------------------------------------------------------------------ */
 
 /**
+ * Which runs are genuinely being driven right now.
+ *
+ * A single id was the whole answer while one `Runner` existed. With a pool
+ * there are several, and the shape has to widen without breaking the dozens of
+ * callers that pass one id — so both are accepted and every reader goes
+ * through `isLive`. Passing the wrong shape is the failure that matters here:
+ * a Set silently compared with `===` would mark every live run as dead and
+ * reconcile a fleet of working runs into `interrupted`.
+ */
+export type LiveRuns = string | null | undefined | ReadonlySet<string>;
+
+/** Is this run one of the ones something is actually driving? */
+export function isLive(id: string, live: LiveRuns): boolean {
+  if (!live) return false;
+  return typeof live === 'string' ? live === id : live.has(id);
+}
+
+/**
  * Make a loaded run tell the truth about whether anything is driving it.
  *
  * `status: "running"` is not an observation, it is a claim — written by a
@@ -433,8 +524,8 @@ export function saveRun(state: RunState): void {
  * Returns whether anything changed, so callers only write when there is
  * something to write.
  */
-export function reconcileRun(state: RunState, liveRunId?: string | null): boolean {
-  if (state.id === liveRunId) return false;
+export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
+  if (isLive(state.id, liveRunId)) return false;
   if (!IN_FLIGHT.includes(state.status)) return false;
 
   const at = new Date().toISOString();
@@ -442,8 +533,14 @@ export function reconcileRun(state: RunState, liveRunId?: string | null): boolea
   // The dangerous case: the console went away but its child did not. That
   // session is still editing the working tree, unobserved. Say so precisely —
   // with the pid — rather than reclaiming a run something is still writing.
-  if (state.child && pidAlive(state.child.pid)) {
-    const frozen = state.freeze?.pid === state.child.pid;
+  //
+  // Every lane is checked, not just the mirror: a three-lane run whose mirror
+  // happened to be the one that exited would otherwise reconcile to
+  // `interrupted` while two sessions carried on writing the tree.
+  const alive = childrenOf(state).filter((child) => pidAlive(child.pid));
+  if (alive.length) {
+    const first = alive[0];
+    const frozen = alive.some((child) => state.freeze?.pid === child.pid);
     state.status = 'parked';
     state.halt ??= {
       at,
@@ -451,17 +548,21 @@ export function reconcileRun(state: RunState, liveRunId?: string | null): boolea
       // nothing is scheduling it, so it will sit stopped forever waiting for a
       // console that is not coming back.
       reason: frozen
-        ? `phase ${state.child.phase} was frozen by the operator (pid ${state.child.pid}) and the `
+        ? `phase ${first.phase} was frozen by the operator (pid ${first.pid}) and the `
           + 'console that stopped it is gone, so nothing will start it again. Continue it with '
-          + `\`kill -CONT ${state.child.pid}\`, or stop it with \`kill ${state.child.pid}\` and run the phase again.`
-        : `a session from an earlier console is still running (pid ${state.child.pid}, `
-          + `phase ${state.child.phase}). Let it finish or stop it, then continue this run.`,
-      phase: state.child.phase,
+          + `\`kill -CONT ${first.pid}\`, or stop it with \`kill ${first.pid}\` and run the phase again.`
+        : alive.length === 1
+          ? `a session from an earlier console is still running (pid ${first.pid}, `
+            + `phase ${first.phase}). Let it finish or stop it, then continue this run.`
+          : `${alive.length} sessions from an earlier console are still running (`
+            + `${alive.map((child) => `pid ${child.pid}, phase ${child.phase}`).join('; ')}). `
+            + 'Let them finish or stop them, then continue this run.',
+      phase: first.phase,
     };
     return true;
   }
 
-  const phase = state.child?.phase ?? state.activePhase ?? undefined;
+  const phase = childrenOf(state)[0]?.phase ?? state.activePhase ?? undefined;
   state.halt ??= {
     at,
     reason: phase === undefined
@@ -471,6 +572,9 @@ export function reconcileRun(state: RunState, liveRunId?: string | null): boolea
   };
   state.status = 'interrupted';
   state.child = null;
+  // Every lane, not only the mirror — a leftover `children` entry would keep
+  // presenting a dead session as live on every page that reads the map.
+  delete state.children;
   // A pause waiting for a phase that is no longer running will never arrive.
   state.pause = null;
   // Same for a freeze whose child is already gone: the block would otherwise
@@ -590,13 +694,13 @@ export function resolveRunsAgainst(
 }
 
 /** Reclaim on read, and make the correction stick so it is done once. */
-function settle(state: RunState, liveRunId?: string | null): RunState {
+function settle(state: RunState, liveRunId?: LiveRuns): RunState {
   if (!reconcileRun(state, liveRunId)) return state;
   try { saveRun(state); } catch { /* a read must not fail because the disk did */ }
   return state;
 }
 
-export function loadRun(root: string, slug: string, id: string, liveRunId?: string | null): RunState | null {
+export function loadRun(root: string, slug: string, id: string, liveRunId?: LiveRuns): RunState | null {
   try {
     return settle(JSON.parse(readFileSync(runFile(root, slug, id), 'utf8')) as RunState, liveRunId);
   } catch {
@@ -605,7 +709,7 @@ export function loadRun(root: string, slug: string, id: string, liveRunId?: stri
 }
 
 /** Every run recorded for a plan, newest first. */
-export function listRuns(root: string, slug: string, liveRunId?: string | null): RunState[] {
+export function listRuns(root: string, slug: string, liveRunId?: LiveRuns): RunState[] {
   const dir = runDir(root, slug);
   if (!existsSync(dir)) return [];
   const runs: RunState[] = [];
@@ -623,7 +727,7 @@ export function listRuns(root: string, slug: string, liveRunId?: string | null):
  * most recent. A finished run is still worth showing — it is the record of what
  * happened — but it must never be silently resumed.
  */
-export function latestRun(root: string, slug: string, liveRunId?: string | null): RunState | null {
+export function latestRun(root: string, slug: string, liveRunId?: LiveRuns): RunState | null {
   const runs = listRuns(root, slug, liveRunId);
   return runs.find((r) => r.status !== 'finished') ?? runs[0] ?? null;
 }

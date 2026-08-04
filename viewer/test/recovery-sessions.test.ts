@@ -534,14 +534,46 @@ function service(root: string) {
 
 test.after(() => rmSync(STATE_HOME, { recursive: true, force: true }));
 
+/**
+ * Put a driving run into the pool, the way the real lookup finds one.
+ *
+ * `busy()` is what makes a runner count as live; without it the service reads
+ * as driving nothing at all.
+ */
+function drives(
+  svc: ReturnType<typeof service>, slug: string, runId: string, status = 'running',
+): void {
+  (svc as never as { runners: Map<string, unknown> }).runners.set(slug, {
+    busy: () => true,
+    current: () => ({ slug, status, id: runId }),
+    note: () => {},
+    park: () => {},
+  });
+}
+
+/**
+ * …and give it a live grant, which is what a scope collision is measured
+ * against.
+ *
+ * Awaited, always: `admit` resolves on a microtask even when the scope is
+ * free, so a caller that fires and forgets asks about a grant that does not
+ * exist yet and gets told — correctly, and uselessly — that nothing collides.
+ */
+async function holds(
+  svc: ReturnType<typeof service>, runId: string, slug: string, phase: number, scope: string[],
+): Promise<void> {
+  const scheduler = (svc as never as {
+    scheduler: { admit: (r: unknown) => Promise<unknown> };
+  }).scheduler;
+  await scheduler.admit({ slug, phase, runId, scope });
+}
+
 test('minting is refused while the autopilot is driving', async () => {
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
     // Exactly what the loop looks like from outside: busy, with a current run.
-    (svc as never as { runner: Record<string, unknown> }).runner.busy = () => true;
-    (svc as never as { runner: Record<string, unknown> }).runner.current =
-      () => ({ slug: 'alpha', status: 'running', id: 'run-1' });
+    drives(svc, 'alpha', 'run-1');
 
     const refused = await svc.resolveRecovery({ class: 'halted-verification', slug: 'alpha', phase: 2 });
     assert.equal(refused.ok, false);
@@ -555,25 +587,35 @@ test('minting is refused while the autopilot is driving', async () => {
   } finally { cleanup(); }
 });
 
-test('the driving-run refusal asks about the TARGET plan, not "the" run', async () => {
-  // Both arms refuse today — one console, one working tree — but they refuse for
-  // different reasons, and phase 4 keeps only the first. A check written as
-  // "is anything busy" would then refuse a recovery on alpha because beta was
-  // mid-phase, and the wording would blame the wrong plan either way.
+test('a run on another plan refuses only when its SCOPE overlaps the one being recovered', async () => {
+  // This used to be unconditional — one console, one working tree. Phase 4
+  // replaced that arm with a scope intersection, which is the whole point of
+  // the mechanism: two plans in different repositories cannot collide, and
+  // refusing them bought nothing but a serialised operator.
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
-    (svc as never as { runner: Record<string, unknown> }).runner.busy = () => true;
-    (svc as never as { runner: Record<string, unknown> }).runner.current =
-      () => ({ slug: 'beta', status: 'running', id: 'run-2' });
+    drives(svc, 'beta', 'run-2');
 
+    // Alpha's plan declares no Repos, so it would read as `all` — the
+    // conservative default, which intersects everything. Name it explicitly so
+    // this test is about the intersection rule rather than about that default.
+    (svc as never as { scopeOf: unknown }).scopeOf = () => ['alpha-only-repo'];
+
+    // Beta is working somewhere alpha P2 does not touch.
+    await holds(svc, 'run-2', 'beta', 1, ['beta-only-repo']);
+    const allowed = await svc.resolveRecovery({ class: 'halted-verification', slug: 'alpha', phase: 2 });
+    assert.equal(allowed.ok, true, 'disjoint repos have no reason to serialise');
+
+    // …and the same run, now also holding a scope alpha P2 is inside, does
+    // refuse — naming the plan that is running, not the one being recovered.
+    await holds(svc, 'run-2', 'beta', 2, ['alpha-only-repo']);
     const refused = await svc.resolveRecovery({ class: 'halted-verification', slug: 'alpha', phase: 2 });
     assert.equal(refused.ok, false);
     if (!refused.ok) {
       assert.equal(refused.status, 409);
       assert.match(refused.error, /beta is mid-run/, 'it names the plan that is actually running');
-      assert.match(refused.error, /shares this working tree/,
-        'and gives the reason phase 4 will replace with a scope check, not the one about alpha');
+      assert.match(refused.error, /alpha-only-repo/, 'and the scope that made it a collision');
     }
   } finally { cleanup(); }
 });
@@ -582,7 +624,6 @@ test('a second recovery for the same phase is refused, and names the first', asy
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
-    (svc as never as { runner: Record<string, unknown> }).runner.busy = () => false;
     // One live recovery session for alpha P2, as the registry would report it.
     (svc as never as { terminals: Record<string, unknown> }).terminals.state = () => ({
       sessions: [{
@@ -610,7 +651,6 @@ test('an auth recovery refuses to mint while the CLI is signed out', async () =>
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
-    (svc as never as { runner: Record<string, unknown> }).runner.busy = () => false;
     svc.authStatus = (async () => ({ loggedIn: false })) as typeof svc.authStatus;
 
     const refused = await svc.resolveRecovery({ class: 'auth-interrupted', slug: 'alpha', phase: 2 });
@@ -638,7 +678,6 @@ test('a repair with nothing to repair is refused rather than invented', async ()
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
-    (svc as never as { runner: Record<string, unknown> }).runner.busy = () => false;
     const refused = await svc.resolveRecovery({ class: 'plan-repair', slug: 'alpha' });
     assert.equal(refused.ok, false);
     if (!refused.ok) assert.match(refused.error, /no plan errors to repair/);
@@ -649,7 +688,6 @@ test('an unknown plan is a 404, not an empty briefing', async () => {
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
-    (svc as never as { runner: Record<string, unknown> }).runner.busy = () => false;
     const refused = await svc.resolveRecovery({ class: 'interrupted-resume', slug: 'nope', phase: 1 });
     assert.equal(refused.ok, false);
     if (!refused.ok) assert.equal(refused.status, 404);
@@ -660,7 +698,6 @@ test('the resolved briefing is read from the board, not from the request', async
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
-    (svc as never as { runner: Record<string, unknown> }).runner.busy = () => false;
     const resolved = await svc.resolveRecovery({ class: 'interrupted-resume', slug: 'alpha', phase: 2 });
     assert.equal(resolved.ok, true);
     if (!resolved.ok) return;
