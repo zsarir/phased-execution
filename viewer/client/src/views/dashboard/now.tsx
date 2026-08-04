@@ -38,6 +38,7 @@ const RUN_WORD: Record<string, string> = {
   pausing: 'pausing',
   frozen: 'frozen',
   stopping: 'stopping',
+  halting: 'halting',
   halted: 'halted',
   interrupted: 'interrupted',
   finished: 'finished',

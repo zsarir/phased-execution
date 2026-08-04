@@ -988,7 +988,7 @@ export async function handleApi(
             return true;
           }
           case 'skip': json(res, 200, { run: service.skipPhase(slug, Number(body.phase)) }); return true;
-          case 'retry': json(res, 200, { run: service.retryPhase(slug, Number(body.phase)) }); return true;
+          case 'retry': json(res, 200, { run: await service.retryPhase(slug, Number(body.phase)) }); return true;
           // The middle ground between Retry and Skip: re-check what is on disk,
           // or ask the phase's own session to finish what it started. Every one
           // of these ends in the same three checks, so none of them can mark a

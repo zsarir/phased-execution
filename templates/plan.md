@@ -73,6 +73,9 @@ it is in fact committed at sha XXXXXXX. Use `git log` as the source of truth; ig
   verifies (and QA re-checks, when enabled).
   1. <e.g. "POST /x with an empty body returns HTTP 400">
   2. <…>
+<!-- Verification commands must be WHOLE and copy-runnable (no `…` fragments — the runner refuses
+     them into person-checks and, when nothing runnable remains, parks the phase at boarding).
+     cwd-sensitive commands (docker compose / pnpm / npm / task / pytest) need `- **Verify in:** <path>`. -->
 - **Verification:** the runnable command/test that proves each exit criterion above — phase-finish runs
   these green before handing off. Re-check a CLI flag's current docs before relying on its semantics.
   <!-- Monorepo? Add "- **Verify in:** <repo-relative dir>" to run them somewhere other than the root.

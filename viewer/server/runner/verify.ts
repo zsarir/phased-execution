@@ -77,7 +77,9 @@
  */
 
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
+import { log } from '../log.ts';
 import type { VerifyRun, VerifySummary } from './state.ts';
 
 /** Kept in step with `GATE_CMD_DENY` in scripts/phase-graph.sh — same intent. */
@@ -668,8 +670,36 @@ export async function verifyPhase(
   };
 }
 
+/**
+ * Directories a verification's PATH must be able to see.
+ *
+ * Under launchd the plist bakes the PATH of whatever shell ran the installer,
+ * and a thin one turns a green suite into `"python": executable file not found`
+ * at 3 a.m. — a halt that blames the code when only the environment failed
+ * (that exact halt stopped a real run). APPENDED, never prepended: the existing
+ * PATH keeps deciding which toolchain wins, and only otherwise-invisible
+ * binaries are rescued. The amendment is logged once per process so the plist
+ * defect stays visible instead of papered over — the durable fix is re-running
+ * `deploy/agent.sh install` from a shell with a full PATH.
+ */
+const STANDARD_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
+let pathAmendWarned = false;
+
+export function hardenedPath(path: string | undefined): { path: string; added: string[] } {
+  const current = (path ?? '').split(':').filter(Boolean);
+  const have = new Set(current);
+  const added = STANDARD_DIRS.filter((dir) => !have.has(dir) && existsSync(dir));
+  return { path: [...current, ...added].join(':'), added };
+}
+
 function runOne(command: string, opts: VerifyOptions): Promise<VerifyRun> {
   const started = Date.now();
+  const base = { ...(opts.env ?? process.env) };
+  const hardened = hardenedPath(base.PATH);
+  if (hardened.added.length && !pathAmendWarned) {
+    pathAmendWarned = true;
+    log.warn('verify.path-amended', { added: hardened.added });
+  }
   return new Promise((resolve) => {
     execFile(
       'bash', ['-c', command],
@@ -678,7 +708,7 @@ function runOne(command: string, opts: VerifyOptions): Promise<VerifyRun> {
         timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxBuffer: 16 * 1024 * 1024,
         signal: opts.signal,
-        env: { ...(opts.env ?? process.env), NO_COLOR: '1', TERM: 'dumb', CI: '1' },
+        env: { ...base, PATH: hardened.path, NO_COLOR: '1', TERM: 'dumb', CI: '1' },
       },
       (error, stdout, stderr) => {
         const failure = error as (Error & { code?: unknown; killed?: boolean }) | null;

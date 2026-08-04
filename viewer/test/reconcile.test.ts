@@ -91,8 +91,21 @@ test('every in-flight status is reclaimable, and the list is the one the code us
   for (const status of IN_FLIGHT) {
     const state = crashedRun('/tmp/whatever', { status });
     assert.equal(reconcileRun(state, null), true, `${status} claims work in flight and must be reclaimed`);
-    assert.equal(state.status, 'interrupted');
+    // A dead `halting` run DID record why it stopped — it finalizes to the
+    // `halted` its drive loop never got to write. `interrupted` stays the word
+    // for "nothing recorded why".
+    assert.equal(state.status, status === 'halting' ? 'halted' : 'interrupted');
   }
+});
+
+test('a dead halting run keeps its own halt reason on the way to halted', () => {
+  const state = crashedRun('/tmp/whatever', {
+    status: 'halting',
+    halt: { at: '2026-08-04T12:00:00.000Z', reason: 'phase 2 did not verify: stub', phase: 2 },
+  });
+  assert.equal(reconcileRun(state, null), true);
+  assert.equal(state.status, 'halted');
+  assert.equal(state.halt?.reason, 'phase 2 did not verify: stub', 'the reason is the run\'s own, not a reconstruction');
 });
 
 test('an existing halt reason is preserved, not overwritten', () => {

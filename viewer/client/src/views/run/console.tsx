@@ -117,6 +117,13 @@ export interface SessionFilter {
   runId: string;
   /** Omitted on the aggregate pane: every lane of the run, as before. */
   phase?: number | undefined;
+  /**
+   * Run-level pane: keep the runner's own narration (`phase`, `verify`) and
+   * drop the session firehose. An unfiltered stream is two sessions' sentences
+   * spliced into one paragraph the moment a second lane opens — the lanes own
+   * their text; the run pane owns what the RUNNER did between them.
+   */
+  omitStream?: boolean | undefined;
 }
 
 /**
@@ -145,7 +152,7 @@ export function useSessionStream(
   enabled: boolean,
   filter: SessionFilter,
 ): void {
-  const { runId, phase } = filter;
+  const { runId, phase, omitStream } = filter;
   useEffect(() => {
     if (!enabled || !runId) return undefined;
     const as = (name: 'stream' | 'phase' | 'verify') => (data: unknown) => {
@@ -158,12 +165,15 @@ export function useSessionStream(
       record(name, payload);
     };
     const offs = [
-      onSse('run:stream', as('stream')),
+      // Not subscribed at all rather than filtered out: the firehose is the
+      // heaviest event on the wire, and a pane that drops every frame should
+      // not be paying to receive them.
+      ...(omitStream ? [] : [onSse('run:stream', as('stream'))]),
       onSse('run:phase', as('phase')),
       onSse('run:verify', as('verify')),
     ];
     return () => { for (const off of offs) off(); };
-  }, [record, enabled, runId, phase]);
+  }, [record, enabled, runId, phase, omitStream]);
 }
 
 /**

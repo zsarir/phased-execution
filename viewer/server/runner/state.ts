@@ -39,6 +39,16 @@ export type RunStatus =
   | 'parked'
   /** Stopped on a condition that must not be automated past. */
   | 'halted'
+  /**
+   * A halt is recorded and no new phase may board; live lanes are draining.
+   *
+   * In `IN_FLIGHT`, unlike `halted`: sessions are still editing working trees,
+   * so a console that dies mid-drain must have `reconcileRun` pid-check them
+   * rather than read "halted" as final — that hole is how orphan sessions kept
+   * writing with no card saying so. Flips to `halted` when the last lane
+   * settles. The halt card itself keys on `run.halt`, which is already set.
+   */
+  | 'halting'
   /** Nothing left to do on this plan. */
   | 'finished'
   /** A stop was requested; the child is being wound down. */
@@ -80,7 +90,7 @@ export const SETTLED: readonly PhaseStatus[] = ['done', 'skipped', 'failed', 'pa
  *
  * `queued` is not one of them: it claims the opposite. See `RunStatus`.
  */
-export const IN_FLIGHT: readonly RunStatus[] = ['running', 'pausing', 'stopping', 'waiting', 'frozen'];
+export const IN_FLIGHT: readonly RunStatus[] = ['running', 'pausing', 'stopping', 'waiting', 'frozen', 'halting'];
 
 /** The same, per phase. A phase in one of these had a live loop behind it. */
 const PHASE_IN_FLIGHT: readonly PhaseStatus[] = ['running', 'verifying', 'awaiting-verification'];
@@ -581,7 +591,10 @@ export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
       : `nothing has been driving this run since ${state.updatedAt} — the console stopped while phase ${phase} was in flight, without recording why.`,
     phase,
   };
-  state.status = 'interrupted';
+  // A dead `halting` run DID record why it stopped — its halt is the reason —
+  // so it finalizes to the `halted` its drive loop never got to write.
+  // `interrupted` remains the word for "nothing recorded why".
+  state.status = state.status === 'halting' ? 'halted' : 'interrupted';
   state.child = null;
   // Every lane, not only the mirror — a leftover `children` entry would keep
   // presenting a dead session as live on every page that reads the map.

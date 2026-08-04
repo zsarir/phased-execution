@@ -25,7 +25,7 @@ import { navigate, type Route } from '@/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // Through `pane`, deliberately — see the re-export note there: a second
 // importable module in this shared chunk renames it and precaches xterm.
-import { EndedBanner, SessionGone, TerminalPane } from '../terminal/pane';
+import { EndedBanner, SessionGone, SessionVitals, TerminalPane } from '../terminal/pane';
 import { Launcher, type LaunchBody } from './launcher';
 import { MODE_TITLE, modeName } from './modes';
 import { NewPlanWizardButton } from './wizard';
@@ -213,6 +213,9 @@ export default function AgentView({ route }: { route: Route }) {
 
         {open && (
           <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* Plan · phase · elapsed · ETA — the four facts that say what this
+                session IS, before the mode chip says how it was launched. */}
+            <SessionVitals session={open} />
             {/* What the process was STARTED under. ⇧Tab changes the mode inside
                 the session and tells nothing out here, so the chip is a record
                 of the launch and the title says exactly that — a label that

@@ -262,13 +262,38 @@ function mount(node: React.ReactElement) {
   return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   localStorage.clear();
+  // Most of this file exercises the FLAT board (promotion, prompts, ordering)
+  // — still one toggle away, no longer the default. The grouped default has
+  // its own test below.
+  const { setPrefs } = await import('@/lib/prefs');
+  setPrefs({ readyGroup: false });
   state.mockResolvedValue({ allowRun: true, allowWrites: false, autopilot: true, unread: 0 });
   plans.mockResolvedValue([plan({ ready: [2], nextBest: { phase: 2, unblocks: 3 } })]);
   planDetail.mockResolvedValue(detail([phaseView()]));
   prompt.mockResolvedValue('boot me');
+});
+
+describe('the default view', () => {
+  it('groups departures by PLAN out of the box — phases are known by their plan', async () => {
+    const { PREF_DEFAULTS, setPrefs } = await import('@/lib/prefs');
+    // The shipped default IS grouped (the module-level pref cache carries the
+    // flat setting the beforeEach wrote, so the default is pinned on the
+    // constant and the grouped rendering exercised explicitly).
+    expect(PREF_DEFAULTS.readyGroup).toBe(true);
+    setPrefs({ readyGroup: true });
+    const { default: ReadyView } = await import('./index');
+    mount(<ReadyView />);
+
+    // The grouped board leads with the plan — its title linking to the plan
+    // page, its slug beneath (two plans can share a title prefix)…
+    expect(await screen.findByRole('link', { name: 'Alpha plan' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'alpha' })).toBeInTheDocument();
+    // …not with the flat board's single promoted departure.
+    expect(screen.queryByText(/Also boarding/i)).toBeNull();
+  });
 });
 
 describe('the board', () => {

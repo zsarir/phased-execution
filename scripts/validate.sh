@@ -40,8 +40,13 @@ if [ -d "$ho_dir" ]; then
 
     phnum="$(grep -m1 '^phase:' "$f" | sed 's/^phase:[[:space:]]*//; s/[[:space:]]*#.*$//' || true)"
     if [ -n "$phnum" ]; then
-      want="$("$BASH_BIN" "$SCRIPT_DIR/phase-graph.sh" "$slug" --deps "$phnum" 2>/dev/null | tr ' ' '\n' | sed '/^$/d' | sort -n | tr '\n' ' ' | sed 's/ *$//')"
-      got="$(grep -m1 '^depends_on:' "$f" | sed 's/^depends_on:[[:space:]]*\[//; s/\].*$//; s/,/ /g' | tr '\n' ' ' | tr -s ' ' | tr ' ' '\n' | sed '/^$/d' | sort -n | tr '\n' ' ' | sed 's/ *$//')"
+      # `|| true` on both: under `set -eo pipefail`, a handoff with NO
+      # depends_on line made grep fail the pipeline and killed this validator
+      # mid-loop — exit 1 with no ✗ and no summary, the exact silent-red shape
+      # this script exists to prevent. A missing line must be REPORTED as a
+      # disagreement, not die unexplained.
+      want="$("$BASH_BIN" "$SCRIPT_DIR/phase-graph.sh" "$slug" --deps "$phnum" 2>/dev/null | tr ' ' '\n' | sed '/^$/d' | sort -n | tr '\n' ' ' | sed 's/ *$//' || true)"
+      got="$(grep -m1 '^depends_on:' "$f" | sed 's/^depends_on:[[:space:]]*\[//; s/\].*$//; s/,/ /g' | tr '\n' ' ' | tr -s ' ' | tr ' ' '\n' | sed '/^$/d' | sort -n | tr '\n' ' ' | sed 's/ *$//' || true)"
       [ "$want" = "$got" ] || { echo "  ✗ $base: depends_on [$got] disagrees with plan graph [$want]" >&2; problems=$((problems + 1)); }
     fi
   done

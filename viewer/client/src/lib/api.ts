@@ -314,11 +314,9 @@ export interface ConsoleState {
   watcher?: { ok?: boolean; detail?: string };
   health?: unknown;
   /**
-   * The first live run, kept for every consumer written before the pool —
-   * including an older build of this client still open in a tab.
+   * Every live run. The singular `run` field is gone — "the first live run of
+   * ANY plan" reads plan B's run while looking at plan A the moment two drive.
    */
-  run?: unknown;
-  /** Every live run. What anything new should read. */
   runs?: unknown[];
   /** How full the console is, straight from the scheduler. */
   concurrency?: Concurrency;
@@ -632,6 +630,10 @@ export type RunStatus =
   // is holding. A loop IS behind it (that is what is awaiting admission), but it
   // has spawned nothing and holds no lock. See `server/runner/state.ts`.
   | 'queued'
+  // `halting` — a halt is recorded (the card is already up, it keys on
+  // `run.halt`) and the remaining lanes are draining; flips to `halted` when
+  // the last one settles. Live in every way that matters to the controls.
+  | 'halting'
   | 'halted' | 'finished' | 'stopping' | 'interrupted';
 
 export type PhaseStatus =

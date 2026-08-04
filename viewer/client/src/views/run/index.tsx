@@ -37,11 +37,13 @@ import { useCallback, useState } from 'react';
 import {
   Empty, Spinner, Tabs, TabsContent, TabsList, TabsTrigger, toast,
 } from '@/components/ui';
-import { api, type PlanDetail, type QueueEntry, type RunState } from '@/lib/api';
+import { api, type PhaseEta, type PlanDetail, type QueueEntry, type RunState } from '@/lib/api';
 import {
   useApprovals, useAuth, useConsoleState, useQueue, useRun, useRunScopes, useSessions, useSkills,
 } from '@/lib/queries';
 import { keys } from '@/lib/queries';
+import { useNow } from '@/lib/clock';
+import { elapsed } from '@/lib/format';
 import { classifyRun, liveRecovery, type RecoveryClass } from '@/lib/recovery';
 import { startRecovery } from '@/lib/start-recovery';
 import { useQueryClient } from '@tanstack/react-query';
@@ -51,7 +53,7 @@ import { Controls } from './controls';
 import { LiveConsole } from './console';
 import { RunHeader, RunTiles } from './header';
 import { PhaseTable } from './phase-table';
-import { QueuedPane, SessionPanes, laneId, lanesOf, queueEntryFor } from './session-panes';
+import { QueuedPane, SessionPanes, laneId, lanesOf, queueEntryFor, resolveTab, type Lane } from './session-panes';
 import { AuthCard, RunStatusStack, StaleServerNote, looksLikeAuthFailure } from './status';
 import { RunHistory } from './history';
 
@@ -271,6 +273,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           enabled={enabled}
           entries={admission?.entries}
           scopes={scopes?.scopes}
+          phaseEta={detailRun?.phaseEta ?? []}
         />
       ) : (
         <LiveConsole lines={[]} subtitle="idle" />
@@ -307,6 +310,7 @@ function SessionTabs({
   enabled,
   entries,
   scopes,
+  phaseEta,
 }: {
   slug: string;
   run: RunState;
@@ -315,15 +319,15 @@ function SessionTabs({
   enabled: boolean;
   entries?: QueueEntry[] | undefined;
   scopes?: { phase: number; scope: string[]; conflicts: string[] }[] | undefined;
+  phaseEta?: PhaseEta[] | undefined;
 }) {
-  const [picked, setPicked] = useState('run');
+  const [picked, setPicked] = useState<string | null>(null);
   const lanes = lanesOf(run);
+  // One clock for every lane subtitle — ticking only while something runs.
+  const now = useNow(live && lanes.some((lane) => !lane.queued));
 
-  // A lane ends while you are reading it — that is the normal case, not an edge
-  // one. Falling back to Run beats leaving the tab list pointing at a pane that
-  // no longer has a trigger, which Radix renders as no panel at all.
-  const ids = new Set(['run', ...lanes.map(laneId)]);
-  const value = ids.has(picked) ? picked : 'run';
+  // Explicit pick while it exists → the sole live lane → Run. See resolveTab.
+  const value = resolveTab(picked, lanes);
 
   return (
     <Tabs value={value} onValueChange={setPicked}>
@@ -356,7 +360,8 @@ function SessionTabs({
           live={live}
           allowRun={allowRun}
           enabled={enabled}
-          title="Session console"
+          runLevel
+          title="Run console"
           subtitle={run.activePhase != null ? `phase ${run.activePhase} · ${run.model}` : run.status}
           askPhase={run.activePhase}
         />
@@ -383,13 +388,29 @@ function SessionTabs({
               live={live}
               allowRun={allowRun}
               enabled={enabled}
-              subtitle={`${lane.status} · ${run.model}`}
+              subtitle={laneSubtitle(lane, run, now, phaseEta)}
             />
           )}
         </TabsContent>
       ))}
     </Tabs>
   );
+}
+
+/**
+ * A lane pane's one-line vitals: status · model · elapsed / ~estimate.
+ *
+ * The same facts the phases table shows, repeated where the operator is
+ * actually looking while a session runs — the pane header — so "how long has
+ * this been going and is that normal" never needs a scroll.
+ */
+function laneSubtitle(lane: Lane, run: RunState, now: number, phaseEta?: PhaseEta[]): string {
+  const record = run.phases[String(lane.phase)];
+  const started = record?.startedAt ? Date.parse(record.startedAt) : null;
+  const eta = phaseEta?.find((estimate) => estimate.phase === lane.phase);
+  const clock = started != null ? elapsed(Math.max(0, now - started)) : null;
+  const withEta = clock && eta ? `${clock} / ~${elapsed(eta.estMs)}` : clock;
+  return [lane.status, run.model, withEta].filter(Boolean).join(' · ');
 }
 
 export default RunView;

@@ -25,7 +25,7 @@
 
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { accessSync, constants as fsConstants, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 
@@ -35,12 +35,12 @@ import { run as engineRun, readMemoryBlock, readGateStatus, readLint, readText, 
 import { skillDirective } from '../skills.ts';
 import { classify, fallbackChain, nextModel, type Disposition } from './errors.ts';
 import { markFor, spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
-import { verifyPhase } from './verify.ts';
+import { extractCommands, hardenedPath, verifyPhase } from './verify.ts';
 import { failureContext } from './failure-context.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
   type Autonomy, type ChildRef, type PhaseOptions, type PhaseRecord, type RunState,
-  type PhaseStatus, type VerifySummary,
+  type PhaseStatus, type RunStatus, type VerifySummary,
 } from './state.ts';
 import {
   AdmissionAborted, autopilotOwner, type Scheduler, type ScopeGrant,
@@ -323,6 +323,11 @@ export class Runner {
   private handle: SpawnHandle | null = null;
   /** Set when the operator stopped us, so exit 143 is not read as a mystery. */
   private stopRequested = false;
+  /**
+   * Fired by `halt()` so lanes sleeping on a retry backoff or a usage window
+   * wake and re-check, instead of spawning another attempt on a stopped run.
+   */
+  private haltSignal = new EventTarget();
   /** Path to the 0600 settings file carrying this run's deny rules and hook. */
   private settingsPath: string | null = null;
   /** Idempotency keys of operator messages already written, newest last. */
@@ -545,6 +550,14 @@ export class Runner {
       // the run that stopped, not the one about to start.
       this.state.freeze = null;
       delete this.state.finishedReason;
+      // And for the stop's paperwork. A resolution — auto or manual — annotates
+      // the stop that was showing, and a reopen-veto protects that annotation;
+      // resuming ends the stop they were both about. Left in place, a stale
+      // `resolved` made a resumed run's SECOND halt raise no card at all
+      // (autoResolveRun short-circuits on it, and the UI reads resolved as
+      // dismissed) — a real run halted twice and said nothing the second time.
+      this.state.resolved = null;
+      this.state.reopenedAt = null;
       const blocked = this.adopt(this.state);
       if (blocked) { this.persist(); return this.state; }
       if (options.model) this.state.model = options.model;
@@ -657,6 +670,11 @@ export class Runner {
     // this works.
     state.halt = null;
     delete state.finishedReason;
+    // Same rule as `start` on resume: the resolution and any reopen-veto were
+    // about the stop this recovery is ending, and a stale `resolved` silences
+    // the card the NEXT stop should raise.
+    state.resolved = null;
+    state.reopenedAt = null;
     state.status = 'running';
     state.activePhase = options.phase;
 
@@ -746,6 +764,10 @@ export class Runner {
       this.deps.scheduler?.release(lane.grant);
       this.clearFreezeTimer(lane);
       this.lanes.delete(options.phase);
+      // A recovery has no drive loop to finalize a drain: its halt above was
+      // written while its own lane was still in the table, so with that lane
+      // gone the run lands on the final word here.
+      if (state.status === 'halting') state.status = 'halted';
       this.syncMirror();
       this.childPid = null;
       this.handle = null;
@@ -802,7 +824,10 @@ export class Runner {
     if (blockers.length) {
       // Back to running: the wait is over, and a run left reading `queued`
       // while its session works would be the same lie in the other direction.
-      state.status = state.pause ? 'pausing' : 'running';
+      // Compare-and-set: the wait can be minutes, and a status someone ELSE
+      // wrote during it — a halt from another lane erased exactly here on a
+      // real run, a freeze, a stop — is a fact this lane must not overwrite.
+      if (state.status === 'queued') state.status = this.resumedStatus();
       this.record('phase.admitted', {
         scope: formatScope(scope), waitedMs: Date.now() - Date.parse(state.updatedAt),
       }, phase);
@@ -1042,6 +1067,10 @@ export class Runner {
     // recovery where it stands, and Stop ends it; there is no boundary for a
     // Pause to wait for, so saying no is the honest answer.
     if (this.recovering) return false;
+    // A halt outranks a pause: the run is already stopping for a stronger
+    // reason, and writing `pausing` over a draining `halting` would repaint
+    // the stop as an operator's tidy boundary pause — card urgency lost.
+    if (this.state.halt) return false;
     if (this.state.status === 'pausing') return true;
     this.state.status = 'pausing';
     this.state.pause = {
@@ -1133,7 +1162,7 @@ export class Runner {
     // what `resumePause` is for. Only back to `running` once NOTHING is frozen:
     // with lanes, thawing one of two still leaves a session stopped.
     const stillFrozen = this.frozenLane();
-    state.status = stillFrozen ? 'frozen' : state.pause ? 'pausing' : 'running';
+    state.status = stillFrozen ? 'frozen' : this.resumedStatus();
     state.freeze = stillFrozen
       ? {
         at: stillFrozen.frozen!.at,
@@ -1560,6 +1589,17 @@ export class Runner {
           state.pause = null;
           break;
         }
+        if (state.status === 'halting') {
+          // A halt in one lane stops ADMITTING; what is already running drains
+          // — the same shape as a pause, with a worse reason. Only when the
+          // last lane settles may the run read `halted`: "halted" with live
+          // sessions still editing trees is a lie, and one reconcile would
+          // compound (halted is not IN_FLIGHT, so a dead console mid-drain
+          // would never pid-check those children).
+          if (await draining()) continue;
+          state.status = 'halted';
+          break;
+        }
         if (stopping) {
           if (await draining()) continue;
           break;
@@ -1577,7 +1617,9 @@ export class Runner {
         // next phase start anyway: the flag was set a few hundred milliseconds
         // after the only line that read it. Going back to the top rather than
         // breaking here keeps ONE piece of pause bookkeeping, up there.
-        if (state.status === 'pausing') continue;
+        // `halting` for the same reason: a lane can halt the run while the
+        // board subprocess is in flight, and the loop top owns that bookkeeping.
+        if (state.status === 'pausing' || state.status === 'halting') continue;
         if (board.error) {
           if (await draining()) continue;
           this.halt(`the engine could not read the plan: ${board.error}`);
@@ -1650,6 +1692,10 @@ export class Runner {
         // for it, go round again.
         for (const phase of candidates) {
           if (inFlight.size >= this.maxLanes()) break;
+          // Belt-and-braces: nothing above awaits between the status re-check
+          // and here today, but a pause or halt must stop the SECOND lane of a
+          // burst too if that ever changes.
+          if (state.status === 'pausing' || state.status === 'halting') break;
           inFlight.set(phase, this.laneOf(phase, board));
         }
         await settleOne();
@@ -1660,6 +1706,10 @@ export class Runner {
       log.error('runner.crashed', { error });
       this.halt(`the runner itself failed: ${(error as Error)?.message ?? error}`);
     } finally {
+      // A drain the loop never finished — a `break` that bypassed the loop top,
+      // or the `catch` above halting with lanes still recorded — must still
+      // land on the final word: nothing is running past this line.
+      if (state.status === 'halting') state.status = 'halted';
       // Whatever is left is not running any more, whichever way the loop left.
       for (const lane of this.lanes.values()) this.clearFreezeTimer(lane);
       this.lanes.clear();
@@ -1708,11 +1758,12 @@ export class Runner {
   private async runPhase(phase: number, board: Board): Promise<boolean> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
-    // Where the run was pointing before this call. Everything between here and
-    // the spawn is an await, so a phase can still turn out not to start — and
-    // one that never starts must not leave the run claiming to be on it.
-    const wasActive = state.activePhase;
-    state.activePhase = phase;
+    // `activePhase` is set at SPAWN time by `syncMirror`, never here. The gap
+    // between this line and the spawn is three subprocesses and possibly a
+    // queue wait; a phase can still turn out not to start, and one that never
+    // starts must not have the run claiming to be on it — the pointer feeds
+    // the header chip, the "in-progress" row, the ask box and run:state emits,
+    // and an early write here is what made an armed pause look ignored.
 
     /* ---- gate ---- */
     const gate = readGateStatus(await this.engine(['--gate-status', String(phase)]));
@@ -1723,6 +1774,22 @@ export class Runner {
       this.record('phase.gated', { gate }, phase);
       this.emit('phase', { phase, status: record.status, gate });
       // Other ready phases may still be runnable, so this is not a halt.
+      return true;
+    }
+
+    // A pause, halt or stop armed while the gate subprocess ran must end the
+    // boarding BEFORE admission — past this point the phase visibly queues
+    // (journal line, queued tab, run:state emit) for a run that has already
+    // decided to stop.
+    const blockedAfterGate = this.boardingBlocked();
+    if (blockedAfterGate) {
+      this.record('phase.not-started', {
+        reason: blockedAfterGate === 'pause'
+          ? 'a pause was armed while the gate was checked'
+          : blockedAfterGate === 'halted'
+            ? 'the run halted while the gate was checked'
+            : 'the run was stopped while the gate was checked',
+      }, phase);
       return true;
     }
 
@@ -1739,7 +1806,6 @@ export class Runner {
       if (!(error instanceof AdmissionAborted)) throw error;
       // Stopped while it waited. Nothing started, so nothing is owed an
       // explanation beyond the journal — and the phase stays startable.
-      state.activePhase = wasActive;
       if (record.status === 'queued') record.status = 'pending';
       this.record('phase.not-started', {
         reason: 'the run was stopped while this phase waited for its scope',
@@ -1756,7 +1822,7 @@ export class Runner {
     this.lanes.set(phase, lane);
 
     try {
-      return await this.runPhaseAdmitted(phase, board, lane, wasActive);
+      return await this.runPhaseAdmitted(phase, board, lane);
     } finally {
       this.deps.scheduler?.release(lane.grant);
       this.clearFreezeTimer(lane);
@@ -1771,10 +1837,28 @@ export class Runner {
    * and the mirror are released in exactly one place however this returns.
    */
   private async runPhaseAdmitted(
-    phase: number, board: Board, lane: Lane, wasActive: number | null,
+    phase: number, board: Board, lane: Lane,
   ): Promise<boolean> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
+
+    /* ---- arrived from the queue into a run that stopped wanting it ----
+     * The wait inside `admit()` can be minutes. A halt from another lane, an
+     * armed pause or a stop during it must abandon this phase on arrival —
+     * before the lock read, the boot prompt and the spawn — with the record
+     * restored so the phase stays startable. */
+    const blockedOnArrival = this.boardingBlocked();
+    if (blockedOnArrival) {
+      if (record.status === 'queued') record.status = 'pending';
+      this.record('phase.not-started', {
+        reason: blockedOnArrival === 'pause'
+          ? 'a pause was armed while this phase waited for its scope'
+          : blockedOnArrival === 'halted'
+            ? 'the run halted while this phase waited for its scope'
+            : 'the run was stopped while this phase waited for its scope',
+      }, phase);
+      return true;
+    }
 
     /* ---- lock ----
      * Checked, not claimed. The boot prompt already tells the session to claim
@@ -1792,6 +1876,18 @@ export class Runner {
       record.status = 'parked';
       record.note = `phase ${phase} is locked by ${holder} — ${status.stdout.trim().slice(0, 160)}`;
       this.record('phase.lock-refused', { holder, detail: record.note }, phase);
+      return true;
+    }
+
+    /* ---- verification preflight ----
+     * Before the prompt and the spawn: only "nothing would run at all" parks;
+     * everything else is a journal warning. See `preflightVerification`. */
+    const unrunnable = await this.preflightVerification(phase);
+    if (unrunnable) {
+      record.status = 'parked';
+      record.note = unrunnable;
+      this.record('phase.verify-preflight-parked', { reason: unrunnable }, phase);
+      this.emit('phase', { phase, status: 'parked', note: unrunnable });
       return true;
     }
 
@@ -1833,11 +1929,12 @@ export class Runner {
      * that can still act on it: immediately before the phase is marked running.
      * `true` because the run carries on to the loop top, which owns every piece
      * of pause bookkeeping and will stop there. */
-    if (state.status === 'pausing' || this.abort?.signal.aborted) {
-      state.activePhase = wasActive;
+    if (this.boardingBlocked()) {
       await this.release(phase, owner);
       this.record('phase.not-started', {
-        reason: state.status === 'pausing' ? 'a pause was armed before it started' : 'the run was stopped',
+        reason: state.status === 'pausing'
+          ? 'a pause was armed before it started'
+          : state.halt ? 'the run halted before it started' : 'the run was stopped',
       }, phase);
       return true;
     }
@@ -1846,6 +1943,9 @@ export class Runner {
     const chosen = this.optionsFor(phase);
     record.status = 'running';
     record.startedAt = new Date().toISOString();
+    // The phase is now genuinely starting: the active-phase pointer follows
+    // the lane table (the mirror rule), written here and nowhere earlier.
+    this.syncMirror();
     record.model = record.model ?? chosen.model;
     record.effort = record.effort ?? chosen.effort;
     this.record('phase.start', {
@@ -2081,6 +2181,13 @@ export class Runner {
         case 'retry':
           if (attempt === MAX_ATTEMPTS) break;
           await this.sleep(disposition.afterMs);
+          // Same stand-down as the usage-window wake: a halt from another lane
+          // during the backoff means no attempt N+1.
+          if (state.halt) {
+            record.status = 'interrupted';
+            record.note = 'the run halted while this phase waited to retry';
+            return { carryOn: false, completed: false };
+          }
           continue;
 
         case 'wait-until': {
@@ -2099,8 +2206,18 @@ export class Runner {
           // to be armed — and writing `running` unconditionally is how one got
           // thrown away. `state.pause` is the durable record of the request;
           // the status word is derived from it, never the other way round.
-          state.status = state.pause ? 'pausing' : 'running';
+          // Compare-and-set for the same reason as after the queue wait: a
+          // status another lane wrote while this one slept is not this lane's
+          // to overwrite.
+          if (state.status === 'waiting') state.status = this.resumedStatus();
           state.waitUntil = null;
+          // And a lane woken into a halted run must stand down, not spawn
+          // attempt N+1 hours after the run stopped.
+          if (state.halt) {
+            record.status = 'interrupted';
+            record.note = 'the run halted while this phase waited for a usage window';
+            return { carryOn: false, completed: false };
+          }
           continue;
         }
 
@@ -2265,6 +2382,103 @@ export class Runner {
     this.record('phase.done', { costUsd: record.costUsd, attempts: record.attempts }, phase);
     this.emit('phase', { phase, status: 'done' });
     return true;
+  }
+
+  /** Leads whose meaning depends on the working directory. */
+  private static readonly CWD_SENSITIVE = new Set([
+    'docker', 'docker-compose', 'pnpm', 'npm', 'yarn', 'task', 'make', 'just',
+    'pytest', 'go', 'cargo', 'alembic', 'vitest', 'jest', 'tsc', 'node',
+  ]);
+
+  /** Builtins and always-present names not worth a resolution warning. */
+  private static readonly PREFLIGHT_SKIP = new Set([
+    'cd', 'true', 'false', 'echo', 'printf', 'test', 'pwd', 'env', 'which',
+    'bash', 'sh', 'command', 'export',
+  ]);
+
+  /** The program a command starts with, past any `FOO=1` prefixes — or null. */
+  private leadToken(command: string): string | null {
+    let rest = command.trim();
+    for (;;) {
+      const assignment = /^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/.exec(rest);
+      if (!assignment) break;
+      rest = rest.slice(assignment[0].length);
+    }
+    const token = rest.split(/\s+/)[0] ?? '';
+    if (!token || token.includes('/')) return null; // paths are judged elsewhere
+    return token;
+  }
+
+  /**
+   * Read the phase's §Verification BEFORE a session is paid for.
+   *
+   * A real phase spent $45 and 68 minutes, then failed in 92 ms: its
+   * §Verification named a compose file two directories away and test paths
+   * that never existed. Every one of those facts was readable before the
+   * spawn. So this reads them — with the same extractor the real verification
+   * will use — and:
+   *
+   *  · returns a PARK reason when nothing would run at all (today that
+   *    "passes" vacuously into person-checks, after the expensive part);
+   *  · journals warnings for everything else — refused fragments, cwd-
+   *    sensitive commands with no `Verify in:`, leads missing from the
+   *    verification PATH — because a warning that blocked would make every
+   *    plan author fight the runner, and one that stays silent repeats the
+   *    $45 lesson.
+   *
+   * A custom `verify` dep owns the question entirely: predicting the default
+   * extractor against a substitute verifier would judge a different machine.
+   */
+  private async preflightVerification(phase: number): Promise<string | null> {
+    const state = this.state!;
+    if (this.deps.verify) return null;
+    const text = await this.deps.verificationText(state.slug, phase);
+    const { commands, notRun } = extractCommands(text);
+
+    if (!commands.length) {
+      const specimen = notRun[0];
+      return text?.trim()
+        ? `phase ${phase}'s §Verification contains nothing the runner can execute — `
+          + `${notRun.length} entr${notRun.length === 1 ? 'y' : 'ies'} refused`
+          + (specimen ? ` (first: ${specimen.reason})` : '')
+          + '. Fix the plan bullet into whole, copy-runnable commands, then Retry.'
+        : `the plan states no verification for phase ${phase} — nothing would prove the work. `
+          + 'Add a §Verification command to the plan, then Retry.';
+    }
+
+    const warnings: string[] = [];
+    for (const held of notRun) warnings.push(`a person will be asked: ${held.text} — ${held.reason}`);
+
+    const declared = (await this.deps.verifyIn?.(state.slug, phase))?.trim();
+    if (!declared) {
+      const sensitive = commands.filter((command) => {
+        if (/^cd\s/.test(command.trim())) return false; // names its own directory
+        const lead = this.leadToken(command);
+        return lead ? Runner.CWD_SENSITIVE.has(lead) : false;
+      });
+      if (sensitive.length) {
+        warnings.push(`${sensitive.length} command(s) are cwd-sensitive and the plan declares no `
+          + '**Verify in:** — they will run at the repository root');
+      }
+    }
+
+    const dirs = hardenedPath(process.env.PATH).path.split(':').filter(Boolean);
+    const seen = new Set<string>();
+    for (const command of commands) {
+      const lead = this.leadToken(command);
+      if (!lead || seen.has(lead) || Runner.PREFLIGHT_SKIP.has(lead)) continue;
+      seen.add(lead);
+      const found = dirs.some((dir) => {
+        try { accessSync(join(dir, lead), fsConstants.X_OK); return true; } catch { return false; }
+      });
+      if (!found) warnings.push(`\`${lead}\` is not on the verification PATH — its command would exit 127`);
+    }
+
+    if (warnings.length) {
+      this.record('phase.verify-preflight', { warnings }, phase);
+      this.emit('phase', { phase, preflight: warnings });
+    }
+    return null;
   }
 
   /**
@@ -2732,10 +2946,55 @@ export class Runner {
     this.emit('stream', { phase, ...event });
   }
 
+  /**
+   * The status a lane restores after a wait it initiated (queue, usage window,
+   * thaw). Derived from the durable records — `halt` and `pause` — never
+   * assumed: writing `running` unconditionally after a wait is how a halt from
+   * another lane got erased on a real run (status `running` WITH a halt set,
+   * phase admitted 206 ms after the stop).
+   */
+  private resumedStatus(): RunStatus {
+    const state = this.state!;
+    if (state.halt) return 'halting';
+    return state.pause ? 'pausing' : 'running';
+  }
+
+  /**
+   * Why this phase must not board right now, or `null`.
+   *
+   * Boarding is three subprocesses and possibly a queue wait; every await in it
+   * is a window where a pause, a halt from another lane, or a stop can arrive.
+   * One predicate, asked at each of those boundaries, so the answer cannot
+   * drift between them.
+   */
+  private boardingBlocked(): 'stopped' | 'halted' | 'pause' | null {
+    const state = this.state!;
+    if (this.abort?.signal.aborted || this.stopRequested) return 'stopped';
+    if (state.halt) return 'halted';
+    if (state.status === 'pausing') return 'pause';
+    return null;
+  }
+
   private halt(reason: string, phase?: number): void {
     const state = this.state!;
-    state.status = 'halted';
+    // With lanes still live the run is DRAINING, not stopped: `halting` keeps
+    // it in IN_FLIGHT (a dead console mid-drain must still pid-check those
+    // children) and the drive loop flips it to `halted` when the last lane
+    // settles. A verified live run once read `running` WITH a halt attached —
+    // admission bookkeeping overwrote `halted` — and this is the honest shape:
+    // the halt is a fact the moment it happens, the "stopped" claim only when
+    // nothing is running any more.
+    state.status = this.lanes.size ? 'halting' : 'halted';
     state.halt = { at: new Date().toISOString(), reason, phase };
+    // Wake any lane sleeping on a retry backoff or a usage window: each
+    // re-checks `state.halt` on waking and stands down instead of spawning
+    // another attempt hours later on a run that has already stopped.
+    this.haltSignal.dispatchEvent(new Event('halt'));
+    // A new halt is a new fact: a resolution recorded about an EARLIER stop must
+    // not dismiss this one's card. `reopenedAt` deliberately stays — it is a
+    // person's veto on auto-resolution, and an override a person made is never
+    // re-inferred away.
+    state.resolved = null;
     // One field the console can always read for "why did this stop", whichever
     // of the several endings it was.
     state.finishedReason = reason;
@@ -2763,18 +3022,27 @@ export class Runner {
     try { saveRun(this.state); } catch (error) { log.warn('runner.persist', { error }); }
   }
 
-  /** A sleep that a stop can cut short. */
+  /** A sleep that a stop — or a halt from another lane — can cut short. */
   private sleep(ms: number): Promise<void> {
     if (ms <= 0) return Promise.resolve();
+    // A halt that landed BEFORE this sleep began would otherwise be waited out
+    // in full — the wake event below fires once, at halt time, and a listener
+    // attached after that hears nothing.
+    if (this.state?.halt) return Promise.resolve();
     return new Promise((resolve) => {
       const signal = this.abort?.signal;
+      const halts = this.haltSignal;
       const timer = setTimeout(done, ms);
       function done(): void {
         clearTimeout(timer);
         signal?.removeEventListener('abort', done);
+        halts.removeEventListener('halt', done);
         resolve();
       }
       signal?.addEventListener('abort', done, { once: true });
+      // Without this, a run could read `halting` for hours behind a lane that
+      // holds no session at all — just a timer waiting for a usage window.
+      halts.addEventListener('halt', done, { once: true });
     });
   }
 

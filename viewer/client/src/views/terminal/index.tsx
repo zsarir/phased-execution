@@ -31,7 +31,7 @@ import { navigate, type Route } from '@/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // Through `./pane`, deliberately — see the re-export note there: a second
 // importable module in this shared chunk renames it and precaches xterm.
-import { EndedBanner, SessionGone, TerminalPane } from './pane';
+import { EndedBanner, SessionGone, SessionVitals, TerminalPane } from './pane';
 
 export default function TerminalView({ route }: { route: Route }) {
   const client = useQueryClient();
@@ -218,9 +218,14 @@ export default function TerminalView({ route }: { route: Route }) {
         </Button>
 
         {open && (
-          <Chip mono className="ml-auto hidden shrink-0 md:inline-flex" title={open.cwd}>
-            {(size ?? open).cols}×{(size ?? open).rows}
-          </Chip>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* Plan · phase · elapsed (· ETA when the session names a phase) —
+                a shell attached to nothing still gets its clock. */}
+            <SessionVitals session={open} />
+            <Chip mono className="hidden shrink-0 md:inline-flex" title={open.cwd}>
+              {(size ?? open).cols}×{(size ?? open).rows}
+            </Chip>
+          </div>
         )}
       </div>
 

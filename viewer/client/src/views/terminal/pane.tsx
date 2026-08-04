@@ -228,3 +228,4 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
  * the warning in `vite.config.ts`). `scripts/check-dist.mjs` holds both ends.
  */
 export { EndedBanner, SessionGone, exitSummary } from './ended';
+export { SessionVitals, sessionLinkage } from './vitals';

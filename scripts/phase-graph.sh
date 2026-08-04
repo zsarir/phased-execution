@@ -873,7 +873,10 @@ case "$mode" in
     printf -- '       bash %s/phase-lock.sh %s conflicts %s --scope "%s" --git\n' "$SCRIPT_DIR" "$slug" "$p" "$sc"
     printf -- '     A reported conflict means STOP AND ASK the user — never build over a live session.\n'
     printf -- '  2. Claim it:\n'
-    printf -- '       bash %s/phase-lock.sh %s claim %s --owner "<account>/<session>" --scope "%s" --git\n' "$SCRIPT_DIR" "$slug" "$p" "$sc"
+    printf -- '       bash %s/phase-lock.sh %s claim %s --scope "%s" --git\n' "$SCRIPT_DIR" "$slug" "$p" "$sc"
+    printf -- '     (--owner defaults to $PE_OWNER, which the autopilot already exports to its\n'
+    printf -- '      sessions — do not override it, or the supervisor cannot release your lock.\n'
+    printf -- '      Only a person driving this by hand should pass --owner "<account>/<session>".)\n'
     printf 'The invariant: never two live sessions whose scopes intersect; same repo ⇒ serialized;\n'
     printf '`all` ⇒ exclusive; disjoint ⇒ parallel. (Handoff/lock commits in the docs repo are NOT\n'
     printf 'part of your scope — if a commit or pull races another session, pull --rebase and retry\n'

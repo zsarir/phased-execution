@@ -24,7 +24,7 @@ import { forPhase } from './console';
 import { livePhases } from './header';
 import {
   QueuedPane, SessionPanes, crossLaneId, holderLabel, laneId, lanesAcross, lanesOf,
-  queueEntryFor, waitingLabel,
+  queueEntryFor, resolveTab, waitingLabel,
 } from './session-panes';
 
 /* ------------------------------------------------------------------ *
@@ -394,5 +394,66 @@ describe('QueuedPane', () => {
     mount(<QueuedPane phase={4} entry={entry({ bypassed: 3, reserving: true })} />);
     expect(screen.getByText(/Passed over 3 time/)).toBeInTheDocument();
     expect(screen.getByText(/Now reserving its scope/)).toBeInTheDocument();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The run-level pane: narration, never a lane's text or its task list
+ * ------------------------------------------------------------------ */
+
+describe('the run-level pane', () => {
+  function runPane() {
+    return mount(
+      <div data-testid="pane-run">
+        <SessionPanes slug="demo" runId="r1" live allowRun={false} runLevel />
+      </div>,
+      { 'demo#r1': [] },
+    );
+  }
+
+  it("keeps the runner's narration and drops the session firehose", () => {
+    runPane();
+    emit('run:stream', { runId: 'r1', slug: 'demo', phase: 6, kind: 'text', text: 'six speaks' });
+    emit('run:phase', { runId: 'r1', phase: 6, status: 'running', model: 'opus' });
+
+    const run = within(screen.getByTestId('pane-run'));
+    expect(run.queryByText('six speaks')).not.toBeInTheDocument();
+    expect(run.getByText(/phase 6 started on opus/)).toBeInTheDocument();
+  });
+
+  it('never renders the task panels — the lanes own them, so no lane start can wipe another', () => {
+    runPane();
+    emit('run:stream', {
+      runId: 'r1', phase: 6, kind: 'todos', items: [{ content: 'six is working', status: 'pending' }],
+    });
+    emit('run:phase', { runId: 'r1', phase: 7, status: 'running', model: 'opus' });
+
+    const run = within(screen.getByTestId('pane-run'));
+    expect(run.queryByText('six is working')).not.toBeInTheDocument();
+    expect(run.getByText(/lives? in its own tab/i)).toBeInTheDocument();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Which tab the strip opens on
+ * ------------------------------------------------------------------ */
+
+describe('resolveTab', () => {
+  const lane = (phase: number, status: PhaseStatus = 'running') =>
+    ({ slug: 'demo', phase, status, queued: false }) as ReturnType<typeof lanesOf>[number];
+
+  it('defaults to the sole live lane — the session the operator came to watch', () => {
+    expect(resolveTab(null, [lane(6)])).toBe('p6');
+  });
+
+  it('defaults to Run with two lanes, or none', () => {
+    expect(resolveTab(null, [lane(6), lane(7)])).toBe('run');
+    expect(resolveTab(null, [])).toBe('run');
+  });
+
+  it('an explicit pick sticks while its lane exists, and falls back when it ends', () => {
+    expect(resolveTab('p7', [lane(6), lane(7)])).toBe('p7');
+    expect(resolveTab('p7', [lane(6)])).toBe('p6');
+    expect(resolveTab('run', [lane(6)])).toBe('run');
   });
 });

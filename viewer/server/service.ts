@@ -1044,7 +1044,14 @@ export class Service {
       if (state?.status !== 'queued') continue;
       try {
         log.info('run.readopt-queued', { slug: record.slug, runId: state.id });
-        await this.startRun(record.slug, { resumeRunId: state.id });
+        await this.startRun(record.slug, {
+          resumeRunId: state.id,
+          // Resume clears a scope it is not handed, and an omitted skills list
+          // would let machine defaults overwrite the run's sticky one — the
+          // same passthrough retryPhase makes, for the same reason.
+          ...(state.onlyPhases?.length ? { onlyPhases: state.onlyPhases } : {}),
+          skills: state.skills ?? [],
+        });
       } catch (error) {
         log.warn('run.readopt-failed', { slug: record.slug, runId: state.id, error });
       }
@@ -2084,11 +2091,11 @@ export class Service {
       // The agent gate, same shape — the nav-level fact; the richer answer
       // still lives on `/api/terminal` (`agentAllowed` beside `allowed`).
       allowAgent: agentEnabled(this.flags),
-      // The FIRST live run, kept exactly as it was so every consumer written
-      // before the pool — including an older client still open in a browser
-      // tab — goes on reading a run rather than suddenly reading nothing.
-      run: this.runStates()[0] ?? null,
-      // …and all of them, which is the honest answer. New consumers read this.
+      // Every live run. The old singular `run` — "the FIRST live run of any
+      // plan" — was dropped once the pool made it a lie: with two plans
+      // driving, any consumer of it read plan B's run while looking at plan A.
+      // Grep found zero readers, and a stale tab is carried over the gap by
+      // the console's own reload machinery (`generation`/`serverStale`).
       runs: this.runStates(),
       // What the scheduler is doing, so a header can say "2 of 3 running, 1
       // queued" instead of leaving a queued phase looking like a stalled one.
@@ -2473,7 +2480,12 @@ export class Service {
     // same button-that-does-nothing this method was rewritten to eliminate,
     // arrived at from the other direction.
     if (runner?.recoveringNow()) return null;
-    if (runner?.pause(by)) return runner.current();
+    // A LIVE runner that says no (recovering, or a halt already draining) is
+    // an answer, not an invitation to edit the checkpoint underneath it — the
+    // disk copy would say `pausing` while the loop drains a halt, and the next
+    // persist would overwrite it anyway. The fallback is only for a run no
+    // loop drives.
+    if (runner) return runner.pause(by) ? runner.current() : null;
     return this.editStoredRun(slug, (state) => {
       if (!IN_FLIGHT.includes(state.status)) return;
       state.status = 'pausing';
@@ -2563,16 +2575,32 @@ export class Service {
     return this.editStoredRun(slug, (state) => { applySettings(state, patch); });
   }
 
-  retryPhase(slug: string, phase: number): RunState | null {
+  async retryPhase(slug: string, phase: number): Promise<RunState | null> {
     const runner = this.liveRunner(slug);
     if (runner) { runner.retry(phase); return runner.current(); }
-    return this.editStoredRun(slug, (state) => {
+    // No loop behind it: resetting the record used to be the WHOLE action —
+    // the button answered 200, the halt banner cleared, and nothing anywhere
+    // was going to run the phase. Retry on a stopped run now means what the
+    // operator means by it: clear the failure AND continue the run, under
+    // normal admission.
+    const edited = this.editStoredRun(slug, (state) => {
       const record = phaseRecord(state, phase);
       record.status = 'pending';
       record.note = undefined;
       record.endedAt = undefined;
       state.consecutiveFailures = 0;
       state.halt = null;
+    });
+    if (!edited) return null;
+    return this.startRun(slug, {
+      resumeRunId: edited.id,
+      // Resume CLEARS a scope it is not handed ("Continue never silently
+      // inherits"), so a scoped run's retry must carry its own forward —
+      // otherwise retrying one phase silently widens the run to the whole plan.
+      ...(edited.onlyPhases?.length ? { onlyPhases: edited.onlyPhases } : {}),
+      // Same for skills: an omission lets machine defaults overwrite the run's
+      // sticky list on resume.
+      skills: edited.skills ?? [],
     });
   }
 

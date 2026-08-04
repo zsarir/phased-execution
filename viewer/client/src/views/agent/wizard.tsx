@@ -26,7 +26,6 @@ import {
 } from '@/components/ui';
 import { SkillPicker } from '../run/skill-picker';
 import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS } from '../run/defaults';
-import { MODES, PLAN_MODE } from './modes';
 
 const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
 
@@ -64,9 +63,6 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
   const [brief, setBrief] = useState('');
   const [model, setModel] = useState<string>(DEFAULTS.model);
   const [effort, setEffort] = useState<string>(DEFAULTS.effort);
-  // The server applies this same default for `intent: 'plan'`; opening on it
-  // here only means the operator is never shown one mode and given another.
-  const [mode, setMode] = useState<string>(PLAN_MODE);
   const [chosen, setChosen] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -78,12 +74,13 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
         brief: brief.trim(),
         model,
         effort,
-        // `''` is the launcher's spelling of "the CLI's own default", and it
-        // reaches the server as an omission — which for a plan session means
-        // "apply the plan-mode default", i.e. the opposite of what was picked.
-        // `manual` is the CLI's documented alias for `default`, so choosing it
-        // is how this form says the default OUT LOUD and stays a real choice.
-        permissionMode: mode || 'manual',
+        // No `permissionMode`: the omission IS the choice. The server defaults
+        // a plan intent to plan mode (`agent.ts` — the phase list is the
+        // decision), and the select this form used to offer was the one hole
+        // left in that rule: `auto`/`acceptEdits` here launched an authoring
+        // session that could write a plan nobody had approved. A session for
+        // ANY other purpose belongs in the launcher, which still offers every
+        // mode.
         ...(chosen.length ? { skills: chosen } : {}),
       });
       // Same two rules as every session the console opens: seed the list from
@@ -140,20 +137,25 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
                 ))}
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-sm">
+            <div className="flex flex-col gap-1 text-sm">
               <span className="text-2xs uppercase tracking-wide text-ink-faint">Permissions</span>
-              <select className={field} value={mode} onChange={(event) => setMode(event.target.value)}>
-                {MODES.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-              </select>
-            </label>
+              {/* Not a select. A plan-authoring session starts in plan mode,
+                  always — any other mode here could write a plan nobody
+                  approved. Generic sessions with mode choices live in the
+                  launcher. */}
+              <div
+                className={`${field} flex items-center text-ink-muted`}
+                title="Plan-authoring sessions always start in plan mode: the session explores and presents the plan for approval before anything is written."
+              >
+                plan mode — fixed for authoring
+              </div>
+            </div>
           </div>
 
           <p className="text-2xs text-ink-faint">
-            {mode === PLAN_MODE
-              ? 'In plan mode the session explores and presents the plan first — it writes docs/plans/'
-                + '<slug>.md only after you approve it in the terminal.'
-              : 'Outside plan mode the session may scaffold and commit the plan file before you have '
-                + 'read it.'}
+            The session explores and presents the plan first — it writes docs/plans/&lt;slug&gt;.md
+            only after you approve it in the terminal (⇧Tab inside the session cycles modes for
+            the steps AFTER approval).
           </p>
 
           {rootOpen ? (

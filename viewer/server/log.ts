@@ -13,7 +13,7 @@
  * takes the server down.
  */
 
-import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { STATE_DIR, defaultLogFile } from './config.ts';
@@ -27,12 +27,21 @@ export type Entry = {
   data?: Record<string, unknown>;
 };
 
-const MAX_BYTES = 8 * 1024 * 1024;
+/** Env-tunable so a test can rotate with kilobytes instead of megabytes. */
+const MAX_BYTES = Number(process.env.PHASE_CONSOLE_LOG_MAX_BYTES) || 8 * 1024 * 1024;
 /** Enough recent history for the UI to explain a degraded state, not a second log. */
 const RING_SIZE = 200;
 
 let file: string | null = null;
 let ready = false;
+/**
+ * Bytes in the live file, counted in the write path. Rotation used to happen
+ * only at `open()` — once per process — so a long-lived console grew the live
+ * file without bound between restarts, and the rename at the NEXT boot turned
+ * all of it into a `.1` as big as the process was long (522 MB seen in the
+ * wild). Counting here keeps the pair bounded at ~2 × MAX_BYTES total.
+ */
+let bytes = 0;
 const ring: Entry[] = [];
 
 /**
@@ -79,7 +88,9 @@ function open(): void {
   try {
     mkdirSync(dirname(file), { recursive: true });
     rotateIfLarge();
+    try { bytes = statSync(file).size; } catch { bytes = 0; }
     ready = true;
+    removeOversizedRelic();
   } catch {
     // An unwritable state directory costs us the file log, not the server.
     file = null;
@@ -89,9 +100,37 @@ function open(): void {
 function rotateIfLarge(): void {
   if (!file) return;
   try {
-    if (statSync(file).size > MAX_BYTES) renameSync(file, `${file}.1`);
+    if (statSync(file).size > MAX_BYTES) rotate();
   } catch {
     /* no file yet, or a rotation race — either way, keep going */
+  }
+}
+
+/** Rename replaces any previous `.1`, so the pair never exceeds ~2 × MAX_BYTES. */
+function rotate(): void {
+  if (!file) return;
+  try { renameSync(file, `${file}.1`); } catch { /* a rotation race loses nothing */ }
+  bytes = 0;
+}
+
+/**
+ * A `.1` more than twice the cap cannot be a product of this code — rotation
+ * replaces it wholesale with a live file the write path keeps under the cap.
+ * It can only be the older bug's leftovers (rotation ran once per process, so
+ * the live file grew for as long as the console did). Remove it once, and say
+ * so, instead of letting half a gigabyte sit under a file nobody reads.
+ */
+function removeOversizedRelic(): void {
+  if (!file) return;
+  try {
+    const relic = `${file}.1`;
+    const size = statSync(relic).size;
+    if (size > 2 * MAX_BYTES) {
+      rmSync(relic);
+      write('info', 'log.relic-removed', { bytes: size });
+    }
+  } catch {
+    /* no relic — the usual case */
   }
 }
 
@@ -128,7 +167,10 @@ function write(level: Level, event: string, data?: Record<string, unknown>): voi
   open();
   if (!file) return;
   try {
-    appendFileSync(file, `${JSON.stringify(entry)}\n`, 'utf8');
+    if (bytes > MAX_BYTES) rotate();
+    const line = `${JSON.stringify(entry)}\n`;
+    appendFileSync(file, line, 'utf8');
+    bytes += Buffer.byteLength(line);
   } catch {
     /* disk full, permissions, a deleted directory — never propagate */
   }

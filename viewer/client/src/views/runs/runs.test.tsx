@@ -69,11 +69,11 @@ const phases = (...records: { phase: number; status: string; [k: string]: unknow
 describe('collapsing every status into five outcomes', () => {
   it('maps every status the runner can write', () => {
     const all = [
-      'running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued',
+      'running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting',
       'paused', 'parked', 'halted', 'finished', 'interrupted',
     ];
     expect(all.map(outcomeOf)).toEqual([
-      'live', 'live', 'live', 'live', 'live', 'live',
+      'live', 'live', 'live', 'live', 'live', 'live', 'live',
       'attention', 'attention', 'halted', 'finished', 'interrupted',
     ]);
   });

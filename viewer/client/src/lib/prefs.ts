@@ -54,7 +54,9 @@ const DEFAULTS: Prefs = {
   plansLayout: 'board',
   plansGroup: 'none',
   readyRank: 'leverage',
-  readyGroup: false,
+  // Grouped by PLAN by default: operators think "which plan boards next", not
+  // in individual phases across plans (the flat board remains one toggle away).
+  readyGroup: true,
   runsSort: 'updated',
   // Empty rather than an outcome: the fleet opens showing everything it has,
   // and a filter is something the operator turned on.
@@ -62,6 +64,10 @@ const DEFAULTS: Prefs = {
   runsGroup: false,
   runsConsole: false,
 };
+
+/** Read-only view of the shipped defaults, so a test can pin one without
+ * fighting the module-level cache a sibling test already wrote through. */
+export const PREF_DEFAULTS: Readonly<Prefs> = DEFAULTS;
 
 function load(): Prefs {
   try {

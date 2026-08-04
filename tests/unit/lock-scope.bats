@@ -208,7 +208,14 @@ load ../helpers/test_helper
   assert_contains "$output" "SCOPE"
   assert_contains "$output" "packages/cart-api"
   assert_contains "$output" "conflicts 6 --scope"
-  assert_contains "$output" "claim 6"
+  # The claim command must NOT carry --owner: the autopilot exports PE_OWNER to
+  # its sessions, and an explicit --owner in the prompt overrode it — the child
+  # then held a lock the supervisor could not release, and a later retry parked
+  # on "locked by a stranger". phase-lock.sh defaults to $PE_OWNER else user@host,
+  # so the right command names no owner and the prose explains when a person may.
+  assert_contains "$output" "claim 6 --scope"
+  refute_contains "$output" "claim 6 --owner"
+  assert_contains "$output" "PE_OWNER"
   assert_contains "$output" "disjoint ⇒ parallel"
   # The old unconditional rule is gone.
   refute_contains "$output" "run SERIALLY"
@@ -223,4 +230,25 @@ load ../helpers/test_helper
   assert_contains "$output" "2∥3"
   assert_contains "$output" "Shared scope"
   assert_contains "$output" "6∩7"
+}
+
+@test "lock: releasing the last lock of a plan-less slug removes the empty husk" {
+  # A slug with no plan, no handoffs and no INDEX exists only because a lock
+  # was claimed under it. Releasing that lock must not leave a folder whose
+  # entire content is an empty .locks/ — the viewer's store reads that as an
+  # orphan that exists for no reason (one such husk was found live, left by a
+  # stale-claim release).
+  setup_docs scoped scoped
+  pe_lock ghost claim 1 --owner sessionA --scope "api"
+  [ -f "$DOCS_ROOT/docs/handoffs/ghost/.locks/phase-01.lock" ]
+  pe_lock ghost release 1 --owner sessionA
+  [ ! -d "$DOCS_ROOT/docs/handoffs/ghost" ]
+}
+
+@test "lock: releasing one lock of a slug with handoffs leaves the folder alone" {
+  setup_docs scoped scoped
+  write_handoff scoped 1 root complete
+  pe_lock scoped claim 2 --owner sessionA --scope "api-server"
+  pe_lock scoped release 2 --owner sessionA
+  [ -d "$DOCS_ROOT/docs/handoffs/scoped" ]
 }

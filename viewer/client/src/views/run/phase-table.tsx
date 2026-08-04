@@ -37,7 +37,10 @@ import { phaseHref } from '@shared/routes.js';
 import {
   BOARD_ORDER, boardCounts, fellOverToAnotherModel, mergePhases, phaseActions,
 } from '@shared/phase-model.js';
+import { Bot, Gauge } from 'lucide-react';
+
 import { scopeOfRow } from '@shared/scope.js';
+import { ScopeChips } from '@/components/scope-chips';
 import { cn } from '@/lib/cn';
 
 /**
@@ -50,16 +53,19 @@ import { cn } from '@/lib/cn';
  * while a session was demonstrably running in it, which is the report this
  * exists for.
  *
- * So where this run is live and on this phase, the run's fact is the fresher
- * one and wins. Never against `done` — that is the board saying the work is
- * finished, and the run record has never been allowed to overrule it (see this
- * file's header). Exported because it is a rule about whose word counts, and a
- * rule like that should be checkable without rendering a table.
+ * The first fix keyed on `run.activePhase` — which mirrors only the LOWEST
+ * live lane, so with phases 3 and 7 both running, phase 7's row went straight
+ * back to "Boarding". The rule now keys on the ROW's own record: a phase whose
+ * record is live-running speaks for itself, whichever lane the mirror points
+ * at. Never against `done` — that is the board saying the work is finished,
+ * and the run record has never been allowed to overrule it (see this file's
+ * header). Exported because it is a rule about whose word counts, and a rule
+ * like that should be checkable without rendering a table.
  */
 export function displayState(
-  boardState: string, { active, live }: { active: boolean; live: boolean },
+  boardState: string, { running }: { running: boolean },
 ): string {
-  return active && live && boardState !== 'done' ? 'in-progress' : boardState;
+  return running && boardState !== 'done' ? 'in-progress' : boardState;
 }
 
 /** A plan phase joined to whatever this run recorded against it. */
@@ -86,9 +92,6 @@ const fellOver = fellOverToAnotherModel as (record: PhaseRecord | undefined) => 
 const ORDER = BOARD_ORDER as string[];
 /** The Repos cell as scope tokens, never empty — a blank cell means `all`. */
 const scopeOf = scopeOfRow as (cell: string | undefined) => string[];
-
-/** Scope chips shown before the row starts eliding. The rest go in the title. */
-const SCOPE_SHOWN = 2;
 
 const PHASE_TONE: Record<PhaseStatus, 'ok' | 'busy' | 'bad' | 'warn' | undefined> = {
   done: 'ok',
@@ -262,7 +265,6 @@ function PhaseRows({
   eta?: PhaseEta | undefined;
 }) {
   const r = p.record;
-  const isActive = run?.activePhase === p.phase;
   // Gated on the BOARD, never on the run record. Offering to run a phase the
   // board calls done is the defect this table was rebuilt for.
   const can = actionsFor(p, { live, allowRun });
@@ -278,22 +280,21 @@ function PhaseRows({
   const recovering = liveRecovery(recovery?.sessions, { slug, phase: p.phase });
   const reviewing = liveQa(recovery?.sessions, { slug, phase: p.phase });
 
-  const showing = displayState(p.state, { active: isActive, live });
-  // The record is what THIS run is doing; the entry is the scheduler's own view.
-  // Either alone is enough to say the phase is in a line.
-  const queued = r?.status === 'queued' || Boolean(entry);
-
   // A session of THIS run is open on this phase. `startedAt` with no `endedAt`
   // is the record's own account; `live` is the console's, and both have to hold
   // — a checkpoint left by a killed console has the first and not the second.
   const running = live && Boolean(r?.startedAt) && !r?.endedAt
     && (r?.status === 'running' || r?.status === 'verifying');
+  const showing = displayState(p.state, { running });
+  // The record is what THIS run is doing; the entry is the scheduler's own view.
+  // Either alone is enough to say the phase is in a line.
+  const queued = r?.status === 'queued' || Boolean(entry);
   const now = useNow(running);
   const runningMs = running && r?.startedAt ? now - Date.parse(r.startedAt) : 0;
 
   return (
     <>
-      <TR className={cn(isActive && 'bg-progress/8', p.state === 'done' && 'text-ink-faint')}>
+      <TR className={cn(running && 'bg-progress/8', p.state === 'done' && 'text-ink-faint')}>
         <TD className="font-mono tabular-nums">{pad2(p.phase)}</TD>
         <TD>
           <a className="underline-offset-2 hover:underline" href={phaseHref(slug, p.phase)}>
@@ -301,7 +302,9 @@ function PhaseRows({
           </a>
           <div className="mt-0.5 flex flex-wrap items-center gap-1">
             {p.gated && <Chip tone="gate">gated</Chip>}
-            {isActive && <Chip tone="busy">running now</Chip>}
+            {/* The row's own record, not the mirror pointer: with two lanes
+                live, `activePhase` names only the lowest one. */}
+            {running && <Chip tone="busy">running now</Chip>}
             {p.elsewhere && (
               <span
                 className="text-2xs text-ink-faint"
@@ -350,10 +353,20 @@ function PhaseRows({
           {r ? (
             <>
               <Chip tone={PHASE_TONE[r.status]}>{r.status}</Chip>
-              <div className="mt-0.5 text-ink-faint">
-                {r.model ?? '—'}
-                {r.effort ? ` · ${r.effort}` : ''}
-                {r.attempts > 1 ? ` · ${r.attempts} tries` : ''}
+              {/* Same icon vocabulary as the header's Model tile — what a row
+                  ran as should not be the smallest, least-scannable text on it. */}
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ink-faint">
+                <span className="inline-flex items-center gap-1 font-medium text-ink-muted">
+                  <Bot size={11} aria-hidden className="shrink-0" />
+                  {r.model ?? '—'}
+                </span>
+                {r.effort && (
+                  <span className="inline-flex items-center gap-1">
+                    <Gauge size={11} aria-hidden className="shrink-0" />
+                    {r.effort}
+                  </span>
+                )}
+                {r.attempts > 1 && <span>{r.attempts} tries</span>}
               </div>
               {detoured && (
                 <div
@@ -392,7 +405,9 @@ function PhaseRows({
         <TD>
           <div className="flex flex-wrap gap-1">
             {can.retry && (
-              <Button size="sm" onClick={() => void onAct('retry', () => api.runRetry(slug, p.phase))}>
+              <Button size="sm"
+                title="Clears this phase's failure and CONTINUES the run from here — a session starts, under normal admission."
+                onClick={() => void onAct('retry', () => api.runRetry(slug, p.phase))}>
                 Retry
               </Button>
             )}
@@ -487,42 +502,6 @@ function PhaseRows({
         </TR>
       )}
     </>
-  );
-}
-
-/**
- * What a phase touches, and therefore what it cannot run beside.
- *
- * Read from the plan's Repos cell through the same `shared/scope.js` the lock
- * files and `phase-lock.sh conflicts` use — one reading, three consumers, so a
- * chip here and a refusal in bash can never disagree about what `packages/cart-api`
- * overlaps. A blank cell is `all`, which is the honest rendering of "this might
- * touch anything": it is why the phase runs alone, and it used to be invisible.
- *
- * Elided rather than wrapped: a plan with five repos per phase turns this column
- * into the widest one on the page, and the full list is a hover away.
- */
-function ScopeChips({
-  tokens,
-  conflicts,
-}: {
-  tokens: string[];
-  conflicts?: string[] | undefined;
-}) {
-  const shown = tokens.slice(0, SCOPE_SHOWN);
-  const hidden = tokens.length - shown.length;
-  const title = tokens.join(', ')
-    + (conflicts?.length ? `\n\nwould collide with: ${conflicts.join(', ')}` : '');
-
-  return (
-    <div className="flex flex-wrap items-center gap-1" title={title}>
-      {shown.map((token) => (
-        <Chip key={token} mono tone={token === 'all' ? 'warn' : undefined}>
-          {token}
-        </Chip>
-      ))}
-      {hidden > 0 && <span className="font-mono text-2xs text-ink-faint">+{hidden}</span>}
-    </div>
   );
 }
 

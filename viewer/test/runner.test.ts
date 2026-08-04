@@ -47,6 +47,8 @@ type Repo = {
   setLintFail: (yes: boolean) => void;
   /** Make the board read slow, so a control can be pressed while it is in flight. */
   setSlowBoard: (yes: boolean) => void;
+  /** Same, for the gate subprocess — the first await of boarding a phase. */
+  setSlowGate: (yes: boolean) => void;
   cleanup: () => void;
 };
 
@@ -84,6 +86,9 @@ case "$mode" in
     echo "ready: \${r%,}"; echo "waiting: \${w%,}"
     ;;
   --gate-status)
+    # Stretched on demand, like the board: the gate is the FIRST subprocess of
+    # boarding, and the pause-during-boarding tests need a window to press in.
+    [ -f "$S/slow-gate" ] && sleep 1
     if [ -f "$S/gate-$arg" ]; then cat "$S/gate-$arg"; exit 1; fi
     echo "clear (no gate)"
     ;;
@@ -122,6 +127,7 @@ echo "VALIDATE OK"
     setLockRefused: (yes) => yes ? writeFileSync(join(state, 'lock-refused'), '') : rmSync(join(state, 'lock-refused'), { force: true }),
     setLintFail: (yes) => yes ? writeFileSync(join(state, 'lint-fail'), '') : rmSync(join(state, 'lint-fail'), { force: true }),
     setSlowBoard: (yes) => yes ? writeFileSync(join(state, 'slow-board'), '') : rmSync(join(state, 'slow-board'), { force: true }),
+    setSlowGate: (yes) => yes ? writeFileSync(join(state, 'slow-gate'), '') : rmSync(join(state, 'slow-gate'), { force: true }),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -2109,4 +2115,219 @@ test("a plan's phase scopes are readable, with what each one would collide with"
   });
   assert.equal(status, 200);
   assert.deepEqual((payload as { scopes: unknown }).scopes, scopes);
+});
+
+/* ------------------------------------------------------------------ *
+ * The stop's paperwork: `resolved` / `reopenedAt` across lives of a run
+ * ------------------------------------------------------------------ */
+
+test('continuing a resolved run clears the resolution, so a second halt raises a card', async () => {
+  const r = repo();
+  // First life: the session claims success and writes nothing — halt #1.
+  const liar: SpawnFn = async () => ok({ resultText: 'Phase complete!' });
+  const first = runner(r, liar);
+  await first.instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await first.instance.wait();
+  const stopped = first.instance.current()!;
+  assert.equal(stopped.status, 'halted');
+
+  // The stop gets annotated — as the board resolver or an operator would —
+  // and the phase is reset the way Retry resets it.
+  const edited = loadRun(r.root, 'demo', stopped.id, null)!;
+  edited.resolved = { at: new Date().toISOString(), auto: true, reason: 'superseded — test annotation' };
+  edited.phases['1'].status = 'pending';
+  edited.phases['1'].note = undefined;
+  saveRun(edited);
+
+  // Second life: Continue. The session still writes nothing — halt #2 must
+  // surface, which it cannot if the first stop's annotation survived.
+  const second = runner(r, liar);
+  await second.instance.start({ slug: 'demo', root: r.root, resumeRunId: stopped.id, autonomy: 'keep-going' });
+  await second.instance.wait();
+
+  const state = second.instance.current()!;
+  assert.equal(state.status, 'halted');
+  assert.equal(state.resolved, null, 'the old annotation cannot dismiss the new stop');
+  assert.equal(state.reopenedAt, null, 'the old veto was about a stop that no longer exists');
+  r.cleanup();
+});
+
+test("a new halt clears a stale resolution but keeps a person's reopen-veto", async () => {
+  const r = repo();
+  // The annotation appears while the run is live — the one path `start` and
+  // `recover` cannot have cleaned up — and then the halt fires.
+  let handle: InstanceType<typeof Runner> | null = null;
+  const spy: SpawnFn = async () => {
+    const state = handle!.current()!;
+    state.resolved = { at: new Date().toISOString(), auto: true, reason: 'stale annotation from an earlier stop' };
+    state.reopenedAt = '2026-08-04T00:00:00.000Z';
+    return ok({ resultText: 'wrote nothing' });
+  };
+  const { instance } = runner(r, spy);
+  handle = instance;
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'halted');
+  assert.equal(state.resolved, null, 'a new halt is a new fact — the stale annotation goes');
+  assert.equal(state.reopenedAt, '2026-08-04T00:00:00.000Z',
+    "a person's veto on auto-resolution is never re-inferred away");
+  r.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
+ * Boarding is not starting: the pause window and the pointer
+ * ------------------------------------------------------------------ */
+
+const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+test('a pause armed while the gate is checked starts nothing and queues nothing', async () => {
+  const r = repo();
+  r.setSlowGate(true);
+  const seen: number[] = [];
+  const { instance, events } = runner(r, workingSession(r, seen));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await sleepMs(300); // inside the 1s gate subprocess for phase 1
+  assert.equal(instance.pause('test'), true);
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'paused');
+  assert.deepEqual(seen, [], 'no session spawned');
+  const journal = events.filter((e) => e.event === 'run:journal')
+    .map((e) => e.data as { event: string; data?: { reason?: string } });
+  assert.ok(journal.some((j) => j.event === 'phase.not-started' && /gate was checked/.test(j.data?.reason ?? '')),
+    'the abandonment wrote itself down');
+  assert.ok(!journal.some((j) => j.event === 'phase.queued'), 'the phase never visibly queued');
+  assert.ok(!journal.some((j) => j.event === 'phase.start'), 'the phase never started');
+  r.cleanup();
+});
+
+test('the run does not claim a phase until it genuinely starts', async () => {
+  const r = repo();
+  r.setSlowGate(true);
+  const during: (number | null | undefined)[] = [];
+  let instance!: InstanceType<typeof Runner>;
+  const spawn: SpawnFn = async () => {
+    during.push(instance.current()!.activePhase); // sampled at spawn time
+    r.markDone(1);
+    return ok();
+  };
+  const made = runner(r, spawn);
+  instance = made.instance;
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1] });
+  await sleepMs(300); // mid-gate: boarding, not started
+  const midBoarding = instance.current()!.activePhase;
+  await instance.wait();
+
+  assert.equal(midBoarding, null, 'boarding must not move the pointer');
+  assert.deepEqual(during, [1], 'the pointer lands exactly at spawn');
+  r.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
+ * Retry acts: a stopped run's Retry resets the phase AND continues the run
+ * ------------------------------------------------------------------ */
+
+test('retry on a stopped run resets the phase and starts the run again', async () => {
+  const r = repo();
+  const { Service } = await import('../server/service.ts');
+  const { phaseRecord: recordOf } = await import('../server/runner/state.ts');
+  const service = new Service({
+    port: 0, host: '127.0.0.1', open: false, allowWrites: false,
+    scriptsDir: r.scripts, logFile: null,
+  } as never);
+  try {
+    assert.equal(service.open(r.root).ok, true);
+
+    // A halted, SCOPED run with a failed phase and a sticky skills list — the
+    // two fields a careless resume silently loses.
+    const stopped = newRun({ slug: 'demo', root: r.root, model: 'opus', onlyPhases: [1], skills: ['alpha-skill'] });
+    stopped.status = 'halted';
+    stopped.halt = { at: new Date().toISOString(), reason: 'phase 1 did not verify: stub', phase: 1 };
+    stopped.consecutiveFailures = 1;
+    const record = recordOf(stopped, 1);
+    record.status = 'failed';
+    record.note = 'stub failure';
+    record.endedAt = new Date().toISOString();
+    saveRun(stopped);
+
+    const calls: { slug: string; options: Record<string, unknown> }[] = [];
+    (service as unknown as { startRun: unknown }).startRun =
+      async (slug: string, options: Record<string, unknown>) => { calls.push({ slug, options }); return null; };
+
+    await service.retryPhase('demo', 1);
+
+    assert.equal(calls.length, 1, 'retry on a dead run STARTS the run — resetting the record alone was the old lie');
+    assert.equal(calls[0].options.resumeRunId, stopped.id);
+    assert.deepEqual(calls[0].options.onlyPhases, [1], 'a scoped run keeps its scope across the retry');
+    assert.deepEqual(calls[0].options.skills, ['alpha-skill'], 'the sticky skills survive; machine defaults must not replace them');
+
+    const onDisk = loadRun(r.root, 'demo', stopped.id, null)!;
+    assert.equal(onDisk.phases['1'].status, 'pending');
+    assert.equal(onDisk.halt, null);
+    assert.equal(onDisk.consecutiveFailures, 0);
+  } finally {
+    service.close();
+    r.cleanup();
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * Verification preflight: read the plan before paying for a session
+ * ------------------------------------------------------------------ */
+
+test('a verification with nothing runnable parks the phase BEFORE a session is spent', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  const { instance, events } = runner(r, workingSession(r, seen),
+    'targeted pytest + full safe set; both green.');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1] });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.deepEqual(seen, [], 'no session was spawned for a phase that could never verify');
+  assert.equal(state.phases['1'].status, 'parked');
+  assert.match(state.phases['1'].note ?? '', /nothing the runner can execute/);
+  assert.match(state.phases['1'].note ?? '', /then Retry/);
+  const journal = events.filter((e) => e.event === 'run:journal')
+    .map((e) => e.data as { event: string });
+  assert.ok(journal.some((j) => j.event === 'phase.verify-preflight-parked'));
+  r.cleanup();
+});
+
+test('a plan with no verification at all parks the same way, saying so', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  // '' rather than undefined: the helper's parameter default would silently
+  // substitute '`true`' for undefined — the exact defaulted-parameter trap
+  // this repo's own history warns about.
+  const { instance } = runner(r, workingSession(r, seen), '');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1] });
+  await instance.wait();
+
+  assert.deepEqual(seen, [], 'no session for a phase nothing would prove');
+  assert.match(instance.current()!.phases['1'].note ?? '', /states no verification/);
+  r.cleanup();
+});
+
+test('preflight warnings are journalled without blocking the phase', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  // One runnable command, one continuation fragment: the fragment becomes a
+  // person-check later, and the preflight says so up front — but the phase runs.
+  const { instance, events } = runner(r, workingSession(r, seen),
+    '`true` plus the safe set `… -m "not slow" -q`');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1] });
+  await instance.wait();
+
+  assert.deepEqual(seen, [1], 'a warning must not cost the phase');
+  assert.equal(instance.current()!.phases['1'].status, 'done');
+  const preflights = events.filter((e) => e.event === 'run:journal')
+    .map((e) => e.data as { event: string; data?: { warnings?: string[] } })
+    .filter((j) => j.event === 'phase.verify-preflight');
+  assert.equal(preflights.length, 1);
+  assert.match(preflights[0].data?.warnings?.join('\n') ?? '', /a person will be asked/);
+  r.cleanup();
 });

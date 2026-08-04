@@ -61,6 +61,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // pulls in no xterm.
 vi.mock('./pane', async () => ({
   ...(await import('./ended')),
+  // The real one — it renders from the session record alone here (no plan
+  // linkage on a shell), and its own behaviour has its own test file.
+  ...(await import('./vitals')),
   TerminalPane: (props: { sessionId: string }) => {
     pane(props.sessionId);
     return <div data-testid="pane">{props.sessionId}</div>;

@@ -34,6 +34,12 @@ die() { echo "phase-console agent: $*" >&2; exit 1; }
 # launchd gives a process a minimal PATH, but the console shells out to bash,
 # git and the skill's scripts. Baking in the PATH from the shell that installs
 # it is the only version that reliably matches what those scripts expect.
+# ⚠️ That also means: after a toolchain move (new Homebrew python, nvm switch),
+# re-run `agent.sh install` FROM A FULL SHELL — a verification once halted a
+# run at 3 a.m. with `"python": executable file not found` because the plist
+# still carried the thin PATH of the shell that installed it. The verifier now
+# appends the standard dirs defensively (and logs `verify.path-amended` when it
+# had to), but the plist staying honest is the real fix.
 current_path="$PATH"
 
 xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }

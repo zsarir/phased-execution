@@ -13,7 +13,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 metadata:
-  version: 4.0.0
+  version: 4.0.1
 ---
 
 # Phased Execution
@@ -144,8 +144,11 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    (`scripts/phase-graph.sh <slug> --repos <N>` — the boot prompt already states it), then
    ```
    scripts/phase-lock.sh <slug> conflicts <N> --scope "<csv>" --git   # 0 = clear, 1 = collides
-   scripts/phase-lock.sh <slug> claim <N> --owner "<account>/<session>" --scope "<csv>" --git
+   scripts/phase-lock.sh <slug> claim <N> --scope "<csv>" --git
    ```
+   `--owner` defaults to `$PE_OWNER` (which an autopilot exports to its sessions — do not override
+   it, or the supervisor cannot release your lock) else `<user>@<host>`. Pass
+   `--owner "<account>/<session>"` only when driving phases by hand as one of several people.
    `conflicts` looks across **every plan**, because a working tree doesn't know which plan asked for it.
    If it names a live session — or `claim` reports the phase already held — **stop and ask the user**
    whether to wait, stop that session, take over (`--force`), or pick a ready phase with a disjoint

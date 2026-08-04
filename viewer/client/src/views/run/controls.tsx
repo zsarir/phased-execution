@@ -149,6 +149,10 @@ export function Controls({
   const disabled = !allowRun || Boolean(busy);
   const pausing = run?.status === 'pausing';
   const stopping = run?.status === 'stopping';
+  // A draining halt: sessions are still live (Stop applies), but a pause or a
+  // freeze aimed at "the current phase" is aimed at a run that already stopped
+  // admitting — the server refuses both, so the buttons say so up front.
+  const halting = run?.status === 'halting';
   const frozen = run?.status === 'frozen';
   /** A freeze that ran past its threshold left a session to resume, not a fresh start. */
   const checkpointed = Object.values(run?.phases ?? {}).some((p) => p.resumeSessionId);
@@ -301,7 +305,7 @@ export function Controls({
                   {busy === 'resume' ? 'Cancelling…' : 'Cancel pause — keep going'}
                 </Button>
               ) : (
-                <Button disabled={disabled || stopping}
+                <Button disabled={disabled || stopping || halting}
                   onClick={() => void onAct('pause', async () => {
                     // Report what the SERVER did, not what the click intended. A
                     // pause that lands on nothing used to answer 200 and say
@@ -333,7 +337,7 @@ export function Controls({
                   {busy === 'thaw' ? 'Continuing…' : 'Continue the frozen session'}
                 </Button>
               ) : (
-                <Button disabled={disabled || stopping || run?.activePhase == null}
+                <Button disabled={disabled || stopping || halting || run?.activePhase == null}
                   title="Stops the session where it stands, losing nothing. The opposite of waiting for the phase to finish."
                   onClick={() => void onAct('freeze', async () => {
                     const { run: after } = await api.runFreeze(slug);

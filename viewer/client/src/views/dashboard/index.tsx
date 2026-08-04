@@ -153,7 +153,7 @@ export default function DashboardView() {
         <section aria-label="Running now" className="flex flex-col gap-4">
           {isPending
             ? <Skeleton className="h-16" />
-            : (runs ?? []).some((r) => ['running', 'waiting', 'pausing', 'stopping', 'frozen'].includes(r.status))
+            : (runs ?? []).some((r) => ['running', 'waiting', 'pausing', 'stopping', 'frozen', 'halting'].includes(r.status))
               ? <LiveStrip runs={runs ?? []} />
               : (
                 <AllQuiet

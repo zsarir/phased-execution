@@ -29,6 +29,9 @@ export const RUN_TONE: Record<RunStatus, 'ok' | 'busy' | 'bad' | 'warn' | undefi
   running: 'busy',
   finished: 'ok',
   halted: 'bad',
+  // The halt is already a fact while lanes drain — same colour as the ending
+  // it becomes, not a softer one that would read as "still deciding".
+  halting: 'bad',
   waiting: 'warn',
   // Not `bad`: parked is not a failure, it is a queue of questions. The run did
   // everything it could without someone.

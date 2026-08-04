@@ -238,15 +238,26 @@ test('every live lane is in `children`, and `child` mirrors one of them', async 
     live += 1;
     if (live >= 2) {
       // Both lanes are open: read the checkpoint from DISK, not from memory,
-      // because a restarted console only ever gets the disk.
-      const state = loadRun(r.root, 'demo', runId!, runId);
-      seen.push({
-        children: Object.keys(state?.children ?? {}).length,
-        child: state?.child?.phase ?? null,
-      });
+      // because a restarted console only ever gets the disk. The write sits on
+      // the other side of an async boundary, so under a loaded suite the first
+      // read can land before the second lane's persist — poll briefly rather
+      // than race it (the property under test is "the disk says it", not
+      // "the disk says it within one scheduler tick").
+      for (let tries = 0; ; tries += 1) {
+        const state = loadRun(r.root, 'demo', runId!, runId);
+        const snap = {
+          children: Object.keys(state?.children ?? {}).length,
+          child: state?.child?.phase ?? null,
+        };
+        if ((snap.children >= 2 && snap.child !== null) || tries >= 24) { seen.push(snap); break; }
+        await sleep(25);
+      }
       gate.resolve();
     }
-    await Promise.race([gate.promise, sleep(750)]);
+    // 3s, not 750ms: the fallback exists so a SERIAL loop fails fast, and under
+    // a fully parallel suite the shorter window let a loaded box leave the
+    // barrier before both lanes were inside.
+    await Promise.race([gate.promise, sleep(3_000)]);
     live -= 1;
     appendFileSync(join(r.state, 'done'), `${phase}\n`);
     return ok({ sessionId: `sess-${phase}` });
@@ -386,5 +397,147 @@ test('a phase blocked at admission reads `queued`, and says what it is waiting o
 
   await instance.stop();
   scheduler.close();
+  r.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
+ * A halt in one lane, honestly, while others are live
+ * ------------------------------------------------------------------ */
+
+test('a halt in one lane stops admitting, drains the rest, and reads halting on the way', async () => {
+  const r = repo();
+  const gate = deferred<void>();
+  let live = 0;
+  const seen: number[] = [];
+  const midDrain: string[] = [];
+  let instance!: InstanceType<typeof Runner>;
+
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    seen.push(phase);
+    live += 1;
+    if (live >= 2) gate.resolve();
+    await Promise.race([gate.promise, sleep(750)]);
+    if (phase === 1) {
+      // The liar: exits clean, writes nothing. confirm() halts the run while
+      // phase 2 is still inside this function — the drain case.
+      return ok({ sessionId: 'sess-liar' });
+    }
+    // Linger long enough for lane 1's halt to land, then record what the run
+    // claimed while this lane was still live, then finish honestly.
+    await sleep(400);
+    midDrain.push(instance.current()!.status);
+    appendFileSync(join(r.state, 'done'), `${phase}\n`);
+    return ok({ sessionId: `sess-${phase}` });
+  };
+
+  const made = runnerOn(r, spawn, (phase) => [`repo-${phase}`], 2);
+  instance = made.instance;
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'halted', 'the final word, once nothing is running');
+  assert.ok(state.halt, 'the halt survived the drain');
+  assert.ok(midDrain.includes('halting'),
+    `a live lane saw the run read 'halting', not 'running'-with-a-halt (saw: ${midDrain.join(', ')})`);
+  assert.ok(!seen.includes(3), 'no new phase boarded after the halt');
+  r.cleanup();
+});
+
+test('a lane sleeping on a retry backoff stands down when another lane halts', async () => {
+  const r = repo();
+  const gate = deferred<void>();
+  let live = 0;
+  const spawnsPerPhase = new Map<number, number>();
+
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    spawnsPerPhase.set(phase, (spawnsPerPhase.get(phase) ?? 0) + 1);
+    live += 1;
+    if (live >= 2) gate.resolve();
+    await Promise.race([gate.promise, sleep(750)]);
+    if (phase === 1) return ok({ sessionId: 'sess-liar' }); // halts the run
+    // Phase 2 reports a retryable failure: a 30-second backoff sleep begins —
+    // which the halt must cut short, and which must NOT be followed by a
+    // second attempt on a run that has stopped.
+    await sleep(120);
+    return ok({ signal: { subtype: 'crash', code: 137, text: '' }, sessionId: 'sess-2' });
+  };
+
+  const { instance } = runnerOn(r, spawn, (phase) => [`repo-${phase}`], 2);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'halted');
+  assert.equal(spawnsPerPhase.get(2), 1, 'no attempt N+1 on a halted run');
+  assert.equal(state.phases['2'].status, 'interrupted');
+  assert.match(state.phases['2'].note ?? '', /waited to retry/);
+  r.cleanup();
+});
+
+test('a lane sleeping on a usage window stands down when another lane halts', async () => {
+  const r = repo();
+  const gate = deferred<void>();
+  let live = 0;
+  const spawnsPerPhase = new Map<number, number>();
+
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    spawnsPerPhase.set(phase, (spawnsPerPhase.get(phase) ?? 0) + 1);
+    live += 1;
+    if (live >= 2) gate.resolve();
+    await Promise.race([gate.promise, sleep(750)]);
+    if (phase === 1) return ok({ sessionId: 'sess-liar' }); // halts the run
+    await sleep(120);
+    // "usage limit reached" with no parseable reset → wait-until now+1h. The
+    // halt wakes the sleeper; waking into a halted run must not spawn again.
+    return ok({ signal: { subtype: 'limit', code: 1, text: 'usage limit reached' }, sessionId: 'sess-2' });
+  };
+
+  const { instance } = runnerOn(r, spawn, (phase) => [`repo-${phase}`], 2);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'halted');
+  assert.equal(spawnsPerPhase.get(2), 1, 'no attempt N+1 on a halted run');
+  assert.equal(state.phases['2'].status, 'interrupted');
+  assert.match(state.phases['2'].note ?? '', /usage window/);
+  assert.equal(state.waitUntil, null, 'the window sleep did not outlive the run');
+  r.cleanup();
+});
+
+test('a pause armed while a phase waits for its scope abandons it back to pending', async () => {
+  const r = repo();
+  let locks: { slug: string; phase: number; owner: string; expired: boolean; scope: string[] }[] =
+    [{ slug: 'other', phase: 9, owner: 'someone/else', expired: false, scope: ['blocked-repo'] }];
+  const scheduler = new Scheduler({ max: 3, locks: () => locks });
+  const seen: number[] = [];
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    seen.push(phase);
+    appendFileSync(join(r.state, 'done'), `${phase}\n`);
+    return ok();
+  };
+  const instance = new Runner({
+    scriptsDir: r.scripts, spawn, scheduler, maxParallel: 3,
+    verificationText: () => '`true`',
+    phaseScope: () => ['blocked-repo'],
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1] });
+  await sleep(250); // phase 1 is now queued behind the foreign lock
+  assert.equal(instance.current()!.phases['1']?.status, 'queued');
+  assert.equal(instance.pause('test'), true);
+
+  locks = [];        // the blocker releases…
+  scheduler.poll();  // …and the scheduler notices — the grant arrives into an armed pause
+
+  await instance.wait();
+  const state = instance.current()!;
+  assert.equal(state.status, 'paused');
+  assert.deepEqual(seen, [], 'admission arrived into an armed pause — nothing spawned');
+  assert.equal(state.phases['1'].status, 'pending', 'restored so the phase stays startable');
   r.cleanup();
 });

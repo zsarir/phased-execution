@@ -1,9 +1,14 @@
 import { Chip, StateChip } from '@/components/ui';
 import { MarkdownInline, plainText } from '@/components/markdown';
+import { ScopeChips } from '@/components/scope-chips';
 import { pad2 } from '@/lib/format';
 import { phaseHref } from '@shared/routes.js';
+import { scopeOfRow } from '@shared/scope.js';
 import { cn } from '@/lib/cn';
 import type { PlanDetail } from '@/lib/api';
+
+/** The Repos cell as scope tokens, never empty — a blank cell means `all`. */
+const scopeOf = scopeOfRow as (cell: string | undefined) => string[];
 
 /**
  * Every phase, as one tall list — the view for a phone, where the departures
@@ -31,6 +36,11 @@ export function PhasesTab({ detail }: { detail: PlanDetail }) {
             </span>
             <span className="block truncate text-2xs text-ink-faint">
               {phase.goal ? plainText(phase.goal).slice(0, 110) : (phase.row?.exitCriteria ?? '')}
+            </span>
+            {/* What the phase touches — the fact that decides what may run
+                beside it, same chips as the run table. */}
+            <span className="mt-1 block">
+              <ScopeChips tokens={scopeOf(phase.row?.repos)} />
             </span>
           </span>
           <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">

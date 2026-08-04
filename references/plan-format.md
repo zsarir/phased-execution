@@ -115,6 +115,12 @@ memory: project_<slug>      # or pre-existing project_<other> when reusing an ex
      reasonable reading, so make them tight.
      Mirror the one-line summary into the Phase-graph table's `Exit criteria` column.
    - **Verification:** the concrete commands/tests proving each exit criterion — runnable, not narrative.
+     Every command must be WHOLE and copy-runnable: an ellipsis fragment (`… -m "not slow" -q`) is
+     refused by the runner's extractor and becomes a card a person must hand-confirm — a real phase
+     spent $45 and 68 minutes before its verification turned out to contain nothing runnable, which
+     the console now parks on at boarding instead. Commands that depend on their directory
+     (`docker compose`, `pnpm`, `npm`, `task`, `pytest`, …) need the phase's `- **Verify in:** <path>`
+     bullet — a bare path on ONE line — or they run at the repository root.
      **Phase-finish runs these green before handing off** (Mode 3 step 1). Add a deterministic test for
      every criterion you can; flag any that can only be reasoned about. Before relying on a CLI flag's
      semantics in one of these commands, re-check the tool's current docs and note the check in the

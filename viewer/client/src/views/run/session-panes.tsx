@@ -98,6 +98,22 @@ export function lanesAcross(runs: readonly RunState[] | undefined): Lane[] {
 /** The tab id for a lane. `p<N>` — in-page state only, never a route. */
 export const laneId = (lane: Lane): string => `p${lane.phase}`;
 
+/**
+ * Which tab the strip shows: the explicit pick while it still exists, else the
+ * SOLE live lane, else Run.
+ *
+ * The solo default is the point: with exactly one live lane — still the common
+ * case — the operator came to watch that session, and opening on the aggregate
+ * Run tab put narration where their session's text should be. A pick that
+ * outlived its lane falls back the same way (Radix renders a missing panel as
+ * nothing at all).
+ */
+export function resolveTab(picked: string | null, lanes: readonly Lane[]): string {
+  const ids = new Set(['run', ...lanes.map(laneId)]);
+  if (picked && ids.has(picked)) return picked;
+  return lanes.length === 1 ? laneId(lanes[0]) : 'run';
+}
+
 /** The tab id for a lane on the cross-plan page, where phase numbers repeat. */
 export const crossLaneId = (lane: Lane): string => `${lane.slug}:p${lane.phase}`;
 
@@ -111,6 +127,7 @@ export function SessionPanes({
   title,
   subtitle,
   askPhase,
+  runLevel = false,
 }: {
   slug: string;
   runId: string;
@@ -128,6 +145,16 @@ export function SessionPanes({
    * is running — which is the behaviour the page had before there were lanes.
    */
   askPhase?: number | null;
+  /**
+   * The Run tab: the runner's own narration (phase transitions, verify
+   * commands), with the session firehose and the task/tool panels left to the
+   * lanes that own them. Unfiltered, two live lanes spliced their sentences
+   * into one paragraph here, and `activity()`'s reset-on-running meant phase 7
+   * starting WIPED phase 6's still-live task list — the cross-phase bleed this
+   * page was reported for. A finished run's replay pane deliberately does NOT
+   * set this: reading history whole is what a replay is for.
+   */
+  runLevel?: boolean;
 }) {
   const { lines, activity, record, clear, hydrate } = useLiveLines();
 
@@ -136,9 +163,13 @@ export function SessionPanes({
   // fetch per tab of a payload that is already the largest thing this console
   // reads, to save a single pass over an array it holds anyway.
   const { data: transcript } = useTranscript(slug, runId, enabled);
-  useEffect(() => { hydrate(forPhase(transcript, phase)); }, [transcript, phase, hydrate]);
+  useEffect(() => {
+    hydrate(runLevel
+      ? (transcript ?? []).filter((entry) => entry.event !== 'stream')
+      : forPhase(transcript, phase));
+  }, [transcript, phase, hydrate, runLevel]);
 
-  useSessionStream(record, enabled, { runId, phase });
+  useSessionStream(record, enabled, { runId, phase, omitStream: runLevel });
 
   const target = askPhase === undefined ? phase : askPhase;
 
@@ -158,7 +189,13 @@ export function SessionPanes({
           />
         )}
       />
-      <ActivityPanels activity={activity} live={live} />
+      {runLevel
+        ? (
+          <p className="text-2xs text-ink-faint">
+            Each phase&rsquo;s session text, task list and tool calls live in its own tab.
+          </p>
+        )
+        : <ActivityPanels activity={activity} live={live} />}
     </div>
   );
 }

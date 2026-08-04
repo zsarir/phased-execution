@@ -165,7 +165,16 @@ case "$action" in
     if [ ! -f "$lockfile" ]; then printf 'phase %s: already free\n' "$phase"; exit 0; fi
     cur_owner="$(_field owner)"
     if [ "$cur_owner" = "$owner" ] || [ "$force" = 1 ]; then
-      rm -f "$lockfile"; _git_sync release
+      rm -f "$lockfile"
+      # Releasing the LAST lock of a slug that has no handoffs must not leave
+      # an empty husk under docs/handoffs/ — a folder with no files and an
+      # empty .locks/ reads as an orphan that exists for no reason (the
+      # viewer's store test rightly objects; one such husk was found live).
+      # Best-effort only: rmdir refuses non-empty directories, which is
+      # exactly the guard wanted here.
+      rmdir "$lockdir" 2>/dev/null || true
+      rmdir "$DOCS_ROOT/docs/handoffs/$slug" 2>/dev/null || true
+      _git_sync release
       printf 'phase %s: released\n' "$phase"; exit 0
     fi
     printf 'phase %s: held by %s, not %s — use --force to override\n' "$phase" "$cur_owner" "$owner" >&2

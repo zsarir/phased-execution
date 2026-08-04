@@ -92,7 +92,8 @@ export const AUTONOMY_LABEL: Record<Autonomy, string> = {
  * while its plan offered a Start button the server answers with a 409.
  */
 export const LIVE_STATUSES = [
-  'running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued',
+  // `halting` is a drain: sessions are still live and Stop must stay offered.
+  'running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting',
 ] as const;
 
 export const isLive = (status: string | undefined): boolean =>

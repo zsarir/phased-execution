@@ -44,7 +44,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Radio } from 'lucide-react';
 import { api, type QueueEntry, type RunState } from '@/lib/api';
 import {
-  keys, useApprovals, useAuth, useConsoleState, useQueue, useRuns,
+  keys, useApprovals, useAuth, useConsoleState, usePlans, useQueue, useRuns,
 } from '@/lib/queries';
 import { usePrefs } from '@/lib/prefs';
 import { relativeTime } from '@/lib/format';
@@ -202,6 +202,20 @@ export default function RunsView() {
   );
   const counts = useMemo(() => outcomeCounts(all), [all]);
   const plans = useMemo(() => planOptions(all), [all]);
+  // The repos each plan touches — what decides what may run beside it. From
+  // the (cached) plans list; a missing summary just means no chips.
+  const { data: summaries } = usePlans(enabled);
+  const reposBySlug = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const s of summaries ?? []) {
+      // PlanSummary is deliberately loose on the wire; narrow at the point of use.
+      const repos = Array.isArray(s.repos)
+        ? s.repos.filter((r): r is string => typeof r === 'string')
+        : [];
+      if (repos.length) map[s.slug] = repos;
+    }
+    return map;
+  }, [summaries]);
 
   const onFilters = (patch: Partial<Filters>) => {
     const { outcome, ...rest } = patch;
@@ -324,6 +338,7 @@ export default function RunsView() {
                 <Fleet
                   rows={visible}
                   grouped={Boolean(prefs.runsGroup)}
+                  reposBySlug={reposBySlug}
                   onWatch={onWatch}
                   // Only while the console is actually showing it. A row
                   // reading "In the console" above a console that is folded

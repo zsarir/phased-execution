@@ -50,7 +50,7 @@ describe('isLive', () => {
     // Treating it as idle would offer a Start button that refuses because a run
     // is already in progress.
     expect(isLive('frozen')).toBe(true);
-    for (const s of ['running', 'waiting', 'pausing', 'stopping']) expect(isLive(s)).toBe(true);
+    for (const s of ['running', 'waiting', 'pausing', 'stopping', 'halting']) expect(isLive(s)).toBe(true);
     for (const s of ['finished', 'halted', 'paused', 'interrupted']) expect(isLive(s)).toBe(false);
     expect(isLive(undefined)).toBe(false);
   });
@@ -142,21 +142,23 @@ describe('displayState — Boarding is not what a phase being worked on says', (
   // from handoff files. Retry a phase and the board goes on saying it for as
   // long as it takes the session to write one — an hour is normal — while the
   // run has demonstrably started work. The row showed only the stale word.
-  it('shows the live phase as in progress while the run is on it', () => {
-    expect(displayState('ready', { active: true, live: true })).toBe('in-progress');
-    expect(displayState('waiting', { active: true, live: true })).toBe('in-progress');
+  // The rule keys on the ROW's own record being live-running — not on
+  // `run.activePhase`, which mirrors only the LOWEST live lane and sent every
+  // other running lane straight back to "Boarding".
+  it('shows a phase whose own record is live-running as in progress', () => {
+    expect(displayState('ready', { running: true })).toBe('in-progress');
+    expect(displayState('waiting', { running: true })).toBe('in-progress');
   });
 
   it('never overrules the board on done — that is the board reporting work finished', () => {
-    expect(displayState('done', { active: true, live: true })).toBe('done');
+    expect(displayState('done', { running: true })).toBe('done');
   });
 
   it('leaves every other row exactly as the board reported it', () => {
-    expect(displayState('ready', { active: false, live: true })).toBe('ready');
-    // Not live: the run is stopped, paused or belongs to another console, so
-    // there is no fresher fact to prefer and the board is all there is.
-    expect(displayState('ready', { active: true, live: false })).toBe('ready');
-    expect(displayState('blocked', { active: false, live: false })).toBe('blocked');
+    // Not running: the record is settled, or the console is not live — either
+    // way there is no fresher fact to prefer and the board is all there is.
+    expect(displayState('ready', { running: false })).toBe('ready');
+    expect(displayState('blocked', { running: false })).toBe('blocked');
   });
 });
 

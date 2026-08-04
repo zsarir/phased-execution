@@ -53,6 +53,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // from `../terminal/ended`, which pulls in no xterm.
 vi.mock('../terminal/pane', async () => ({
   ...(await import('../terminal/ended')),
+  // The real one — its own behaviour has its own test file.
+  ...(await import('../terminal/vitals')),
   TerminalPane: (props: { sessionId: string }) => {
     pane(props.sessionId);
     return <div data-testid="pane">{props.sessionId}</div>;
@@ -325,37 +327,25 @@ describe('the plan wizard', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /start authoring/i }));
 
-    // `permissionMode: 'plan'` without anyone choosing it: the form opens on it
-    // and the server defaults to it, so a wizard session explores and presents
-    // the phase graph before it writes the plan file.
+    // NO `permissionMode` in the ticket: the omission is the choice. The
+    // server defaults a plan intent to plan mode, and the select this form
+    // used to offer was the one hole left in that rule — `auto` here launched
+    // an authoring session that could write a plan nobody approved.
     await waitFor(() => expect(agentTicket).toHaveBeenCalledWith({
       intent: 'plan', brief: 'Ship a cart API.', model: 'opus', effort: 'max',
-      permissionMode: 'plan',
     }));
     await waitFor(() => expect(window.location.hash).toBe('#/agent/a1'));
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('the permission select is a real choice, and the CLI default is expressible', async () => {
+  it('permissions are fixed to plan mode — shown, not selectable', async () => {
     const { NewPlanWizard } = await import('./wizard');
     mount(<NewPlanWizard onClose={() => {}} />);
 
-    const select = await screen.findByLabelText(/permissions/i);
-    expect(select).toHaveValue('plan');
-
-    fireEvent.change(screen.getByPlaceholderText(/what should this plan achieve/i), {
-      target: { value: 'Ship a cart API.' },
-    });
-    // `''` is the launcher's spelling of the CLI default, and it reaches the
-    // server as an omission — which for a plan session means "apply the plan
-    // default", i.e. the opposite of what was picked. `manual` is the CLI's
-    // documented alias for `default`, so the choice survives the trip.
-    fireEvent.change(select, { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: /start authoring/i }));
-
-    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith(
-      expect.objectContaining({ permissionMode: 'manual' }),
-    ));
+    // The fact is stated where the select used to be…
+    expect(await screen.findByText(/plan mode — fixed for authoring/i)).toBeInTheDocument();
+    // …and there is genuinely nothing to change: no permissions control exists.
+    expect(screen.queryByLabelText(/permissions/i)).toBeNull();
   });
 
   it('needs an open source directory before it can author anywhere', async () => {

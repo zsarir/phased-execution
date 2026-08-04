@@ -43,3 +43,25 @@ load ../helpers/test_helper
   [ "$status" -ne 0 ]
   assert_contains "$output" "cycle"
 }
+
+@test "F10: a handoff with NO depends_on line is judged, never a silent death" {
+  # Under `set -eo pipefail` the missing line used to fail the grep pipeline
+  # and kill the validator mid-loop: exit 1, no ✗, no summary — the silent-red
+  # shape this script exists to prevent. Dep-less phase: absent line means [].
+  setup_docs scoped scoped
+  write_handoff scoped 1 root complete
+  printf '\n## Start next phase(s)\nnothing.\n' >> "$DOCS_ROOT/docs/handoffs/scoped/phase-01-root.md"
+  run pe_validate scoped
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "VALIDATE OK"
+}
+
+@test "F10: a missing depends_on on a phase WITH deps reports the disagreement out loud" {
+  setup_docs scoped scoped
+  write_handoff scoped 2 api complete
+  printf '\n## Start next phase(s)\nnothing.\n' >> "$DOCS_ROOT/docs/handoffs/scoped/phase-02-api.md"
+  run pe_validate scoped
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "disagrees with plan graph"
+  assert_contains "$output" "VALIDATE FAIL"
+}

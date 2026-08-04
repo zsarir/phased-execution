@@ -237,6 +237,7 @@ function FleetRows({
   onResolve,
   allowRun,
   busyId,
+  reposBySlug,
 }: {
   rows: RunRow[];
   open: Set<string>;
@@ -246,6 +247,7 @@ function FleetRows({
   onResolve?: (row: RunRow, resolve: boolean) => void;
   allowRun: boolean;
   busyId?: string;
+  reposBySlug?: Record<string, string[]>;
 }) {
   return (
     <TBody>
@@ -269,9 +271,22 @@ function FleetRows({
               </button>
             </TD>
             <TD className="max-w-48">
-              <a href={planHref(row.slug, 'run')} className="block truncate text-ink hover:text-action">
+              <a
+                href={planHref(row.slug, 'run')}
+                className="block truncate text-ink hover:text-action"
+                // The repos this plan touches — the fact that decides what may
+                // run beside it — without spending a column the table lacks.
+                title={reposBySlug?.[row.slug]?.length
+                  ? `repos: ${reposBySlug[row.slug].join(', ')}`
+                  : undefined}
+              >
                 {row.slug}
               </a>
+              {Boolean(reposBySlug?.[row.slug]?.length) && (
+                <span className="block truncate font-mono text-2xs text-ink-faint">
+                  {reposBySlug![row.slug].join(' · ')}
+                </span>
+              )}
             </TD>
             <TD><code className="font-mono text-2xs text-ink-faint">{row.id}</code></TD>
             <TD>
@@ -360,6 +375,7 @@ export function Fleet({
   onResolve,
   allowRun = false,
   busyId,
+  reposBySlug,
 }: {
   rows: RunRow[];
   grouped: boolean;
@@ -368,6 +384,8 @@ export function Fleet({
   onResolve?: (row: RunRow, resolve: boolean) => void;
   allowRun?: boolean;
   busyId?: string;
+  /** Plan slug → the repos its phases touch, for the group header + row hint. */
+  reposBySlug?: Record<string, string[]>;
 }) {
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [all, setAll] = useState(false);
@@ -405,9 +423,24 @@ export function Fleet({
       {groups.map((group) => (
         <div key={group.key || 'all'}>
           {grouped && (
-            <h3 className="mb-1 flex items-baseline gap-2 text-2xs font-medium uppercase tracking-[0.14em] text-ink-faint">
+            <h3 className="mb-1 flex flex-wrap items-baseline gap-2 text-2xs font-medium uppercase tracking-[0.14em] text-ink-faint">
               <a href={planHref(group.key, 'run')} className="hover:text-action">{group.key}</a>
               <span className="font-mono tabular-nums">{group.rows.length}</span>
+              {Boolean(reposBySlug?.[group.key]?.length) && (
+                <span
+                  className="flex items-center gap-1 normal-case tracking-normal"
+                  title={reposBySlug![group.key].join(', ')}
+                >
+                  {reposBySlug![group.key].slice(0, 3).map((repo) => (
+                    <span key={repo} className="rounded border border-rule px-1 font-mono text-ink-muted">
+                      {repo}
+                    </span>
+                  ))}
+                  {reposBySlug![group.key].length > 3 && (
+                    <span>+{reposBySlug![group.key].length - 3}</span>
+                  )}
+                </span>
+              )}
             </h3>
           )}
           <TableWrap>
@@ -422,6 +455,7 @@ export function Fleet({
                 onResolve={onResolve}
                 allowRun={allowRun}
                 busyId={busyId}
+                reposBySlug={reposBySlug}
               />
             </Table>
           </TableWrap>
