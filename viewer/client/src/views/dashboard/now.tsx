@@ -22,6 +22,7 @@ import {
 import { phaseHref, planHref } from '@shared/routes.js';
 import type { HealthIssue, RunState, TerminalSession } from '@/lib/api';
 import { isLive } from '../run/defaults';
+import { runStatusTitle } from '@/lib/status-vocab';
 // Data + dialog only — the wizard never imports the pane, so this does not drag
 // xterm into the dashboard chunk. See the note at the top of `agent/wizard.tsx`.
 import { NewPlanWizardButton } from '../agent/wizard';
@@ -75,7 +76,7 @@ export function LiveStrip({ runs }: { runs: RunState[] }) {
                   <span className="block truncate font-display text-lg leading-tight">{run.slug}</span>
                   <span className="block truncate text-2xs text-ink-muted">
                     {run.activePhase != null ? `phase ${run.activePhase} · ` : ''}
-                    {RUN_WORD[run.status] ?? run.status}
+                    <span title={runStatusTitle(run.status)}>{RUN_WORD[run.status] ?? run.status}</span>
                     {run.model ? ` · ${run.model}` : ''}
                   </span>
                 </span>

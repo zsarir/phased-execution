@@ -1,0 +1,179 @@
+/**
+ * Every status word this console shows, explained — what it MEANS and what to
+ * DO about it — in one place.
+ *
+ * Three vocabularies coexist by design and used to be explained nowhere:
+ * a RUN's status ("what is the autopilot doing"), a PHASE RECORD's status
+ * ("what happened to this phase in this run"), and the BOARD's state ("what
+ * is true of the phase on disk", the departures words). An operator staring
+ * at `parked` next to `Held` next to `interrupted` was expected to already
+ * know all three — which is exactly the burden this console exists to remove.
+ *
+ * `Record<Status, …>` on the closed unions makes forgetting a new status a
+ * type error here, not a silent empty tooltip. Chips read these as their
+ * default `title`; the Guide's Reference section renders the same objects as
+ * tables — one source, so the hover and the page can never disagree.
+ */
+
+// Type-only, and straight from the module rather than the barrel: chip.tsx
+// imports this file's functions at runtime, so the runtime graph must stay
+// one-directional (chip → vocab); a type edge the compiler erases is fine.
+import type { PhaseStatus, RunStatus } from '@/lib/api';
+import type { PhaseState } from '@/components/ui/chip';
+
+export type StatusHelp = {
+  /** What the word means, in one sentence. */
+  means: string;
+  /** What, if anything, the operator should do about it. */
+  then: string;
+};
+
+/** The RUN's own status — what the autopilot is doing with the whole plan. */
+export const RUN_STATUS_HELP: Record<RunStatus, StatusHelp> = {
+  running: {
+    means: 'The autopilot is driving: sessions spawn, verify and hand off by themselves.',
+    then: 'Nothing to do — watch the phase tabs. Pause, Freeze and Stop all apply.',
+  },
+  pausing: {
+    means: 'A pause is armed: whatever is running finishes, and nothing new boards.',
+    then: 'Wait for the boundary, or Cancel pause to keep going.',
+  },
+  paused: {
+    means: 'Stopped between phases at your request; nothing is running.',
+    then: 'Press Continue when ready — it picks up exactly where it left off.',
+  },
+  waiting: {
+    means: "Sleeping until the account's usage window reopens, then resumes itself.",
+    then: 'Nothing to do.',
+  },
+  frozen: {
+    means: 'The session is stopped where it stands (mid-token), warm and losing nothing.',
+    then: 'Continue the frozen session to resume instantly, or Stop it.',
+  },
+  parked: {
+    means: 'Every remaining phase needs a person first — a gate, an approval, a decision.',
+    then: 'Read "Why this is stopped": each blocker is named with its remedy.',
+  },
+  queued: {
+    means: 'In line behind another plan holding the same repos; starts itself when the scope frees.',
+    then: 'Nothing to do — the holder is named on the queued chip.',
+  },
+  halting: {
+    means: 'A halt was recorded; live sessions are finishing before the run fully stops.',
+    then: 'Read the halt card. The run reads halted once the last session settles.',
+  },
+  halted: {
+    means: 'Stopped on something that must not be automated past — usually a red verification.',
+    then: 'Use Fix with AI on the halt card, or fix the cause yourself and Retry the phase.',
+  },
+  stopping: {
+    means: 'A stop was requested; sessions are being wound down.',
+    then: 'Wait a moment.',
+  },
+  finished: {
+    means: 'Nothing left to run on this plan.',
+    then: 'Nothing to do.',
+  },
+  interrupted: {
+    means: 'Nothing is driving it and nothing recorded why — a console or session died mid-flight.',
+    then: 'Resume with AI, or press Continue — work already on disk is kept.',
+  },
+};
+
+/** A PHASE RECORD's status — what happened to that phase in THIS run. */
+export const PHASE_STATUS_HELP: Record<PhaseStatus, StatusHelp> = {
+  pending: {
+    means: 'This run has not started the phase yet.',
+    then: 'Nothing to do — the loop reaches it when its dependencies are done.',
+  },
+  gated: {
+    means: "Parked at the plan's gate — a condition the plan reserves for a person.",
+    then: 'Confirm the condition (the note quotes it), then Retry re-checks the gate.',
+  },
+  running: {
+    means: 'A session is working this phase right now.',
+    then: 'Watch its tab; Ask reaches the session mid-flight.',
+  },
+  verifying: {
+    means: "The session finished; the console is running the plan's §Verification commands itself.",
+    then: 'Nothing to do — green marks it done, red halts with the evidence.',
+  },
+  'awaiting-verification': {
+    means: 'The machine checks passed; steps only a person can confirm remain.',
+    then: 'Answer the verification card — it lists exactly what needs your eyes.',
+  },
+  done: {
+    means: 'Finished and independently verified in this run.',
+    then: 'Nothing to do.',
+  },
+  failed: {
+    means: 'The attempt failed — a red verification, or a session that produced nothing.',
+    then: 'Why? shows the evidence; Fix with AI repairs it, or Retry restarts the run here.',
+  },
+  interrupted: {
+    means: 'The session or console died mid-phase; the working tree is wherever it stopped.',
+    then: 'Resume with AI — uncommitted work is preserved, never redone blindly.',
+  },
+  skipped: {
+    means: 'Taken off this run’s list by the operator.',
+    then: 'Retry it later if it should still happen.',
+  },
+  parked: {
+    means: 'Needs a person before the loop will touch it again — the note says exactly why.',
+    then: 'Read the note (gate, foreign lock, decision), act on it, then Retry.',
+  },
+  queued: {
+    means: 'Waiting for repos another phase or plan is holding; starts itself when they free.',
+    then: 'Nothing to do — the queued chip names what it waits on.',
+  },
+};
+
+/** The BOARD's state — what is true of the phase on disk, departures spelling. */
+export const BOARD_STATE_HELP: Record<PhaseState, StatusHelp> = {
+  done: {
+    means: 'Departed — the handoff is complete; the work is finished and verified.',
+    then: 'Nothing to do.',
+  },
+  ready: {
+    means: 'Boarding — every dependency is met; this phase can start now.',
+    then: 'Start it (or the autopilot will), or copy its boot prompt from the phase page.',
+  },
+  'in-progress': {
+    means: 'On track — a session is on this phase right now.',
+    then: 'Watch its tab. The board catches up when the handoff lands.',
+  },
+  waiting: {
+    means: 'Held — an earlier phase it depends on is not done yet.',
+    then: 'Nothing to do here; finish what it waits on.',
+  },
+  blocked: {
+    means: 'Its handoff is marked blocked — the Outstanding section says exactly why.',
+    then: 'Read the excerpt on the phase page, or use Repair with AI on the run page.',
+  },
+  stuck: {
+    means: 'Its handoff is marked blocked or in-progress — the Outstanding section says why.',
+    then: 'Read the excerpt on the phase page, or use Repair with AI on the run page.',
+  },
+  gated: {
+    means: 'The plan reserves a decision for a person before this phase may run.',
+    then: 'Confirm the gate condition (quoted on the phase page), then start or Retry.',
+  },
+};
+
+/** One hover-sized line: the meaning, then the move. */
+function line(help: StatusHelp | undefined): string | undefined {
+  if (!help) return undefined;
+  return `${help.means}\n\n→ ${help.then}`;
+}
+
+export function runStatusTitle(status: string | undefined): string | undefined {
+  return line(RUN_STATUS_HELP[status as RunStatus]);
+}
+
+export function phaseStatusTitle(status: string | undefined): string | undefined {
+  return line(PHASE_STATUS_HELP[status as PhaseStatus]);
+}
+
+export function boardStateTitle(state: string | undefined): string | undefined {
+  return line(BOARD_STATE_HELP[state as PhaseState]);
+}

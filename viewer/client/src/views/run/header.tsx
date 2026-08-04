@@ -18,6 +18,7 @@ import { Chip, Tile } from '@/components/ui';
 import { elapsed, etaLabel, etaPoint, etaTitle, money, relativeTime } from '@/lib/format';
 import { useNow } from '@/lib/clock';
 import { cn } from '@/lib/cn';
+import { runStatusTitle } from '@/lib/status-vocab';
 import type { EtaEstimate, PhaseEta, PhaseRecord, RunState, RunStatus } from '@/lib/api';
 
 /**
@@ -108,7 +109,7 @@ export function RunHeader({
   return (
     <header className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
-        <Chip tone={RUN_TONE[run.status]}>{run.status}</Chip>
+        <Chip tone={RUN_TONE[run.status]} title={runStatusTitle(run.status)}>{run.status}</Chip>
         {lanes.length > 1 ? (
           <>
             <span className="font-display text-sm">phases {lanes.join(', ')}</span>

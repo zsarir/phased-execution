@@ -32,6 +32,7 @@ import {
 import { LoadMeter, RunStrip } from '@/components/charts';
 import { duration, money, relativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { runStatusTitle } from '@/lib/status-vocab';
 import { planHref } from '@shared/routes.js';
 import type { ChipProps } from '@/components/ui';
 import type { PhaseRecord } from '@/lib/api';
@@ -294,6 +295,7 @@ function FleetRows({
                 tone={RUN_TONE[row.status as keyof typeof RUN_TONE]}
                 dot={row.live}
                 className={cn(row.live && 'animate-pulse-soft')}
+                title={runStatusTitle(row.status)}
               >
                 {row.status}
               </Chip>

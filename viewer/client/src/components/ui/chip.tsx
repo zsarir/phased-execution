@@ -1,6 +1,7 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import type { HTMLAttributes } from 'react';
 import { cn } from '@/lib/cn';
+import { boardStateTitle } from '@/lib/status-vocab';
 
 /**
  * The tone variants are real classes, not a colour passed in as a prop.
@@ -105,6 +106,7 @@ export function StateChip({
   label,
   board = false,
   className,
+  title,
   ...props
 }: {
   state: PhaseState | string;
@@ -118,6 +120,10 @@ export function StateChip({
       tone="state"
       dot
       className={cn(`state-${resolved}`, className)}
+      // Every state word explains itself on hover — what it means and what to
+      // do — unless the caller has something more specific to say. The same
+      // text the Guide's Reference tables render, from one vocabulary module.
+      title={title ?? boardStateTitle(resolved)}
       {...props}
     >
       {label ?? (board ? STATE_BOARD : STATE_LABEL)[resolved]}

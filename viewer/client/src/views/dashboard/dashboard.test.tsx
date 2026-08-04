@@ -216,7 +216,11 @@ describe('the dashboard', () => {
     const { default: DashboardView } = await import('./index');
     mount(<DashboardView />);
 
-    expect(await screen.findByText(/phase 2 · running · opus/)).toBeTruthy();
+    // A function matcher on textContent: the status word carries its own
+    // explanatory title span now, which splits the line into elements.
+    expect(await screen.findByText((_, element) =>
+      element?.textContent === 'phase 2 · running · opus'
+      && element.className.includes('truncate'))).toBeTruthy();
     expect(screen.queryByText(/Nothing is running/)).toBeNull();
   });
 

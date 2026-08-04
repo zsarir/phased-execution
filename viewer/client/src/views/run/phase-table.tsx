@@ -41,6 +41,7 @@ import { Bot, Gauge } from 'lucide-react';
 
 import { scopeOfRow } from '@shared/scope.js';
 import { ScopeChips } from '@/components/scope-chips';
+import { phaseStatusTitle } from '@/lib/status-vocab';
 import { cn } from '@/lib/cn';
 
 /**
@@ -356,7 +357,7 @@ function PhaseRows({
         <TD className="text-2xs">
           {r ? (
             <>
-              <Chip tone={PHASE_TONE[r.status]}>{r.status}</Chip>
+              <Chip tone={PHASE_TONE[r.status]} title={phaseStatusTitle(r.status)}>{r.status}</Chip>
               {/* Same icon vocabulary as the header's Model tile — what a row
                   ran as should not be the smallest, least-scannable text on it. */}
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ink-faint">
