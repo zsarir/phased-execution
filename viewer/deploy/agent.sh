@@ -133,10 +133,33 @@ $notify_xml$skills_xml  </dict>
 </plist>
 PLIST_END
 
-  # bootout first so a re-install replaces cleanly rather than erroring.
+  # Bootout first so a re-install replaces cleanly rather than erroring — but
+  # bootout is ASYNCHRONOUS. Bootstrapping straight after it races the teardown
+  # and fails with "Bootstrap failed: 5: Input/output error", which leaves the
+  # old job gone and the new one never loaded: the console is simply down, and
+  # the installer has already printed its success banner. Wait for the label to
+  # actually disappear, then retry a few times.
   launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
-  launchctl bootstrap "gui/$UID" "$PLIST"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+
+  bootstrapped=0
+  for attempt in 1 2 3 4 5; do
+    if launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null; then bootstrapped=1; break; fi
+    [ "$attempt" -eq 1 ] && echo "launchd is still tearing the old job down — retrying…" >&2
+    sleep 1
+  done
+  [ "$bootstrapped" -eq 1 ] || die "could not load $LABEL — the console is NOT running. Try: launchctl bootstrap gui/$UID $PLIST"
   launchctl enable "gui/$UID/$LABEL"
+
+  # Prove it came up rather than assuming: a banner claiming success over a
+  # dead console is worse than an error.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
 
   echo "installed  $PLIST"
   echo "root       $root"

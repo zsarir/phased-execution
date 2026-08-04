@@ -95,13 +95,26 @@ type Run = { ok: boolean; stdout: string; code?: string };
  * `execFile` reports a missing binary as `ENOENT` on the error rather than a
  * non-zero exit, which is the difference between "not installed" and "installed
  * and unhappy" — so the code is carried out rather than flattened into `ok`.
+ *
+ * `TERM` is load-bearing and was found the hard way. The macOS app's CLI is a
+ * shim in front of the GUI, and with no `TERM` in the environment it concludes
+ * it was double-clicked rather than run from a shell — so instead of answering
+ * it tries to *open the app*, and prints "The Tailscale GUI failed to start"
+ * where the JSON should be. Every shell has `TERM`; launchd hands a job an
+ * almost-empty environment, so this worked in every test and on every developer
+ * machine and reported `installed-not-running` on the one console that runs
+ * supervised, with Tailscale plainly running.
  */
 function run(binary: string, args: string[]): Promise<Run> {
   return new Promise((resolve) => {
     execFile(
       binary,
       args,
-      { timeout: PROBE_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
+      {
+        timeout: PROBE_TIMEOUT_MS,
+        maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, TERM: process.env.TERM || 'dumb' },
+      },
       (error, stdout) => {
         if (!error) return resolve({ ok: true, stdout: String(stdout) });
         const code = typeof (error as NodeJS.ErrnoException).code === 'string'

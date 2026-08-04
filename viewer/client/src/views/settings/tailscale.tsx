@@ -48,7 +48,9 @@ function Devices({ self, peers }: { self: TailscaleDevice; peers: TailscaleDevic
             <tr key={device.dnsName || device.hostName} className="border-t border-rule">
               <td className="py-1 pr-3 text-ink">
                 {device.hostName}
-                {device.isSelf && <span className="ml-1 font-sans text-2xs text-ink-faint">this machine</span>}
+                {/* The leading space is read; the margin is only seen. Without
+                    it a screen reader says "…MacBook Prothis machine". */}
+                {device.isSelf && <span className="ml-1 font-sans text-2xs text-ink-faint">{' '}this machine</span>}
               </td>
               <td className="py-1 pr-3 text-ink-muted">{device.os ?? '—'}</td>
               <td className="py-1">

@@ -74,7 +74,11 @@ const SERVED = {
  * only honest evidence that a second call did not shell out is that the binary
  * did not run.
  */
-function fakeCli(options: { status?: unknown; serve?: unknown; exit?: number; stderr?: string }): {
+function fakeCli(options: {
+  status?: unknown; serve?: unknown; exit?: number; stderr?: string;
+  /** Refuse to answer without a TERM, exactly as the macOS app's shim does. */
+  requireTerm?: boolean;
+}): {
   bin: string; calls: () => string[]; cleanup: () => void;
 } {
   const dir = mkdtempSync(join(tmpdir(), 'pc-tailscale-'));
@@ -85,6 +89,9 @@ function fakeCli(options: { status?: unknown; serve?: unknown; exit?: number; st
 
   writeFileSync(bin, `#!/usr/bin/env bash
 echo "$1 $2" >> ${JSON.stringify(calls)}
+${options.requireTerm
+    ? 'if [ -z "${TERM:-}" ]; then echo "The Tailscale GUI failed to start"; exit 0; fi'
+    : ''}
 if [ "$1" = "serve" ]; then
   cat <<'SERVE_EOF'
 ${emit(options.serve)}
@@ -260,6 +267,32 @@ test('a second read inside the window does not shell out again', async () => {
   } finally {
     delete process.env.PHASE_CONSOLE_TAILSCALE_BIN;
     resetTailscaleCache();
+    cli.cleanup();
+  }
+});
+
+test('the CLI is given a TERM even when this process has none', async () => {
+  /*
+   * The bug this pins cost a live console its tailnet card.
+   *
+   * The macOS app's `tailscale` is a shim in front of the GUI. With no `TERM`
+   * it decides it was double-clicked, tries to open the app, and prints
+   * "The Tailscale GUI failed to start" instead of JSON — so the probe reported
+   * `installed-not-running` on a machine where Tailscale was plainly running.
+   * Every shell sets `TERM`, which is why it passed everywhere except under
+   * launchd, the one place the console actually runs.
+   *
+   * So the fixture refuses to answer without one, and the assertion is simply
+   * that we still get a reading with `TERM` deleted from this process.
+   */
+  const cli = fakeCli({ status: RUNNING, serve: SERVED, requireTerm: true });
+  const saved = process.env.TERM;
+  delete process.env.TERM;
+  try {
+    const status = await probeWith(cli.bin);
+    assert.equal(status.state, 'running', 'the probe must hand the CLI a TERM of its own');
+  } finally {
+    if (saved === undefined) delete process.env.TERM; else process.env.TERM = saved;
     cli.cleanup();
   }
 });
