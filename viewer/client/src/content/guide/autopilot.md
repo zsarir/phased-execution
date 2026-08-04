@@ -48,6 +48,24 @@ Each phase row can be opened for a **diagnosis**: what the board says, what the 
 actually returned, whether a session is resumable, what is uncommitted in the working tree, and who
 holds the lock. A phase that is not done always offers a way forward.
 
+## Every warning carries its remedy
+
+A dashboard that lists problems and offers nothing is a dashboard you stop reading. So each card
+under **Waiting on you** has the verb that answers it beside it, and each of those verbs works out
+what it needs rather than asking you to retype it.
+
+| The card | The verb beside it |
+|---|---|
+| A halted or interrupted run | **Continue**, **Dismiss**, or an AI recovery — and if the phases it stopped for have since gone green, it is resolved for you before you get there. |
+| A stale claim | **Release** — one, or all of them at once. The owner is read off the lock file, so there is nothing to type and nothing to get wrong. A lease that is still live is refused rather than stolen. |
+| Unread notifications | **Mark all read**. |
+| A plan that will not parse | The actual issues, each a link to the line, and **Repair with AI**. |
+
+**A resolved run is annotated, never deleted.** It keeps its status, its halt reason and its place
+on the Runs page — you can see what happened and why it no longer demands anything, and undoing that
+is a click. What you overrode by hand is remembered as an override, so the next read does not
+quietly re-derive it and make the button look broken.
+
 ## Stop 7 · The plan closes itself out 🟢
 
 The run reports **finished** when no phase is left outstanding. Each phase has written its handoff

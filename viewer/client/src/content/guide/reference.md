@@ -19,6 +19,8 @@ clears itself; one it cannot waits for you.
 | `--root <dir>` | Open this repository immediately, skipping the picker. |
 | `--allow-writes` | Enable scaffolding, QA records and locks. |
 | `--allow-run` | Enable the autopilot. Separate on purpose. |
+| `--allow-agent` | Open interactive `claude` sessions — including recovery and QA reviews — and the *New plan with AI* wizard. |
+| `--allow-terminal` | Open a shell in the browser. No deny list, no approval hook: whoever is at the keyboard is the policy. |
 | `--port <n>` | Listen somewhere other than 4123. |
 | `--remote <host>` | Also answer to this hostname, behind a proxy that authenticates callers. Turns on strict `Host` checking. |
 | `--remote-user <login>` | A login allowed to arrive that way. Required by `--remote`. |
@@ -32,7 +34,7 @@ clears itself; one it cannot waits for you.
 | `docs/plans/` | The plans. Yours, in git. |
 | `docs/handoffs/` | Per-phase handoffs and locks. Yours, in git. |
 | `~/.local/state/phase-console/` | Run checkpoints, journals, the log. Never inside your repository, so `git status` stays clean. |
-| `~/.config/phase-console/` | Preferences and your autopilot policy. |
+| `~/.config/phase-console/` | Preferences — notification categories, push devices — and your autopilot policy. |
 
 ## The engine, if you would rather drive it yourself
 

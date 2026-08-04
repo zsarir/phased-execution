@@ -77,13 +77,18 @@ to discover it at 3am.
 `--allow-terminal` and `--allow-agent` sit outside everything above, on purpose. A shell is a
 person typing — no deny list, no approval hook, no profile; the only policy is whoever is at the
 keyboard. An agent session sits in between: the console builds the `claude` command itself from
-allowlisted choices (model, effort, permission mode — never the bypass mode), but once the session
-is up, approvals happen **in the terminal**, not in the console's queue. Neither capability
-weakens the autopilot's rules — they are different doors into the same machine, each behind its
-own flag.
+allowlisted choices (model, effort, permission mode), but once the session is up, approvals happen
+**in the terminal**, not in the console's queue. Neither capability weakens the autopilot's rules —
+they are different doors into the same machine, each behind its own flag.
+
+**Bypass on an agent session exists in exactly one place: a QA review.** A review reads a diff and
+runs a phase's tests, and stopping it every few minutes to approve a `git log` is how a review stops
+happening. So `permissionProfile` is accepted with a QA launch and **refused on every other agent
+session**, which is a rule rather than a habit — the surface cannot drift open later. `trusted` is
+deliberately not offered there: it means *no approval card*, and there is no card in a terminal you
+are watching. The deny list is untouched by any of this.
 
 Sessions of both kinds are **durable**: closing the tab, navigating away or putting the phone to
 sleep detaches the socket and leaves the process running, and it stops only when you close it or
-when the console itself goes down. A session that has ended stays in the list with its exit status
-— and, for an agent session, the `claude --resume <id>` it can be picked up with — until you
-dismiss it. The cap of 8 counts live processes only.
+when the console itself goes down. **Sessions** covers what follows from that — the list, the
+ended-session record, recovery and review sessions, and the off switch.

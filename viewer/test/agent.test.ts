@@ -10,6 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { homedir, hostname, userInfo } from 'node:os';
 
 import {
   buildAgentLaunch, phasedExecutionSkillId, planPrompt,
@@ -160,16 +161,22 @@ test('the composed plan prompt walks Mode 1 end to end and carries the brief', (
 });
 
 test('the committed template is neutral — the scrub patterns find nothing', () => {
-  const text = planPrompt(
-    'a neutral brief about a cart api',
-    'phased-execution',
-    '/opt/phased-execution/scripts',
-  );
-  for (const pattern of [
-    /themarketrobo/i, /\bmobinzarekar\b/i, /\.ts\.net\/[a-z]/i,
-    /front-admin/i, /platform-architecture/i, /\/Users\//,
-  ]) {
-    assert.ok(!pattern.test(text), String(pattern));
+  // Derived, never spelled out. This file ships in a public repository, and a
+  // test that lists the operator's real name and employer in order to forbid
+  // them publishes exactly what it is defending.
+  const scriptsDir = '/opt/phased-execution/scripts';
+  const text = planPrompt('a neutral brief about a cart api', 'phased-execution', scriptsDir);
+
+  for (const secret of [userInfo().username, hostname(), homedir()]) {
+    // A single-character username would match everything; nothing real is that short.
+    if (secret.length < 3) continue;
+    assert.ok(!text.toLowerCase().includes(secret.toLowerCase()), `template names ${secret.length} chars of local identity`);
+  }
+  assert.ok(!/\.ts\.net\/[a-z]/i.test(text), 'template names a tailnet');
+  // The structural rule the literals were a proxy for: the only absolute path a
+  // committed template may carry is the one its caller passed in.
+  for (const found of text.match(/(?:\/Users\/|\/home\/|\/opt\/)[\w.\-/]+/g) ?? []) {
+    assert.ok(found.startsWith(scriptsDir), `template names ${found}`);
   }
 });
 

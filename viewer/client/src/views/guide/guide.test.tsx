@@ -13,6 +13,7 @@
  * instructions tell people to open.
  */
 
+import { homedir, hostname, userInfo } from 'node:os';
 import { render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
@@ -68,11 +69,18 @@ describe('the guide section registry', () => {
     // is somebody's actual machine.
     const addresses = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g;
     const ALLOWED = new Set(['127.0.0.1', '0.0.0.0']);
-    const forbidden = [/themarketrobo/i, /\bmobinzarekar\b/i, /\.ts\.net\/[a-z]/i];
+    // Whoever is running this, derived — never written down. A test that spells
+    // out the name it forbids leaks it to everyone who reads the test.
+    const local = [userInfo().username, hostname(), homedir()].filter((s) => s.length >= 3);
+    const forbidden = [/\.ts\.net\/[a-z]/i, /\/Users\//, /\/home\/[a-z]/i];
 
     for (const section of SECTIONS) {
       for (const pattern of forbidden) {
         expect(section.body, `${section.id} matched ${pattern}`).not.toMatch(pattern);
+      }
+      for (const secret of local) {
+        expect(section.body.toLowerCase(), `${section.id} names local identity`)
+          .not.toContain(secret.toLowerCase());
       }
       for (const found of section.body.match(addresses) ?? []) {
         expect(ALLOWED.has(found), `${section.id} names ${found}`).toBe(true);

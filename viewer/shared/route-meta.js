@@ -75,6 +75,8 @@ export const GUIDE_SECTIONS = Object.freeze([
   'concepts',
   'running',
   'autopilot',
+  'sessions',
+  'notifications',
   'permissions',
   'mobile',
   'troubleshooting',

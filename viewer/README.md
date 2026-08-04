@@ -56,6 +56,19 @@ working one. Every exit writes down its reason to
 crash the next time the console starts — so "it just stopped" is a question the log can
 answer.
 
+## Stop it
+
+**Settings → Shut down** ends the console and everything it owns. Under launchd that means
+`launchctl bootout`, so the job is unloaded and *stays* off — otherwise `KeepAlive` would turn the
+exit into a restart, which is why the console had a Restart button and no Stop one for so long.
+Anywhere else it is a graceful exit.
+
+The confirm dialog is an inventory rather than a warning: it lists the run it is about to stop (which
+is checkpointed first and resumes when the console comes back), each live agent session, each
+terminal, and the command that brings it all back. Restart shows the same list — it has always killed
+every pty on the way out and never said so. Shut down is deliberately **not** behind `--allow-run`:
+the one thing every console must be able to do is stop.
+
 ## What it shows
 
 | Screen | Contents |
@@ -71,8 +84,11 @@ answer.
 | **Ready now** | Every ready phase across every plan, ranked by how much it unblocks, each with a copyable prompt. |
 | **Statistics** | Portfolio totals, velocity, completions calendar, size mix, repos, skills, models, locks and every health issue. |
 | **Autopilot** | Drive a plan unattended: one `claude -p` per phase, with the model, effort, skills and tool set chosen per run or per phase; the live session console; the approval queue; and the controls to pause, stop, retry, skip or run a single phase. A **status header** carries a clock that advances on its own and an estimate of how much is left, and **What it is doing** shows the session's task list, its tool calls with durations and outcomes, and one lane per subagent. |
-| **Agent** | Interactive `claude` sessions in the browser terminal — off unless started with `--allow-agent`. A launcher for model, effort, permission mode, the first prompt and extra skills; a **New plan with AI** wizard that boots the skill's plan mode from your brief and links the plan the moment it exists; ended sessions offer their `claude --resume` command. The argv is built server-side from allowlisted fields — the browser never supplies a command. |
-| **Terminal** | A real shell in the browser — off unless the console was started with `--allow-terminal`. Token-handshaked WebSocket, persistent sessions that survive a reload, a key bar for phone keyboards (including `⇧Tab`, claude's permission-mode cycle). |
+| **Agent** | Interactive `claude` sessions in the browser terminal — off unless started with `--allow-agent`. A launcher for model, effort, permission mode, the first prompt and extra skills; a **New plan with AI** wizard that boots the skill's plan mode from your brief and links the plan the moment it exists; ended sessions offer their `claude --resume` command. The argv is built server-side from allowlisted fields — the browser never supplies a command. Also the target of **recovery** sessions (a stuck phase handed to a session with a prompt the server composes) and **QA reviews** (a finished phase handed to a fresh session carrying the skill's own QA brief). |
+| **Terminal** | A real shell in the browser — off unless the console was started with `--allow-terminal`. Token-handshaked WebSocket, durable sessions that survive a reload — and a browser close — a key bar for phone keyboards (including `⇧Tab`, claude's permission-mode cycle). |
+| **Dashboard** | What needs you now, each warning next to the verb that answers it: continue or dismiss a halted run, release a stale claim (one or all — the owner is read off the lock file), mark the inbox read, repair a plan that will not parse, or hand any of them to an AI recovery session. Plus every live session across every plan. |
+| **Notifications** | The inbox, and a switch per category that gates **every** delivery leg — no record, no live event, no `PHASE_CONSOLE_NOTIFY`, no push. Devices subscribed for push can only narrow what it allows. Pages mark their own records read as you read them. |
+| **Settings** | Permission rules with a builder that names the forms people get wrong, the notification and push registers, restart, and shut down. |
 | **Search** | Full text across all plans and handoffs, grouped by plan. |
 
 The page updates itself: a watch on `docs/` pushes changes over server-sent events, so a handoff
@@ -256,6 +272,38 @@ The runner will also not execute a verification command that reaches outside the
 it can be shown read-only — `curl -X POST`, `ssh box 'systemctl restart …'` and `psql -c 'DELETE …'`
 all go to a person with the reason attached, while `docker ps` and `psql -c 'SELECT …'` still run.
 
+## Sessions, and the two the console starts for you
+
+Agent sessions and shells are processes on this machine, not objects in a tab. Closing the browser
+detaches the socket and leaves the work running; reopening reattaches with scrollback. Nothing is
+reaped for being idle — a session ends when you end it, or when the console goes down — and the cap
+of 8 counts live processes, so ended ones never crowd out a new one. A session that has exited stays
+in the list with its status and its `claude --resume <id>` until you dismiss it, or for 24 hours.
+
+Two kinds are composed for you rather than typed:
+
+**Recovery.** Each way a run comes to rest has a session that answers it — a failed verification, a
+phase that did the work but wrote no handoff, an interrupted run, a run stopped at a sign-in, a stale
+claim, a plan that will not parse. **The server composes the prompt**, reading the board, the run,
+the phase diagnosis, the lock and the health issues itself; the browser names only the target, which
+is both the security property and the honest one. It refuses while the autopilot is driving, refuses
+a second recovery for the same phase (linking to the live one instead), and on exit re-reads the
+board from disk to say whether the phase actually went green.
+
+**Review.** Any finished phase can be handed to a fresh session for QA. The brief is the skill's own
+`phase-graph.sh --qa-prompt N`, embedded verbatim, plus what the engine cannot know: the handoff the
+phase wrote, its key files, the commits that touched it, and that phase's exit criteria and
+verification quoted rather than summarised. It will not resume the session that built the phase, run
+while the autopilot drives, run while a session is still building that phase, or start twice for one
+phase. **The session records the verdict with `qa-record.sh`; the console only reads it back** —
+`test-status.md` is re-read on exit and compared with a snapshot taken at launch, so a session that
+ended without recording one is reported as exactly that.
+
+Both ride `POST /api/terminal` behind `--allow-agent`; neither adds a route. `permissionProfile`
+(`guarded` | `bypass`) is accepted **only** with a review and refused on every other agent session.
+Turning QA on for a plan (`POST /api/plans/:slug/qa-mode`, `--allow-writes`) goes through the
+skill's own `--qa` path, which waives the already-finished phases rather than gating them.
+
 ## The rule it follows
 
 `phase-graph.sh` is the only source of truth for **done / ready / waiting**, session batches, boot
@@ -276,6 +324,7 @@ shows the exact command first:
 | Scaffold or repair a handoff | `new-handoff.sh` |
 | Record a QA result | `qa-record.sh` |
 | Claim or release a phase | `phase-lock.sh` |
+| Turn QA on for a plan | `new-handoff.sh … --qa` (it backfills finished phases as waived) |
 
 `--git` is never passed, so the console never commits or pushes — that stays a deliberate act in a
 terminal. Editing plan or handoff bodies is deliberately not offered; agents write those.

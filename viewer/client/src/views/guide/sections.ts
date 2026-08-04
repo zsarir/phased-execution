@@ -19,6 +19,8 @@ import { GUIDE_SECTIONS } from '@shared/route-meta.js';
 import concepts from '@/content/guide/concepts.md?raw';
 import running from '@/content/guide/running.md?raw';
 import autopilot from '@/content/guide/autopilot.md?raw';
+import sessions from '@/content/guide/sessions.md?raw';
+import notifications from '@/content/guide/notifications.md?raw';
 import permissions from '@/content/guide/permissions.md?raw';
 import mobile from '@/content/guide/mobile.md?raw';
 import troubleshooting from '@/content/guide/troubleshooting.md?raw';
@@ -51,6 +53,18 @@ export const SECTIONS: readonly GuideSection[] = [
     label: 'Autopilot',
     lede: 'Answering what needs you, what “verified” means, and the verbs for a phase that stalled.',
     body: autopilot,
+  },
+  {
+    id: 'sessions',
+    label: 'Sessions',
+    lede: 'Work that outlives the browser — plus the recovery and QA sessions the console starts for you, and the shutdown button.',
+    body: sessions,
+  },
+  {
+    id: 'notifications',
+    label: 'Notifications',
+    lede: 'One switch per category, governing every way a message could reach you — and how the inbox gets back to zero.',
+    body: notifications,
   },
   {
     id: 'permissions',
