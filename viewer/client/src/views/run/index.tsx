@@ -220,6 +220,9 @@ export function RunView({ detail }: { detail: PlanDetail }) {
             allowAgent,
             authFailure,
             sessions: terminals?.sessions,
+            qaMode: detail.summary.qaMode,
+            planSkills,
+            allowWrites: Boolean(state?.allowWrites),
             onStart: (phase, recoveryClass) => recover({
               recoveryClass,
               phase,

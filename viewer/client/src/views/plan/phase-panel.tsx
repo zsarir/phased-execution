@@ -5,8 +5,10 @@ import {
 import { Markdown, MarkdownInline } from '@/components/markdown';
 import { PromptCard } from '@/components/prompt-card';
 import { WriteMenu } from '@/components/write-menu';
+import { QaButton, QaVerdict } from '@/components/qa-launcher';
 import { api } from '@/lib/api';
-import { keys, useConsoleState, useGateStatus } from '@/lib/queries';
+import { keys, useConsoleState, useGateStatus, useSessions } from '@/lib/queries';
+import { canQa, liveQa } from '@/lib/qa';
 import { countdown, pad2, plural, weight } from '@/lib/format';
 import { handoffHref, phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
@@ -38,6 +40,7 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
   const slug = detail.summary.slug;
   const view = detail.phases.find((p) => p.phase === Number(phase));
   const { data: state } = useConsoleState();
+  const { data: terminals } = useSessions(state);
 
   // Only asked when the plan declares a machine-checkable gate for this phase —
   // the engine shells out per call, and every other phase would ask for nothing.
@@ -73,6 +76,7 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
                   {view.effort && <Chip mono>effort {view.effort}</Chip>}
                   {view.gated && <Chip tone="gate">gated</Chip>}
                   {view.analysis?.onCriticalPath && <Chip>critical path</Chip>}
+                  <QaVerdict qa={view.qa} />
                 </div>
               </div>
             </div>
@@ -137,6 +141,39 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
         {/* Inline, so a read-only console says what turning writes on would
             give you rather than showing an empty sidebar. */}
         <WriteMenu detail={detail} phase={view} allowWrites={Boolean(state?.allowWrites)} inline />
+
+        {/* A phase nobody has started has no diff to read, so the control is
+            absent rather than disabled there — "disabled" is for a capability
+            the console HAS and cannot offer, which is what allowAgent is. */}
+        {canQa(view.state) && (
+          <Card>
+            <CardHeader><CardTitle>Quality</CardTitle></CardHeader>
+            <CardBody className="flex flex-col gap-2">
+              <QaButton
+                target={{
+                  slug,
+                  phase: view.phase,
+                  title: view.title,
+                  model: view.model,
+                  effort: view.effort,
+                  qaMode: detail.summary.qaMode,
+                  ...(view.qa ? { qa: view.qa } : {}),
+                  planSkills: detail.plan?.sessionBudget?.skills ?? [],
+                }}
+                allowAgent={Boolean(state?.allowAgent)}
+                allowWrites={Boolean(state?.allowWrites)}
+                runningSessionId={liveQa(terminals?.sessions, { slug, phase: view.phase })?.id}
+              />
+              <p className="text-2xs text-ink-faint">
+                {view.qa?.report
+                  ? <>Last verdict recorded in <code className="font-mono">{view.qa.report}</code>.</>
+                  : detail.summary.qaMode === 'off'
+                    ? 'QA is off for this plan — the dialog can turn it on.'
+                    : 'A fresh session reviews the phase and records the verdict itself.'}
+              </p>
+            </CardBody>
+          </Card>
+        )}
 
         <Card>
           <CardHeader><CardTitle>Dependencies</CardTitle></CardHeader>

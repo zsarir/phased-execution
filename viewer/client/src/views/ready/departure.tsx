@@ -20,7 +20,9 @@ import { PromptCard } from '@/components/prompt-card';
 import { plainText } from '@/components/markdown';
 import { LoadMeter } from '@/components/charts';
 import { api } from '@/lib/api';
-import { keys } from '@/lib/queries';
+import { keys, useConsoleState, useSessions } from '@/lib/queries';
+import { liveQa } from '@/lib/qa';
+import { QaButton } from '@/components/qa-launcher';
 import { countdown, pad2, plural, weight as fmtWeight } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { phaseHref, planHref } from '@shared/routes.js';
@@ -246,6 +248,8 @@ export function DepartureRow({ d, index }: { d: Departure; index: number }) {
   const meter = load(d.weight, d.budget);
   const promptText = usePromptText(d.slug, d.phase);
   const why = reasons(d);
+  const { data: state } = useConsoleState();
+  const { data: terminals } = useSessions(state);
 
   return (
     <li
@@ -306,6 +310,30 @@ export function DepartureRow({ d, index }: { d: Departure; index: number }) {
           </div>
 
           <div className="order-3 ml-auto flex shrink-0 items-center gap-1 md:order-4">
+            {/* Only where the board is already flagging one. This page ranks
+                phases nobody has built yet, so a review has nothing to read on
+                most rows — but "QA failed here before" was a warning with no
+                remedy beside it, which is the one thing every card on this
+                console is supposed to have. */}
+            {d.qaFailed && (
+              <QaButton
+                label="Re-QA"
+                target={{
+                  slug: d.slug,
+                  phase: d.phase,
+                  ...(d.title ? { title: plainText(d.title) } : {}),
+                  ...(d.model ? { model: d.model } : {}),
+                  ...(d.effort ? { effort: d.effort } : {}),
+                  qa: { result: 'fail' },
+                  planSkills: d.skills ?? [],
+                }}
+                allowAgent={Boolean(state?.allowAgent)}
+                allowWrites={Boolean(state?.allowWrites)}
+                {...(liveQa(terminals?.sessions, { slug: d.slug, phase: d.phase })
+                  ? { runningSessionId: liveQa(terminals?.sessions, { slug: d.slug, phase: d.phase })!.id }
+                  : {})}
+              />
+            )}
             <CopyButton text={promptText} label="Prompt" copiedLabel="Copied" />
             <Button
               size="sm"

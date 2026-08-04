@@ -41,6 +41,7 @@ import { randomUUID } from 'node:crypto';
 import { EFFORTS, isEffort, PERMISSION_MODES, sanitize } from './runner/spawn.ts';
 import { MODEL_FALLBACK as MODELS } from './runner/errors.ts';
 import { recoveryLabel, recoveryPrompt, type RecoveryFacts } from './recovery.ts';
+import { qaLabel, qaPrompt, type QaFacts } from './qa-session.ts';
 import { skillDirective, type SkillInfo } from './skills.ts';
 import type { LaunchSpec, SessionMeta } from './terminal.ts';
 
@@ -54,6 +55,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** Same shape the run endpoints accept: `name` or `plugin:name`. */
 const SKILL_ID = /^[\w.-]+(?::[\w.-]+)?$/;
+
+/**
+ * The permission profiles a QA session may be started under.
+ *
+ * Deliberately two rather than the runner's three. `trusted` is an *autopilot*
+ * idea — it means "no approval card is raised", and there is no card here: a QA
+ * session runs in a terminal a person is looking at, so the only real question
+ * is whether the CLI asks that person before acting. Guarded is that CLI, and
+ * bypass is the CLI told to stop asking, which is the one choice worth naming
+ * because it is the one that can change a repository unattended.
+ */
+const QA_PROFILES = ['guarded', 'bypass'] as const;
+type QaProfile = (typeof QA_PROFILES)[number];
 
 export type AgentRefusal = { ok: false; status: number; error: string };
 
@@ -73,6 +87,15 @@ export type AgentContext = {
    * for every other intent.
    */
   recovery?: RecoveryFacts;
+  /**
+   * The resolved QA briefing, for `intent: 'qa'`.
+   *
+   * Composed by the service (which reads the plan, the handoff, the commits and
+   * the board) for the same two reasons the recovery briefing is: a page cannot
+   * dictate what a review session is told, and a brief cannot claim an exit
+   * criterion exists unless the plan holds one. Absent for every other intent.
+   */
+  qa?: QaFacts;
 };
 
 /**
@@ -92,6 +115,12 @@ export type AgentContext = {
  *   intent:         a recovery: the server composes the prompt from the
  *     'recovery'    briefing it resolved (`ctx.recovery`), and stamps
  *                   `meta.recovery` so the exit can be checked against it
+ *   intent: 'qa'    an independent review: the server composes the prompt from
+ *                   the brief it resolved (`ctx.qa`), stamps `meta.qa` with the
+ *                   verdict snapshot, and NEVER resumes — a review inherited
+ *                   from the session that built the phase is not independent
+ *   permissionProfile  `guarded` | `bypass`, QA sessions only; bypass is the
+ *                   one place `sanitize`'s `allowBypass` is unlocked here
  */
 export function buildAgentLaunch(
   body: Record<string, unknown>,
@@ -113,11 +142,27 @@ export function buildAgentLaunch(
   const resume = str(body.resume);
   if (resume && !UUID_RE.test(resume)) return bad('resume must be a claude session id (a uuid).');
 
-  if (body.intent != null && body.intent !== 'plan' && body.intent !== 'recovery') {
-    return bad("intent, when given, must be 'plan' or 'recovery'.");
+  if (body.intent != null && body.intent !== 'plan' && body.intent !== 'recovery' && body.intent !== 'qa') {
+    return bad("intent, when given, must be 'plan', 'recovery' or 'qa'.");
   }
   const planIntent = body.intent === 'plan';
   const recoveryIntent = body.intent === 'recovery';
+  const qaIntent = body.intent === 'qa';
+
+  // Bypass is unlocked for ONE flow, named rather than implied. Widening it to
+  // every agent session would be a different decision from the one this field
+  // exists for, so the refusal is explicit and the surface stays where it was.
+  const profileField = str(body.permissionProfile);
+  if (profileField && !qaIntent) {
+    return bad('permissionProfile is only accepted on a QA session — other sessions use permissionMode.');
+  }
+  if (profileField && !(QA_PROFILES as readonly string[]).includes(profileField)) {
+    return bad(`permission profile must be one of: ${QA_PROFILES.join(', ')}.`);
+  }
+  const profile = (profileField ?? 'guarded') as QaProfile;
+  if (profile === 'bypass' && permissionMode) {
+    return bad('bypass IS the permission mode — send one or the other, not both.');
+  }
 
   const prompt = str(body.prompt)?.trim();
   if (prompt && Buffer.byteLength(prompt) > MAX_AGENT_PROMPT_BYTES) {
@@ -129,6 +174,10 @@ export function buildAgentLaunch(
   if (resume && prompt) return bad('resume and a prompt are mutually exclusive — the resumed session has its context.');
   if (resume && planIntent) return bad('resume and a plan brief are mutually exclusive.');
   if (resume && recoveryIntent) return bad('resume and a recovery are mutually exclusive — a recovery starts fresh.');
+  // Said again here even though `parseQaRequest` refuses it first: this is the
+  // function that composes argv, and "the review is never the session that
+  // built it" must not depend on a caller having parsed the body correctly.
+  if (resume && qaIntent) return bad('a QA session is a fresh review — it never resumes the session that built the phase.');
 
   // What the first message says, and what the session gets named after.
   let text = '';
@@ -136,6 +185,7 @@ export function buildAgentLaunch(
   let planSkill = '';
   let label: string | undefined;
   let recoveryMeta: SessionMeta['recovery'];
+  let qaMeta: SessionMeta['qa'];
   if (planIntent) {
     if (prompt) return bad('a plan session composes its own prompt — send the brief instead.');
     const brief = str(body.brief)?.trim();
@@ -163,6 +213,25 @@ export function buildAgentLaunch(
       ...(facts.phase != null ? { phase: facts.phase } : {}),
       ...(facts.runId ? { runId: facts.runId } : {}),
     };
+  } else if (qaIntent) {
+    if (prompt) return bad('a QA session composes its own prompt.');
+    // Resolved by the service before we are called; reaching here without a
+    // briefing is a wiring bug, not something a browser can provoke.
+    const facts = ctx.qa;
+    if (!facts) return bad('that QA session could not be resolved.');
+    if (!ctx.rootOpen) return { ok: false, status: 409, error: 'No source directory is open.' };
+    planSkill = facts.skillId;
+    text = qaPrompt(facts);
+    label = qaLabel(facts);
+    // The snapshot the exit check compares against. Taken from the facts the
+    // service resolved a moment ago, so "did this session record anything?" is
+    // answered against the table as it stood when the session was minted.
+    qaMeta = {
+      slug: facts.slug,
+      phase: facts.phase,
+      ...(facts.previous?.result ? { before: facts.previous.result } : {}),
+      ...(facts.previous?.report ? { beforeReport: facts.previous.report } : {}),
+    };
   } else if (prompt) {
     text = prompt;
     named = prompt;
@@ -170,7 +239,7 @@ export function buildAgentLaunch(
 
   // The skill the composed prompt is already about; naming it again in the
   // directive would read as a second, competing instruction.
-  const composed = planIntent || recoveryIntent;
+  const composed = planIntent || recoveryIntent || qaIntent;
   const extras = skillIds(body.skills).filter((id) =>
     id !== planSkill && !(composed && (id === 'phased-execution' || id.endsWith(':phased-execution'))));
   const directive = skillDirective(extras);
@@ -186,24 +255,35 @@ export function buildAgentLaunch(
   const argv: string[] = [];
   if (resume) argv.push('--resume', resume);
   else argv.push('--session-id', claudeSessionId);
-  if (permissionMode) argv.push('--permission-mode', permissionMode);
+  // Guarded is the absence of the flag — the CLI's own "ask before acting",
+  // which is what a person watching a terminal is there for.
+  if (profile === 'bypass') argv.push('--permission-mode', 'bypassPermissions');
+  else if (permissionMode) argv.push('--permission-mode', permissionMode);
   if (model) argv.push('--model', model);
   if (effort) argv.push('--effort', effort);
   if (label) argv.push('--name', label.slice(0, 80));
 
-  const flags = sanitize(argv);
+  // `sanitize` stays the single audit point: bypass is not special-cased here,
+  // it is UNLOCKED here, by the one profile that may ask for it.
+  const flags = sanitize(argv, profile === 'bypass' ? { allowBypass: true } : undefined);
   const args = text ? [...flags, text] : flags;
 
   const meta: SessionMeta = {
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
-    ...(permissionMode ? { permissionMode } : {}),
+    // What the session is actually running under, not what was asked for: the
+    // page that shows "bypass" must be reading the resolved argv's mode.
+    ...(profile === 'bypass' ? { permissionMode: 'bypassPermissions' }
+      : permissionMode ? { permissionMode } : {}),
     claudeSessionId,
     ...(planIntent ? { intent: 'plan' as const } : {}),
     // The linkage P2 built the session-exit announce policy around: a session
     // carrying it is always announced when it ends, and its outcome is checked
     // against the thing it was opened to fix.
     ...(recoveryMeta ? { intent: 'recovery' as const, recovery: recoveryMeta } : {}),
+    // The linkage the exit check reads: a QA session's end is answered by
+    // re-reading test-status.md rather than by reporting that a process ended.
+    ...(qaMeta ? { intent: 'qa' as const, qa: qaMeta } : {}),
   };
 
   return {

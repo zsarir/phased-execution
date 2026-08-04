@@ -29,7 +29,7 @@ import {
 import { log } from './log.ts';
 import { CATEGORIES, Push, routeFor, sanitiseCategories, tagFor, type CategoryId } from './push/index.ts';
 import { Notifications, type NotificationQuery, type NotificationRecord } from './notifications.ts';
-import { repoInfo, lastCommit, type GitRepoInfo, type GitFileInfo } from './git.ts';
+import { repoInfo, lastCommit, commitsTouching, type GitRepoInfo, type GitFileInfo } from './git.ts';
 import { findMemory, memoryIndexLines } from './memory.ts';
 import {
   loadSizing, indexGraph, routeLayout, analysePhases, criticalPath, remainingWork,
@@ -57,6 +57,9 @@ import {
   type RecoveryClass, type RecoveryFacts, type RecoveryRequest,
 } from './recovery.ts';
 import { phasedExecutionSkillId } from './agent.ts';
+import {
+  isVerdict, qaKey, type QaFacts, type QaRequest,
+} from './qa-session.ts';
 import {
   Approvals, classifyTool, loadPolicy, loadPolicyFor, policyExtras, addPolicyRules,
   editPolicy, planPolicyPath, notifyOutOfBand, profilePolicy, suggestedRule,
@@ -174,6 +177,21 @@ export type PhaseDiagnosis = {
   workingTree: string[];
   lock: string | null;
   actions: RecoveryAction[];
+};
+
+/**
+ * What a finished QA session left behind.
+ *
+ * `recorded` is the whole point: it is false for a session that ended without
+ * writing a row, and `result` is then absent rather than inherited from
+ * whatever the phase happened to read before.
+ */
+export type QaOutcome = {
+  recorded: boolean;
+  result?: string;
+  report?: string;
+  headline: string;
+  detail: string;
 };
 
 /** The phase's title from the plan graph, when the table has one. */
@@ -547,13 +565,19 @@ export class Service {
     const code = session.exited?.code ?? 0;
     const failed = code !== 0 || session.exited?.signal != null;
     const recovery = session.meta?.recovery;
-    if (!event.detached && !failed && !recovery) return;
+    const qa = session.meta?.qa;
+    if (!event.detached && !failed && !recovery && !qa) return;
 
     // A recovery session was opened to change something specific, so its exit
     // is answered by re-reading that thing rather than by reporting that a
     // process ended. Async, and deliberately not awaited: the registry is
     // emitting an event, not waiting for a verdict.
     if (recovery) { void this.announceRecoveryOutcome(session, recovery, failed); return; }
+
+    // A QA session was opened to produce a verdict, so its exit is answered by
+    // re-reading test-status.md — never by reporting that a process ended, and
+    // never by assuming the review reached a conclusion because it stopped.
+    if (qa) { void this.announceQaOutcome(session, qa, failed); return; }
 
     const what = session.kind === 'claude' ? 'Agent session' : 'Terminal';
     this.announce('session', {
@@ -615,6 +639,55 @@ export class Service {
       type: 'recovery-outcome',
       session,
       recovery: { ...link, ...outcome },
+      sessions: this.terminals.state().sessions,
+      live: this.terminals.live(),
+    });
+  }
+
+  /**
+   * What the QA session actually recorded — read back, never assumed.
+   *
+   * The asymmetry with a recovery is deliberate. A recovery is judged by the
+   * board, which moves for many reasons; a review is judged by the one row it
+   * was sent to write, and a review that wrote no row produced no verdict
+   * however long it ran. So "no verdict recorded" is a first-class outcome
+   * here, and it is never softened into a pass.
+   */
+  private async announceQaOutcome(
+    session: SessionInfo,
+    link: { slug: string; phase: number; before?: string; beforeReport?: string },
+    failed: boolean,
+  ): Promise<void> {
+    let outcome: QaOutcome;
+    try {
+      outcome = await this.qaOutcome(link);
+    } catch (error) {
+      outcome = {
+        recorded: false,
+        headline: `QA for ${link.slug} P${link.phase} finished`,
+        detail: `The console could not re-read test-status.md: ${(error as Error).message}`,
+      };
+    }
+
+    this.announce('session', {
+      title: outcome.recorded
+        ? `QA ${outcome.result} · ${link.slug} P${link.phase}`
+        : `No verdict · ${link.slug} P${link.phase}`,
+      body: `${outcome.detail}${failed ? ` (the session itself exited ${describeExit(session)})` : ''}`,
+      tag: tagFor('session', session.id, outcome.result ?? 'none'),
+      detail: session.label,
+    }, {
+      sessionId: session.id,
+      sessionKind: session.kind,
+      slug: link.slug,
+      phase: link.phase,
+    });
+
+    // The surfaces that offered the review re-read themselves off this.
+    this.emit('sessions', {
+      type: 'qa-outcome',
+      session,
+      qa: { ...link, ...outcome },
       sessions: this.terminals.state().sessions,
       live: this.terminals.live(),
     });
@@ -1117,7 +1190,7 @@ export class Service {
    * has never been able to offer it usefully, because `phase-lock.sh release`
    * refuses unless `--owner` matches, and the only place that owner was written
    * down was the lock file the operator could not see. So the UI asked a person
-   * to retype `mobin.zarekar@gmail.com/opus-p2` from a dashboard card that did
+   * to retype `sam.doe@example.com/opus-p2` from a dashboard card that did
    * not show it, and offered "Claim phase" instead — which takes the phase
    * rather than freeing it.
    *
@@ -2308,6 +2381,289 @@ export class Service {
       fixed,
       headline: `${slug} P${phase} is still ${state}`,
       detail: 'The recovery session ended without moving the board — inspect it before starting another.',
+    };
+  }
+
+  /* ---------------------------------------------------------------- *
+   * QA sessions
+   * ---------------------------------------------------------------- */
+
+  /**
+   * The live QA session already reviewing a phase, if there is one.
+   *
+   * Keyed by `(slug, phase)` like a recovery's, and for a sharper reason: two
+   * reviewers of one phase write the same report path and race each other's
+   * `qa-record.sh` row, so the second one does not merely duplicate work — it
+   * can overwrite a verdict nobody read.
+   */
+  liveQaFor(link: { slug?: string; phase?: number }): SessionInfo | undefined {
+    const key = qaKey(link);
+    return this.terminals.state().sessions.find((session) =>
+      !session.exited && session.meta?.qa && qaKey(session.meta.qa) === key);
+  }
+
+  /**
+   * Turn "QA this phase" into the brief a reviewer can act on — or say why not.
+   *
+   * The browser names the phase; every fact in the brief is read here, from the
+   * plan, the handoff, the repository's own history and the board. Same split
+   * as a recovery, for the same two reasons: a page cannot dictate what a
+   * session is told, and a brief cannot quote an exit criterion the plan does
+   * not hold.
+   *
+   * Three refusals live here (the fourth, `--allow-agent`, is the route's, so
+   * that a console without the flag never even resolves a brief):
+   *
+   *  1. **the autopilot is driving** — a review reads the working tree and runs
+   *     the phase's tests, and both are meaningless while another session is
+   *     editing underneath. Broader than "holds that phase" on purpose: the
+   *     tree is shared, so a run on *any* phase invalidates the reading;
+   *  2. **the phase is being built right now** — a recovery session on this
+   *     exact phase is its author, and reviewing a moving target is not a
+   *     review. This is the guard that keeps "independent" true;
+   *  3. **a review is already running** for this `(slug, phase)`, whose id the
+   *     refusal carries so the client can open it rather than only refuse.
+   */
+  async resolveQa(
+    request: QaRequest,
+  ): Promise<
+    { ok: true; facts: QaFacts }
+    | { ok: false; status: number; error: string; sessionId?: string }
+  > {
+    const refuse = (status: number, error: string, sessionId?: string) =>
+      ({ ok: false as const, status, error, ...(sessionId ? { sessionId } : {}) });
+
+    const root = this.root?.path;
+    if (!root) return refuse(409, 'No source directory is open.');
+
+    let record = this.store?.get(request.slug);
+    if (!record) return refuse(404, `No plan named ${request.slug}.`);
+    if (!record.plan?.graph.some((row) => row.phase === request.phase)) {
+      return refuse(404, `${request.slug} has no phase ${request.phase}.`);
+    }
+
+    if (this.runner.busy()) {
+      const live = this.runner.current();
+      return refuse(409, live
+        ? `${live.slug} is mid-run (${live.status}) — a review reads the working tree and runs the `
+          + 'phase\'s tests, so pause or stop it first.'
+        : 'A run is in progress — pause or stop it before starting a review.');
+    }
+
+    const building = this.liveRecoveryFor({ slug: request.slug, phase: request.phase });
+    if (building) {
+      return refuse(409,
+        `${request.slug} P${request.phase} is being worked on by a live session — a review of a `
+        + 'phase still being changed is not a review. Wait for it to finish.',
+        building.id);
+    }
+
+    const already = this.liveQaFor(request);
+    if (already) {
+      return refuse(409,
+        `A QA session for ${request.slug} P${request.phase} is already running.`, already.id);
+    }
+
+    // Activation before the facts are read, so the brief reports the qa-mode
+    // the session will actually be gated by rather than the one it replaced.
+    if (request.activate) {
+      const turned = await this.activateQa(request.slug, request.phase);
+      if (!turned.ok) return refuse(409, turned.detail);
+      record = this.store?.get(request.slug) ?? record;
+    }
+
+    const handoff = handoffFor(record, request.phase);
+    const detail = record.plan?.phases[request.phase];
+    const padded = String(request.phase).padStart(2, '0');
+    const reportArg = `reports/phase-${padded}-qa.md`;
+
+    const [board, engineBrief, qaMode, commits] = await Promise.all([
+      this.board(request.slug),
+      this.qaPrompt(request.slug, request.phase).catch(() => ''),
+      this.qaMode(request.slug),
+      handoff?.path ? commitsTouching(root, handoff.path, 5) : Promise.resolve([]),
+    ]);
+
+    const rows = record.plan?.graph ?? [];
+    const previous = qaFor(record, request.phase);
+
+    return {
+      ok: true,
+      facts: {
+        slug: request.slug,
+        phase: request.phase,
+        scriptsDir: this.flags.scriptsDir,
+        skillId: phasedExecutionSkillId(this.skills()),
+        reportPath: `docs/handoffs/${request.slug}/${reportArg}`,
+        reportArg,
+        qaMode: qaMode.mode,
+        ...(titleOf(rows, request.phase) ? { phaseTitle: titleOf(rows, request.phase) } : {}),
+        ...(engineBrief ? { engineBrief } : {}),
+        ...(handoff
+          ? {
+            handoffPath: `docs/handoffs/${request.slug}/${handoff.file}`,
+            handoffStatus: handoff.status,
+            ...(handoff.keyFiles.length ? { keyFiles: handoff.keyFiles } : {}),
+          }
+          : {}),
+        ...(commits.length ? { commits } : {}),
+        ...(detail?.goal ? { goal: detail.goal } : {}),
+        ...(detail?.exitCriteria ? { exitCriteria: detail.exitCriteria } : {}),
+        ...(detail?.verification ? { verification: detail.verification } : {}),
+        ...(record.plan?.sessionBudget.skills?.length
+          ? { skills: record.plan.sessionBudget.skills } : {}),
+        board: rows.length
+          ? rows.map((row) => ({
+            phase: row.phase,
+            state: board.states[row.phase] ?? 'unknown',
+            ...(row.title ? { title: row.title } : {}),
+          }))
+          : Object.entries(board.states).map(([phase, state]) => ({ phase: Number(phase), state })),
+        ...(previous && previous.result !== 'unknown'
+          ? { previous: { result: previous.result, ...(previous.report ? { report: previous.report } : {}) } }
+          : {}),
+      },
+    };
+  }
+
+  /**
+   * The snapshot a QA session is judged against, taken at mint time.
+   *
+   * Both halves matter: a re-review that lands the same verdict still writes a
+   * new report, and without the report path that session would be reported as
+   * having recorded nothing.
+   */
+  qaSnapshot(slug: string, phase: number): { before?: string; beforeReport?: string } {
+    const record = this.store?.get(slug);
+    const row = record ? qaFor(record, phase) : undefined;
+    if (!row) return {};
+    return {
+      ...(row.result ? { before: row.result } : {}),
+      ...(row.report && row.report !== '-' ? { beforeReport: row.report } : {}),
+    };
+  }
+
+  /**
+   * Turn QA on for a plan that has it off.
+   *
+   * This delegates to the skill's own `--qa` activation (`new-handoff.sh --qa`)
+   * rather than writing `test-status.md` here, because activation is not one
+   * row — it also **backfills every already-complete phase as `waived`**. Skip
+   * that and gating turns on plan-wide, every finished phase reads "no QA
+   * result", and their dependents flip ready → waiting: the board would break
+   * as a side effect of asking for one review.
+   *
+   * ⚠️ The script exits **1** in the normal case here, and that is correct: it
+   * writes `test-status.md` and *then* refuses to overwrite the phase's
+   * existing handoff. Refusing is what protects the handoff, so the exit code
+   * is not the verdict — the postcondition is, read back from the engine. A
+   * server test pins this, so a future reordering of that script fails the
+   * suite rather than silently doing nothing here.
+   *
+   * With no handoff to protect there is nothing to backfill either, so the
+   * lighter `qa-record.sh <phase> pending` is used: it creates the file and
+   * says, truthfully, that a review has been asked for and not yet answered.
+   */
+  async activateQa(slug: string, phase: number): Promise<{ ok: boolean; mode: string; detail: string }> {
+    if (!this.flags.allowWrites) {
+      return { ok: false, mode: 'off', detail: 'Writes are disabled. Restart with --allow-writes to enable them.' };
+    }
+    const record = this.store?.get(slug);
+    if (!record || !this.root) return { ok: false, mode: 'off', detail: `No plan named ${slug}.` };
+
+    const current = await this.qaMode(slug);
+    if (current.mode !== 'off') {
+      return { ok: true, mode: current.mode, detail: `QA is already ${current.mode} for ${slug}.` };
+    }
+
+    const handoff = handoffFor(record, phase);
+    // `unknown` is a parse outcome, not a status the scripts accept — a handoff
+    // whose frontmatter the parser could not read must not turn activation into
+    // a validation error about a field nobody asked about.
+    const status = handoff && handoff.status !== 'unknown' ? handoff.status : 'complete';
+    const request = handoff
+      ? { action: 'new-handoff' as const, slug, phase, title: handoff.title, status, qa: true }
+      : { action: 'qa-record' as const, slug, phase, result: 'pending', report: `reports/phase-${String(phase).padStart(2, '0')}-qa.md` };
+
+    let outcome;
+    try {
+      outcome = await runWrite(
+        planWrite(request, { root: this.root.path, docsDir: this.root.docsDir }),
+        { scriptsDir: this.flags.scriptsDir, root: this.root.path },
+      );
+    } catch (error) {
+      // A handoff whose title the write layer will not accept is a reason QA
+      // could not be turned on, not a 500 — say which and let the operator use
+      // the write menu, where the field is editable.
+      return { ok: false, mode: 'off', detail: `Could not turn QA on: ${(error as Error).message}` };
+    }
+
+    // Read the postcondition rather than the exit code — see the note above.
+    this.reread(slug);
+    const mode = (await this.qaMode(slug)).mode;
+    const ok = mode !== 'off';
+    log.info('qa.activate', { slug, phase, ok, mode, code: outcome.code });
+    if (ok) this.invalidateAll();
+    return {
+      ok,
+      mode,
+      detail: ok
+        ? `QA is now ${mode} for ${slug} — earlier completed phases were recorded as waived.`
+        : (outcome.stderr || outcome.stdout).trim() || 'The activation did not turn QA on.',
+    };
+  }
+
+  /**
+   * What the QA session recorded, read back rather than assumed.
+   *
+   * "The session ended" is not an outcome — every session ends. The question a
+   * review is opened to answer is whether a verdict now exists, and the only
+   * evidence for that is `test-status.md` having changed for this phase. A
+   * session that argues convincingly in its final message and never runs
+   * `qa-record.sh` has produced nothing the engine can gate on, and this says
+   * so in those words.
+   */
+  async qaOutcome(link: {
+    slug: string; phase: number; before?: string; beforeReport?: string;
+  }): Promise<QaOutcome> {
+    const { slug, phase } = link;
+    if (!this.root) {
+      return { recorded: false, headline: `QA for ${slug} P${phase} finished`, detail: 'Nothing to check it against.' };
+    }
+
+    // The watcher is debounced and every engine answer is cached by revision,
+    // so the session's last commit would otherwise be judged against the table
+    // as it stood before the review — P4's `reread` exists for exactly this.
+    this.reread(slug);
+
+    const record = this.store?.get(slug);
+    const row = record ? qaFor(record, phase) : undefined;
+    const result = row?.result;
+    const report = row?.report && row.report !== '-' ? row.report : undefined;
+
+    const moved = result !== link.before || report !== link.beforeReport;
+    if (isVerdict(result) && moved) {
+      return {
+        recorded: true,
+        result,
+        ...(report ? { report } : {}),
+        headline: `${slug} P${phase} recorded ${result}`,
+        detail: result === 'fail'
+          ? `The review recorded FAIL — every dependent of P${phase} stays gated until it is fixed `
+            + `and re-reviewed.${report ? ` Report: ${report}` : ''}`
+          : `The review recorded ${result}.${report ? ` Report: ${report}` : ''}`,
+      };
+    }
+
+    return {
+      recorded: false,
+      ...(result && result !== 'unknown' ? { result } : {}),
+      headline: `${slug} P${phase} — no verdict recorded`,
+      detail: isVerdict(result)
+        ? `test-status.md still reads ${result}, exactly as it did before the session started — `
+          + 'nothing new was recorded. Open the session and see what it concluded.'
+        : 'The session ended without running qa-record.sh, so the phase has no QA verdict. '
+          + 'Open the session and see how far it got.',
     };
   }
 

@@ -217,6 +217,25 @@ export type RecoveryLink = {
   runId?: string;
 };
 
+/**
+ * What a QA session was launched to review, and what was already on file.
+ *
+ * The snapshot is the reason this link carries more than the target. Without it
+ * a phase that already read `pass` would be reported as a pass again by a
+ * session that recorded nothing at all — precisely the lie the exit check
+ * exists to prevent. Result AND report are both kept, because a re-review that
+ * lands the same verdict still writes a new report, and that is the difference
+ * between "reviewed again" and "never ran".
+ */
+export type QaLink = {
+  slug: string;
+  phase: number;
+  /** The recorded result before the session started; absent when there was none. */
+  before?: string;
+  /** The report path recorded with it — the other half of "did this change?". */
+  beforeReport?: string;
+};
+
 /** Facts about a claude session the UI needs back, none of them secret. */
 export type SessionMeta = {
   model?: string;
@@ -225,9 +244,11 @@ export type SessionMeta = {
   /** The uuid handed to `--session-id` — what `claude --resume <id>` takes later. */
   claudeSessionId?: string;
   /** `plan` marks a session booted by the New-plan wizard. */
-  intent?: 'plan' | 'recovery';
+  intent?: 'plan' | 'recovery' | 'qa';
   /** Set on a session minted by a recovery action; absent on every other session. */
   recovery?: RecoveryLink;
+  /** Set on a session minted to QA one phase; absent on every other session. */
+  qa?: QaLink;
 };
 
 /**

@@ -8,6 +8,7 @@
  */
 
 import type { RecoveryClass } from './recovery';
+import type { QaProfile } from './qa';
 
 /** Every request carries this; non-GETs additionally need a same-origin Origin,
  *  which the dev proxy rewrites (see vite.config.ts). */
@@ -109,9 +110,15 @@ export interface TerminalSession {
     permissionMode?: string;
     /** What `claude --resume <id>` takes after this pty is gone. */
     claudeSessionId?: string;
-    intent?: 'plan' | 'recovery';
+    intent?: 'plan' | 'recovery' | 'qa';
     /** Set by the server on a recovery session — what it was launched to fix. */
     recovery?: { kind: string; slug?: string; phase?: number; runId?: string };
+    /**
+     * Set by the server on a QA session — which phase it reviews, and what
+     * `test-status.md` said when it started. The snapshot is how the exit check
+     * tells "recorded a verdict" from "ended next to one that was already there".
+     */
+    qa?: { slug: string; phase: number; before?: string; beforeReport?: string };
   };
   /**
    * Present once the process has gone. The record now OUTLIVES it until it is
@@ -1115,11 +1122,24 @@ export const api = {
     cols?: number; rows?: number;
     model?: string; effort?: string; permissionMode?: string;
     prompt?: string; skills?: string[]; resume?: string;
-    intent?: 'plan' | 'recovery'; brief?: string;
+    intent?: 'plan' | 'recovery' | 'qa'; brief?: string;
     /* A recovery names its TARGET and nothing else — the server reads the
        board, the run and the diagnosis and composes the prompt itself. */
     recoveryClass?: RecoveryClass; slug?: string; phase?: number; runId?: string;
+    /* A review names its target the same way. `activate` turns QA on for the
+       plan first; `permissionProfile` is the one place bypass is offered, and
+       the server refuses it on any other kind of session. */
+    activate?: boolean; permissionProfile?: QaProfile;
   }) => post<TerminalTicket>('/api/terminal', { kind: 'claude', ...body }),
+  /**
+   * Turn QA on for a plan that has it off.
+   *
+   * Write-class rather than agent-class: it creates `test-status.md` and
+   * backfills the already-complete phases as waived, which is a change to the
+   * repository whether or not a review is ever minted.
+   */
+  qaActivate: (slug: string, phase: number) =>
+    post<{ ok: boolean; mode: string; detail: string }>(`/api/plans/${q(slug)}/qa-mode`, { phase }),
   terminalClose: (id: string) =>
     request<{ closed: boolean; state: TerminalState }>(`/api/terminal?id=${q(id)}`, { method: 'DELETE' }),
   /** Drop the record of a session that has already ended. Refused on a live one. */

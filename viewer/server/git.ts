@@ -58,6 +58,26 @@ export async function lastCommit(root: string, path: string): Promise<GitFileInf
   return sha ? { sha, subject, author, date, relativeDate } : {};
 }
 
+/**
+ * The commits that touched `path`, newest first.
+ *
+ * Used to give a QA session somewhere concrete to start reading. A phase's
+ * handoff is the one file every phase certainly writes, so the commits that
+ * touched it bracket where the phase landed — the reviewer widens from there,
+ * because the code itself usually lands in commits that never went near docs/.
+ */
+export async function commitsTouching(
+  root: string, path: string, limit = 5,
+): Promise<{ sha: string; subject?: string; date?: string }[]> {
+  const format = ['%h', '%s', '%ad'].join(SEP);
+  const out = await git(root, ['log', `-${Math.max(1, Math.min(limit, 20))}`, `--format=${format}`,
+    '--date=short', '--', path]);
+  return out.split('\n').filter(Boolean).map((line) => {
+    const [sha, subject, date] = line.split(SEP);
+    return { sha, ...(subject ? { subject } : {}), ...(date ? { date } : {}) };
+  }).filter((entry) => entry.sha);
+}
+
 /** Which of these paths have uncommitted changes. */
 export async function uncommitted(root: string, paths: string[]): Promise<Set<string>> {
   if (!paths.length) return new Set();

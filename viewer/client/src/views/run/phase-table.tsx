@@ -26,6 +26,8 @@ import {
 import { duration, money, pad2, relativeTime } from '@/lib/format';
 import { useDiagnosis } from '@/lib/queries';
 import { classifyPhase, liveRecovery, type RecoveryClass } from '@/lib/recovery';
+import { canQa, liveQa } from '@/lib/qa';
+import { QaButton, QaVerdict } from '@/components/qa-launcher';
 import { RecoveryButton } from './status';
 import { phaseHref } from '@shared/routes.js';
 import {
@@ -81,6 +83,12 @@ export type PhaseRecovery = {
   /** The run's halt looks like an authentication failure — one class overrides all. */
   authFailure?: boolean;
   onStart: (phase: number, kind: RecoveryClass) => void;
+  /** The plan's qa-mode, so a row can offer to turn it on with the review. */
+  qaMode?: string;
+  /** Skills the plan asks every session to invoke. */
+  planSkills?: string[];
+  /** Whether the console may turn QA on for the plan — a different flag from allowAgent. */
+  allowWrites?: boolean;
 };
 
 export function PhaseTable({
@@ -211,6 +219,7 @@ function PhaseRows({
     ? classifyPhase(r.status, run, { authFailure: recovery.authFailure ?? false })
     : undefined;
   const recovering = liveRecovery(recovery?.sessions, { slug, phase: p.phase });
+  const reviewing = liveQa(recovery?.sessions, { slug, phase: p.phase });
 
   return (
     <>
@@ -234,7 +243,10 @@ function PhaseRows({
           </div>
         </TD>
         <TD>
-          <StateChip state={p.state} board />
+          <div className="flex flex-wrap items-center gap-1">
+            <StateChip state={p.state} board />
+            <QaVerdict qa={p.qa} />
+          </div>
         </TD>
         <TD className="text-2xs">
           {r ? (
@@ -302,6 +314,28 @@ function PhaseRows({
                 allowAgent={recovery.allowAgent}
                 {...(recovering ? { runningSessionId: recovering.id } : {})}
                 onStart={() => recovery.onStart(p.phase, recoveryClass)}
+              />
+            )}
+            {/* Reviewing is not recovering: it is offered for a phase that is
+                FINE, which is why it survives the `p.state !== 'done'` gate
+                above. Never while the run is live — the autopilot owns the tree
+                and the server refuses anyway. */}
+            {recovery && !live && canQa(p.state) && (
+              <QaButton
+                label="QA"
+                target={{
+                  slug,
+                  phase: p.phase,
+                  title: p.title,
+                  model: p.model,
+                  effort: p.effort,
+                  ...(recovery.qaMode ? { qaMode: recovery.qaMode } : {}),
+                  ...(p.qa ? { qa: p.qa } : {}),
+                  planSkills: recovery.planSkills ?? [],
+                }}
+                allowAgent={recovery.allowAgent}
+                allowWrites={recovery.allowWrites}
+                {...(reviewing ? { runningSessionId: reviewing.id } : {})}
               />
             )}
           </div>

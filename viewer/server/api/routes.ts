@@ -13,6 +13,7 @@ import type { Service } from '../service.ts';
 import { agentEnabled, checkRoot, listDirs } from '../config.ts';
 import { buildAgentLaunch } from '../agent.ts';
 import { parseRecoveryRequest, type RecoveryFacts } from '../recovery.ts';
+import { parseQaRequest, type QaFacts } from '../qa-session.ts';
 import { isClientDisconnect, log } from '../log.ts';
 import { isEffort, PERMISSION_MODES } from '../runner/spawn.ts';
 import { isPermissionProfile, type PolicyScope } from '../runner/approvals.ts';
@@ -533,11 +534,31 @@ export async function handleApi(
             recovery = resolved.facts;
           }
 
+          // Same split for a review, and the same reason: the browser names the
+          // phase, the SERVER reads the plan, the handoff, the history and the
+          // board. The guard that keeps a review independent lives with those
+          // facts, not in the page that offered the button.
+          let qa: QaFacts | undefined;
+          if (body.intent === 'qa') {
+            const parsed = parseQaRequest(body);
+            if (!parsed.ok) { json(res, parsed.status, { error: parsed.error }); return true; }
+            const resolved = await service.resolveQa(parsed.request);
+            if (!resolved.ok) {
+              json(res, resolved.status, {
+                error: resolved.error,
+                ...(resolved.sessionId ? { sessionId: resolved.sessionId } : {}),
+              });
+              return true;
+            }
+            qa = resolved.facts;
+          }
+
           const built = buildAgentLaunch(body, {
             skills: () => service.skills(),
             scriptsDir: service.flags.scriptsDir,
             rootOpen: Boolean(service.store),
             ...(recovery ? { recovery } : {}),
+            ...(qa ? { qa } : {}),
           });
           if (!built.ok) { json(res, built.status, { error: built.error }); return true; }
           launch = built.launch;
@@ -674,6 +695,24 @@ export async function handleApi(
       }
       if (sub === 'lint') { json(res, 200, await service.lint(slug)); return true; }
       if (sub === 'work') { json(res, 200, await service.work(slug)); return true; }
+
+      /* Turn QA on for a plan that has it off. Write-class — it creates
+       * `test-status.md` and backfills the already-complete phases — so it sits
+       * behind `--allow-writes`, not behind the agent flag: activating QA and
+       * minting a reviewer are two different permissions. */
+      if (sub === 'qa-mode' && req.method === 'POST') {
+        const refusal = guardWrite(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const phase = Number(body.phase);
+        if (!Number.isInteger(phase) || phase < 1) {
+          json(res, 400, { error: 'pass {phase} — activation records that phase and waives the rest' });
+          return true;
+        }
+        const outcome = await service.activateQa(slug, phase);
+        json(res, outcome.ok ? 200 : 409, outcome);
+        return true;
+      }
     }
 
     /* ---------------- stale claims ----------------
