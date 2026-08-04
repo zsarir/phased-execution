@@ -20,6 +20,7 @@ import { Page } from '../_page';
 import { PolicyCard } from './policy';
 import { RestartButton } from './restart';
 import { ShutdownButton } from './shutdown';
+import { LauncherCard } from './launcher';
 
 const MODELS = ['', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-haiku-4-5'];
 
@@ -96,6 +97,10 @@ export default function SettingsView() {
             </div>
           </CardBody>
         </Card>
+
+        {/* Directly after *This process*: that card is where Restart refuses,
+            and this is the fix for the reason it refuses. */}
+        <LauncherCard supervised={state.supervisor?.supervised} />
 
         <Card>
           <CardHeader>

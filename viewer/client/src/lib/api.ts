@@ -152,8 +152,25 @@ export interface SessionInventory {
   sessions: { id: string; label: string; kind: 'shell' | 'claude' }[];
 }
 
+/**
+ * What `lifecycle.ts` reports about whatever started this process.
+ *
+ * `supervised` — not `ok`. The field was declared as `ok` here and has always
+ * been sent as `supervised`, so every read of it was `undefined`; nothing
+ * happened to notice because only `detail` was ever read. A page that gated a
+ * button on it would have found the console permanently unsupervised.
+ */
+export interface SupervisorInfo {
+  /** Whether a clean exit is expected to come back. */
+  supervised?: boolean;
+  kind?: 'launchd' | 'systemd' | 'declared' | 'none';
+  detail?: string;
+  /** True when supervision is inferred rather than read from a plist. */
+  assumed?: boolean;
+}
+
 export interface ShutdownReadiness {
-  supervisor: { ok?: boolean; kind?: string; detail?: string };
+  supervisor: SupervisorInfo;
   /** How it will actually stop — `launchctl` unloads the job, `exit` just ends. */
   stop: { via: 'launchctl' | 'exit'; label?: string; detail: string };
   busy: boolean;
@@ -188,7 +205,7 @@ export interface ConsoleState {
   serverStale?: boolean;
   /** Which static root answered — the migration seam, surfaced in Settings. */
   staticRoot?: 'dist' | 'not-built';
-  supervisor?: { ok?: boolean; kind?: string; detail?: string };
+  supervisor?: SupervisorInfo;
   unread?: number;
   scriptsDir?: string;
   sizing?: Sizing;
@@ -951,7 +968,7 @@ export interface PolicyEdit {
 export interface RestartReadiness {
   ok: boolean;
   reason?: string;
-  supervisor: { ok?: boolean; kind?: string; detail?: string };
+  supervisor: SupervisorInfo;
   busy: boolean;
   run: { slug: string; status: string; phase?: number } | null;
   /** A restart has always killed every pty. Now it says so before it does. */
