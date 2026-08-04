@@ -58,6 +58,14 @@ AGENT="--allow-agent"
 PORT=4123
 SUPERVISED="yes"
 
+# Bumped whenever this file changes in a way a copy of it needs. The Desktop
+# launcher is a COPY, not a link — so a `git pull` improves the repo's version
+# and leaves the one you double-click untouched. That is how a console with no
+# SUPERVISED knob kept starting unsupervised while this file said it would not.
+# Comparing revisions rather than bytes means your own edits to the knobs above
+# never look like staleness.
+LAUNCHER_REV=2
+
 set -uo pipefail
 
 LABEL="com.phase-console"
@@ -94,6 +102,18 @@ if ! command -v node >/dev/null 2>&1; then
   echo
   read -r -p "Press return to close. "
   exit 1
+fi
+
+# Am I an old copy of the file in the repo?
+SOURCE="$VIEWER/deploy/desktop-launcher.command"
+if [ -f "$SOURCE" ]; then
+  source_rev="$(grep -m1 '^LAUNCHER_REV=' "$SOURCE" 2>/dev/null | cut -d= -f2)"
+  if [ -n "$source_rev" ] && [ "$source_rev" != "$LAUNCHER_REV" ]; then
+    echo "⚠️  This launcher is rev $LAUNCHER_REV; the repo now ships rev $source_rev."
+    echo "    Copy it over (your knobs are at the top — re-apply any you changed):"
+    echo "      cp \"$SOURCE\" \"$0\""
+    echo
+  fi
 fi
 
 open_browser() { [ -z "${PHASE_CONSOLE_NO_OPEN:-}" ] && open "http://127.0.0.1:$PORT"; }
@@ -211,6 +231,42 @@ if [ "$SUPERVISED" = yes ]; then
     echo
   }
 
+  # A console answering on the port is NOT evidence that the agent is running.
+  # An earlier foreground console — including one this file started before it
+  # grew a SUPERVISED knob — answers identically, holds the port, and is exactly
+  # the unsupervised process whose Restart button refuses. Ask launchd what it
+  # is actually running instead of inferring it from a healthy-looking port.
+  agent_loaded() { launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; }
+
+  if ! agent_loaded && lsof -ti "tcp:$PORT" >/dev/null 2>&1; then
+    # launchd cannot bind a port something else holds: the job would crash-loop
+    # on EADDRINUSE, and KeepAlive would keep it looping.
+    echo "Port $PORT is held by a console launchd did not start:"
+    lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | tail -n +2 | awk '{print "  pid " $2 "  " $1}'
+    echo
+    echo "That is the unsupervised process the app refuses to restart. The agent"
+    echo "cannot take the port until it stops."
+    read -r -p "Stop it and hand the port to the agent? [y/N] " REPLY
+    case "$REPLY" in
+      y|Y|yes|YES)
+        lsof -ti "tcp:$PORT" 2>/dev/null | xargs -r kill
+        for _ in $(seq 1 20); do
+          lsof -ti "tcp:$PORT" >/dev/null 2>&1 || break
+          sleep 0.25
+        done
+        lsof -ti "tcp:$PORT" >/dev/null 2>&1 && lsof -ti "tcp:$PORT" | xargs -r kill -9
+        echo "Stopped."
+        echo
+        ;;
+      *)
+        echo "Left it alone — opening it as it is. Restart will still refuse there."
+        open_browser
+        sleep 2
+        exit 0
+        ;;
+    esac
+  fi
+
   if [ "$needs_install" = 1 ]; then
     echo "Installing the launchd agent (${reason# })…"
     echo "This builds the client first, so it takes a minute the first time."
@@ -225,10 +281,17 @@ if [ "$SUPERVISED" = yes ]; then
       exit 1
     fi
     echo
+  elif ! agent_loaded; then
+    # The plist is right but nothing loaded it — after a `bootout`, or a plist
+    # copied in by hand. Bootstrapping is enough; a re-install would rebuild the
+    # client for no reason.
+    echo "The plist is up to date but the job is not loaded — loading it…"
+    launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null
+    launchctl enable "gui/$UID/$LABEL" 2>/dev/null
+    echo
   elif ! curl -s -o /dev/null -m 2 "http://127.0.0.1:$PORT/api/state"; then
-    # Installed and matching. KeepAlive plus RunAtLoad means it is normally
-    # already up, so only nudge launchd when nothing answers.
-    echo "Installed but not answering — asking launchd to start it…"
+    # Loaded, matching, but silent. KeepAlive plus RunAtLoad means this is rare.
+    echo "Loaded but not answering — asking launchd to restart it…"
     launchctl kickstart -k "gui/$UID/$LABEL" >/dev/null 2>&1
   fi
 
