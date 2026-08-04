@@ -407,7 +407,21 @@ function PhaseRows({
                 : '—'}
         </TD>
         <TD>
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap items-center gap-1">
+            {/* The one thing a failed-HERE-finished-ELSEWHERE row still owes:
+                the statement that nothing needs fixing. A red chip beside an
+                empty actions cell read as a dead end (reported live). */}
+            {p.elsewhere && r && ['failed', 'interrupted', 'parked'].includes(r.status) && (
+              <span
+                className="text-2xs text-ink-faint"
+                title={'This run\'s own attempt stopped'
+                  + (r.note ? ` (${r.note.slice(0, 160)})` : '')
+                  + ' — but the phase was finished and verified outside it, and the board reads done.'
+                  + ' There is nothing to fix; Why? opens what failed here.'}
+              >
+                nothing to fix — done elsewhere
+              </span>
+            )}
             {can.retry && (
               <Button size="sm"
                 title="Clears this phase's failure and CONTINUES the run from here — a session starts, under normal admission."

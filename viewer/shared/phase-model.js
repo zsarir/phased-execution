@@ -50,11 +50,16 @@ export function boardCounts(rows) {
  */
 export function phaseActions(phase, { live, allowRun }) {
   const status = phase.record?.status;
-  // A phase that stopped short can always be asked why — including on a console
-  // started without `--allow-run`, because reading the evidence changes nothing.
-  // Refusing to show it is what sent people to a terminal. The actions inside
-  // the panel are the part that is gated.
-  const diagnose = !live && phase.state !== 'done'
+  // A record that stopped short can always be asked why — including on a
+  // console started without `--allow-run`, and including when the BOARD calls
+  // the phase done. That last one used to be excluded ("nothing left to
+  // explain"), and a real page proved it wrong: a run whose verification
+  // environment failed showed two red `failed` chips on phases later finished
+  // outside it, and offered NOTHING — the one thing those rows still owe is
+  // the story of what failed HERE. Reading evidence changes nothing; refusing
+  // to show it is what sent people to a terminal. The actions inside the
+  // panel are the part that is gated.
+  const diagnose = !live
     && ['failed', 'interrupted', 'parked', 'awaiting-verification'].includes(status);
 
   if (!allowRun || phase.state === 'done') {

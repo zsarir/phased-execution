@@ -136,3 +136,26 @@ describe('NextSteps', () => {
     expect(container).toBeEmptyDOMElement();
   });
 });
+
+describe('failed here, finished elsewhere', () => {
+  it('explains a red record on a green phase instead of offering to fix it', () => {
+    const rows = nextStepRows('demo', [
+      phase({ phase: 1, state: 'done', title: 'Editor truth' }),
+    ], run({ phases: { 1: { phase: 1, status: 'failed', attempts: 1, costUsd: 0,
+      note: 'no configuration file provided' } } } as never), false);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].why).toContain("this run's own attempt stopped");
+    expect(rows[0].why).toContain('no configuration file provided');
+    expect(rows[0].why).toContain('Nothing needs fixing');
+    expect(rows[0].recoveryClass).toBeUndefined();
+    expect(rows[0].retry).toBeUndefined();
+  });
+
+  it('stays quiet about done phases whose record is clean', () => {
+    const rows = nextStepRows('demo', [
+      phase({ phase: 1, state: 'done' }),
+    ], run({ phases: { 1: { phase: 1, status: 'done', attempts: 1, costUsd: 0 } } } as never), false);
+    expect(rows).toHaveLength(0);
+  });
+});

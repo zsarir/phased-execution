@@ -55,8 +55,25 @@ export function nextStepRows(
 ): Row[] {
   const rows: Row[] = [];
   for (const p of planPhases) {
-    if (p.state === 'done') continue;
     const record = run?.phases?.[String(p.phase)];
+
+    if (p.state === 'done') {
+      // A red record on a green phase: this run's attempt stopped, the work
+      // was finished and verified outside it. Nothing to press — but leaving
+      // the chip unexplained is the dead end this card exists to remove.
+      if (record && ['failed', 'interrupted', 'parked'].includes(record.status)) {
+        rows.push({
+          phase: p.phase,
+          title: p.title,
+          state: 'done',
+          why: `this run's own attempt stopped (${excerpt(record.note ?? record.status, 160)})`
+            + ' — but the phase was finished and verified outside it, and the board reads done.'
+            + ' Nothing needs fixing; the Why? button on its row shows what failed here.',
+          readMore: phaseHref(slug, p.phase),
+        });
+      }
+      continue;
+    }
 
     if (p.state === 'stuck') {
       rows.push({
@@ -171,7 +188,9 @@ export function NextSteps({
                 {row.readMore && (
                   <Button size="sm" variant="ghost" asChild>
                     <a href={row.readMore}>
-                      {row.state === 'stuck' ? 'Read the full handoff' : 'Read the gate (plan)'}
+                      {row.state === 'stuck'
+                        ? 'Read the full handoff'
+                        : row.state === 'done' ? 'Open the phase' : 'Read the gate (plan)'}
                     </a>
                   </Button>
                 )}

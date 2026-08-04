@@ -88,11 +88,14 @@ test('a finished phase offers nothing at all, whatever the run recorded', () => 
     runAlone: false, retry: false, skip: false, diagnose: false,
   });
 
-  // Even when the record looks retryable. `diagnose` obeys the same rule as the
-  // rest of the row: a phase the board calls done has nothing left to explain.
+  // Even when the record looks retryable, no CONTROL is offered — but the
+  // record's own story stays readable. "A done phase has nothing left to
+  // explain" was the old rule, and a real page disproved it: two red `failed`
+  // chips on phases finished outside the run, with nothing to click. What
+  // failed HERE is exactly what such a row still owes.
   const failed = { state: 'done', record: { status: 'failed' } };
   assert.deepEqual(phaseActions(failed, opts), {
-    runAlone: false, retry: false, skip: false, diagnose: false,
+    runAlone: false, retry: false, skip: false, diagnose: true,
   });
 });
 
