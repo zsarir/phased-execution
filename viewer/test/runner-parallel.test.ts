@@ -541,3 +541,34 @@ test('a pause armed while a phase waits for its scope abandons it back to pendin
   assert.equal(state.phases['1'].status, 'pending', 'restored so the phase stays startable');
   r.cleanup();
 });
+
+test('a queued second lane does not repaint a run that is still driving its first', async () => {
+  const r = repo();
+  const gate = deferred<void>();
+  let sampled: { run?: string; p2?: string } = {};
+  let instance!: InstanceType<typeof Runner>;
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    if (phase === 1) {
+      await sleep(400); // let phase 2 reach admission and queue behind this scope
+      const state = instance.current()!;
+      sampled = { run: state.status, p2: state.phases['2']?.status };
+      gate.resolve();
+    }
+    await Promise.race([gate.promise, sleep(3_000)]);
+    appendFileSync(join(r.state, 'done'), `${phase}\n`);
+    return ok({ sessionId: `sess-${phase}` });
+  };
+  const made = runnerOn(r, spawn, () => ['shared-repo'], 2);
+  instance = made.instance;
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  // Seen live: phase 4 driving with a real child while the RUN read `queued`,
+  // because phases 5–6 sat behind its scope. The lane's own record is where
+  // "queued" belongs; the run is running for as long as anything drives.
+  assert.equal(sampled.run, 'running', "queued is the lane's word, not a driving run's");
+  assert.equal(sampled.p2, 'queued', 'the waiting lane itself says so');
+  assert.equal(instance.current()!.status, 'finished');
+  r.cleanup();
+});

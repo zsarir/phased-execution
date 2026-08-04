@@ -808,7 +808,12 @@ export class Runner {
       // The run's own durable shadow of the queue. Deliberately NOT in
       // `IN_FLIGHT`: a queued run has done nothing, so a console restart may
       // re-adopt it rather than reconciling it into `interrupted`.
-      state.status = 'queued';
+      // Only when NOTHING of this run is live: with another lane mid-session,
+      // stamping the RUN `queued` repaints a working run as waiting for the
+      // whole of that phase (seen live — phase 4 driving, run reading
+      // `queued` because phases 5–6 sat behind its scope). The queued LANE
+      // is already honest in `record.status` and the tabs.
+      if (!this.livePhases().length) state.status = 'queued';
       this.record('phase.queued', {
         scope: formatScope(scope),
         waitingOn: blockers.map((holder) => ({
