@@ -583,11 +583,21 @@ test('tool results do not disturb the close rule or the operator echo', async ()
   // have stopped — so it is worth asserting rather than assuming.
   const b = bench();
   const events: StreamEvent[] = [];
+  let handle: SpawnHandle | null = null;
+  let sent = false;
   const outcome = await spawnClaude({
     prompt: 'BOOT phase 1', cwd: b.dir, env: { ...b.env, PC_STUB_TOOLS: '1' },
-    onEvent: (event) => events.push(event),
-    onHandle: (handle) => {
-      setTimeout(() => handle.send(tagged('bbbb2222', 'and this?')), 60);
+    onHandle: (h) => { handle = h; },
+    onEvent: (event) => {
+      events.push(event);
+      // Send amid turn 1's tool traffic — after a tool event, before the
+      // turn's result — which is the situation under test. This was a 60ms
+      // wall-clock delay once, and a fast machine finished the whole stub
+      // session inside it: a send after exit is a send to nobody.
+      if (event.kind === 'tool' && !sent) {
+        sent = true;
+        handle!.send(tagged('bbbb2222', 'and this?'));
+      }
     },
   });
 
