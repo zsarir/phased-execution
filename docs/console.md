@@ -9,8 +9,10 @@ phase-console                      # installed as a plugin, via npm or via brew 
 ./start --allow-writes             # plus the guarded write verbs
 ./start --allow-run                # plus the autopilot
 
-phase-console start                # via the background agent (foreground if none installed)
-phase-console stop | restart | status | logs [-f]
+cd ~/code/your-repo && phase-console start    # a console for THIS project
+phase-console list                 # every console: name, root, port, status
+phase-console open [<name>]        # open one in the browser
+phase-console stop | restart | status | logs [-f]   [<name>]
 phase-console install-skill        # copy the skill where Claude Code reads it
 ```
 
@@ -43,6 +45,35 @@ work is left, and whether a plan's graph even lints.
 
 It **updates itself**: a watch on `docs/` pushes changes over server-sent events, so a handoff written
 by an agent session appears without a reload.
+
+## More than one project
+
+One install, one console per project. `cd` into a repository and start — it gets its own port, its
+own state and its own supervisor, and the consoles for your other projects keep running:
+
+```bash
+cd ~/code/alpha && phase-console start     # http://127.0.0.1:4123
+cd ~/code/beta  && phase-console start     # http://127.0.0.1:4187 — a different console
+phase-console list                         # both, with their roots and ports
+phase-console open alpha                   # by name, from anywhere
+phase-console restart beta                 # every verb takes the same selector
+```
+
+An **instance** is a repository root. Its identity is derived from the path, so it survives restarts
+and reboots without anything being written down: the same root is always the same console.
+
+| | |
+|---|---|
+| **Which one a verb means** | The console for the directory you are standing in. Name one explicitly with `phase-console <verb> <name>`, `--instance <sel>` or `--root <dir>`. A selector matches an id, a name, or a unique folder name. |
+| **Port** | The first console you ever ran keeps **4123**. Every other project derives one from its path in **4124–4223** — stable across restarts, and never guessed twice. If something already holds it, the server takes the next free one and records what it actually bound. |
+| **Name** | The folder name, unless the project says otherwise. Commit a `.phase-console.json` with `{"name": "…"}` to name it for everyone who clones the repo — and to pin a port with `{"port": 4150}`. |
+| **State** | Logs, notifications, push devices and settings are per console. The first one keeps the paths it has always used, so nothing moves on upgrade; the rest live under `instances/<id>/`. Run journals are keyed by repository already and are shared by nobody. |
+| **Supervisor** | Each installed console gets its own launchd/systemd unit. The first keeps the plain `com.phase-console` / `phase-console.service` names; the others are suffixed with their id, so installing a second never renames the one you already have. |
+
+`phase-console status` with no selector reports **all** of them. Ports are reserved by registration
+rather than by being bound, so a stopped console still owns its port and a restart lands where it
+was — and starting a second console on a port that belongs to another project is refused, naming the
+project that owns it rather than failing with an address-in-use.
 
 **One rule governs the design.** `phase-graph.sh` is the only source of truth for done / ready /
 waiting, session batches, boot prompts, QA regime and lint — the console shells out to those same

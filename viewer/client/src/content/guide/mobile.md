@@ -138,6 +138,10 @@ service and back, so a notification appearing proves the whole chain rather than
 Do it on the laptop too. `http://127.0.0.1` counts as a secure context, so the same button works
 there with no HTTPS involved, and every browser gets its own subscription and its own choices.
 
+**If you run a console per project**, each is its own origin with its own signing keys and its own
+list of subscribed devices. Subscribe from each one you want to hear from — and to reach more than
+one from the phone, serve each on its own HTTPS port and install each as its own Home Screen app.
+
 Permission is never demanded on load: a page that asks the moment it opens gets refused by reflex,
 and that refusal is permanent.
 

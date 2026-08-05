@@ -54,6 +54,11 @@ phase-console install-skill           # copy the skill where Claude Code reads i
 phase-console start | stop | restart | status | logs   # drive the background agent
 ```
 
+**One install, one console per project.** `cd` into a repository and `phase-console start`: it gets
+its own port, its own state and its own supervisor, and your other projects keep running. The first
+console on a machine keeps port 4123 and everything it already had; the rest derive a stable port
+from their path. `phase-console list` shows them all, and every verb takes the name of one.
+
 Works on **macOS** and **Linux**, and on **Windows inside WSL2** — routes, updates, uninstall and
 the platform notes live in **[docs/install.md](docs/install.md)**.
 

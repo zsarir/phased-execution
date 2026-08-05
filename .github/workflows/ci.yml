@@ -84,18 +84,26 @@ jobs:
           EOF
           chmod +x "$HOME/bin/claude"
           echo "$HOME/bin" >> "$GITHUB_PATH"
-      - name: Server suite (minus the two timing-sensitive files)
+      - name: Server suite (minus the timing-sensitive files)
         # Serial files on purpose: the suite is documented load-sensitive
         # (terminal reattach is only the loudest case), and a 3-core runner
         # under 40-odd parallel files hits races a dev machine's cores absorb.
-        run: node --test --test-concurrency=1 $(ls test/*.test.ts | grep -vE 'terminal.test.ts|spawn-protocol.test.ts')
+        run: node --test --test-concurrency=1 $(ls test/*.test.ts | grep -vE 'terminal.test.ts|spawn-protocol.test.ts|runner-parallel.test.ts')
       - name: Timing-sensitive files, isolated with one retry each
         # terminal: the known reattach flake under load. spawn-protocol: the
         # operator-echo test races a 60ms send against the stub session's
         # natural close, and runner timing sometimes loses that race.
+        # runner-parallel: two tests here measure scheduling against real
+        # sleeps — 'a stranger's live lock' (400ms) and 'a queued second lane
+        # does not repaint a run that is still driving its first'. The latter
+        # failed the v1.2.0 release on macOS while the CI workflow passed the
+        # same job on the same commit concurrently: both workflows fire on a
+        # tagged push and race for macOS runners, so this bites hardest exactly
+        # at release time.
         run: |
           node --test test/terminal.test.ts || node --test test/terminal.test.ts
           node --test test/spawn-protocol.test.ts || node --test test/spawn-protocol.test.ts
+          node --test test/runner-parallel.test.ts || node --test test/runner-parallel.test.ts
       - name: Client suite
         run: npm run test:client
       - name: Client typecheck

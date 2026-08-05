@@ -39,8 +39,22 @@ phase-console                                   # from anywhere: plugin, npm or 
 ```bash
 ./start ~/code/your-repo      # open this plan library straight away
 ./start --allow-writes        # also enable the guarded write verbs
-./start --port 8080 --no-open # different port, don't open a browser
+./start --port 8080 --no-open # pin a port, don't open a browser
 ```
+
+</div>
+
+<div dir="rtl">
+
+**یک نصب، برای هر پروژه یک کنسول.** هر کنسول به یک ریشهٔ مخزن تعلق دارد و هویتش از همان مسیر ساخته
+می‌شود، پس یک پروژه همیشه همان کنسول است. داخل مخزن که بروید و `phase-console start` بزنید، پورت و
+پوشهٔ وضعیت و سرویسِ خودش را می‌گیرد؛ `phase-console list` همه را فهرست می‌کند و `open`، `status`،
+`stop`، `restart` و `logs` هرکدام یک انتخابگر می‌گیرند (نام، شناسه، نام یکتای پوشه، یا `--root <dir>`)
+و در نبودش یعنی کنسولِ همان پوشه‌ای که در آن ایستاده‌اید. اولین کنسولِ هر ماشین پورت ۴۱۲۳ و نام سرویس
+و مسیرهای وضعیتِ همیشگی‌اش را نگه می‌دارد — نصبِ تک‌پروژه هیچ فایل تازه‌ای نمی‌گیرد. باقی ماجرا در
+[`shared/instances.mjs`](shared/instances.mjs) است: دفترچهٔ ثبت در
+`~/.config/phase-console/instances.json`، بازهٔ پورتِ مشتق‌شده ۴۱۲۴ تا ۴۲۲۳، و زنجیرهٔ اولویت
+`--port` ← `PHASE_CONSOLE_PORT` ← فایل `.phase-console.json` پروژه ← آخرین پورتی که واقعاً گرفته ← مشتق‌شده.
 
 </div>
 

@@ -6,6 +6,83 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [1.3.0] - 2026-08-05
+
+One install, one console per project. `cd` into a repository and `phase-console start` — it gets its
+own port, its own state and its own supervisor, while the consoles for your other projects keep
+running. A single-project machine gains nothing new and loses nothing: the first console keeps port
+4123, the plain unit name and every path it already had.
+
+### Added
+
+- **Per-project consoles.** A console belongs to a repository root, and its identity is derived from
+  that path (`sha256(realpath(root))[:8]-basename(root)`), so the same project is always the same
+  console across restarts and reboots with nothing written down. `viewer/shared/instances.mjs` is
+  the single definition of identity, the registry and ports — imported rather than re-derived, so
+  the bash, Node and server readings cannot drift apart.
+- **`phase-console list`** — every console with its name, root, port, status and unit, status from a
+  live 2s probe rather than from what the registry hoped.
+- **`phase-console open [<sel>]`** — open one in the browser; refuses when it is stopped and names
+  the command that starts it. `PHASE_CONSOLE_NO_OPEN=1` makes it print the URL instead.
+- **Instance selectors on every verb.** `start`, `stop`, `restart`, `status`, `logs` and `open` each
+  take `[<instance>]`, `--instance <sel>` or `--root <dir>`; with none, they mean the console for
+  the directory you are standing in. A selector matches an id, a name, or a unique folder name.
+  `status` with no selector reports **all** consoles.
+- **`.phase-console.json`** — commit `{"name": …, "port": …}` at a repository root to name that
+  project's console for everyone who clones it, or to pin its port.
+- **A registry** at `~/.config/phase-console/instances.json`: name, root, port, unit, pid per
+  console. Ports are reserved by *registration* rather than by being bound, so a stopped console
+  still owns its port and a restart lands where it was.
+
+### Changed
+
+- **Ports.** The first console on a machine keeps 4123. Every other project derives a stable port in
+  **4124–4223** from its path; if something already holds it the server probes upward and records
+  what it actually bound. Precedence: `--port` → `PHASE_CONSOLE_PORT` → `.phase-console.json` → the
+  port it last actually bound → derived. Naming a port explicitly turns probing off, because naming
+  one means wanting it.
+- **Starting a console on a port that belongs to another project is refused by name**, naming the
+  project that owns it, instead of failing with an address-in-use.
+- **Per-console state.** Logs, notifications, push keys and subscriptions, approvals and settings
+  live under `instances/<id>/`. The default instance keeps the top-level paths byte-for-byte, so
+  nothing moves on upgrade; run journals were keyed by repository already and move for nobody.
+- **Per-console supervisors.** Generated units are `com.phase-console.<id>` /
+  `phase-console-<id>.service`. The default instance keeps the bare pre-1.3.0 names, so upgrading
+  never renames the agent you already have. `agent.sh install` gained `--instance`, and its `--port`
+  now defaults to the *instance's* port rather than to 4123; `uninstall` clears only the registry's
+  `unit` field, because the instance still exists — it just has no supervisor.
+- **The plans page reports what it is hiding.** With closed plans and documents hidden by sticky
+  preferences, a large library could render a single row and explain itself in a grey line. The
+  toggles now carry what they would bring back (`Show closed +71`) in the accessible name as well as
+  the pixels, a dismissible banner appears when the shape filters hide most of the source, and the
+  subtitle says "1 of 87 rows" — a true sentence about the list rather than a false one about the
+  source. The defaults are unchanged.
+- **Closed plans are marked where they were not.** The plan header carries a `CLOSED · <status>`
+  badge rather than a chip, and the plans *table* gained a marker it never had — every other signal
+  it shows is one closure suppresses, so a closed plan rendered as a live plan with nothing to do.
+- CI isolates `runner-parallel.test.ts` with one retry. Two of its tests measure scheduling against
+  real sleeps, and one failed the v1.2.0 release on macOS while the CI workflow passed the same job
+  on the same commit concurrently — both workflows fire on a tagged push and race for runners.
+
+### Fixed
+
+- **Two consoles booting together could lose one another's registry entries.** `withRegistry` gave
+  up on a contended lock immediately and wrote anyway; the write is atomic but read-modify-write is
+  not, and the lost field that matters is `pid` — the one thing `stop` needs for an unsupervised
+  console. It now waits up to 2s for the lock before falling back.
+- **The default-instance election now happens inside the registry lock.** A caller that read "is
+  there a default yet" and then registered could race another doing the same, and the loser would
+  silently inherit the legacy port *and the legacy state directory* — another console's log and push
+  subscriptions.
+- **A `name` in a committed `.phase-console.json` could inject a line into what `agent.sh` reads.**
+  The file arrives with a clone and its name reaches `key=value` lines bash parses a unit path out
+  of. Control characters are now stripped at the source, replaced with spaces so nothing is silently
+  joined.
+- `config.ts` imports `STATE_DIR`, `instanceStateDir`, `configDir` and the legacy unit name from the
+  shared module instead of keeping second copies. `configDir` falls through `env` → `process.env` →
+  `homedir()`, so a caller passing a *partial* env can no longer escape a sandbox and read the real
+  registry.
+
 ## [1.2.0] - 2026-08-05
 
 A plan can be closed — an off switch for work that will never be finished.

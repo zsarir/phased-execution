@@ -32,7 +32,7 @@ export const DESKTOP_LAUNCHER_PROMPT = `Set up a Phase Console launcher on my De
      RUNS        --allow-run: spawn unattended Claude sessions that edit ROOT
      TERM_FLAG   --allow-terminal: a real shell in the browser, running as me
      AGENT       --allow-agent: interactive claude sessions + the New-plan wizard
-     PORT        change only if 4123 is already taken
+     PORT        leave blank — each project derives its own; set one to pin it
      SUPERVISED  leave "yes" — it installs a launchd agent, and that is what makes
                  the app's own Restart and Shut down buttons work
    Blank out any door I do not want opened, and explain any I am unsure about

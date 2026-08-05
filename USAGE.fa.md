@@ -39,6 +39,9 @@
 ```bash
 ~/.claude/skills/phased-execution/start        # opens http://127.0.0.1:4123 in your browser
 phase-console                                  # same thing, when installed as a plugin, via npm or via brew
+
+cd ~/code/your-repo && phase-console start     # a console for THIS project, on its own port
+phase-console list                             # every console: name, root, port, status
 ```
 
 </div>
@@ -53,6 +56,11 @@ phase-console                                  # same thing, when installed as a
 ثبت نتیجه‌ی QA، قفل‌ها، بستن و بازکردنِ طرح) یا `--allow-run` را بدهید (**اتوپایلوت** — یک `claude -p` برای هر فاز، که طرح را
 بدون حضور شما پیش می‌برد و برای هر کاری که از درختِ کاری بیرون بزند، درخواست تأیید می‌سازد). هیچ‌وقت
 کامیت یا پوش نمی‌کند. مرحله‌ی نصب هم ندارد — به `viewer/README.fa.md` نگاه کنید.
+
+**یک نصب به همه‌ی پروژه‌ها سرویس می‌دهد.** هر مخزن کنسولِ خودش را می‌گیرد — پورت، وضعیت و سرویسِ
+جداگانه — از همان یک نصبی که دارید؛ `phase-console list` همه را نشان می‌دهد و هر فعل (`open`، `stop`،
+`restart`، `status`، `logs`) نامِ یکی از آن‌ها را می‌پذیرد. اولین کنسولِ هر ماشین پورت ۴۱۲۳ و همان
+مسیرهای همیشگی‌اش را نگه می‌دارد، پس برای کسی که یک پروژه دارد هیچ‌چیز عوض نمی‌شود.
 
 ## چیزها کجا زندگی می‌کنند (دو جا)
 

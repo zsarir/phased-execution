@@ -25,7 +25,7 @@ Set up a Phase Console launcher on my Desktop.
      RUNS        --allow-run: spawn unattended Claude sessions that edit ROOT
      TERM_FLAG   --allow-terminal: a real shell in the browser, running as me
      AGENT       --allow-agent: interactive claude sessions + the New-plan wizard
-     PORT        change only if 4123 is already taken
+     PORT        leave blank — each project derives its own; set one to pin it
      SUPERVISED  leave "yes" — it installs a launchd agent, and that is what makes
                  the app's own Restart and Shut down buttons work
    Blank out any door I do not want opened, and explain any I am unsure about
@@ -138,3 +138,46 @@ plan's last phase pushes that branch and opens the PR after one approval tap.
 
 Settings ▸ Automation holds the defaults these forms open with; each launch can override them for
 itself.
+
+## Running more than one project
+
+One install, one console per project. `cd` into a repository and start it — the consoles for your
+other projects keep running, each on its own port with its own state.
+
+```bash
+cd ~/code/alpha && phase-console start     # http://127.0.0.1:4123
+cd ~/code/beta  && phase-console start     # a different port, a different console
+phase-console list                         # both, with their roots, ports and status
+phase-console open alpha                   # by name, from anywhere
+```
+
+A console belongs to a **repository root**, and its identity comes from that path — so the same
+project is always the same console, across restarts and reboots, without anything being written
+down.
+
+**Which console a verb means.** The one for the directory you are standing in. Name another with
+`phase-console <verb> <name>`, `--instance <sel>` or `--root <dir>`; a selector matches an id, a
+name, or a unique folder name. `phase-console status` with no selector reports all of them.
+
+**Ports.** The first console you ever ran keeps **4123**. Every other project derives a stable one
+in **4124–4223** from its path. If something already holds that port the server takes the next free
+one and records what it actually bound, so nothing has to be guessed twice. Starting a console on a
+port that belongs to a *different* project is refused by name rather than failing with an
+address-in-use — and because a port is reserved by registration rather than by being bound, a
+stopped console still owns its port and a restart lands where it was.
+
+**Naming a project.** By default a console is named after its folder. Commit a `.phase-console.json`
+at the repository root to decide it for everyone who clones:
+
+```json
+{ "name": "alpha", "port": 4150 }
+```
+
+Both keys are optional — `port` pins one instead of deriving it.
+
+**What is per console, and what is not.** Logs, notifications, push subscriptions and settings are
+separate for each. The first console keeps the paths it has always used, so a single-project machine
+gains no new files and nothing moves on upgrade; the rest live under `instances/<id>/`. Run
+journals are keyed by repository already, so they were never shared. Each installed console also
+gets its own launchd/systemd unit — the first keeps the plain name, so installing a second never
+renames the one you already have.

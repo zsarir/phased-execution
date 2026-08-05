@@ -55,6 +55,10 @@ RUNS="--allow-run"
 # this machine reads, and overwriting it here breaks the console's own shell.
 TERM_FLAG="--allow-terminal"
 AGENT="--allow-agent"
+# 4123 is the FIRST console on a machine. Every other project derives its own
+# port from its path (4124–4223), so a launcher for a second project should
+# blank this out and let it — pinning 4123 in two copies of this file is two
+# projects fighting over one port.
 PORT=4123
 SUPERVISED="yes"
 

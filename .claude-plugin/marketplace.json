@@ -10,7 +10,7 @@
       "name": "phased-execution",
       "source": "./",
       "strict": false,
-      "description": "Run large work as a dependency graph of right-sized Claude sessions — plans, per-phase handoffs, and a computed ready-set. Ships a zero-dependency local web console: scope-aware concurrency so disjoint plans run at once while intersecting phases queue, per-session tabs, remaining-time estimates, a plan-mode wizard that drafts a plan before writing it, and Tailscale onboarding to drive it all from your phone. The console also installs prebuilt via npm (phase-console) or Homebrew (zsarir/homebrew-tap/phase-console).",
+      "description": "Run large work as a dependency graph of right-sized Claude sessions — plans, per-phase handoffs, and a computed ready-set. Ships a zero-dependency local web console: one install serves every project, each repository getting its own console, port, state and supervisor from a single `cd <project> && phase-console start` — list them, open one by name, and drive any of them with the same verbs. Plus scope-aware concurrency so disjoint plans run at once while intersecting phases queue, closable plans that stop reporting work nobody will do, per-session tabs, remaining-time estimates, a plan-mode wizard that drafts a plan before writing it, and Tailscale onboarding to drive it all from your phone. The console also installs prebuilt via npm (phase-console) or Homebrew (zsarir/homebrew-tap/phase-console).",
       "author": {
         "name": "mobin",
         "url": "https://github.com/zsarir"
@@ -32,6 +32,8 @@
         "queue",
         "estimates",
         "dashboard",
+        "multi-project",
+        "monorepo",
         "tailscale",
         "remote-access"
       ],

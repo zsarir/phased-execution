@@ -29,6 +29,9 @@ and the guardrails — lives in `SKILL.md` + `references/`; that is what Claude 
 ```bash
 ~/.claude/skills/phased-execution/start        # opens http://127.0.0.1:4123 in your browser
 phase-console                                  # same thing, when installed as a plugin, via npm or via brew
+
+cd ~/code/your-repo && phase-console start     # a console for THIS project, on its own port
+phase-console list                             # every console: name, root, port, status
 ```
 
 **Phase Console** (`viewer/`) is a local web app for reading this system: every plan with its live
@@ -43,6 +46,11 @@ terminal, plus a *New plan with AI* wizard that authors a plan from a brief), or
 `--allow-terminal` (a real shell); it never commits or pushes. One-time setup per machine:
 `cd viewer && npm ci && npm run build` — skipped entirely on an npm or Homebrew install, which ships
 the client prebuilt — see `viewer/README.md`.
+
+**One install serves every project.** Each repository gets its own console — its own port, state and
+supervisor — from the single install you already have; `phase-console list` shows them, and every
+verb (`open`, `stop`, `restart`, `status`, `logs`) takes the name of one. The first console on a
+machine keeps port 4123 and the paths it always used, so upgrading changes nothing for one project.
 
 ## Where things live (two places)
 

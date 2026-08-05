@@ -43,7 +43,17 @@ npm run check:dist            # the build gate — run it after every build
 ```bash
 ./start [<repo-with-docs-plans>] [--allow-writes] [--port N] [--no-open]   # run the console
 ./start --agent-status | --agent-log -f | --agent-restart                  # the launchd agent
+phase-console list | open | start | stop | restart | status | logs [<sel>] # one console per project
 ```
+
+**One install, one console per project.** Identity, the registry and ports live in
+`viewer/shared/instances.mjs` — the single definition everything else imports rather than re-deriving
+(`config.ts`, `bin/phase-console.mjs`, and `deploy/agent.sh`, which shells its `shell` op for
+`key=value` lines because it may have neither `jq` nor python). An instance id is
+`sha256(realpath(root))[:8]-basename(root)`; the default instance keeps port 4123, the bare
+`com.phase-console` unit name and the top-level state paths, and every other project derives a port
+in 4124–4223. Identity **must** resolve at module load — log, notification, push and approval paths
+are module-level consts, so a late resolution writes global state while reporting a private id.
 
 The Node suite must keep passing **without** a client build — a fresh clone verifies the server before
 `dist` exists (`test/static.test.ts` holds the not-built answers, including the `/sw.js` fallback).

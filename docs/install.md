@@ -135,7 +135,9 @@ runs inside [WSL2](https://learn.microsoft.com/windows/wsl/install).
 - **The background agent is a systemd user service.** `phase-console --install-agent --root <repo>`
   writes `~/.config/systemd/user/phase-console.service` (`Restart=always`, same 150s stop grace as
   the launchd plist) and starts it — the app's own Restart and Shut-down buttons work the same as
-  on macOS. It stops at logout unless you run `loginctl enable-linger $USER` once.
+  on macOS. It stops at logout unless you run `loginctl enable-linger $USER` once. Installing a
+  console for a **second** project writes its own unit, `phase-console-<id>.service`, so the one you
+  already have is never renamed; `phase-console list` prints which unit belongs to which project.
 - **On WSL, systemd must be on** (it is on current WSL2 installs). If the install says so: add
   `[boot]` + `systemd=true` to `/etc/wsl.conf`, run `wsl --shutdown` from Windows, reopen. Until
   then — or instead — just run `phase-console --root <repo>` in a tmux window. WSL parks its VM
@@ -172,7 +174,7 @@ Set up a Phase Console launcher on my Desktop.
      RUNS        --allow-run: spawn unattended Claude sessions that edit ROOT
      TERM_FLAG   --allow-terminal: a real shell in the browser, running as me
      AGENT       --allow-agent: interactive claude sessions + the New-plan wizard
-     PORT        change only if 4123 is already taken
+     PORT        leave blank — each project derives its own; set one to pin it
      SUPERVISED  leave "yes" — it installs a launchd agent, and that is what makes
                  the app's own Restart and Shut down buttons work
    Blank out any door I do not want opened, and explain any I am unsure about

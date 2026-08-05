@@ -129,6 +129,12 @@ that foreground command, and you will be re-running it by hand forever.
 To undo it: `tailscale serve --https=443 http://127.0.0.1:4123 off`, or `tailscale serve reset` to
 clear everything.
 
+**More than one project?** 4123 is the port of the *first* console on the machine; the others derive
+their own (`phase-console list` prints them). Serve each one you want on the phone, on its own
+HTTPS port — `tailscale serve --bg --https=8443 http://127.0.0.1:4187` — and install each as its own
+Home Screen app. Nothing below changes: a console is a normal origin, and the phone treats two of
+them as two sites.
+
 Now open `https://your-machine.your-tailnet.ts.net/` on the phone. Padlock, no warning, no port
 number.
 
@@ -165,6 +171,10 @@ service and back, so a notification appearing proves the whole chain rather than
 
 Do it on the laptop too. `http://127.0.0.1` counts as a secure context, so the same button works
 there with no HTTPS involved, and every browser gets its own subscription and its own choices.
+
+Each console is its own origin, so it keeps its own signing keys and its own list of subscribed
+devices: turning notifications on for one project does not subscribe you to another, and one project
+going quiet is a choice you make per project. Subscribe from each console you want to hear from.
 
 **Eight categories, per device**, because a phone and a laptop rarely want the same ones:
 

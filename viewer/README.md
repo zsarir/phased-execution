@@ -28,8 +28,20 @@ the ones you pick, and you can switch at any time from the **Source** panel in t
 ```bash
 ./start ~/code/your-repo      # open this plan library straight away
 ./start --allow-writes        # also enable the guarded write verbs
-./start --port 8080 --no-open # different port, don't open a browser
+./start --port 8080 --no-open # pin a port, don't open a browser
 ```
+
+**One install serves every project.** A console belongs to a repository root, and its identity is
+derived from that path, so the same project is always the same console. `cd` into a repository and
+`phase-console start` gives it its own port, its own state directory and its own supervisor while
+your other projects keep running; `phase-console list` shows them all, and `open`, `status`, `stop`,
+`restart` and `logs` each take a selector (a name, an id, a unique folder name, or `--root <dir>`)
+and otherwise mean the console for the directory you are in. The first console on a machine keeps
+port 4123, the plain unit name and the state paths it always had — a single-project install gains no
+new files. Everything else is in [`shared/instances.mjs`](shared/instances.mjs): the registry at
+`~/.config/phase-console/instances.json`, the derived-port range 4124–4223, and the precedence chain
+`--port` → `PHASE_CONSOLE_PORT` → the project's `.phase-console.json` → the port it last actually
+bound → derived.
 
 ## Keep it running
 

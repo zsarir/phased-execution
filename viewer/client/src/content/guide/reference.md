@@ -21,11 +21,25 @@ clears itself; one it cannot waits for you.
 | `--allow-run` | Enable the autopilot. Separate on purpose. |
 | `--allow-agent` | Open interactive `claude` sessions — including recovery and QA reviews — and the *New plan with AI* wizard. |
 | `--allow-terminal` | Open a shell in the browser. No deny list, no approval hook: whoever is at the keyboard is the policy. |
-| `--port <n>` | Listen somewhere other than 4123. |
+| `--port <n>` | Pin a port instead of deriving one from the repository path. |
+| `--instance <sel>` | Act on a named console rather than the one for this directory. |
 | `--remote <host>` | Also answer to this hostname, behind a proxy that authenticates callers. Turns on strict `Host` checking. |
 | `--remote-user <login>` | A login allowed to arrive that way. Required by `--remote`. |
 | `--scripts <dir>` | Use a different phased-execution checkout. |
 | `--log-file <path>` | Structured log. Defaults under `~/.local/state/phase-console/`. |
+
+## Console verbs
+
+Every verb takes an optional instance selector — a name, an id or a unique folder name. With none,
+it means the console for the directory you are in.
+
+| Verb | Does |
+|---|---|
+| `phase-console start [sel]` | Start it — through its background agent if one is installed, in the foreground otherwise. |
+| `phase-console list` | Every console: name, root, port, status, unit. |
+| `phase-console open [sel]` | Open it in the browser. Refuses when it is stopped, and says how to start it. |
+| `phase-console status [sel]` | With no selector, reports **all** consoles. |
+| `phase-console stop \| restart \| logs [sel]` | The rest of the lifecycle, one console at a time. |
 
 ## Where things live
 
@@ -33,8 +47,9 @@ clears itself; one it cannot waits for you.
 |---|---|
 | `docs/plans/` | The plans. Yours, in git. |
 | `docs/handoffs/` | Per-phase handoffs and locks. Yours, in git. |
-| `~/.local/state/phase-console/` | Run checkpoints, journals, the log. Never inside your repository, so `git status` stays clean. |
-| `~/.config/phase-console/` | Preferences — notification categories, push devices — and your autopilot policy. |
+| `~/.local/state/phase-console/` | Run checkpoints, journals, the log. Never inside your repository, so `git status` stays clean. Per-console state lives under `instances/<id>/`; the first console on a machine keeps the top-level paths it always had. |
+| `~/.config/phase-console/` | Preferences — notification categories, push devices — and your autopilot policy. `instances.json` is the registry of every console: name, root, port, unit. |
+| `.phase-console.json` | Optional, committed at a repository root: `{"name": …, "port": …}` names that project's console for everyone who clones it. |
 
 ## The engine, if you would rather drive it yourself
 
