@@ -34,23 +34,28 @@ the ones you pick, and you can switch at any time from the **Source** panel in t
 ## Keep it running
 
 A foreground console dies with its terminal, with a logout, and with any crash.
-Install it as a launchd agent instead and it starts at login and comes back on its own:
+Install it as a background agent instead — launchd on macOS, a systemd user service on Linux —
+and it starts at login and comes back on its own:
 
 ```bash
 ./start --install-agent --root ~/code/your-repo
 ./start --agent-status      # is it up, and as which pid
 ./start --agent-log -f      # follow the structured log
+./start --agent-start       # start it (stopped ≠ uninstalled)
+./start --agent-stop        # stop it — it stays installed and returns at login
 ./start --agent-restart
 ./start --agent-update      # after a git pull: npm ci + npm run build, then restart
 ./start --uninstall-agent
 ```
 
-(On an npm or Homebrew install the same verbs hang off the bin: `phase-console --install-agent
---root ~/code/your-repo`, `--agent-status`, and so on. Updates come through the package manager —
-`npm update -g phase-console` / `brew upgrade phase-console`, then `phase-console --agent-restart`.)
+(On an npm or Homebrew install the same verbs are friendlier words on the bin:
+`phase-console --install-agent --root ~/code/your-repo`, then `phase-console
+start | stop | restart | status | logs [-f]` — `start` runs in the foreground when no agent is
+installed. Updates come through the package manager — `npm update -g phase-console` /
+`brew upgrade phase-console`, then `phase-console restart`.)
 
-`--install-agent` and `--agent-update` build the client as part of the job; the launchd boot path
-never builds, so a restart serves exactly what was verified and a crash loop cannot spend its
+`--install-agent` and `--agent-update` build the client as part of the job; the supervisor's boot
+path never builds, so a restart serves exactly what was verified and a crash loop cannot spend its
 throttle interval rebuilding.
 
 It also tries not to fall over in the first place. An unhandled fault, a file watch that
@@ -65,9 +70,9 @@ answer.
 ## Stop it
 
 **Settings → Shut down** ends the console and everything it owns. Under launchd that means
-`launchctl bootout`, so the job is unloaded and *stays* off — otherwise `KeepAlive` would turn the
-exit into a restart, which is why the console had a Restart button and no Stop one for so long.
-Anywhere else it is a graceful exit.
+`launchctl bootout`, and under systemd `systemctl --user stop` — the job is unloaded and *stays*
+off; otherwise `KeepAlive` / `Restart=always` would turn the exit into a restart, which is why the
+console had a Restart button and no Stop one for so long. Anywhere else it is a graceful exit.
 
 The confirm dialog is an inventory rather than a warning: it lists the run it is about to stop (which
 is checkpointed first and resumes when the console comes back), each live agent session, each
@@ -179,9 +184,10 @@ actions, so answering from a lock screen is one tap.
 
 `PHASE_CONSOLE_NOTIFY=<command>` covers what neither can: a machine with no browser in the picture at
 all. It is run as `cmd "<title>" "<body>"`, and is an environment variable rather than a setting
-because it runs a command on this machine. Under launchd it has to be in the plist — a variable
-exported in your shell does not reach the job launchd starts at login, which is the one running
-while you are asleep — so `deploy/agent.sh install --notify '<command>'` bakes it in.
+because it runs a command on this machine. Under the background agent it has to be in the plist /
+unit — a variable exported in your shell does not reach the job the supervisor starts at login,
+which is the one running while you are asleep — so `deploy/agent.sh install --notify '<command>'`
+bakes it in.
 
 Every destination is decided by one function (`routeFor`), used by the SSE announce, the push
 payload, the service worker and the inbox row alike, and a test walks the catalogue against the
@@ -414,7 +420,7 @@ client/   src/ (the React app: shell/ · views/ · components/ · lib/ · styles
 shared/   routes.js · route-meta.js · console-model.js · phase-model.js · sw-push.js
           — dependency-free ESM, imported by the Node tests and the client alike
 scripts/  check-dist.mjs (build gate) · stamp-build.mjs · check-stamp.mjs
-deploy/   agent.sh (launchd install/update/uninstall/status/restart/log)
+deploy/   agent.sh (launchd/systemd install/update/uninstall/status/restart/log)
 ```
 
 Fonts are Archivo Narrow, Public Sans and JetBrains Mono (SIL Open Font License), bundled by the build.

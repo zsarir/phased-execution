@@ -47,7 +47,8 @@ phase-console                                   # from anywhere: plugin, npm or 
 ## زنده نگه‌داشتنش
 
 کنسولی که در پیش‌زمینه اجرا شود، با بسته‌شدنِ ترمینال می‌میرد، با logout می‌میرد و با هر کرشی هم می‌میرد.
-به‌جایش آن را به‌عنوان یک launchd agent نصب کنید تا با ورود به سیستم بالا بیاید و خودش برگردد:
+به‌جایش آن را به‌عنوان یک agent پس‌زمینه نصب کنید — روی macOS با launchd و روی لینوکس با یک سرویسِ
+systemd کاربری — تا با ورود به سیستم بالا بیاید و خودش برگردد:
 
 <div dir="ltr">
 
@@ -55,6 +56,8 @@ phase-console                                   # from anywhere: plugin, npm or 
 ./start --install-agent --root ~/code/your-repo
 ./start --agent-status      # is it up, and as which pid
 ./start --agent-log -f      # follow the structured log
+./start --agent-start       # start it (stopped ≠ uninstalled)
+./start --agent-stop        # stop it — it stays installed and returns at login
 ./start --agent-restart
 ./start --agent-update      # after a git pull: npm ci + npm run build, then restart
 ./start --uninstall-agent
@@ -63,11 +66,13 @@ phase-console                                   # from anywhere: plugin, npm or 
 </div>
 
 دستورهای `--install-agent` و `--agent-update` ساختِ کلاینت را هم خودشان انجام می‌دهند؛ مسیرِ بوتِ
-launchd هرگز build نمی‌کند — تا یک ری‌استارت دقیقاً همان چیزی را سرو کند که راستی‌آزمایی شده، و یک
-crash loop نتواند وقتش را صرفِ buildهای پیاپی کند. (در نصب‌های npm و Homebrew همین فعل‌ها روی خودِ
-دستور سوارند — <span dir="ltr">`phase-console --install-agent --root …`</span> — و به‌روزرسانی از
-مسیرِ package manager می‌آید: <span dir="ltr">`npm update -g phase-console`</span> یا
-<span dir="ltr">`brew upgrade phase-console`</span> و سپس <span dir="ltr">`phase-console --agent-restart`</span>.)
+supervisor هرگز build نمی‌کند — تا یک ری‌استارت دقیقاً همان چیزی را سرو کند که راستی‌آزمایی شده، و یک
+crash loop نتواند وقتش را صرفِ buildهای پیاپی کند. (در نصب‌های npm و Homebrew همین فعل‌ها به‌شکلِ
+کلمه‌های ساده روی خودِ دستور سوارند — <span dir="ltr">`phase-console --install-agent --root …`</span>
+و بعد <span dir="ltr">`phase-console start | stop | restart | status | logs`</span>؛ `start` وقتی
+agentی نصب نیست در پیش‌زمینه اجرا می‌کند — و به‌روزرسانی از مسیرِ package manager می‌آید:
+<span dir="ltr">`npm update -g phase-console`</span> یا
+<span dir="ltr">`brew upgrade phase-console`</span> و سپس <span dir="ltr">`phase-console restart`</span>.)
 
 از طرف دیگر، تلاش می‌کند اصلاً زمین نخورد. یک خطای مدیریت‌نشده، یک file watch که ارور می‌دهد، مرورگری که
 وسطِ استریم ناپدید می‌شود — هرکدام به‌عنوان وضعیتِ **degraded** ثبت می‌شود و از `/api/state` سرو می‌شود،
@@ -80,9 +85,10 @@ crash loop نتواند وقتش را صرفِ buildهای پیاپی کند. (�
 ## خاموش کردنش
 
 از **Settings → Shut down** کنسول و هر چیزی که در اختیار دارد خاموش می‌شود. زیر launchd این یعنی
-`launchctl bootout` — یعنی job از حافظه برداشته می‌شود و خاموش **می‌مانَد**؛ وگرنه `KeepAlive` هر خروجی
-را به یک ری‌استارت تبدیل می‌کرد، و دقیقاً به همین دلیل بود که کنسول مدت‌ها دکمه‌ی Restart داشت و دکمه‌ی
-Stop نداشت. جای دیگر، یک خروجِ تمیز.
+`launchctl bootout` و زیر systemd یعنی <span dir="ltr">`systemctl --user stop`</span> — یعنی job از
+حافظه برداشته می‌شود و خاموش **می‌مانَد**؛ وگرنه `KeepAlive` / <span dir="ltr">`Restart=always`</span>
+هر خروجی را به یک ری‌استارت تبدیل می‌کرد، و دقیقاً به همین دلیل بود که کنسول مدت‌ها دکمه‌ی Restart داشت
+و دکمه‌ی Stop نداشت. جای دیگر، یک خروجِ تمیز.
 
 دیالوگِ تأیید یک صورت‌برداری است، نه یک هشدار: می‌گوید چه چیزی متوقف می‌شود — اجرایی که در جریان است (که
 اول checkpoint می‌شود و با برگشتنِ کنسول ادامه پیدا می‌کند)، هر نشستِ ایجنتِ زنده، هر ترمینال، و دستوری که
@@ -310,7 +316,7 @@ client/   src/ (the React app: shell/ · views/ · components/ · lib/ · styles
           public/ (icons, manifest) → dist/ (built output + .build-rev — gitignored)
 shared/   routes.js · route-meta.js · console-model.js · phase-model.js · sw-push.js
 scripts/  check-dist.mjs (build gate) · stamp-build.mjs · check-stamp.mjs
-deploy/   agent.sh (launchd install/update/uninstall/status/restart/log)
+deploy/   agent.sh (launchd/systemd install/update/uninstall/status/restart/log)
 ```
 
 </div>

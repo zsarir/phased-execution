@@ -6,6 +6,9 @@ Typing `./start` is fine. A launcher is better for one specific reason: started 
 back — a window you double-clicked is the server's parent, not its supervisor, so Settings
 correctly refuses there.
 
+(The `.command` launcher is macOS-only. On Linux, `--install-agent` gives you the same supervised
+mode as a systemd user service — Restart and Shut down work identically.)
+
 Paste this into Claude Code:
 
 ```

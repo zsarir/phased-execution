@@ -84,7 +84,8 @@ you signed in with.
 completely correct and quietly admit everyone on your network, so it is an error rather than a
 warning.
 
-To survive reboots, install it as a launchd agent with the same flags:
+To survive reboots, install it as a background agent (launchd on macOS, a systemd user service on
+Linux) with the same flags:
 
 ```bash
 ./start --install-agent --root ~/code/your-repo --allow-writes --allow-run --allow-agent \
@@ -92,7 +93,7 @@ To survive reboots, install it as a launchd agent with the same flags:
 ./start --agent-status
 ```
 
-(The launchd *agent* here is the background **process supervisor** — nothing to do with the
+(The *agent* here is the background **process supervisor** — nothing to do with the
 console's Agent page; the flag for that is `--allow-agent`.)
 
 ### Step 4 · Put the proxy in front of it
@@ -165,7 +166,7 @@ chmod +x ~/.local/bin/phase-notify
 export PHASE_CONSOLE_NOTIFY=~/.local/bin/phase-notify
 ```
 
-Under launchd it has to be in the plist, not in your shell:
+Under the background agent it has to be baked into the plist / unit, not exported in your shell:
 `deploy/agent.sh install --notify '<command>'`.
 
 > **This sends plan names and approval details to whatever service you choose.** Pick a topic name

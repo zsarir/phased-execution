@@ -84,13 +84,14 @@ yellow and stall everything downstream of them.
 ## The off switch
 
 The console has always had a **Restart** button and never a **Stop** one, for the same reason
-Restart works at all: under launchd `KeepAlive`, exiting *is* restarting. So stopping a console
-meant a terminal and `launchctl` — the exact situation a browser UI exists to remove.
+Restart works at all: under launchd `KeepAlive` (or systemd `Restart=always`), exiting *is*
+restarting. So stopping a console meant a terminal and `launchctl` — the exact situation a browser
+UI exists to remove.
 
 **Settings → Shut down** does it properly:
 
-- **It does the right thing per supervisor** — `bootout` under launchd, so the job is unloaded and
-  stays off; a graceful exit anywhere else.
+- **It does the right thing per supervisor** — `bootout` under launchd and `systemctl --user stop`
+  under systemd, so the job is unloaded and stays off; a graceful exit anywhere else.
 - **The dialog is an inventory, not a warning.** It lists what will stop: the run (checkpointed
   first, and it resumes when the console comes back), each live agent session, each terminal, and the
   command that starts it all again. *Are you sure?* is not a question anybody can answer; *this stops

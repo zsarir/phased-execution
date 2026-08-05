@@ -5,7 +5,7 @@
 **A [Claude Code](https://claude.com/claude-code) skill for running work that is too big for one
 session — as a dependency graph of right-sized sessions, with a local web console to watch it.**
 
-![Skill](https://img.shields.io/badge/Claude%20Code-Agent%20Skill-d97757?style=flat-square) ![Plugin](https://img.shields.io/badge/install-plugin%20·%20clone%20·%20npm%20·%20brew-4FA8FF?style=flat-square) ![npm](https://img.shields.io/npm/v/phase-console?style=flat-square&color=CB3837) ![App](https://img.shields.io/badge/app-Phase%20Console-ffb627?style=flat-square) ![Dependencies](https://img.shields.io/badge/dependencies-none-3fb68b?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-7A8B92?style=flat-square)
+[![CI](https://github.com/zsarir/phased-execution/actions/workflows/ci.yml/badge.svg)](https://github.com/zsarir/phased-execution/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/phase-console?style=flat-square&color=CB3837)](https://www.npmjs.com/package/phase-console) ![Skill](https://img.shields.io/badge/Claude%20Code-Agent%20Skill-d97757?style=flat-square) ![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Linux%20·%20WSL2-3fb68b?style=flat-square) ![Dependencies](https://img.shields.io/badge/runtime%20dependencies-none-3fb68b?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-7A8B92?style=flat-square)
 
 **English** · [فارسی](README.fa.md)
 
@@ -36,7 +36,28 @@ stay correct.*
 
 ---
 
-## Install it
+## Install
+
+| You want | Run | Notes |
+|---|---|---|
+| The console, ready to use | `npm install -g phase-console` | Client prebuilt — no build step. Skill files ship inside for the console's own use |
+| … via Homebrew | `brew install zsarir/homebrew-tap/phase-console` | macOS **and** Linux; runs on brew's Node |
+| … without installing | `npx phase-console ~/code/your-repo` | One-off, always the latest release |
+| The **skill** in Claude Code | `/plugin marketplace add zsarir/phased-execution` then `/plugin install phased-execution@mobin` | Auto-updates from every commit. Pair with npm/brew, or build its console once |
+| An editable tree | `git clone https://github.com/zsarir/phased-execution ~/.claude/skills/phased-execution` | Skill + console from one folder you control |
+
+Then point the console at any repository that has (or should have) `docs/plans`:
+
+```bash
+phase-console ~/code/your-repo        # run it, right here
+phase-console install-skill           # copy the skill where Claude Code reads it
+phase-console start | stop | restart | status | logs   # drive the background agent
+```
+
+Works on **macOS** and **Linux**, and on **Windows inside WSL2** — routes, updates, uninstall and
+the platform notes live in **[docs/install.md](docs/install.md)**.
+
+### Or hand it to Claude Code
 
 Paste this into Claude Code. It asks before every step and turns nothing on by itself.
 
@@ -51,8 +72,9 @@ Install the phased-execution skill for me, and ask before each step.
      npm:     npm install -g phase-console     (console prebuilt, skill files inside)
      Brew:    brew install zsarir/homebrew-tap/phase-console
    Claude Code discovers the SKILL from the plugin or the clone; npm and brew
-   are for the console. If I already have it, update it the same way instead
-   and tell me what changed.
+   install the console — after one of those, phase-console install-skill puts
+   the skill where Claude Code reads it. If I already have it, update it the
+   same way instead and tell me what changed.
 2. Ask which repository holds my work. The console reads plans from
    <repo>/docs/plans and handoffs from <repo>/docs/handoffs; it will not start
    without docs/plans, so create it if I say to.
@@ -68,7 +90,8 @@ Install the phased-execution skill for me, and ask before each step.
    Default every one of them to off. Then install with only what I chose:
      bash <skill>/viewer/deploy/agent.sh install --root <repo> [flags]
    (from npm or brew: phase-console --install-agent --root <repo> [flags])
-   That installs a launchd agent that starts at login and survives a crash.
+   That installs a login agent (launchd on macOS, systemd on Linux) that
+   starts at login and survives a crash.
 5. Open http://127.0.0.1:4123 and confirm it loads. If it does not, read
    ~/.local/state/phase-console/console.err.log and tell me what it says.
 6. Finish by listing what you enabled, what you left off, and how to change it.
@@ -76,9 +99,6 @@ Install the phased-execution skill for me, and ask before each step.
 Do not turn on a flag I did not agree to, and do not start a phase run to
 "test" it — a run edits my repository.
 ```
-
-Prefer to do it by hand — `npm i -g phase-console`, `brew install zsarir/homebrew-tap/phase-console`,
-plugin or clone? → **[docs/install.md](docs/install.md)**
 
 ---
 
@@ -102,7 +122,7 @@ Make my Phase Console reachable from my phone over Tailscale.
      tailscale serve --bg --https=443 http://127.0.0.1:4123
    Use my real port if it is not 4123. Confirm with: tailscale serve status
 3. Re-install the console agent so it answers to that hostname, keeping every
-   flag it already has — read them from the current plist rather than guessing:
+   flag it already has — read them from the current plist / unit, never guess:
      bash <skill>/viewer/deploy/agent.sh install --root <repo> [existing flags] \
        --remote <Self.DNSName without the trailing dot> \
        --remote-user <my login>
@@ -135,7 +155,8 @@ The long version, including push notifications and exactly what is enforced →
 [Session budget](docs/session-budget.md) · [Model handling](docs/model-handling.md) ·
 [QA gating](docs/qa-gating.md) · [Safety rails](docs/safety-rails.md) ·
 [Phase Console](docs/console.md) · [Install by hand](docs/install.md) ·
-[Reference](docs/reference.md)
+[Versioning & releases](docs/releasing.md) · [Reference](docs/reference.md)
 
 Needs Claude Code, plus `bash` and `git`. The console adds Node 22.18+ (or 23.6+) and has **no
-runtime dependencies**. MIT — see [LICENSE](LICENSE).
+runtime dependencies**. Releases: tagged `vX.Y.Z`, published by CI with npm provenance — see the
+[CHANGELOG](CHANGELOG.md). MIT — see [LICENSE](LICENSE).

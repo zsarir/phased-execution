@@ -70,7 +70,7 @@ git clone https://github.com/zsarir/phased-execution.git ~/.claude/skills/phased
 Restart Claude Code. The skill is `/phased-execution` — no prefix, because it is not inside a plugin.
 Build the console's client once (`cd ~/.claude/skills/phased-execution/viewer && npm ci && npm run
 build`), then start it with `~/.claude/skills/phased-execution/start`. Update with `git pull`, then
-rebuild — `./start --agent-update` does both build and restart if it runs as a launchd agent.
+rebuild — `./start --agent-update` does both build and restart if it runs as a background agent.
 
 ## Route C — npm *(the console as a package, prebuilt)*
 
@@ -80,11 +80,26 @@ npm install -g phase-console          # or one-off: npx phase-console ~/code/you
 
 You get the `phase-console` command on PATH with the client **already built** — the per-machine
 build step from A/B does not exist here. The whole tree ships inside the package (at
-`$(npm root -g)/phase-console`), so the console's write verbs, prompts and QA templates all work;
-what an npm install does *not* do is register the skill with Claude Code — pair it with Route A if
-you want `/phased-execution` in your sessions. Update with `npm update -g phase-console`; if you run
-the background agent, follow with `phase-console --agent-restart`. Remove with
-`npm uninstall -g phase-console`.
+`$(npm root -g)/phase-console`), so the console's write verbs, prompts and QA templates all work.
+An npm install does not register the skill with Claude Code by itself — one more command does:
+
+```bash
+phase-console install-skill     # copies the skill into ~/.claude/skills/phased-execution
+```
+
+Restart Claude Code and the skill appears as `/phased-execution` (re-run `install-skill` after a
+package update to refresh the copy; it refuses to touch a git clone or anything it did not put
+there — `uninstall-skill` removes only its own copy). Prefer the plugin instead? Route A works
+beside this route; then skip `install-skill` so the skill exists once.
+
+Day to day: `phase-console start | stop | restart | status | logs [-f]` drive the background agent
+(`start` runs in the foreground when no agent is installed). Update with `npm update -g
+phase-console`, then `phase-console restart`. Remove with `npm uninstall -g phase-console`.
+
+> The name on npmjs is exactly `phase-console` — **unscoped**. `@zsarir/phase-console` exists only
+> as a mirror on **GitHub Packages**, whose reads require GitHub authentication — installing it
+> from the default registry answers 404. Unless you specifically want the mirror (and have
+> `@zsarir:registry=https://npm.pkg.github.com` plus a token in your `.npmrc`), use the plain name.
 
 ## Route D — Homebrew *(macOS and Linux, from the `zsarir` tap)*
 
@@ -103,7 +118,7 @@ Homebrew's own Node, and updates with `brew upgrade phase-console` (then
 |---|---|---|---|---|
 | **Install** | two commands, inside Claude Code | one `git clone` | `npm i -g phase-console` | `brew install zsarir/homebrew-tap/phase-console` |
 | **Updates** | automatic, every commit | when you `git pull` | `npm update -g`, tagged releases | `brew upgrade`, tagged releases |
-| **Skill name** | `/phased-execution:phased-execution` | `/phased-execution` | — (console only; pair with A or B) | — (console only; pair with A or B) |
+| **Skill name** | `/phased-execution:phased-execution` | `/phased-execution` | `/phased-execution`, after `phase-console install-skill` | `/phased-execution`, after `phase-console install-skill` |
 | **Console** | `phase-console`, from anywhere | `./start`, from the folder | `phase-console`, prebuilt | `phase-console`, prebuilt |
 | **Lives at** | a per-version cache directory that moves on every update | wherever you cloned it, permanently | `$(npm root -g)/phase-console` | `$(brew --prefix phase-console)/libexec` |
 | **Suits** | wanting it present and current, with nothing to maintain | scripting against the path, or editing the skill itself | wanting the console with no build step | brew-managed machines |
@@ -111,7 +126,32 @@ Homebrew's own Node, and updates with `brew upgrade phase-console` (then
 Plugin and clone at once works, but you would see the skill twice and pay its always-on cost twice —
 pick one of those two for the *skill*; C or D can sit beside either for the *console*.
 
-## Give yourself a launcher *(optional, and the only way Restart works)*
+## Linux, and Windows through WSL2
+
+Every route above works on Linux exactly as written — including Homebrew. The differences are
+below; there is no native Windows build, and on Windows the whole thing (Claude Code included)
+runs inside [WSL2](https://learn.microsoft.com/windows/wsl/install).
+
+- **The background agent is a systemd user service.** `phase-console --install-agent --root <repo>`
+  writes `~/.config/systemd/user/phase-console.service` (`Restart=always`, same 150s stop grace as
+  the launchd plist) and starts it — the app's own Restart and Shut-down buttons work the same as
+  on macOS. It stops at logout unless you run `loginctl enable-linger $USER` once.
+- **On WSL, systemd must be on** (it is on current WSL2 installs). If the install says so: add
+  `[boot]` + `systemd=true` to `/etc/wsl.conf`, run `wsl --shutdown` from Windows, reopen. Until
+  then — or instead — just run `phase-console --root <repo>` in a tmux window. WSL parks its VM
+  when nothing runs in it, so the console is up whenever WSL is.
+- **The browser.** On a Linux desktop the console opens via `xdg-open`. On WSL it hands the URL to
+  Windows (`wslview`); if nothing can open one it prints the URL — WSL2 forwards localhost, so
+  `http://127.0.0.1:4123` in your **Windows** browser just works.
+- **The Terminal page (optional).** Its native module (`node-pty`) has no Linux prebuilds, so npm
+  compiles it during install *if* build tools exist — `sudo apt-get install -y build-essential
+  python3` first (the brew route compiles it with brew's own toolchain). Skipping this loses only
+  the in-browser shell: board, writes, autopilot and agent sessions all run without it, and the
+  Terminal page names exactly what is missing.
+- **The Desktop launcher below is macOS-only** (a Finder `.command` file). On Linux the systemd
+  agent is the equivalent — it is the supervised mode the launcher's `SUPERVISED="yes"` provides.
+
+## Give yourself a launcher *(optional, macOS — the double-click way to a supervised console)*
 
 A double-click that starts the console. Started with `SUPERVISED="yes"` it installs a launchd
 agent, which is what makes the app's own **Restart** and **Shut down** buttons work — those exist

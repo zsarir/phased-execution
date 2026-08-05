@@ -101,8 +101,8 @@ you signed in with.
 completely correct and quietly admit everyone on your network, so it is an error rather than a
 warning.
 
-To have it survive reboots and logouts, install it as a launchd agent with the same flags — they are
-passed straight through:
+To have it survive reboots and logouts, install it as a background agent (launchd on macOS, a
+systemd user service on Linux) with the same flags — they are passed straight through:
 
 ```bash
 ./start --install-agent --root ~/code/your-repo --allow-writes --allow-run \
@@ -201,7 +201,7 @@ curl -s -H "Title: $1" -d "$2" https://ntfy.sh/your-private-topic-name >/dev/nul
 
 ```bash
 chmod +x ~/.local/bin/phase-notify
-export PHASE_CONSOLE_NOTIFY=~/.local/bin/phase-notify   # or add it to the launchd agent's environment
+export PHASE_CONSOLE_NOTIFY=~/.local/bin/phase-notify   # or bake it into the agent: install --notify
 ```
 
 [ntfy](https://ntfy.sh) is the shortest path — install its app, subscribe to the topic. Pushover,

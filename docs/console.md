@@ -8,11 +8,16 @@ phase-console                      # installed as a plugin, via npm or via brew 
 ./start ~/code/your-repo           # skip the picker
 ./start --allow-writes             # plus the guarded write verbs
 ./start --allow-run                # plus the autopilot
+
+phase-console start                # via the background agent (foreground if none installed)
+phase-console stop | restart | status | logs [-f]
+phase-console install-skill        # copy the skill where Claude Code reads it
 ```
 
 *(First time on a machine: the client is built output — `cd viewer && npm ci && npm run build`, or
-let the console's own page tell you. As a launchd agent, `deploy/agent.sh install|update` builds it
-for you. npm and Homebrew installs ship it prebuilt — nothing to run.)*
+let the console's own page tell you. As a background agent — `deploy/agent.sh install|update`,
+launchd on macOS, systemd on Linux — the install builds it for you. npm and Homebrew installs ship
+it prebuilt — nothing to run.)*
 
 A plan library outgrows a terminal: dozens of plans, hundreds of phases, hundreds of handoff files —
 and the engine answers for exactly one plan at a time. The console is the portfolio view: what is

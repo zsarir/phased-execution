@@ -39,6 +39,13 @@ have run — npm and Homebrew installs ship it prebuilt). Once built it bundles 
 included — so it works offline and installs to a phone's home screen. No service, no configuration
 file.
 
+**Platforms:** macOS and Linux are first-class — the background agent is launchd on one and a
+systemd user service on the other. The terminal's native module (`node-pty`, optional) ships macOS
+prebuilds and compiles during install on Linux when the distro's build tools are present
+(`build-essential` + `python3` on Debian/Ubuntu); without it the console still runs and the
+Terminal page says exactly what is missing. On Windows, run it inside **WSL2** (see
+[install.md](install.md)); there is no native Windows build.
+
 # Tests
 
 ```bash

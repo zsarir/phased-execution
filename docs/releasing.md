@@ -51,10 +51,24 @@ untracked files never block you.
 
 ## Secrets
 
-Tokens live in **`.secrets/`** (gitignored — see its README for exactly which token to create and
-how) or in GitHub Actions secrets — never in the tree, never in a commit. CI needs no long-lived
-npm token at all: npm publishing is OIDC trusted publishing, GitHub Packages uses the workflow's
-own `GITHUB_TOKEN`, and only the optional tap bump wants a fine-grained PAT (`TAP_GITHUB_TOKEN`).
+**`.secrets/` is entirely gitignored** — a local drop-point for tokens on the release machine.
+Nothing in it is ever committed, pasted into a doc, or echoed into a log; the scrub gate cannot see
+gitignored files, so the protection is that they never enter git at all. CI reads nothing from it:
+npm publishing is OIDC trusted publishing (no long-lived npm token exists anywhere), GitHub
+Packages uses the workflow's own `GITHUB_TOKEN`, and the one optional secret — `TAP_GITHUB_TOKEN`,
+which arms the automatic Homebrew bump PR — lives in GitHub Actions secrets (set 2026-08-05).
+
+To (re)create that token when it expires: GitHub → *Settings → Developer settings → Fine-grained
+personal access tokens* → resource owner `zsarir`, repository access **Only select repositories** →
+`zsarir/homebrew-tap`, permissions `Contents: Read and write` + `Pull requests: Read and write`,
+nothing else. Drop the value in a file under `.secrets/`, then:
+
+```bash
+gh secret set TAP_GITHUB_TOKEN --repo zsarir/phased-execution < .secrets/<that-file>
+```
+
+Without the secret a release still works end to end — the tap-bump job skips cleanly and the
+formula's `url`/`sha256` get bumped by hand.
 
 ## One-time setup (already done, recorded for the next repo)
 

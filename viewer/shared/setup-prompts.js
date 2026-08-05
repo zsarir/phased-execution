@@ -63,8 +63,9 @@ export const INSTALL_PROMPT = `Install the phased-execution skill for me, and as
      npm:     npm install -g phase-console     (console prebuilt, skill files inside)
      Brew:    brew install zsarir/homebrew-tap/phase-console
    Claude Code discovers the SKILL from the plugin or the clone; npm and brew
-   are for the console. If I already have it, update it the same way instead
-   and tell me what changed.
+   install the console — after one of those, phase-console install-skill puts
+   the skill where Claude Code reads it. If I already have it, update it the
+   same way instead and tell me what changed.
 2. Ask which repository holds my work. The console reads plans from
    <repo>/docs/plans and handoffs from <repo>/docs/handoffs; it will not start
    without docs/plans, so create it if I say to.
@@ -80,7 +81,8 @@ export const INSTALL_PROMPT = `Install the phased-execution skill for me, and as
    Default every one of them to off. Then install with only what I chose:
      bash <skill>/viewer/deploy/agent.sh install --root <repo> [flags]
    (from npm or brew: phase-console --install-agent --root <repo> [flags])
-   That installs a launchd agent that starts at login and survives a crash.
+   That installs a login agent (launchd on macOS, systemd on Linux) that
+   starts at login and survives a crash.
 5. Open http://127.0.0.1:4123 and confirm it loads. If it does not, read
    ~/.local/state/phase-console/console.err.log and tell me what it says.
 6. Finish by listing what you enabled, what you left off, and how to change it.
@@ -113,7 +115,7 @@ export const TAILSCALE_PROMPT = `Make my Phase Console reachable from my phone o
      tailscale serve --bg --https=443 http://127.0.0.1:4123
    Use my real port if it is not 4123. Confirm with: tailscale serve status
 3. Re-install the console agent so it answers to that hostname, keeping every
-   flag it already has — read them from the current plist rather than guessing:
+   flag it already has — read them from the current plist / unit, never guess:
      bash <skill>/viewer/deploy/agent.sh install --root <repo> [existing flags] \\
        --remote <Self.DNSName without the trailing dot> \\
        --remote-user <my login>

@@ -3,9 +3,9 @@ node_modules/
 dist/
 *.local.json
 
-# Local token drop-point — only its README is tracked. See .secrets/README.md.
-.secrets/*
-!.secrets/README.md
+# Local token drop-point — nothing in it is ever tracked. How to create the one
+# useful token lives in docs/releasing.md §Secrets.
+.secrets/
 # `npm pack` emits type-stripped .js beside each server .ts (see
 # viewer/server/tsconfig.pack.json) and postpack deletes them — this guards a
 # crashed pack from committing strays. fallback-sw.js is real, tracked source.
