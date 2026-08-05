@@ -383,17 +383,92 @@ export function matches(row: PlanRow, query: string): boolean {
   return words.every((word) => haystack.includes(word));
 }
 
+/**
+ * Two sentinels the status control offers besides the statuses themselves.
+ *
+ * "Closed" is a question about a plan that no single status answers — three
+ * words mean it (`complete`, `abandoned`, `superseded`) and picking one of them
+ * from the dropdown gives a third of the answer. They live in the status value
+ * space rather than in a control of their own because they are the same
+ * question the operator is already asking there, and `@` cannot collide with a
+ * status: these come out of YAML frontmatter, where they are bare words.
+ */
+export const OPEN_ONLY = '@open';
+export const CLOSED_ONLY = '@closed';
+
 export function applyFilters(rows: readonly PlanRow[], filters: Filters): PlanRow[] {
+  const openOnly = filters.status === OPEN_ONLY;
+  const closedOnly = filters.status === CLOSED_ONLY;
+  // A sentinel is not a status, so it must not be compared to one — otherwise
+  // "closed only" would ask for rows whose status is the literal `@closed` and
+  // every list would be empty.
+  const named = openOnly || closedOnly ? '' : filters.status;
+
   return rows.filter((row) => {
     if (!filters.showDocuments && !row.isPlan) return false;
-    // Asking for a status by name overrides the closed filter: picking
-    // `abandoned` from the dropdown and getting an empty list would read as a
-    // broken control rather than as a filter fighting another filter.
-    if (!filters.showClosed && row.isClosed && filters.status !== row.status) return false;
+    if (closedOnly) {
+      if (!row.isClosed) return false;
+    } else if (openOnly) {
+      if (row.isClosed) return false;
+    } else if (!filters.showClosed && row.isClosed && named !== row.status) {
+      // Asking for a status by name overrides the closed filter: picking
+      // `abandoned` from the dropdown and getting an empty list would read as a
+      // broken control rather than as a filter fighting another filter.
+      return false;
+    }
     if (filters.repo && !row.repos.includes(filters.repo)) return false;
-    if (filters.status && row.status !== filters.status) return false;
+    if (named && row.status !== named) return false;
     return matches(row, filters.query);
   });
+}
+
+/**
+ * What the filters are dropping, and which filter is doing it.
+ *
+ * A single "N hidden" is true and useless once N gets large: on this machine's
+ * source it reads 86 of 87, and the operator's reasonable conclusion is that the
+ * page is broken rather than that two toggles are doing exactly what they were
+ * asked to. The distinction that matters is between the SHAPE toggles — closed
+ * and documents, which are sticky preferences that survive reloads and are
+ * usually the whole answer — and the SEARCH filters, which the operator set
+ * seconds ago and already knows about.
+ *
+ * Counted independently, not as a cascade: `closed` is every closed row the
+ * closed toggle is dropping, whether or not a document, so the two numbers can
+ * overlap. Each answers "turn this one thing on and how much comes back", which
+ * is the question the buttons beside them actually pose.
+ */
+export interface HiddenBreakdown {
+  /** Rows the filters dropped, all reasons together. */
+  total: number;
+  /** Dropped for being closed — what `Show closed` would bring back. */
+  closed: number;
+  /** Dropped for not being a plan — what `Documents` would bring back. */
+  documents: number;
+  /** Dropped by the query, repo or status fields. */
+  search: number;
+  /** Nothing but the sticky shape toggles is hiding anything. */
+  shapeOnly: boolean;
+}
+
+export function hiddenBreakdown(rows: readonly PlanRow[], filters: Filters): HiddenBreakdown {
+  // Every number here is MEASURED by re-running the real filter with one toggle
+  // moved, never by re-deriving the predicate. A second copy of "is this row
+  // dropped" is a second thing to keep in step with `applyFilters`, and the way
+  // it fails is a button promising to bring back rows it then does not.
+  const shown = applyFilters(rows, filters).length;
+  const withClosed = applyFilters(rows, { ...filters, showClosed: true }).length;
+  const withDocuments = applyFilters(rows, { ...filters, showDocuments: true }).length;
+  const widened = applyFilters(rows, { ...filters, showClosed: true, showDocuments: true }).length;
+  return {
+    total: rows.length - shown,
+    closed: withClosed - shown,
+    documents: withDocuments - shown,
+    // What the query/repo/status fields cost, measured with the shape toggles
+    // already open so the two are not counted against each other.
+    search: rows.length - widened,
+    shapeOnly: widened === rows.length,
+  };
 }
 
 /** Every repo the list names, most-used first — the filter's own vocabulary. */

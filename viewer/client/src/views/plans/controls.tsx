@@ -16,7 +16,10 @@ import { LayoutGrid, Search, SlidersHorizontal, Table2, X } from 'lucide-react';
 import { Button, ButtonGroup, Chip, Sheet, SheetContent, SheetTrigger } from '@/components/ui';
 import { usePhone } from '@/lib/media';
 import { cn } from '@/lib/cn';
-import { SORTS, type Filters, type GroupBy, type SortId } from './model';
+import {
+  CLOSED_ONLY, OPEN_ONLY, SORTS,
+  type Filters, type GroupBy, type HiddenBreakdown, type SortId,
+} from './model';
 
 export interface ControlsProps {
   sortId: SortId;
@@ -29,8 +32,10 @@ export interface ControlsProps {
   onGroup: (value: GroupBy) => void;
   repos: string[];
   statuses: string[];
-  /** How many rows the filters are currently hiding — never a silent cut. */
-  hidden: number;
+  /** What the filters are hiding, and which filter is doing it — never a silent cut. */
+  hiddenBy: HiddenBreakdown;
+  /** Open every shape toggle at once, without touching the search fields. */
+  onShowEverything: () => void;
 }
 
 const fieldClass =
@@ -44,6 +49,11 @@ const fieldClass =
  * `showComplete` it replaces, because the default moved: hiding closed plans is
  * now the resting state, and showing them is the deliberate act.
  */
+/** `Show closed` → `Show closed — 71 more`, and plain again when there is nothing to add. */
+function countedLabel(label: string, count: number): string {
+  return count > 0 ? `${label} — ${count} more` : label;
+}
+
 export function activeFilterCount(filters: Filters): number {
   return Number(filters.showDocuments) + Number(filters.showClosed)
     + Number(Boolean(filters.repo)) + Number(Boolean(filters.status));
@@ -162,20 +172,32 @@ function LayoutToggle({
 }
 
 function FilterFields({
-  filters, onFilters, group, onGroup, repos, statuses, stacked,
-}: Pick<ControlsProps, 'filters' | 'onFilters' | 'group' | 'onGroup' | 'repos' | 'statuses'>
+  filters, onFilters, group, onGroup, repos, statuses, hiddenBy, stacked,
+}: Pick<ControlsProps, 'filters' | 'onFilters' | 'group' | 'onGroup' | 'repos' | 'statuses' | 'hiddenBy'>
   & { stacked: boolean }) {
   return (
     <div className={cn('flex gap-2', stacked ? 'flex-col' : 'flex-wrap items-center')}>
       <div className="flex flex-wrap gap-1.5">
+        {/* Each toggle carries what turning it on would BRING BACK. A button
+            labelled only "Show closed" beside a list of one, on a source where
+            seventy-one are closed, is asking the operator to guess whether the
+            page is filtered or broken — and on this machine they guessed
+            broken. The number is the whole difference. */}
         <Button
           size="sm"
           variant={filters.showDocuments ? 'action' : 'default'}
           aria-pressed={filters.showDocuments}
+          // The count is in the accessible name, not just the pixels: "how many
+          // come back" is the entire reason to press this, and a screen reader
+          // that only hears "Documents" has been told the least useful half.
+          aria-label={countedLabel('Documents', filters.showDocuments ? 0 : hiddenBy.documents)}
           onClick={() => onFilters({ showDocuments: !filters.showDocuments })}
           title="Documents and orphan handoff sets are not plans — they have no phases to run."
         >
           Documents
+          {!filters.showDocuments && hiddenBy.documents > 0 && (
+            <span aria-hidden className="font-mono tabular-nums text-ink-faint">+{hiddenBy.documents}</span>
+          )}
         </Button>
         {/* "Show closed" rather than "Hide closed", so pressed still means the
             same thing on both buttons: *you have changed the default view*.
@@ -188,10 +210,14 @@ function FilterFields({
           size="sm"
           variant={filters.showClosed ? 'action' : 'default'}
           aria-pressed={filters.showClosed}
+          aria-label={countedLabel('Show closed', filters.showClosed ? 0 : hiddenBy.closed)}
           onClick={() => onFilters({ showClosed: !filters.showClosed })}
           title="Complete, abandoned and superseded plans. They report no work, so the list leaves them out until you ask."
         >
           Show closed
+          {!filters.showClosed && hiddenBy.closed > 0 && (
+            <span aria-hidden className="font-mono tabular-nums text-ink-faint">+{hiddenBy.closed}</span>
+          )}
         </Button>
       </div>
 
@@ -218,7 +244,17 @@ function FilterFields({
               onChange={(e) => onFilters({ status: e.target.value })}
             >
               <option value="">every status</option>
-              {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+              {/* "Closed" is three statuses, so no single option says it and
+                  picking `complete` answers a third of the question. Grouped
+                  apart because these two are not statuses — they are the
+                  question the statuses are usually a proxy for. */}
+              <optgroup label="by whether it is closed">
+                <option value={OPEN_ONLY}>open only</option>
+                <option value={CLOSED_ONLY}>closed only</option>
+              </optgroup>
+              <optgroup label="by status">
+                {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+              </optgroup>
             </select>
           </label>
         )}
@@ -280,7 +316,7 @@ export function Controls(props: ControlsProps) {
         </div>
         <p className="min-w-0 text-2xs text-ink-faint">
           <span className="text-ink-muted">{sort.label}</span> — {sort.hint}
-          {props.hidden > 0 && <> · {props.hidden} hidden</>}
+          {props.hiddenBy.total > 0 && <> · <HiddenNote hiddenBy={props.hiddenBy} onShowEverything={props.onShowEverything} /></>}
         </p>
       </div>
     );
@@ -302,8 +338,48 @@ export function Controls(props: ControlsProps) {
       </div>
       <p className="text-2xs text-ink-faint">
         {sort.blurb}
-        {props.hidden > 0 && <> · {props.hidden} hidden by filters</>}
+        {props.hiddenBy.total > 0 && <> · <HiddenNote hiddenBy={props.hiddenBy} onShowEverything={props.onShowEverything} /></>}
       </p>
     </div>
+  );
+}
+
+/**
+ * What is being left out, as something you can press.
+ *
+ * It used to be grey text reading "82 hidden by filters", which is accurate and
+ * does nothing: it names a problem and leaves the operator to work out which of
+ * five controls fixes it. When the hidden rows are hidden by the two STICKY
+ * toggles — the ones set in a previous session, possibly by a previous
+ * version's default — the fix is one press, so it should be one press.
+ */
+function HiddenNote({
+  hiddenBy,
+  onShowEverything,
+}: {
+  hiddenBy: HiddenBreakdown;
+  onShowEverything: () => void;
+}) {
+  const parts: string[] = [];
+  if (hiddenBy.closed) parts.push(`${hiddenBy.closed} closed`);
+  if (hiddenBy.documents) parts.push(`${hiddenBy.documents} ${hiddenBy.documents === 1 ? 'document' : 'documents'}`);
+  if (hiddenBy.search) parts.push(`${hiddenBy.search} by the search`);
+
+  return (
+    <>
+      {parts.join(', ') || `${hiddenBy.total} hidden`} hidden
+      {(hiddenBy.closed > 0 || hiddenBy.documents > 0) && (
+        <>
+          {' · '}
+          <button
+            type="button"
+            onClick={onShowEverything}
+            className="underline underline-offset-2 hover:text-action"
+          >
+            show everything
+          </button>
+        </>
+      )}
+    </>
   );
 }

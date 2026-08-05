@@ -46,8 +46,8 @@ import { Page } from '../_page';
 import { Controls } from './controls';
 import { PlanCard, PlanTable } from './row';
 import {
-  NO_FILTERS, applyFilters, groupRows, isSortId, repoOptions, rowTotals, sortRows,
-  statusOptions, toRows, type Filters, type GroupBy, type PlanRow, type SortId,
+  NO_FILTERS, applyFilters, groupRows, hiddenBreakdown, isSortId, repoOptions, rowTotals,
+  sortRows, statusOptions, toRows, type Filters, type GroupBy, type PlanRow, type SortId,
 } from './model';
 
 export default function PlansView() {
@@ -88,6 +88,7 @@ export default function PlansView() {
   const totals = rowTotals(visible);
   const repos = useMemo(() => repoOptions(all), [all]);
   const statuses = useMemo(() => statusOptions(all), [all]);
+  const hiddenBy = useMemo(() => hiddenBreakdown(all, filters), [all, filters]);
 
   const onFilters = (patch: Partial<Filters>) => {
     const { showDocuments, showClosed, ...rest } = patch;
@@ -100,6 +101,13 @@ export default function PlansView() {
     setLocal({ query: '', repo: '', status: '' });
     setPrefs({ showDocuments: NO_FILTERS.showDocuments, showClosed: NO_FILTERS.showClosed });
   };
+
+  // Deliberately NOT `clearFilters`. Clearing restores the DEFAULTS, and both
+  // defaults hide — so on this estate "Clear the filters" makes the list
+  // smaller, which is the opposite of what someone pressing it wants. Widening
+  // is its own verb, and it leaves the search fields alone: whatever you typed
+  // is not what you are trying to undo.
+  const showEverything = () => setPrefs({ showDocuments: true, showClosed: true });
 
   const newPlan = (
     <div className="flex items-center gap-2">
@@ -152,7 +160,8 @@ export default function PlansView() {
       onGroup={(value) => setPrefs({ plansGroup: value })}
       repos={repos}
       statuses={statuses}
-      hidden={all.length - visible.length}
+      hiddenBy={hiddenBy}
+      onShowEverything={showEverything}
     />
   );
 
@@ -180,9 +189,10 @@ export default function PlansView() {
   }
 
   return (
-    <Page title="Plans" subtitle={subtitle(totals)} actions={newPlan}>
+    <Page title="Plans" subtitle={subtitle(totals, all.length, hiddenBy)} actions={newPlan}>
       <Card className="mb-3 p-3">{controls}</Card>
 
+      <HiddenBand hiddenBy={hiddenBy} shown={visible.length} onShowEverything={showEverything} />
       <AttentionBand rows={visible} />
 
       {groups.map((section) => (
@@ -206,10 +216,22 @@ export default function PlansView() {
   );
 }
 
-/** What is on screen, counted the way the list beside it counts. */
-function subtitle(totals: ReturnType<typeof rowTotals>): string {
-  const parts = [plural(totals.plans, 'plan')];
-  if (totals.documents) parts.push(plural(totals.documents, 'document'));
+/**
+ * What is on screen, counted the way the list beside it counts.
+ *
+ * The plan count says `4 of 87` whenever the filters are dropping anything.
+ * Bare, it read `4 plans` on a source holding eighty-seven of them — a true
+ * sentence about the list and a false one about the source, and the page's own
+ * heading is the last place that should need a caveat.
+ */
+function subtitle(
+  totals: ReturnType<typeof rowTotals>,
+  total: number,
+  hiddenBy: ReturnType<typeof hiddenBreakdown>,
+): string {
+  const shown = totals.plans + totals.documents;
+  const parts = [hiddenBy.total > 0 ? `${shown} of ${plural(total, 'row')}` : plural(totals.plans, 'plan')];
+  if (hiddenBy.total === 0 && totals.documents) parts.push(plural(totals.documents, 'document'));
   // Only worth saying when they are on screen — with the filter at its default
   // the count is always zero, and a permanent "0 closed" is noise.
   if (totals.closed) parts.push(`${totals.closed} closed`);
@@ -217,6 +239,50 @@ function subtitle(totals: ReturnType<typeof rowTotals>): string {
   if (totals.sessions) parts.push(`${plural(totals.sessions, 'session')} of work left`);
   if (totals.running) parts.push(`${totals.running} running`);
   return parts.join(' · ');
+}
+
+/**
+ * Say what the list is leaving out, when leaving it out is most of the estate.
+ *
+ * The `#/ready` page has said this for phases since the closure work landed —
+ * *"N phases in closed plans are not counted — reopen a plan to put its work
+ * back on the board"* — and this page, which is the one whose whole job is
+ * "where does everything stand", said nothing but a grey count. On the source
+ * this was written against that meant showing 1 row of 87 with no explanation
+ * a person would find, which reads as data loss.
+ *
+ * Deliberately NOT a change to the default. Hiding closed plans is the
+ * operator's own decision and the list should still open on the work; what was
+ * wrong was doing it quietly. The threshold is proportional rather than a count:
+ * hiding 71 of 72 needs saying, hiding 3 of 90 does not.
+ */
+function HiddenBand({
+  hiddenBy,
+  shown,
+  onShowEverything,
+}: {
+  hiddenBy: ReturnType<typeof hiddenBreakdown>;
+  shown: number;
+  onShowEverything: () => void;
+}) {
+  const byShape = hiddenBy.closed + hiddenBy.documents;
+  if (!byShape) return null;
+  // Most of the source is missing, and the operator did not do it this session.
+  if (byShape <= shown * 2) return null;
+
+  const parts: string[] = [];
+  if (hiddenBy.closed) parts.push(`${plural(hiddenBy.closed, 'closed plan')}`);
+  if (hiddenBy.documents) parts.push(`${plural(hiddenBy.documents, 'document')}`);
+
+  return (
+    <Banner severity="info" className="mb-3">
+      <span>
+        {parts.join(' and ')} {byShape === 1 ? 'is' : 'are'} not listed. Closed plans report no
+        work, so this page leaves them out until you ask — nothing is missing from the source.
+      </span>
+      <Button size="sm" className="ml-2 shrink-0" onClick={onShowEverything}>Show everything</Button>
+    </Banner>
+  );
 }
 
 /**

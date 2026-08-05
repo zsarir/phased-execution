@@ -25,8 +25,8 @@ import { queryClientConfig } from '@/lib/queries';
 import { setPrefs } from '@/lib/prefs';
 import type { PlanSummaryFull, RunState } from '@/lib/api';
 import {
-  NO_FILTERS, applyFilters, concerns, groupRows, matches, repoOptions, rowTotals,
-  sortRows, statusOptions, toRows,
+  CLOSED_ONLY, NO_FILTERS, OPEN_ONLY, applyFilters, concerns, groupRows, hiddenBreakdown,
+  matches, repoOptions, rowTotals, sortRows, statusOptions, toRows,
 } from './model';
 
 /* ------------------------------------------------------------------ *
@@ -319,6 +319,84 @@ describe('filtering', () => {
       .toEqual(['shipped']);
   });
 
+  // "Closed" is three statuses, so picking one of them from the dropdown
+  // answers a third of the question. These two sentinels ask it properly.
+  it('offers open-only and closed-only, which no single status can express', () => {
+    const terminal = toRows([
+      plan({ slug: 'live' }),
+      plan({ slug: 'walked-away', status: 'abandoned' }),
+      plan({ slug: 'replaced', status: 'superseded' }),
+      plan({ slug: 'shipped', status: 'complete' }),
+    ], [], NOW);
+
+    expect(applyFilters(terminal, { ...NO_FILTERS, status: CLOSED_ONLY }).map((r) => r.slug))
+      .toEqual(['walked-away', 'replaced', 'shipped']);
+    // …and it works without `showClosed`, which is the whole point: asking for
+    // closed plans must not also require finding the toggle that permits them.
+    expect(applyFilters(terminal, { ...NO_FILTERS, status: OPEN_ONLY }).map((r) => r.slug))
+      .toEqual(['live']);
+    // A sentinel is not a status. Compared to one, every list would be empty.
+    expect(applyFilters(terminal, { ...NO_FILTERS, status: CLOSED_ONLY, showClosed: true }))
+      .toHaveLength(3);
+  });
+
+  // A single "86 hidden" is true and useless: the operator's reasonable
+  // conclusion is that the page is broken, not that two toggles are doing what
+  // they were asked. Which filter is doing it is the actionable half.
+  it('says how many rows each filter is hiding, and whether the search is involved', () => {
+    const mixed = toRows([
+      plan({ slug: 'live' }),
+      plan({ slug: 'shipped', status: 'complete' }),
+      plan({ slug: 'gone', status: 'abandoned' }),
+      plan({ slug: 'notes', kind: 'document', status: 'active' }),
+    ], [], NOW);
+
+    const shape = hiddenBreakdown(mixed, NO_FILTERS);
+    expect(shape.total).toBe(3);
+    expect(shape.closed).toBe(2);
+    expect(shape.documents).toBe(1);
+    expect(shape.search).toBe(0);
+    expect(shape.shapeOnly).toBe(true);
+
+    // With a query on top, the shape counts stay about the shape toggles and
+    // the query is accounted for separately — never double-counted.
+    const searched = hiddenBreakdown(mixed, { ...NO_FILTERS, query: 'live' });
+    expect(searched.search).toBe(3);
+    expect(searched.shapeOnly).toBe(false);
+  });
+
+  // The counts are MARGINAL, and that is deliberate: a row hidden by BOTH
+  // toggles comes back for neither of them alone, so it belongs to `total` and
+  // to neither `closed` nor `documents`. A `+1` on a button that then returns
+  // nothing is worse than no number at all.
+  it('does not credit a toggle with rows the other toggle is also hiding', () => {
+    const both = toRows([
+      plan({ slug: 'live' }),
+      plan({ slug: 'old-notes', kind: 'document', status: 'complete' }),
+    ], [], NOW);
+    const counts = hiddenBreakdown(both, NO_FILTERS);
+    expect(counts.total).toBe(1);
+    expect(counts.closed).toBe(0);
+    expect(counts.documents).toBe(0);
+  });
+
+  // The counts are what the toggles PROMISE. A number that does not match what
+  // pressing the button actually returns is worse than no number.
+  it('each hidden count equals what turning that toggle on brings back', () => {
+    const mixed = toRows([
+      plan({ slug: 'live' }),
+      plan({ slug: 'shipped', status: 'complete' }),
+      plan({ slug: 'notes', kind: 'document' }),
+    ], [], NOW);
+    const before = applyFilters(mixed, NO_FILTERS).length;
+    const counts = hiddenBreakdown(mixed, NO_FILTERS);
+
+    expect(applyFilters(mixed, { ...NO_FILTERS, showClosed: true }).length - before)
+      .toBe(counts.closed);
+    expect(applyFilters(mixed, { ...NO_FILTERS, showDocuments: true }).length - before)
+      .toBe(counts.documents);
+  });
+
   it('matches words in any order, across the slug and the title', () => {
     const [row] = rows;
     expect(matches(row, 'cart api')).toBe(true);       // hyphenated slug, split query
@@ -453,18 +531,29 @@ describe('the plans page', () => {
     expect(screen.queryByText(/\*\*Alpha\*\*/)).toBeNull();
   });
 
-  it('hides the documents and says how many it hid', async () => {
+  it('hides the documents and says how many it hid, and by which filter', async () => {
     const { default: PlansView } = await import('./index');
     mount(<PlansView />);
     await screen.findByText('Alpha plan');
     expect(screen.queryByText('Notes')).toBeNull();
-    expect(screen.getByText(/1 hidden by filters/)).toBeTruthy();
+    // Not a bare "1 hidden": which filter is doing it is the part that tells
+    // you which control to reach for.
+    expect(screen.getByText(/1 document hidden/)).toBeTruthy();
+  });
+
+  it('puts the count of what would come back on the toggle itself', async () => {
+    const { default: PlansView } = await import('./index');
+    mount(<PlansView />);
+    await screen.findByText('Alpha plan');
+    // In the accessible name, not only in the pixels — "how many come back" is
+    // the whole reason to press it.
+    expect(await screen.findByRole('button', { name: 'Documents — 1 more' })).toBeTruthy();
   });
 
   it('brings the documents back when the toggle is pressed', async () => {
     const { default: PlansView } = await import('./index');
     mount(<PlansView />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Documents' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Documents/ }));
     expect(await screen.findByText('Notes')).toBeTruthy();
   });
 
@@ -478,8 +567,46 @@ describe('the plans page', () => {
     await screen.findByText('Alpha plan');
     expect(screen.queryByText('Walked away')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show closed' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Show closed/ }));
     expect(await screen.findByText('Walked away')).toBeTruthy();
+  });
+
+  // The reported symptom, as a test. On the source this was written against the
+  // page rendered ONE row out of eighty-seven and explained itself only in a
+  // grey line under the controls — which reads as data loss, and was reported
+  // as data loss. The list still opens on the work (that default is the
+  // operator's own decision); what was wrong was doing it quietly.
+  it('says so, loudly, when the filters are hiding most of the source', async () => {
+    plans.mockResolvedValue([
+      plan({ slug: 'live', title: 'Still going' }),
+      ...Array.from({ length: 8 }, (_, i) => plan({
+        slug: `done-${i}`, title: `Finished ${i}`, status: 'complete',
+      })),
+    ]);
+    const { default: PlansView } = await import('./index');
+    mount(<PlansView />);
+    await screen.findByText('Still going');
+
+    expect(screen.getByText(/8 closed plans are not listed/)).toBeTruthy();
+    // The heading must not claim the source holds one plan.
+    expect(screen.getByText(/1 of 9 rows/)).toBeTruthy();
+
+    // And one press brings them back — the band is an action, not a caption.
+    fireEvent.click(screen.getByRole('button', { name: 'Show everything' }));
+    expect(await screen.findByText('Finished 0')).toBeTruthy();
+  });
+
+  it('keeps quiet when the filters are only trimming the edges', async () => {
+    // Proportional, not a raw count: hiding two of nine is the toggle working,
+    // and a banner every visit would be the boy who cried wolf.
+    plans.mockResolvedValue([
+      ...Array.from({ length: 7 }, (_, i) => plan({ slug: `live-${i}`, title: `Live ${i}` })),
+      plan({ slug: 'done', title: 'Finished', status: 'complete' }),
+    ]);
+    const { default: PlansView } = await import('./index');
+    mount(<PlansView />);
+    await screen.findByText('Live 0');
+    expect(screen.queryByText(/are not listed/)).toBeNull();
   });
 
   // The row-level half of the ready board's gate. `readyPhases` stays populated
@@ -491,7 +618,7 @@ describe('the plans page', () => {
     ]);
     const { default: PlansView } = await import('./index');
     mount(<PlansView />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Show closed' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Show closed/ }));
     await screen.findByText('Walked away');
 
     expect(screen.queryByText('P2 ready')).toBeNull();
@@ -510,7 +637,7 @@ describe('the plans page', () => {
     ]);
     const { default: PlansView } = await import('./index');
     mount(<PlansView />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Show closed' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Show closed/ }));
     await screen.findByText('Walked away');
 
     const band = await screen.findByRole('status');
@@ -600,7 +727,7 @@ describe('the plans page', () => {
     // own pressed member, and one order is always in force.
     expect(amber().filter((label) => label !== 'Recent')).toEqual([]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show closed' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Show closed/ }));
     expect(amber()).toContain('Show closed');
   });
 
