@@ -1,0 +1,6 @@
+# Exact strings the email check may ignore, one per line — vendor license
+# banners that surface inside built client assets, and URL userinfo that only
+# LOOKS like an address. Placeholders (@example.com, @example.org, @x.com) are
+# always allowed and do not belong here.
+TAP_TOKEN@github.com
+TOKEN@github.com

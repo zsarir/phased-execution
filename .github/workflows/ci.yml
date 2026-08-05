@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  skill-scripts:
+    name: bash engine (bats on macOS system bash 3.2)
+    # macos-latest on purpose: tests/helpers/test_helper.bash forces every
+    # script under test onto /bin/bash — macOS system bash 3.2, the real target
+    # runtime. On ubuntu /bin/bash is 5.x and a 3.2 regression would slip.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats + shellcheck
+        run: brew install bats-core shellcheck
+      - name: Shell suites (shellcheck + unit + integration)
+        run: tests/run-tests.sh
+
+  console:
+    name: console (server suite, client suite, build gate)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: viewer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+      - run: npm ci
+      - name: Server suite (minus the load-sensitive terminal file)
+        run: node --test $(ls test/*.test.ts | grep -v 'terminal.test.ts')
+      - name: Terminal suite, isolated with one retry (known reattach flake under full-suite load)
+        run: node --test test/terminal.test.ts || node --test test/terminal.test.ts
+      - name: Client suite
+        run: npm run test:client
+      - name: Client typecheck
+        run: npm run typecheck:client
+      - name: Build
+        run: npm run build
+      - name: Build gate
+        run: npm run check:dist
+
+  scrub:
+    name: public-repo scrub
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/scrub.sh
+
+  pack-check:
+    name: tarball contents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pack (runs the full client build via prepack)
+        run: npm pack
+      - name: Assert contents
+        run: bash .github/scripts/assert-tarball.sh phase-console-*.tgz

@@ -1,0 +1,90 @@
+name: Release
+
+# Fires on a manually pushed vX.Y.Z tag — the tag IS the release decision;
+# nothing here pushes to this repository. Publishing uses npm Trusted
+# Publishing (GitHub OIDC): no npm token exists anywhere in this repo's
+# secrets, so a compromised dependency cannot exfiltrate one.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  gates:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          # Deliberately NO registry-url and NO NODE_AUTH_TOKEN anywhere:
+          # a token env var would shadow OIDC trusted publishing.
+      - name: npm new enough for trusted publishing (>= 11.5.1)
+        run: |
+          npm install -g npm@latest
+          npm --version
+      - name: Tag matches package.json version
+        run: |
+          v="$(node -p "require('./package.json').version")"
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $v" >&2
+            exit 1
+          fi
+      - name: Pack
+        run: npm pack
+      - name: Assert tarball contents
+        run: bash .github/scripts/assert-tarball.sh phase-console-*.tgz
+      - name: Scrub the artifact itself
+        run: |
+          mkdir -p "$RUNNER_TEMP/pkg"
+          tar -xzf phase-console-*.tgz -C "$RUNNER_TEMP/pkg"
+          bash .github/scripts/scrub.sh --dir "$RUNNER_TEMP/pkg/package"
+      - name: Publish with provenance (OIDC)
+        run: npm publish ./phase-console-*.tgz --provenance --access public
+      - name: GitHub release with the changelog section
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="$(awk '/^## \[/{n++} n==1' CHANGELOG.md)"
+          gh release create "$GITHUB_REF_NAME" phase-console-*.tgz \
+            --title "$GITHUB_REF_NAME" --notes "$notes"
+
+  tap-bump:
+    # Opens a version-bump PR on zsarir/homebrew-tap — never merges it. Runs
+    # only when the operator has created the TAP_GITHUB_TOKEN secret (a PAT
+    # with repo scope on the tap); without it this job is a clean no-op.
+    needs: publish
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+    steps:
+      - name: Bump formula and open a PR
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "TAP_GITHUB_TOKEN is not set — skipping the tap bump."
+            exit 0
+          fi
+          V="${GITHUB_REF_NAME#v}"
+          url="https://registry.npmjs.org/phase-console/-/phase-console-$V.tgz"
+          sha="$(curl -sL "$url" | shasum -a 256 | awk '{print $1}')"
+          git clone "https://x-access-token:$TAP_TOKEN@github.com/zsarir/homebrew-tap.git" tap
+          cd tap
+          sed -i -E "s|^(  url \").*(\")\$|\\1$url\\2|" Formula/phase-console.rb
+          sed -i -E "s|^(  sha256 \").*(\")\$|\\1$sha\\2|" Formula/phase-console.rb
+          git checkout -b "phase-console-$V"
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -am "phase-console $V"
+          git push origin "phase-console-$V"
+          GH_TOKEN="$TAP_TOKEN" gh pr create --repo zsarir/homebrew-tap \
+            --head "phase-console-$V" --title "phase-console $V" \
+            --body "Automated bump to $V (url + sha256) from the release workflow."
