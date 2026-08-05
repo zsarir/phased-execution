@@ -65,7 +65,7 @@ import {
 } from './qa-session.ts';
 import {
   Approvals, classifyTool, matchedDenyRule, loadPolicy, loadPolicyFor, policyExtras, addPolicyRules,
-  editPolicy, planPolicyPath, notifyOutOfBand, profilePolicy, suggestedRule,
+  editPolicy, planPolicyPath, notifyOutOfBand, carvedPolicy, suggestedRule,
   parseRule, inertRules, HOOK_TOOLS, WRAPPERS_NOT_STRIPPED,
   PERMISSION_PROFILES, PROFILE_LABELS,
   DEFAULT_DENY, DEFAULT_ASK, DEFAULT_ALLOW, POLICY_PATH,
@@ -320,7 +320,7 @@ function describeToolInput(input: unknown): string {
 /**
  * The model alias inside a plan's `**Model:**` bullet.
  *
- * Plans write these as prose — "`claude-opus-4-8` (1M window)", "Opus for the
+ * Plans write these as prose — "`claude-opus-5` (1M window)", "Opus for the
  * hard reasoning", "Haiku — mechanical". Passing that whole string to `--model`
  * would fail, so only a known alias is taken and anything unrecognised is left
  * to the run's default rather than guessed at.
@@ -514,6 +514,10 @@ export class Service {
       // A lock with no `scope=` line: recover what the plan says that phase
       // touches rather than reading it as `all`. See `SchedulerDeps.scopeFor`.
       scopeFor: (slug, phase) => this.scopeOf(slug, phase),
+      // The repository guard is a preference, read per call so a flip in the
+      // settings page lands on the very next poll. Off never means unguarded
+      // within one run — see `SchedulerDeps.guard`.
+      guard: () => this.prefs.repoGuard !== false,
       onChange: (snapshot) => this.emit('run:queue', {
         max: snapshot.max,
         live: snapshot.live,
@@ -711,6 +715,10 @@ export class Service {
         if (!detail) return undefined;
         return { model: modelAlias(detail.model), effort: effortOf(detail.effort) };
       },
+      // The plan's Branch prose and title, for the git-strategy block: the
+      // prose is read only to WARN on a mismatch, the title names the PR.
+      planBranch: (slug) => this.store?.get(slug)?.plan?.sessionBudget.branch,
+      planTitle: (slug) => this.store?.get(slug)?.plan?.title,
       onEvent: (event, data) => this.onRunnerEvent(event, data),
     });
   }
@@ -2157,9 +2165,45 @@ export class Service {
         `${slug} is already running in this console. Pause or stop it first — `
         + 'another plan can start beside it, but one plan cannot run twice.');
     }
+
+    // QA on launch, resolved BEFORE the runner starts so the run's first board
+    // read already sees gating. The preference speaks only for a fresh run — a
+    // resume is not a new launch decision — and an explicit `qa: false` beats
+    // the preference, so unticking the box means what it says.
+    const wantQa = options.qa ?? (options.resumeRunId ? false : this.prefs.qaByDefault ?? false);
+    if (wantQa && (await this.qaMode(slug)).mode === 'off') {
+      if (!this.flags.allowWrites) {
+        throw new Error(
+          'QA on launch needs --allow-writes: turning QA on writes test-status.md. '
+          + 'Start without QA, or restart the console with --allow-writes.');
+      }
+      // Anchor on the latest phase that has a handoff — that is the
+      // `new-handoff.sh --qa` path, which backfills every completed phase as
+      // waived. A fresh plan with no handoffs takes its first phase instead,
+      // which records "a review was asked for and not yet answered".
+      const phases = record.plan.graph.map((r) => r.phase);
+      const withHandoff = phases.filter((p) => handoffFor(record, p));
+      const anchor = withHandoff.length ? Math.max(...withHandoff)
+        : phases.length ? Math.min(...phases) : 1;
+      const turned = await this.activateQa(slug, anchor);
+      if (!turned.ok) throw new Error(`Could not turn QA on for ${slug}: ${turned.detail}`);
+    }
+
+    // The machine's default skills are an opt-in now, not a side effect. On a
+    // fresh run the attach choice (per-launch, else the preference) decides
+    // whether they ride along with whatever was picked; a resume passes the
+    // picked list through untouched — the run's sticky list rules, and prefs
+    // never re-seed a half-finished run. `seedSkills`' contract is unchanged
+    // for its other callers: an explicit empty list still means none.
+    const attach = options.attachDefaultSkills
+      ?? (options.resumeRunId ? false : this.prefs.attachDefaultSkills ?? false);
+    const skills = attach
+      ? [...new Set([...this.flags.defaultSkills, ...(options.skills ?? [])])]
+      : options.skills;
+
     const state = await this.runnerFor(slug).start({
       ...options,
-      skills: seedSkills(options.skills, this.flags.defaultSkills),
+      skills,
       slug,
       root: this.root.path,
     });
@@ -2570,9 +2614,26 @@ export class Service {
 
   /** Change model, autonomy or budgets on a run in flight; applies next phase. */
   configureRun(slug: string, patch: RunSettingsPatch, by = 'console'): RunState | null {
+    // `attachDefaultSkills` is a request, not a field: it is translated here
+    // into the concrete skills list against the run's CURRENT one, because the
+    // patch that reaches `applySettings` must say what the list is, not how to
+    // derive it. On means the machine defaults ride along with what the run
+    // already has; off means they come out and everything picked by hand stays.
+    const translate = (state: RunState | null): RunSettingsPatch => {
+      if (patch.attachDefaultSkills === undefined) return patch;
+      const { attachDefaultSkills: attach, ...rest } = patch;
+      const defaults = this.flags.defaultSkills;
+      const base = rest.skills != null ? rest.skills : (state?.skills ?? []);
+      return {
+        ...rest,
+        skills: attach
+          ? [...new Set([...base, ...defaults])]
+          : base.filter((skill) => !defaults.includes(skill)),
+      };
+    };
     const runner = this.liveRunner(slug);
-    if (runner?.configure(patch, by)) return runner.current();
-    return this.editStoredRun(slug, (state) => { applySettings(state, patch); });
+    if (runner?.configure(translate(runner.current()), by)) return runner.current();
+    return this.editStoredRun(slug, (state) => { applySettings(state, translate(state)); });
   }
 
   async retryPhase(slug: string, phase: number): Promise<RunState | null> {
@@ -2828,6 +2889,11 @@ export class Service {
       ...(titleOf(rows, request.phase) ? { phaseTitle: titleOf(rows, request.phase) } : {}),
       ...(runState?.status ? { runStatus: runState.status } : {}),
       ...(runState?.halt?.reason ? { haltReason: runState.halt.reason } : {}),
+      // A recovery of a branched run must commit where the run commits — the
+      // discipline block flips its branch bullet on this.
+      ...(runState?.gitMode === 'new-branch'
+        ? { gitStrategy: { branch: `pe/${request.slug}` } }
+        : {}),
       board: rows.length
         ? rows.map((row) => ({
           phase: row.phase,
@@ -3042,11 +3108,12 @@ export class Service {
     const padded = String(request.phase).padStart(2, '0');
     const reportArg = `reports/phase-${padded}-qa.md`;
 
-    const [board, engineBrief, qaMode, commits] = await Promise.all([
+    const [board, engineBrief, qaMode, commits, latestRun] = await Promise.all([
       this.board(request.slug),
       this.qaPrompt(request.slug, request.phase).catch(() => ''),
       this.qaMode(request.slug),
       handoff?.path ? commitsTouching(root, handoff.path, 5) : Promise.resolve([]),
+      this.runFor(request.slug).catch(() => null),
     ]);
 
     const rows = record.plan?.graph ?? [];
@@ -3077,6 +3144,10 @@ export class Service {
         ...(detail?.verification ? { verification: detail.verification } : {}),
         ...(record.plan?.sessionBudget.skills?.length
           ? { skills: record.plan.sessionBudget.skills } : {}),
+        // A reviewer told nothing about the branch runs the suite on the wrong
+        // tree; the brief names it when the plan's latest run is branched.
+        ...(latestRun?.gitMode === 'new-branch'
+          ? { gitStrategy: { branch: `pe/${request.slug}` } } : {}),
         board: rows.length
           ? rows.map((row) => ({
             phase: row.phase,
@@ -3296,7 +3367,13 @@ export class Service {
     // very next classification, and the settings file the child already loaded
     // cannot be reloaded. This is the path that makes the switch immediate.
     const profile: PermissionProfile = run?.permissionProfile ?? 'guarded';
-    const policy = profilePolicy(loadPolicyFor(run?.slug ?? null), profile);
+    // The openPr carve-out rides the same read: for a new-branch run that will
+    // open a PR, bare `git push` is an ask (a card, one human tap) instead of a
+    // deny — and `gh pr create` stays an ask even under `trusted`.
+    const policy = carvedPolicy(
+      loadPolicyFor(run?.slug ?? null), profile,
+      run?.gitMode === 'new-branch' && run.openPr !== false,
+    );
 
     // The hook fires on every matching tool, so most calls have to be answered
     // here without troubling anyone. Only what the policy marks `ask` becomes a
@@ -3409,6 +3486,22 @@ export class Service {
   }
 
   savePreferences(patch: Partial<Prefs>): Prefs {
+    // The patch arrives straight off an HTTP body, so it is picked apart
+    // allowlist-style: only keys this type has, with the types they take. A
+    // client must not write arbitrary JSON into config.json, and a mistyped
+    // value is dropped — the stored value survives — rather than persisted.
+    const picked: Partial<Prefs> = {};
+    if (Array.isArray(patch.recentRoots)) picked.recentRoots = patch.recentRoots.filter((r): r is string => typeof r === 'string');
+    if (typeof patch.lastRoot === 'string') picked.lastRoot = patch.lastRoot;
+    if (patch.theme === 'dark' || patch.theme === 'light' || patch.theme === 'system') picked.theme = patch.theme;
+    if (patch.density === 'comfortable' || patch.density === 'compact') picked.density = patch.density;
+    if (typeof patch.model === 'string') picked.model = patch.model;
+    if (typeof patch.sort === 'string') picked.sort = patch.sort;
+    if (typeof patch.attachDefaultSkills === 'boolean') picked.attachDefaultSkills = patch.attachDefaultSkills;
+    if (typeof patch.qaByDefault === 'boolean') picked.qaByDefault = patch.qaByDefault;
+    if (patch.gitMode === 'default-branch' || patch.gitMode === 'new-branch') picked.gitMode = patch.gitMode;
+    if (typeof patch.openPrOnComplete === 'boolean') picked.openPrOnComplete = patch.openPrOnComplete;
+    if (typeof patch.repoGuard === 'boolean') picked.repoGuard = patch.repoGuard;
     // `notify` is a map inside a patch, so a shallow spread alone would let a
     // client sending one toggle reset every other category to its default.
     // Merged off the *current* map (captured before the spread overwrites it),
@@ -3417,7 +3510,7 @@ export class Service {
     const notify = patch.notify === undefined
       ? this.prefs.notify
       : sanitiseCategories({ ...this.prefs.notify, ...patch.notify });
-    this.prefs = { ...this.prefs, ...patch, notify };
+    this.prefs = { ...this.prefs, ...picked, notify };
     savePrefs(this.prefs);
     return this.prefs;
   }

@@ -102,6 +102,15 @@ export type RunnerDeps = {
    * because the plan is the source for what a phase needs.
    */
   phaseDefaults?: (slug: string, phase: number) => { model?: string; effort?: string } | undefined;
+  /**
+   * The plan's own `**Branch:**` prose from §Session budget, verbatim. Read
+   * only to WARN: when a run's console-set git strategy contradicts a branch
+   * the plan names, the session is told about the discrepancy rather than left
+   * to discover two authorities disagreeing mid-commit.
+   */
+  planBranch?: (slug: string) => string | undefined;
+  /** The plan's title, for the PR the final phase is asked to open. */
+  planTitle?: (slug: string) => string | undefined;
   /** Without one, sessions run on the deny rules alone and nothing can be asked. */
   approvals?: Approvals;
   /** Where the child posts its hook calls, e.g. `http://127.0.0.1:4123`. */
@@ -137,6 +146,18 @@ export type StartOptions = {
   permissionProfile?: PermissionProfile;
   /** Lanes this run may fill. Never above the console's own cap. */
   maxParallel?: number;
+  /** Work on one plan-wide branch instead of what is checked out. */
+  gitMode?: 'default-branch' | 'new-branch';
+  /** New-branch runs only: tell the final phase to push and open a PR. */
+  openPr?: boolean;
+  /**
+   * Consumed by the Service before the runner sees the run — `qa` activates the
+   * plan's QA gate at start, `attachDefaultSkills` decides whether the machine's
+   * default skills are seeded into `skills`. Carried here so route parsing
+   * stays one shape; `Runner.start` itself ignores both.
+   */
+  qa?: boolean;
+  attachDefaultSkills?: boolean;
 };
 
 /** The three ways to move a stuck phase forward without starting it over. */
@@ -192,7 +213,7 @@ const CLOSEOUT_MAX_TURNS = 60;
  * the closeout becomes a machine for turning failures into green boards, which
  * is worse than the halt it replaces.
  */
-function closeoutPrompt(slug: string, phase: number, boardState: string): string {
+function closeoutPrompt(slug: string, phase: number, boardState: string, branch?: string): string {
   return [
     `You exited without closing phase ${phase} of \`${slug}\`. The board still reads `
       + `"${boardState}", which means the handoff was never written or is not marked complete.`,
@@ -203,6 +224,10 @@ function closeoutPrompt(slug: string, phase: number, boardState: string): string
     '2. If any of them is red, write the handoff with status `blocked` and record the failure in it.',
     '   Never write a `complete` handoff on red verification.',
     '3. Commit the changed files with explicit paths (never `git add -A`), in the relevant submodule(s).',
+    ...(branch
+      ? [`   This run works on the plan's branch \`${branch}\` — commit there (check it out if`,
+        '   needed), never on the default branch.']
+      : []),
     `4. Run \`scripts/new-handoff.sh ${slug} ${phase} <title> [status]\`, then fill in the frontmatter`,
     '   and the body. Review the generated "Start next phase(s)" section rather than rewriting it.',
     '5. Update `INDEX.md`.',
@@ -536,6 +561,8 @@ export class Runner {
       phaseOptions: options.phaseOptions,
       skills: options.skills,
       permissionProfile: options.permissionProfile,
+      gitMode: options.gitMode,
+      openPr: options.openPr,
     });
 
     if (state) {
@@ -576,6 +603,18 @@ export class Runner {
       if (options.maxParallel !== undefined) {
         if (options.maxParallel > 0) this.state.maxParallel = options.maxParallel;
         else delete this.state.maxParallel;
+      }
+      // The git strategy is sticky the same way: absent means "keep what the
+      // run already is" — a resume must never re-read the machine defaults and
+      // silently move a half-finished run onto (or off) its branch.
+      if (options.gitMode === 'new-branch') {
+        this.state.gitMode = 'new-branch';
+        this.state.openPr = options.openPr ?? this.state.openPr ?? true;
+      } else if (options.gitMode === 'default-branch') {
+        delete this.state.gitMode;
+        delete this.state.openPr;
+      } else if (options.openPr !== undefined && this.state.gitMode === 'new-branch') {
+        this.state.openPr = options.openPr;
       }
       // A run resumed from disk may carry lanes recorded by the console that
       // died. Nothing is behind them now — `adopt` has already ruled on the
@@ -865,7 +904,8 @@ export class Runner {
     const prompt = [
       instruction.trim(),
       this.retryContext(record, haltedWith),
-      closeoutPrompt(state.slug, phase, board.states[phase] ?? 'unknown'),
+      closeoutPrompt(state.slug, phase, board.states[phase] ?? 'unknown',
+        state.gitMode === 'new-branch' ? `pe/${state.slug}` : undefined),
     ].filter(Boolean).join('\n\n---\n\n');
 
     this.record('phase.resume-instruction', { sessionId, instruction: instruction.slice(0, 2_000) }, phase);
@@ -970,7 +1010,17 @@ export class Runner {
       origin,
       policy: loadPolicyFor(this.state?.slug ?? null),
       profile: this.profile(),
+      openPrCarveOut: this.openPrCarveOut(),
     }));
+  }
+
+  /**
+   * Whether this run gets the push/PR carve-out — new-branch runs that will
+   * open a PR, and nothing else. `rearmSettings` already rebuilds the settings
+   * file when the run's git mode is patched mid-run.
+   */
+  private openPrCarveOut(): boolean {
+    return this.state?.gitMode === 'new-branch' && this.state.openPr !== false;
   }
 
   /**
@@ -1475,6 +1525,7 @@ export class Runner {
   configure(patch: RunSettingsPatch, by = 'console'): boolean {
     if (!this.state) return false;
     const before = this.profile();
+    const carveBefore = this.openPrCarveOut();
     applySettings(this.state, patch);
     const after = this.profile();
 
@@ -1485,6 +1536,11 @@ export class Runner {
       // reading a diff of the whole patch.
       this.record('run.permission-profile', { from: before, to: after, by });
       log.warn('runner.permission-profile', { runId: this.state.id, from: before, to: after, by });
+      this.rearmSettings();
+    } else if (this.openPrCarveOut() !== carveBefore) {
+      // The carve-out is part of the settings file too — a git-mode change is
+      // a permission change by another name, and gets the same rebuild.
+      this.record('run.push-carve-out', { on: this.openPrCarveOut(), by });
       this.rearmSettings();
     }
 
@@ -1671,6 +1727,16 @@ export class Runner {
           state.finishedReason = outstanding.length
             ? undefined
             : `every phase of ${state.slug} is done.`;
+          // Two DAG leaves finishing together means neither read as "last", so
+          // neither was told to open the PR. Saying the branch still awaits one
+          // is the honest ending; inventing a session to do it here is not.
+          if (!outstanding.length && state.gitMode === 'new-branch'
+            && state.openPr !== false && !this.prBlockEmitted) {
+            this.record('run.pr-pending', { branch: `pe/${state.slug}` });
+            state.finishedReason = `every phase of ${state.slug} is done. The work branch `
+              + `pe/${state.slug} still awaits its PR — no phase ran as the plan's last, so `
+              + 'push it and open one by hand, or re-run the final phase.';
+          }
           if (outstanding.length) {
             // Parking with work left is not self-explanatory: every phase this
             // loop will not pick up again needs its ACTUAL blocker named — a
@@ -1931,7 +1997,11 @@ export class Runner {
     // Between the engine's text and the skill directive, so the plan still
     // speaks first and the directive still has the last word.
     const context = this.retryContext(record);
-    const prompt = engineText + (context ? `\n\n${context}\n` : '') + skillDirective(extraSkills);
+    // The git strategy sits between the failure context and the directive: the
+    // plan still speaks first, the operator's branch rule is stated before the
+    // work begins, and the skill directive keeps the last word.
+    const git = await this.gitStrategy(phase, board);
+    const prompt = engineText + (context ? `\n\n${context}\n` : '') + git + skillDirective(extraSkills);
     if (context) this.record('phase.retry-context', { bytes: Buffer.byteLength(context) }, phase);
     if (extraSkills.length) this.record('phase.skills', { skills: [...new Set(extraSkills)] }, phase);
 
@@ -2011,6 +2081,120 @@ export class Runner {
     // no story to tell and a header promising one would be a lie.
     if (!(record.attempts > 0 || record.verification || record.said)) return '';
     return failureContext(record, halt);
+  }
+
+  /** Journalled once per run: the plan and the console disagree about branches. */
+  private branchMismatchNoted = false;
+
+  /** Whether any phase of this run was handed the PR block. See `run.pr-pending`. */
+  private prBlockEmitted = false;
+
+  /**
+   * The operator's git strategy for this phase's session, or '' — which is the
+   * only value a default-branch run ever gets, so every prompt composed before
+   * this feature existed is byte-identical after it.
+   *
+   * The console never runs a git write itself; these are instructions to the
+   * session, which is the entity that holds the lock and owns the tree. Three
+   * escalations ride on the base block: a WORKTREE variant when someone else
+   * is live in a shared repository right now (switching branches in a shared
+   * checkout would swap files under the other session mid-edit — the skill's
+   * conventions name a linked worktree as the escape hatch, and this automates
+   * exactly that); a MISMATCH note when the plan's own §Session budget names a
+   * different branch; and the PR block when this is the plan's last remaining
+   * phase and the run was asked to open one.
+   */
+  private async gitStrategy(phase: number, board: Board): Promise<string> {
+    const state = this.state!;
+    if (state.gitMode !== 'new-branch') return '';
+    const branch = `pe/${state.slug}`;
+    const scope = await this.scopeFor(phase);
+
+    // The honesty probe, guard-independent: it fires under guard-off by
+    // design, and on a guard-on race where a foreign lock appeared after
+    // admission. Either way the session must know it is not alone.
+    const overlaps = this.deps.scheduler?.overlapsFor({
+      slug: state.slug, phase, runId: state.id, scope,
+    }) ?? [];
+    const worktree = overlaps.length > 0;
+    if (worktree) {
+      this.record('phase.shared-checkout', {
+        scope,
+        holders: overlaps.map((h) => `${h.slug} P${h.phase ?? '?'} (${h.owner})`),
+        guard: this.deps.scheduler?.snapshot().guard === false ? 'off' : 'on(race)',
+      }, phase);
+    }
+
+    // The plan's Branch prose, read only to warn. The default idioms —
+    // "current branch", "no new branch", "default" — are not a named branch.
+    const prose = this.deps.planBranch?.(state.slug)?.trim();
+    const planNames = prose && !/current|no new branch|default/i.test(prose) ? prose : undefined;
+    if (planNames && !this.branchMismatchNoted) {
+      this.branchMismatchNoted = true;
+      this.record('run.branch-mismatch', { plan: planNames, run: branch });
+    }
+
+    // Final ⇔ every OTHER phase on the board is done, this is the only live
+    // lane, and the run is the whole plan (a scoped run finishing is not the
+    // plan finishing). Two leaves finishing together therefore never both read
+    // final — `run.pr-pending` at finish covers that honestly instead.
+    const phases = Object.keys(board.states).map(Number);
+    const final = !state.onlyPhases?.length
+      && phases.filter((p) => p !== phase).every((p) => board.done.includes(p))
+      && this.livePhases().every((p) => p === phase);
+    const pr = final && state.openPr !== false;
+    if (pr) this.prBlockEmitted = true;
+
+    const checkoutBullet = worktree
+      ? `- CAUTION — another live session shares a repository with this phase right now\n`
+        + `  (${overlaps.map((h) => `${h.slug} P${h.phase ?? '?'} (${h.owner})`).join('; ')}), so you must NOT switch\n`
+        + `  branches in the shared checkout: that would swap files under the other\n`
+        + `  session mid-edit. Use a linked worktree instead, as the skill's conventions\n`
+        + `  prescribe for overlapping sessions:\n`
+        + `      git worktree add ../<repo>-pe-${state.slug} ${branch}\n`
+        + `  (add \`-b ${branch}\` to that command if the branch does not exist yet). Do\n`
+        + `  ALL of this phase's work inside that worktree directory and commit there.\n`
+        + `  Do not remove the worktree when you finish — later phases of this run\n`
+        + `  reuse it. If it already exists, work in it as it stands.`
+      : `- In each scoped repository, BEFORE editing anything: if \`${branch}\` exists\n`
+        + `  (locally or on the remote), check it out; otherwise create it from the\n`
+        + `  repository's default branch. Later phases of this run reuse it — leave it\n`
+        + `  checked out when you finish.`;
+
+    const mismatch = planNames
+      ? `\n- Note: the plan's §Session budget names the branch \`${planNames}\`. This run\n`
+        + `  was started with the console's new-branch strategy, which wins for sessions\n`
+        + `  the console mints: use \`${branch}\`, and record the discrepancy in your\n`
+        + `  handoff so the plan can be updated.`
+      : '';
+
+    const title = this.deps.planTitle?.(state.slug) ?? state.slug;
+    const prBlock = pr
+      ? `\n\nOpening the pull request — this is the plan's LAST remaining phase. After the\n`
+        + `handoff is written and verification is green, in EACH scoped repository where\n`
+        + `\`${branch}\` has commits:\n`
+        + `  1. Push the branch: git push -u origin ${branch}\n`
+        + `  2. Open a PR with \`gh pr create\` — base: the repository's default branch,\n`
+        + `     head: ${branch}, title: "${title}", body: a short per-phase summary of\n`
+        + `     what this plan changed (from the handoffs).\n`
+        + `  3. If a PR for \`${branch}\` already exists, do not open a second one — say so\n`
+        + `     instead.\n`
+        + `Record each PR URL in the phase handoff. If pushing or \`gh\` is refused or\n`
+        + `unavailable, do not look for another route: write the exact commands you would\n`
+        + `have run into the handoff and your final message, and finish the phase normally.`
+      : '';
+
+    this.record('phase.git-strategy', { mode: 'new-branch', branch, worktree, pr }, phase);
+
+    return `\n\nGit strategy for this run — set by the operator in the console. For this run\n`
+      + `it overrides whatever §Session budget says about branches:\n\n`
+      + `- All work for this plan lands on ONE plan-wide branch: \`${branch}\`, in every\n`
+      + `  repository in this phase's scope (${scope.join(', ')}).\n`
+      + `${checkoutBullet}\n`
+      + `- Commit only to \`${branch}\`. Never commit to the default branch, never push\n`
+      + `  the default branch, and do not create any other branch.\n`
+      + `- Handoff, INDEX and lock commits in the docs repository follow the skill's\n`
+      + `  usual rules — do not invent a separate branch just for docs.${mismatch}${prBlock}\n`;
   }
 
   /**
@@ -2671,7 +2855,8 @@ export class Runner {
     let outcome;
     try {
       outcome = await spawn({
-        prompt: closeoutPrompt(state.slug, phase, boardState),
+        prompt: closeoutPrompt(state.slug, phase, boardState,
+          state.gitMode === 'new-branch' ? `pe/${state.slug}` : undefined),
         cwd: state.root,
         model: record.model ?? state.model,
         effort: record.effort ?? state.effort,
@@ -3097,6 +3282,13 @@ export type RunSettingsPatch = {
   phaseOptions?: Record<string, PhaseOptions> | null;
   skills?: string[] | null;
   permissionProfile?: PermissionProfile;
+  gitMode?: 'default-branch' | 'new-branch';
+  openPr?: boolean;
+  /**
+   * Translated by the Service before this patch reaches `applySettings`
+   * (into a concrete `skills` list); never stored on the run itself.
+   */
+  attachDefaultSkills?: boolean;
 };
 
 /**
@@ -3132,6 +3324,19 @@ export function applySettings(state: RunState, patch: RunSettingsPatch): RunStat
     if (patch.permissionProfile === 'guarded') delete state.permissionProfile;
     else state.permissionProfile = patch.permissionProfile;
   }
+  if (patch.gitMode) {
+    // Default-branch is the absent state on disk (see `newRun`), so switching
+    // back is a delete — and takes the PR flag with it, which has no meaning
+    // without a branch to open a PR from.
+    if (patch.gitMode === 'new-branch') {
+      state.gitMode = 'new-branch';
+      if (state.openPr === undefined) state.openPr = patch.openPr ?? true;
+    } else {
+      delete state.gitMode;
+      delete state.openPr;
+    }
+  }
+  if (patch.openPr !== undefined && state.gitMode === 'new-branch') state.openPr = patch.openPr;
   return state;
 }
 

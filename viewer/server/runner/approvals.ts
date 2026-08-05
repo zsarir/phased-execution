@@ -592,10 +592,65 @@ export const PROFILE_LABELS: Record<PermissionProfile, string> = {
  * a profile that could widen it would make the wall a preference, and the whole
  * reason `deny` is trustworthy is that it is enforced by the CLI with this
  * console unreachable.
+ *
+ * `alwaysAsk` survives the emptying: the openPr carve-out (below) needs its
+ * two rules to raise a card even under `trusted`, because a push and a PR are
+ * the run's one world-visible act and the deal is one human tap.
  */
-export function profilePolicy(policy: AutopilotPolicy, profile: PermissionProfile): AutopilotPolicy {
+export function profilePolicy(
+  policy: AutopilotPolicy, profile: PermissionProfile,
+  opts?: { alwaysAsk?: readonly string[] },
+): AutopilotPolicy {
   if (profile === 'guarded') return policy;
-  return { ...policy, ask: [] };
+  const kept = opts?.alwaysAsk?.length
+    ? policy.ask.filter((rule) => opts.alwaysAsk!.includes(rule))
+    : [];
+  return { ...policy, ask: kept };
+}
+
+/* ------------------------------------------------------------------ *
+ * The openPr carve-out: the one deliberate hole in the push wall
+ * ------------------------------------------------------------------ */
+
+/** The deny rule the carve-out moves to ask — and only this exact rule. */
+export const PUSH_DENY = 'Bash(git push:*)';
+
+/**
+ * What replaces it. The destructive push shapes stay walled: the carve-out
+ * exists so a finished plan can publish ONE new branch, not so anything can
+ * rewrite or delete what a remote already has.
+ */
+export const PUSH_DENY_CARVED = [
+  'Bash(git push --force:*)',
+  'Bash(git push -f:*)',
+  'Bash(git push --force-with-lease:*)',
+  'Bash(git push --delete:*)',
+  'Bash(git push origin --delete:*)',
+];
+
+/** The asks that survive every profile while the carve-out is on. */
+export const OPEN_PR_ASK = ['Bash(git push:*)', 'Bash(gh pr create:*)'];
+
+/**
+ * The effective policy for one run, carve-out and profile applied together.
+ *
+ * Scoped to a run, never to the console: only a run started with
+ * `gitMode: 'new-branch'` and PR-on-completion gets it, which is the narrowest
+ * shape that lets the final phase actually push its branch. The residual risk
+ * is stated in the docs — with this console dead, that run's CLI-side deny no
+ * longer contains bare `git push` — and force/delete pushes stay denied at
+ * both layers regardless.
+ */
+export function carvedPolicy(
+  policy: AutopilotPolicy, profile: PermissionProfile, openPrCarveOut: boolean,
+): AutopilotPolicy {
+  if (!openPrCarveOut) return profilePolicy(policy, profile);
+  const carved: AutopilotPolicy = {
+    ...policy,
+    deny: [...policy.deny.filter((rule) => rule !== PUSH_DENY), ...PUSH_DENY_CARVED],
+    ask: [...new Set([...policy.ask, ...OPEN_PR_ASK])],
+  };
+  return profilePolicy(carved, profile, { alwaysAsk: OPEN_PR_ASK });
 }
 
 const POLICY_DIR = join(
@@ -1165,10 +1220,14 @@ export type SettingsOptions = {
   policy?: AutopilotPolicy;
   /** How much this run may do unasked. Only `bypass` changes the child's argv. */
   profile?: PermissionProfile;
+  /** New-branch runs that will open a PR: bare `git push` moves deny → ask. */
+  openPrCarveOut?: boolean;
 };
 
 export function buildSettings(opts: SettingsOptions): Record<string, unknown> {
-  const policy = profilePolicy(opts.policy ?? loadPolicy(), opts.profile ?? 'guarded');
+  const policy = carvedPolicy(
+    opts.policy ?? loadPolicy(), opts.profile ?? 'guarded', opts.openPrCarveOut ?? false,
+  );
   return {
     permissions: {
       // `allow` rides along because permission rules merge across scopes: it

@@ -112,6 +112,12 @@ export type QaFacts = QaRequest & {
   previous?: { result: string; report?: string };
   /** Skills the plan asks every session to invoke. */
   skills?: string[];
+  /**
+   * Set when the plan's latest run works on a console-declared branch. A
+   * reviewer that runs the tests on the default branch is reviewing the wrong
+   * tree, so the brief names the branch up front.
+   */
+  gitStrategy?: { branch: string };
 };
 
 /* ------------------------------------------------------------------ *
@@ -225,6 +231,13 @@ function intro(facts: QaFacts): string {
       '',
       'NOTE: QA is currently OFF for this plan, so nothing is gated on your verdict yet.',
       'Recording one turns gating on for the plan from that point onwards.',
+    );
+  }
+  if (facts.gitStrategy) {
+    lines.push(
+      '',
+      `The phase's work lands on the plan's branch \`${facts.gitStrategy.branch}\` — review that`,
+      "branch's state (check it out, or its linked worktree), not the default branch.",
     );
   }
   if (facts.skills?.length) {

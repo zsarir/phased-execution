@@ -910,6 +910,14 @@ export async function handleApi(
               // reason a run takes the guard rails off.
               permissionProfile: isPermissionProfile(body.permissionProfile)
                 ? body.permissionProfile : 'guarded',
+              // Same posture for the git strategy: only the two exact literals
+              // mean anything; everything else is `undefined`, which lets the
+              // stored preference decide. A typo must never mint a branch.
+              gitMode: body.gitMode === 'new-branch' ? 'new-branch'
+                : body.gitMode === 'default-branch' ? 'default-branch' : undefined,
+              openPr: typeof body.openPr === 'boolean' ? body.openPr : undefined,
+              attachDefaultSkills: typeof body.attachDefaultSkills === 'boolean' ? body.attachDefaultSkills : undefined,
+              qa: typeof body.qa === 'boolean' ? body.qa : undefined,
             });
             json(res, 200, { run: state });
             return true;
@@ -1023,6 +1031,11 @@ export async function handleApi(
               ...('skills' in body ? { skills: skillList(body.skills) ?? null } : {}),
               ...(isPermissionProfile(body.permissionProfile)
                 ? { permissionProfile: body.permissionProfile } : {}),
+              ...(body.gitMode === 'new-branch' || body.gitMode === 'default-branch'
+                ? { gitMode: body.gitMode } : {}),
+              ...(typeof body.openPr === 'boolean' ? { openPr: body.openPr } : {}),
+              ...(typeof body.attachDefaultSkills === 'boolean'
+                ? { attachDefaultSkills: body.attachDefaultSkills } : {}),
             }, typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console');
             json(res, 200, { run });
             return true;

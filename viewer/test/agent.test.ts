@@ -277,3 +277,28 @@ test('resume swaps the session id for --resume and carries no prompt', () => {
   assert.equal(built.launch.meta?.claudeSessionId, '11111111-2222-4333-8444-555555555555',
     'the meta still names the claude session a future resume would target');
 });
+
+test('a recovery ticket honors model, effort and skills — the dialog depends on it', () => {
+  // Pinned because the launch dialog now offers all three on every recovery
+  // click: these are generic body fields, and a refactor that special-cased
+  // the recovery intent out of them would break the dialog silently.
+  const built = buildAgentLaunch({
+    kind: 'claude', intent: 'recovery', model: 'sonnet', effort: 'high',
+    skills: ['design-review'],
+  }, {
+    ...CTX,
+    recovery: {
+      class: 'plan-repair', slug: 'alpha',
+      scriptsDir: '/opt/phased-execution/scripts', skillId: 'phased-execution',
+      issues: [{ kind: 'index-drift', message: 'INDEX says done, handoff says blocked' }],
+    } as never,
+  });
+  assert.equal(built.ok, true);
+  if (!built.ok) return;
+  assert.ok(built.launch.args.includes('--model'), 'the model flag rides');
+  assert.equal(built.launch.args[built.launch.args.indexOf('--model') + 1], 'sonnet');
+  assert.equal(built.launch.args[built.launch.args.indexOf('--effort') + 1], 'high');
+  const prompt = built.launch.args[built.launch.args.length - 1];
+  assert.match(prompt, /\/design-review/, 'picked skills reach the recovery prompt');
+  assert.match(prompt, /plan-repair|Repair/i, 'and it is still the recovery briefing');
+});

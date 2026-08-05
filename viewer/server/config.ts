@@ -342,6 +342,31 @@ export type Prefs = {
   model?: string;
   sort?: string;
   /**
+   * Automation defaults — the opening values for every launch surface. Each
+   * launch can override them for itself; these are what the dialogs open on.
+   *
+   * - `attachDefaultSkills`: seed the machine's default skills (the
+   *   `--default-skills` / `PHASE_CONSOLE_DEFAULT_SKILLS` list) into new runs
+   *   and pre-check them in launch dialogs. Off by default: attaching extra
+   *   skills to every session is an opt-in, not a side effect of installing.
+   * - `qaByDefault`: open launch surfaces with the QA gate ticked, so starting
+   *   a run turns QA on for the plan unless the operator unticks it.
+   * - `gitMode`: 'new-branch' puts each run on one plan-wide work branch
+   *   (`pe/<slug>`); 'default-branch' keeps today's behaviour — sessions work
+   *   on whatever is checked out and never create branches.
+   * - `openPrOnComplete`: when a new-branch run finishes its last phase, the
+   *   final session is instructed to push the branch and open a PR. Meaningful
+   *   only with `gitMode: 'new-branch'`.
+   * - `repoGuard`: queue runs whose repository scopes overlap (the scheduler's
+   *   cross-run serialization). Turning it off admits overlapping runs; a
+   *   new-branch run that overlaps a live one is steered into a git worktree.
+   */
+  attachDefaultSkills?: boolean;
+  qaByDefault?: boolean;
+  gitMode?: 'default-branch' | 'new-branch';
+  openPrOnComplete?: boolean;
+  repoGuard?: boolean;
+  /**
    * Which categories the console is allowed to announce **at all** — the switch
    * an operator actually means when they turn a notification off.
    *
@@ -365,18 +390,40 @@ const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
 const DEFAULT_PREFS: Prefs = {
-  recentRoots: [], theme: 'system', density: 'comfortable', sort: 'activity', notify: sanitiseCategories(undefined),
+  recentRoots: [], theme: 'system', density: 'comfortable', sort: 'activity',
+  attachDefaultSkills: false, qaByDefault: false, gitMode: 'default-branch', openPrOnComplete: true, repoGuard: true,
+  notify: sanitiseCategories(undefined),
 };
+
+/**
+ * Coerce the automation keys to values the rest of the app can trust: booleans
+ * stay booleans (anything else takes the default), and `gitMode` is
+ * 'new-branch' only when it says exactly that — a typo in config.json must
+ * never mint branches.
+ */
+export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
+  'attachDefaultSkills' | 'qaByDefault' | 'gitMode' | 'openPrOnComplete' | 'repoGuard'> {
+  const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback);
+  return {
+    attachDefaultSkills: bool(parsed.attachDefaultSkills, false),
+    qaByDefault: bool(parsed.qaByDefault, false),
+    gitMode: parsed.gitMode === 'new-branch' ? 'new-branch' : 'default-branch',
+    openPrOnComplete: bool(parsed.openPrOnComplete, true),
+    repoGuard: bool(parsed.repoGuard, true),
+  };
+}
 
 export function loadPrefs(): Prefs {
   try {
     const parsed = JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) as Partial<Prefs>;
     // `notify` is rebuilt rather than spread: a stored map missing a key must
-    // take that category's default, not inherit `undefined`.
+    // take that category's default, not inherit `undefined`. The automation
+    // keys are rebuilt for the same reason, plus type coercion.
     return {
       ...DEFAULT_PREFS,
       ...parsed,
       recentRoots: parsed.recentRoots ?? [],
+      ...sanitiseAutomation(parsed),
       notify: sanitiseCategories(parsed.notify),
     };
   } catch {

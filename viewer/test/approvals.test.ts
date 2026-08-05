@@ -855,3 +855,53 @@ test('disarming a run answers only its OWN cards', async () => {
 });
 
 test.after(() => rmSync(STATE_HOME, { recursive: true, force: true }));
+
+/* ------------------------------------------------------------------ *
+ * The openPr carve-out
+ * ------------------------------------------------------------------ */
+
+test('without the carve-out nothing about the wall moves — most runs never see it', async () => {
+  const { carvedPolicy } = await import('../server/runner/approvals.ts');
+  const base = loadPolicy('/nonexistent');
+  const trusted = carvedPolicy(base, 'trusted', false);
+  assert.deepEqual(trusted.deny, base.deny, 'the wall is the wall');
+  assert.deepEqual(trusted.ask, [], 'trusted still empties the ask list');
+});
+
+test('the carve-out moves exactly bare push to ask, and walls the destructive shapes', async () => {
+  const { carvedPolicy, PUSH_DENY, PUSH_DENY_CARVED } = await import('../server/runner/approvals.ts');
+  const carved = carvedPolicy(loadPolicy('/nonexistent'), 'guarded', true);
+  assert.ok(!carved.deny.includes(PUSH_DENY), 'bare git push is no longer denied outright');
+  for (const rule of PUSH_DENY_CARVED) {
+    assert.ok(carved.deny.includes(rule), `${rule} stays walled — the carve-out publishes, never rewrites`);
+  }
+  assert.ok(carved.ask.includes('Bash(git push:*)'));
+  assert.ok(carved.ask.includes('Bash(gh pr create:*)'));
+  // Nothing else came off the wall.
+  for (const rule of DEFAULT_DENY) {
+    if (rule === PUSH_DENY) continue;
+    assert.ok(carved.deny.includes(rule), `${rule} must survive the carve-out untouched`);
+  }
+});
+
+test('under trusted, the carve-out asks survive — the push and the PR still get a card', async () => {
+  const { carvedPolicy, OPEN_PR_ASK } = await import('../server/runner/approvals.ts');
+  const carved = carvedPolicy(loadPolicy('/nonexistent'), 'trusted', true);
+  assert.deepEqual([...carved.ask].sort(), [...OPEN_PR_ASK].sort(),
+    'exactly the two world-visible acts keep asking; everything else trusts');
+  assert.equal(classifyTool('Bash', { command: 'git push -u origin pe/demo' }, carved, 'trusted'), 'ask');
+  assert.equal(classifyTool('Bash', { command: 'gh pr create --title x' }, carved, 'trusted'), 'ask');
+  assert.equal(classifyTool('Bash', { command: 'git push --force origin pe/demo' }, carved, 'trusted'), 'deny');
+  assert.equal(classifyTool('Bash', { command: 'git commit -m x' }, carved, 'trusted'), 'allow');
+});
+
+test('the settings file a carve-out run hands its child reflects the carved wall', () => {
+  const settings = buildSettings({
+    runId: 'r9', token: 't', origin: 'http://127.0.0.1:4123',
+    profile: 'trusted', openPrCarveOut: true,
+  });
+  const deny = (settings.permissions as { deny: string[] }).deny;
+  assert.ok(!deny.includes('Bash(git push:*)'), 'the CLI-side wall lets the one push through');
+  assert.ok(deny.includes('Bash(git push --force:*)'), 'and still refuses a rewrite outright');
+  assert.ok(deny.includes('Bash(terraform apply:*)'), 'the rest of the wall is untouched');
+});

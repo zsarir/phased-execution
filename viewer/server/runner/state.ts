@@ -365,6 +365,18 @@ export type RunState = {
    */
   permissionProfile?: PermissionProfile;
   /**
+   * The run works on one plan-wide branch (`pe/<slug>`) instead of whatever is
+   * checked out. **Absent means default-branch** — a run file written before
+   * this feature keeps meaning what it meant, so the only branching state a
+   * reader ever tests is `state.gitMode === 'new-branch'`.
+   */
+  gitMode?: 'new-branch';
+  /**
+   * Whether the final phase is told to push the branch and open a PR.
+   * Meaningful only with `gitMode: 'new-branch'`; absent there means true.
+   */
+  openPr?: boolean;
+  /**
    * Set once this run stopped being something a person has to deal with — by
    * the board overtaking it, or by someone dismissing it. Never a reason to
    * hide or delete the run: see `RunResolution`.
@@ -424,6 +436,8 @@ export type NewRunOptions = {
   skills?: string[];
   permissionProfile?: PermissionProfile;
   maxParallel?: number;
+  gitMode?: 'default-branch' | 'new-branch';
+  openPr?: boolean;
 };
 
 export function newRun(opts: NewRunOptions): RunState {
@@ -481,6 +495,12 @@ export function newRun(opts: NewRunOptions): RunState {
     ...(opts.permissionProfile === 'guarded'
       ? {}
       : { permissionProfile: opts.permissionProfile ?? 'trusted' }),
+    // Same omission convention as `permissionProfile`: default-branch is the
+    // absent state, so old readers and old run files agree. `openPr` is written
+    // both ways under new-branch so the header can show the run's own record.
+    ...(opts.gitMode === 'new-branch'
+      ? { gitMode: 'new-branch' as const, openPr: opts.openPr !== false }
+      : {}),
     phases: {},
   };
 }

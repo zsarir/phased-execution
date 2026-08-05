@@ -129,6 +129,18 @@ export type SchedulerDeps = {
   now?: () => number;
   /** Called whenever the queue or the grant set changed. Drives `run:queue`. */
   onChange?: (snapshot: SchedulerSnapshot) => void;
+  /**
+   * The repository guard — whether CROSS-RUN scope conflicts block admission.
+   * Read per call, like `max`, so a preference flip lands on the next poll.
+   * Absent means on: serializing overlapping runs is the safe state and must
+   * be the silent one. With the guard off, only a run's own lanes still
+   * serialize against each other — two lanes of one run in one checkout are
+   * still two agents in one tree — while foreign grants, on-disk locks and
+   * other runs' reserved tokens stop blocking. The cap and the usage-window
+   * throttle are about the machine and the account, not about scopes, so they
+   * hold either way.
+   */
+  guard?: () => boolean;
 };
 
 export type SchedulerSnapshot = {
@@ -138,6 +150,8 @@ export type SchedulerSnapshot = {
   throttledUntil: number | null;
   grants: ScopeGrant[];
   entries: QueueEntry[];
+  /** Whether cross-run scope conflicts currently block admission. */
+  guard: boolean;
 };
 
 /** Thrown into a pending `admit()` when the run it belonged to was stopped. */
@@ -260,7 +274,25 @@ export class Scheduler {
       since: this.now(), waitingOn: [], bypassed: 0, reserving: false,
       resolve: () => {}, reject: () => {}, detach: () => {}, settled: false,
     };
-    return this.conflictsFor(probe, this.queue.filter((entry) => entry.reserving));
+    return this.blocking(probe, this.queue.filter((entry) => entry.reserving));
+  }
+
+  /**
+   * Cross-run holders sharing tokens with this request RIGHT NOW — grants of
+   * other runs, and locks this console never issued. Never queues, and never
+   * consults the guard: this is the honesty probe that lets a prompt say "you
+   * are sharing a checkout with someone" even when the guard was turned off,
+   * or when a foreign lock appeared after admission.
+   */
+  overlapsFor(request: AdmitRequest): Holder[] {
+    const probe: Waiting = {
+      id: '', slug: request.slug, phase: request.phase, runId: request.runId,
+      scope: request.scope.length ? request.scope : ['all'],
+      since: this.now(), waitingOn: [], bypassed: 0, reserving: false,
+      resolve: () => {}, reject: () => {}, detach: () => {}, settled: false,
+    };
+    const own = autopilotOwner(request.runId);
+    return this.conflictsFor(probe, []).filter((holder) => holder.owner !== own);
   }
 
   /** Hand a grant back. The only thing that lets the queue move on its own. */
@@ -333,7 +365,7 @@ export class Scheduler {
       // either, and scanning on would only mislabel the rest as scope-blocked.
       if (this.grants.size >= this.maxLive()) break;
 
-      const holders = this.conflictsFor(entry, reserved);
+      const holders = this.blocking(entry, reserved);
       if (holders.length) {
         entry.waitingOn = holders;
         blocked.push(entry);
@@ -362,6 +394,7 @@ export class Scheduler {
   snapshot(): SchedulerSnapshot {
     return {
       max: this.maxLive(),
+      guard: this.deps.guard?.() ?? true,
       live: this.grants.size,
       queued: this.queue.filter((entry) => !entry.settled).length,
       throttledUntil: this.throttledUntil,
@@ -398,6 +431,21 @@ export class Scheduler {
   /* ---------------------------------------------------------------- *
    * The conflict scan
    * ---------------------------------------------------------------- */
+
+  /**
+   * What actually blocks this entry, guard consulted. `poll` and `wouldBlock`
+   * both come through here so they cannot disagree about what "queued" means.
+   * With the guard off, the only holders that still block are the entry's own
+   * run's — its other lanes and their reservations — because turning the guard
+   * off is a statement about OTHER runs, not permission for one run to stack
+   * two lanes into one checkout.
+   */
+  private blocking(entry: Waiting, reserved: readonly Waiting[]): Holder[] {
+    const holders = this.conflictsFor(entry, reserved);
+    if (this.deps.guard?.() ?? true) return holders;
+    const own = autopilotOwner(entry.runId);
+    return holders.filter((holder) => holder.owner === own);
+  }
 
   /**
    * Everything this entry collides with, or an empty list if it may start.

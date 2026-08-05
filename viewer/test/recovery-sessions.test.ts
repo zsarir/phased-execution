@@ -786,3 +786,21 @@ test('every briefing ends with the record-truth rule: statuses flipped, board re
     assert.match(text, /beats a hopeful status/, `${kind} must bless an honest blocked handoff too`);
   }
 });
+
+/* ------------------------------------------------------------------ *
+ * Branch awareness
+ * ------------------------------------------------------------------ */
+
+test('a recovery of a branched run is told to commit on the plan branch', () => {
+  const text = recoveryPrompt(facts({ gitStrategy: { branch: 'pe/alpha' } }));
+  assert.match(text, /plan-wide branch `pe\/alpha`/);
+  assert.match(text, /Never push the default branch/);
+  assert.doesNotMatch(text, /Commit to the branch that is already checked out/,
+    'the default bullet is replaced, not joined');
+});
+
+test('an unbranched recovery keeps the discipline text it always had, verbatim', () => {
+  const text = recoveryPrompt(facts());
+  assert.match(text, /Commit to the branch that is already checked out\. Do not git checkout -b/);
+  assert.doesNotMatch(text, /plan-wide branch/);
+});

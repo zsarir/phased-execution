@@ -37,12 +37,14 @@ async function pending(promise: Promise<unknown>): Promise<boolean> {
 function scheduler(options: {
   max?: number; locks?: () => LockView[]; now?: () => number;
   scopeFor?: (slug: string, phase: number) => string[] | undefined;
+  guard?: () => boolean;
 } = {}) {
   return new Scheduler({
     max: options.max ?? 8,
     locks: options.locks ?? (() => []),
     now: options.now,
     scopeFor: options.scopeFor,
+    guard: options.guard,
   });
 }
 
@@ -296,6 +298,80 @@ test('the snapshot reports what the queue page and the run header render', async
   assert.equal(snap.entries[0].phase, 7);
   assert.deepEqual(snap.entries[0].scope, ['api', 'web']);
   assert.deepEqual(snap.entries[0].waitingOn[0].overlaps, ['api']);
+  s.release(held);
+  s.close();
+});
+
+/* ------------------------------------------------------------------ *
+ * The repository guard
+ * ------------------------------------------------------------------ */
+
+test('guard off: two runs sharing a repo are admitted together', async () => {
+  const s = scheduler({ guard: () => false });
+  const first = await s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'] });
+  const second = await s.admit({ slug: 'b', phase: 1, runId: 'r2', scope: ['api'] });
+  assert.equal(s.snapshot().live, 2, 'the operator turned serialization off, so nothing queues');
+  s.release(first);
+  s.release(second);
+  s.close();
+});
+
+test('guard off is about OTHER runs — one run still cannot stack two lanes on a repo', async () => {
+  const s = scheduler({ guard: () => false });
+  const lane = await s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'] });
+  const secondLane = s.admit({ slug: 'a', phase: 2, runId: 'r1', scope: ['api'] });
+  await tick();
+  assert.ok(await pending(secondLane), 'two lanes of one run in one checkout is never the deal');
+  s.release(lane);
+  assert.equal((await secondLane).phase, 2);
+  s.close();
+});
+
+test('guard off ignores foreign locks, and the cap still holds', async () => {
+  const locks: LockView[] = [
+    { slug: 'other', phase: 3, owner: 'sam@example-host', expired: false, scope: ['api'] },
+  ];
+  const s = scheduler({ max: 1, locks: () => locks, guard: () => false });
+  // The foreign lock shares the scope; with the guard off it does not block.
+  const granted = await s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'] });
+  // But the session cap is about the machine, not about scopes.
+  const blocked = s.wouldBlock({ slug: 'b', phase: 1, runId: 'r2', scope: ['docs'] });
+  assert.equal(blocked[0]?.slug, 'session cap');
+  s.release(granted);
+  s.close();
+});
+
+test('overlapsFor reports the cross-run truth whatever the guard says', async () => {
+  let guard = false;
+  const locks: LockView[] = [
+    { slug: 'held', phase: 2, owner: 'sam@example-host', expired: false, scope: ['api'] },
+  ];
+  const s = scheduler({ locks: () => locks, guard: () => guard });
+  const mine = await s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'] });
+  const overlaps = s.overlapsFor({ slug: 'a', phase: 2, runId: 'r1', scope: ['api'] });
+  // The run's own grant is not an overlap — the probe is about who ELSE is here.
+  assert.ok(!overlaps.some((h) => h.owner === 'autopilot/r1'));
+  assert.ok(overlaps.some((h) => h.kind === 'lock' && h.slug === 'held'), 'the foreign lock is named');
+  const foreign = s.overlapsFor({ slug: 'b', phase: 1, runId: 'r2', scope: ['api'] });
+  assert.ok(foreign.some((h) => h.kind === 'grant' && h.slug === 'a'), 'the live grant is named');
+  guard = true;
+  assert.deepEqual(s.overlapsFor({ slug: 'b', phase: 1, runId: 'r2', scope: ['api'] }), foreign,
+    'the probe never consults the guard');
+  s.release(mine);
+  s.close();
+});
+
+test('a guard flip lands on the next poll — queued work is re-judged, not stranded', async () => {
+  let guard = true;
+  const s = scheduler({ guard: () => guard });
+  const held = await s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'] });
+  const waiting = s.admit({ slug: 'b', phase: 1, runId: 'r2', scope: ['api'] });
+  await tick();
+  assert.ok(await pending(waiting), 'guard on: the overlap queues');
+  guard = false;
+  s.poll();
+  assert.equal((await waiting).slug, 'b', 'guard off: the same entry is admitted');
+  assert.equal(s.snapshot().guard, false, 'the snapshot says which regime is in force');
   s.release(held);
   s.close();
 });

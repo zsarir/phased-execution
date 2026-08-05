@@ -150,6 +150,14 @@ export type RecoveryFacts = RecoveryRequest & {
   newOwner?: string;
   /** The issues to repair (`plan-repair`). */
   issues?: RecoveryIssue[];
+  /**
+   * Set when the run this recovery continues works on a console-declared
+   * branch (`gitMode: 'new-branch'`). The discipline block's branch bullet
+   * flips on it: a recovery of a branched run must commit to that branch, and
+   * the default text — "commit to what is checked out, never checkout -b" —
+   * would point it at the wrong tree.
+   */
+  gitStrategy?: { branch: string };
 };
 
 /* ------------------------------------------------------------------ *
@@ -630,6 +638,16 @@ function issueBlock(issues: RecoveryIssue[]): Block {
  * else's afternoon.
  */
 function discipline(facts: RecoveryFacts): string {
+  const branchBullet = facts.gitStrategy
+    ? [
+      `  · This plan's run works on the plan-wide branch \`${facts.gitStrategy.branch}\`. Commit`,
+      '    there — check it out first if the repository is not on it (or use the run\'s linked',
+      '    worktree if one exists). Never push the default branch.',
+    ]
+    : [
+      '  · Commit to the branch that is already checked out. Do not git checkout -b, and do',
+      '    not push unless the plan says to.',
+    ];
   return [
     'How to finish:',
     '',
@@ -638,8 +656,7 @@ function discipline(facts: RecoveryFacts): string {
     '  · End the commit message with the repository\'s Co-Authored-By: trailer.',
     '  · Verify the sha with git log -1 before you write it into a handoff — never quote a',
     '    sha from memory.',
-    '  · Commit to the branch that is already checked out. Do not git checkout -b, and do',
-    '    not push unless the plan says to.',
+    ...branchBullet,
     '  · Never git stash to carry work between steps — commit it (a WIP commit if needed).',
     '  · The plan file holds the roadmap and the handoff holds the baton; do not re-list',
     '    the roadmap in the handoff.',

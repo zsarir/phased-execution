@@ -802,3 +802,10 @@ test('the outcome is read fresh, past the debounced watcher', async () => {
     assert.equal(outcome.result, 'pass');
   } finally { cleanup(); }
 });
+
+test('a review of a branched plan is pointed at the branch, and an unbranched one is not', () => {
+  const branched = qaPrompt(facts({ gitStrategy: { branch: 'pe/alpha' } }));
+  assert.match(branched, /plan's branch `pe\/alpha`/);
+  assert.match(branched, /not the default branch/);
+  assert.doesNotMatch(qaPrompt(facts()), /plan's branch/);
+});
