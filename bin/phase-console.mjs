@@ -4,10 +4,16 @@
 //   phase-console                        pick the plan directory in the browser
 //   phase-console ~/code/your-repo       open that directory straight away
 //   phase-console --allow-writes         also enable the guarded write verbs
-//   phase-console start | stop | restart | status | logs [-f]
+//   phase-console start                  start the console for THIS project
+//   phase-console list                   every console on this machine
+//   phase-console open [instance]        open one in a browser
+//   phase-console start | stop | restart | status | logs [-f]  [instance]
 //                                        drive the background agent (start falls
 //                                        back to a foreground run if none is installed)
 //   phase-console install-skill          copy the skill where Claude Code reads it
+//
+// [instance] is an id, a name, or a project's directory name — or `--instance
+// <sel>`. With none, the console for the directory you are standing in.
 //
 // The bash `bin/phase-console` next to this file serves the plugin route, where
 // Claude Code puts the real bin/ directory on PATH. npm and Homebrew instead
@@ -22,7 +28,9 @@ import {
   cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // ---- node version gate -----------------------------------------------------
 // First, before anything imports server code: the server is TypeScript run
@@ -142,6 +150,11 @@ if (['uninstall-skill', '--uninstall-skill'].includes(args[0])) {
 // System operations, owned by deploy/agent.sh — mirror viewer/run and hand
 // them straight over rather than starting a server. The bare words are the
 // daily set; the --agent-* flags are the long-standing spellings.
+//
+// One install now runs one console per project, so every verb takes an
+// INSTANCE: `--instance <id|name>`, or a bare word after the verb, or — the
+// case that has to work without being taught — nothing at all, meaning the
+// console for the directory you are standing in.
 const FLAG_VERBS = {
   '--install-agent': 'install',
   '--uninstall-agent': 'uninstall',
@@ -155,21 +168,268 @@ const FLAG_VERBS = {
 const WORD_VERBS = {
   start: 'start', stop: 'stop', restart: 'restart',
   status: 'status', log: 'log', logs: 'log', update: 'update',
+  list: 'list', open: 'open',
 };
 
-function agentInstalled() {
-  const home = process.env.HOME ?? '';
-  const config = process.env.XDG_CONFIG_HOME || join(home, '.config');
-  return existsSync(join(home, 'Library', 'LaunchAgents', 'com.phase-console.plist'))
-    || existsSync(join(config, 'systemd', 'user', 'phase-console.service'));
+// Resolved from the package root rather than imported by a static path: this
+// file is reached through an npm symlink and a Homebrew exec script, and only
+// `root` above knows where the package actually is.
+const instances = await import(pathToFileURL(join(root, 'viewer', 'shared', 'instances.mjs')).href);
+
+/**
+ * A token is a PATH, not an instance name, when it looks like one.
+ *
+ * `phase-console start ~/code/repo` predates instances and still means "run
+ * that directory", while `phase-console start alpha` means the instance called
+ * alpha. Nothing distinguishes them but shape, so shape is what decides:
+ * anything with a separator, a leading dot or tilde, or an existing directory
+ * of that name is a path.
+ */
+function looksLikePath(token) {
+  return token.includes('/') || token.startsWith('.') || token.startsWith('~')
+    || existsSync(resolve(token));
+}
+
+/** Split a verb's arguments into "which console" and "everything else". */
+function parseTarget(rest) {
+  let selector;
+  let rootArg;
+  const keep = [];
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === '--instance') { selector = rest[++i]; continue; }
+    if (arg === '--root') { rootArg = rest[++i]; continue; }
+    if (!arg.startsWith('-') && selector === undefined && rootArg === undefined) {
+      if (looksLikePath(arg)) rootArg = arg; else selector = arg;
+      continue;
+    }
+    keep.push(arg);
+  }
+  return { selector, rootArg, rest: keep };
+}
+
+/**
+ * The instance a verb is about, with the two facts every verb then needs:
+ * whether it is the default (which decides its unit name and its paths) and
+ * where its unit file would be.
+ */
+function describe(found) {
+  const isDefault = found.default === true
+    || (found.kind === 'candidate' && instances.isDefaultRoot(found.root));
+  const unit = instances.unitName({ id: found.id, default: isDefault });
+  return { ...found, default: isDefault, generatedUnit: unit, unitFile: instances.unitPath(unit) };
+}
+
+function locate(selector, rootArg) {
+  return rootArg
+    ? instances.selectRoot(resolve(expandHome(rootArg)))
+    : instances.selectInstance(selector, process.cwd());
+}
+
+/** Resolve, or explain the miss and stop. A verb never guesses. */
+function target(selector, rootArg) {
+  const found = locate(selector, rootArg);
+  if (found.kind !== 'registered' && found.kind !== 'candidate') {
+    process.stderr.write(`phase-console: ${instances.selectionError(found)}\n`);
+    process.exit(1);
+  }
+  return describe(found);
+}
+
+function expandHome(input) {
+  return input.startsWith('~') ? join(process.env.HOME ?? '', input.slice(1)) : input;
+}
+
+/** Is this instance's OWN agent installed — never "is any console installed". */
+function agentInstalled(instance) {
+  return existsSync(instance.unitFile);
+}
+
+/**
+ * Ask a port whether a console is there, and which one.
+ *
+ * Short timeout on purpose: `list` asks this of every instance in turn, and a
+ * port held by something that is not a console (or by nothing at all) must
+ * cost a moment, not a hang.
+ */
+function probeConsole(port, timeoutMs = 2000) {
+  return new Promise((done) => {
+    const req = httpRequest(
+      { host: '127.0.0.1', port, path: '/api/state', timeout: timeoutMs },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          try { done(JSON.parse(body)); } catch { done(null); }
+        });
+      },
+    );
+    req.on('error', () => done(null));
+    req.on('timeout', () => { req.destroy(); done(null); });
+    req.end();
+  });
+}
+
+function toAgent(verb, instance, extra = []) {
+  // By id: agent.sh resolves selectors through the same module, and an id is
+  // the one selector that cannot be ambiguous.
+  const selector = instance.kind === 'registered' ? [instance.id] : ['--root', instance.root];
+  const run = spawnSync(
+    'bash',
+    [join(root, 'viewer', 'deploy', 'agent.sh'), verb, ...selector, ...extra],
+    { stdio: 'inherit' },
+  );
+  process.exit(run.status === null ? 1 : run.status);
+}
+
+/** NAME · ROOT · PORT · STATUS · UNIT, one line per registered console. */
+async function cmdList() {
+  const entries = instances.listInstances();
+  if (!entries.length) {
+    process.stdout.write('no consoles registered yet — cd to a project and run: phase-console start\n');
+    return 0;
+  }
+  const rows = await Promise.all(entries.map(async (entry) => {
+    const described = describe({ kind: 'registered', ...entry });
+    const port = entry.port ?? instances.preferredPort(entry.root, { isDefault: described.default });
+    const live = await probeConsole(port);
+    return {
+      name: `${entry.name ?? entry.id}${entry.default ? ' *' : ''}`,
+      root: entry.root,
+      port: String(port),
+      // "running" is only claimed when a console answered AND said it is this
+      // root. Something else on the port is a collision, not this instance.
+      status: live ? (live.instance?.id === entry.id || live.root?.path === entry.root ? 'running' : 'port taken') : 'stopped',
+      unit: agentInstalled(described) ? described.generatedUnit : '—',
+    };
+  }));
+  const columns = ['name', 'root', 'port', 'status', 'unit'];
+  const width = Object.fromEntries(columns.map((key) => [
+    key, Math.max(key.length, ...rows.map((row) => row[key].length)),
+  ]));
+  const line = (cells) => columns.map((key) => cells[key].padEnd(width[key])).join('  ').trimEnd();
+  process.stdout.write(`${line(Object.fromEntries(columns.map((k) => [k, k.toUpperCase()])))}\n`);
+  for (const row of rows) process.stdout.write(`${line(row)}\n`);
+  if (entries.some((entry) => entry.default)) process.stdout.write('\n* the default instance — it keeps the pre-1.3.0 port, paths and unit name.\n');
+  return 0;
+}
+
+/** Open an instance in a browser, or say why there is nothing to open. */
+async function cmdOpen(instance) {
+  const port = instance.port ?? instances.preferredPort(instance.root, { isDefault: instance.default });
+  const live = await probeConsole(port);
+  if (!live) {
+    process.stderr.write(
+      `phase-console: ${instance.name} is not running (nothing answered on ${port}).\n`
+      + `Start it with: phase-console start ${instance.kind === 'registered' ? instance.name : ''}\n`,
+    );
+    return 1;
+  }
+  const url = instances.instanceUrl(port);
+  // The same knob the server honours, for the same reason: a script (or a test
+  // suite) asking which URL this instance is on must not fling a browser
+  // window at whoever happens to be sitting in front of the machine.
+  if (process.env.PHASE_CONSOLE_NO_OPEN === '1') { process.stdout.write(`${url}\n`); return 0; }
+  const candidates = process.platform === 'darwin'
+    ? ['open']
+    : ['wslview', 'xdg-open', 'gio', 'explorer.exe'];
+  for (const opener of candidates) {
+    const run = spawnSync(opener, [url], { stdio: 'ignore' });
+    // explorer.exe answers non-zero even when it worked; only outright absence
+    // (ENOENT) means "try the next one".
+    if (!run.error) { process.stdout.write(`${url}\n`); return 0; }
+  }
+  process.stdout.write(`${url}\n(no way to open a browser from here — open it yourself)\n`);
+  return 0;
+}
+
+/**
+ * Stop a console nobody is supervising.
+ *
+ * A foreground `phase-console start` records its pid, and that is the only
+ * handle there is. SIGTERM rather than SIGKILL because the console's own drain
+ * takes up to 120s for a live run, and the port is then re-probed rather than
+ * trusted: a pid that has been recycled would otherwise report a stop that
+ * never happened.
+ */
+async function stopByPid(instance) {
+  const port = instance.port ?? instances.preferredPort(instance.root, { isDefault: instance.default });
+  const live = await probeConsole(port);
+  if (!live) {
+    process.stdout.write(`${instance.name} is not running.\n`);
+    return 0;
+  }
+  const pid = Number(instance.pid);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    process.stderr.write(
+      `phase-console: ${instance.name} is answering on ${port} but has no supervisor and no recorded pid.\n`
+      + 'It was started by something this registry did not see — stop it where it is running.\n',
+    );
+    return 1;
+  }
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch (error) {
+    process.stderr.write(`phase-console: could not signal pid ${pid} (${error.code ?? error.message}).\n`);
+    return 1;
+  }
+  for (let waited = 0; waited < 15_000; waited += 500) {
+    // eslint-disable-next-line no-await-in-loop -- a poll is a sequence by definition
+    if (!await probeConsole(port, 500)) {
+      process.stdout.write(`stopped ${instance.name} (pid ${pid}).\n`);
+      return 0;
+    }
+  }
+  process.stderr.write(`phase-console: ${instance.name} did not stop within 15s — it may be draining a run.\n`);
+  return 1;
 }
 
 const verb = FLAG_VERBS[args[0]] ?? WORD_VERBS[args[0]];
-if (verb === 'start' && !agentInstalled()) {
-  // Nothing supervises the console here — `start` means run it, in the
-  // foreground, with whatever else was asked for (root, flags).
-  args.splice(0, 1);
-} else if (verb) {
+
+if (verb) {
+  const parsed = parseTarget(args.slice(1));
+
+  if (verb === 'list') process.exit(await cmdList());
+
+  // `status` with nothing named is the one verb whose honest answer is the
+  // whole board, so it goes over unresolved and agent.sh reports every
+  // instance. Resolving first would refuse to answer on exactly the machine
+  // the question is most worth asking on.
+  if (verb === 'status' && !parsed.selector && !parsed.rootArg) {
+    const run = spawnSync('bash', [join(root, 'viewer', 'deploy', 'agent.sh'), 'status'], { stdio: 'inherit' });
+    process.exit(run.status === null ? 1 : run.status);
+  }
+
+  if (verb === 'install') {
+    // install keeps its own argv (--root, --port, --notify, --default-skills
+    // and any extra console flags) and hands it over untouched.
+    const run = spawnSync('bash', [join(root, 'viewer', 'deploy', 'agent.sh'), 'install', ...args.slice(1)], { stdio: 'inherit' });
+    process.exit(run.status === null ? 1 : run.status);
+  }
+
+  // `start` from a directory nothing claims keeps its pre-instance meaning:
+  // run the console with no root and let the browser pick one. Refusing there
+  // would take away the way a first-time user opens this at all.
+  if (verb === 'start' && !parsed.selector && !parsed.rootArg
+      && locate().kind === 'none') {
+    args.splice(0, args.length, ...parsed.rest);
+  } else {
+    const instance = target(parsed.selector, parsed.rootArg);
+    await runVerb(verb, instance, parsed.rest);
+  }
+}
+
+/**
+ * Everything a verb does once it knows which console it is about.
+ *
+ * Split out so the one case that has NO instance — `start` with nothing to
+ * start, which falls through to the picker — does not have to be threaded
+ * through as a null.
+ */
+async function runVerb(verb, instance, rest) {
+  if (verb === 'open') process.exit(await cmdOpen(instance));
+
   if (verb === 'update' && !existsSync(join(root, '.git'))) {
     // A packaged install has no sources and no lockfile — there is nothing for
     // agent.sh to rebuild. The package manager owns updates.
@@ -181,11 +441,49 @@ if (verb === 'start' && !agentInstalled()) {
     );
     process.exit(1);
   }
-  const rest = verb === 'install' || verb === 'log' ? args.slice(1) : [];
-  const run = spawnSync('bash', [join(root, 'viewer', 'deploy', 'agent.sh'), verb, ...rest], {
-    stdio: 'inherit',
+
+  if (agentInstalled(instance)) toAgent(verb, instance, verb === 'log' ? rest : []);
+
+  // No supervisor for THIS instance. What that means depends on the verb.
+  if (verb === 'stop') process.exit(await stopByPid(instance));
+  if (verb === 'restart') {
+    const code = await stopByPid(instance);
+    if (code === 0) {
+      process.stdout.write(
+        `${instance.name} had no agent installed, so there is nothing to bring it back:\n`
+        + `  phase-console start ${instance.kind === 'registered' ? instance.name : ''}\n`,
+      );
+    }
+    process.exit(code);
+  }
+  if (verb === 'status' || verb === 'log' || verb === 'uninstall' || verb === 'update') {
+    // agent.sh answers these honestly for an instance with no unit — "not
+    // installed", or this instance's own log, which exists either way.
+    toAgent(verb, instance, verb === 'log' ? rest : []);
+  }
+
+  // `start`, unsupervised: run it here, in the foreground.
+  //
+  // Registered before the server binds, in two steps and in this order. First
+  // the ELECTION — `default: 'auto'` settles inside the registry lock whether
+  // this is the machine's default instance. Only then is the port derived,
+  // because the answer differs (4123 for the default, a derived slot for
+  // everyone else) and deriving it from a guess is how a second console ends up
+  // claiming the first one's port. Reserving it here also means a sibling
+  // starting a moment later sees it as spoken for.
+  const registered = instances.registerInstance(instance.root, {
+    name: instance.name,
+    default: 'auto',
   });
-  process.exit(run.status === null ? 1 : run.status);
+  const settled = registered?.default === true;
+  instances.registerInstance(instance.root, {
+    port: instances.preferredPort(instance.root, { isDefault: settled }),
+  });
+  process.stdout.write(`starting ${instance.name} — ${instance.root}\n`);
+  // Deliberately NOT --port: naming a port turns off probing, so a busy
+  // neighbour would become a refusal instead of the next free slot. The server
+  // derives the same port from the root and prints the one it really bound.
+  args.splice(0, args.length, '--root', instance.root, ...rest);
 }
 
 // ---- bare first argument is the directory to open (mirror ../start) --------

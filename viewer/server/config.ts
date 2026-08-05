@@ -14,8 +14,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   DEFAULT_PORT, PORT_RANGE_SIZE, PORT_RANGE_START,
-  defaultInstance, getInstance, instanceId, instancePrefsPath, isDefaultRoot,
+  configDir, defaultInstance, getInstance, instanceId, instancePrefsPath,
+  instanceStateDir as sharedStateDir, isDefaultRoot,
   listInstances, preferredPort, readProjectFile, registerInstance, reservedPorts,
+  stateHome, unitName,
 } from '../shared/instances.mjs';
 import { sanitiseCategories, type CategoryId } from './push/catalogue.ts';
 
@@ -106,10 +108,7 @@ export type Flags = {
  * `~/.local/state`, which is exactly the "survives a reboot, means nothing on
  * another machine" category these files belong to.
  */
-export const STATE_DIR = join(
-  process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'),
-  'phase-console',
-);
+export const STATE_DIR = stateHome();
 
 /* ------------------------------------------------------------------ *
  * Which console is this?
@@ -245,7 +244,7 @@ export const INSTANCE: Instance = resolveInstance();
  * push subscriptions, because the files those live in never moved.
  */
 export function instanceStateDir(instance: Instance = INSTANCE): string {
-  return instance.default ? STATE_DIR : join(STATE_DIR, 'instances', instance.id);
+  return sharedStateDir(instance.id, instance.default);
 }
 
 /** This instance's state directory, resolved once for the module-level consts. */
@@ -263,7 +262,7 @@ export function defaultLogFile(): string {
  * entry records the bare label so the lifecycle verbs can find the agent that
  * is already loaded rather than installing a second one beside it.
  */
-export const LEGACY_UNIT = process.platform === 'darwin' ? 'com.phase-console' : 'phase-console.service';
+export const LEGACY_UNIT = unitName({ id: 'default', default: true });
 
 /**
  * Has this machine been running a console since before instances existed?
@@ -657,7 +656,7 @@ export type Prefs = {
   notify: Record<CategoryId, boolean>;
 };
 
-const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'phase-console');
+const CONFIG_DIR = configDir();
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
 const DEFAULT_PREFS: Prefs = {

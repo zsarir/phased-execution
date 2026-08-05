@@ -11,6 +11,11 @@
 #   ./run --install-agent --root ~/code/your-repo
 #   ./run --agent-status | --agent-restart | --agent-log [-f] | --uninstall-agent
 #
+# One install runs one console per project. The lifecycle words take an
+# instance (a name, an id, or nothing for the project you are standing in):
+#
+#   ./run start | stop | restart | status | logs | list | open [<instance>]
+#
 # The server is plain Node run as TypeScript directly, which needs >= 22.18
 # (or >= 23.6 — 23.0-23.5 still kept type stripping behind a flag). The
 # client is BUILT output: on a fresh clone run `cd viewer && npm ci && npm run
@@ -22,16 +27,27 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Agent management is a system operation, not a server one — hand it straight
 # to the script that owns the supervisor (launchd on macOS, systemd on Linux)
-# and never start a second console here.
+# and never start a second console here. Every verb now takes an optional
+# instance (a name, an id, `--instance <sel>` or `--root <dir>`), so the rest of
+# the line goes over untouched instead of being dropped.
 case "${1:-}" in
   --install-agent)   shift; exec bash "$here/deploy/agent.sh" install "$@" ;;
-  --uninstall-agent) exec bash "$here/deploy/agent.sh" uninstall ;;
-  --agent-status)    exec bash "$here/deploy/agent.sh" status ;;
-  --agent-start)     exec bash "$here/deploy/agent.sh" start ;;
-  --agent-stop)      exec bash "$here/deploy/agent.sh" stop ;;
-  --agent-restart)   exec bash "$here/deploy/agent.sh" restart ;;
-  --agent-update)    exec bash "$here/deploy/agent.sh" update ;;
+  --uninstall-agent) shift; exec bash "$here/deploy/agent.sh" uninstall "$@" ;;
+  --agent-status)    shift; exec bash "$here/deploy/agent.sh" status "$@" ;;
+  --agent-start)     shift; exec bash "$here/deploy/agent.sh" start "$@" ;;
+  --agent-stop)      shift; exec bash "$here/deploy/agent.sh" stop "$@" ;;
+  --agent-restart)   shift; exec bash "$here/deploy/agent.sh" restart "$@" ;;
+  --agent-update)    shift; exec bash "$here/deploy/agent.sh" update "$@" ;;
   --agent-log)       shift; exec bash "$here/deploy/agent.sh" log "$@" ;;
+esac
+
+# The bare lifecycle words belong to the one CLI that owns them — `start` falls
+# back to a foreground run, `list`/`open` are not supervisor operations at all,
+# and re-deciding any of that here would be a second implementation of the same
+# grammar. A clone gets the same verbs as an npm install by delegating.
+case "${1:-}" in
+  start|stop|restart|status|log|logs|update|list|open)
+    exec node "$here/../bin/phase-console.mjs" "$@" ;;
 esac
 
 if ! command -v node >/dev/null 2>&1; then

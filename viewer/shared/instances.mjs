@@ -55,6 +55,16 @@ const REGISTRY_VERSION = 1;
 /** A lock older than this belonged to a process that is not coming back. */
 const LOCK_STALE_MS = 10_000;
 
+/**
+ * How long to wait for a live writer before giving up and writing anyway.
+ *
+ * Long enough that two consoles booting in the same second take turns; short
+ * enough that a pathological holder cannot stop a console from starting, which
+ * is the rule this whole module is built on.
+ */
+const LOCK_WAIT_MS = 2_000;
+const LOCK_POLL_MS = 25;
+
 /* ------------------------------------------------------------------ *
  * Identity
  * ------------------------------------------------------------------ */
@@ -115,9 +125,39 @@ export function instanceUrl(port, host = '127.0.0.1') {
  * So the rule is: the config *location* belongs to the process, and only an
  * `env` that explicitly names `XDG_CONFIG_HOME` moves it.
  */
+export function configHome(env = process.env) {
+  return env.XDG_CONFIG_HOME ?? process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config');
+}
+
 export function configDir(env = process.env) {
-  const home = env.XDG_CONFIG_HOME ?? process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config');
+  return join(configHome(env), 'phase-console');
+}
+
+/**
+ * Machine-local state, by the same rule as `configHome`.
+ *
+ * Lives here rather than in `config.ts` because three consumers need it and
+ * only one of them is TypeScript: the server, the tests, and `deploy/agent.sh`,
+ * which has to write a unit file pointing at this instance's logs. `config.ts`
+ * imports `STATE_DIR` from here for exactly the reason `state.ts` imports
+ * `instanceId` — a rule with two copies is a rule that will drift.
+ */
+export function stateHome(env = process.env) {
+  const home = env.XDG_STATE_HOME ?? process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state');
   return join(home, 'phase-console');
+}
+
+/**
+ * Where an instance keeps its log, inbox, push keys and approvals queue.
+ *
+ * The default instance answers with the flat legacy directory — no moves, no
+ * renames. That single branch is the whole migration promise, and it is why
+ * this takes `isDefault` rather than working it out: the caller already knows,
+ * and a second reading of the registry here could disagree with the first.
+ */
+export function instanceStateDir(id, isDefault, env = process.env) {
+  const base = stateHome(env);
+  return isDefault ? base : join(base, 'instances', safeId(id));
 }
 
 export function registryPath(env = process.env) {
@@ -136,6 +176,16 @@ export function instancePrefsPath(id, env = process.env) {
  * came off a CLI argument or an HTTP body, and a value that decides a path is
  * checked where it is used rather than where it was born.
  */
+/**
+ * Anything that could add a line to output someone parses line by line.
+ *
+ * Replaced with a space rather than deleted, so `"a\nb"` reads as `a b` and
+ * never as `ab` — a silent join is its own small lie about what the file said.
+ */
+function stripControl(value) {
+  return String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ');
+}
+
 function safeId(id) {
   return String(id ?? '')
     .replace(/[^\w.-]/g, '-')
@@ -147,6 +197,23 @@ function safeId(id) {
 /* ------------------------------------------------------------------ *
  * Reading and writing the registry
  * ------------------------------------------------------------------ */
+
+/**
+ * Block this thread for `ms`.
+ *
+ * `withRegistry` is synchronous and has to stay that way — it is called from
+ * module-load paths and from a CLI whose whole contract is one line of output —
+ * so waiting for a lock cannot be a promise. `Atomics.wait` on a buffer nobody
+ * else can see is the one sleep that does not spin a CPU.
+ */
+function sleepSync(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    // No SharedArrayBuffer (an exotic runtime, a locked-down embedder): fall
+    // back to not waiting at all, which is exactly the old behaviour.
+  }
+}
 
 /** An empty registry — the shape every reader can rely on getting. */
 function emptyRegistry() {
@@ -206,24 +273,34 @@ export function writeRegistry(registry, env = process.env) {
  * console killed mid-register wedging every future one — is a worse failure
  * than two writers racing for one write. Returning `null` from `mutate` means
  * "nothing to write", which keeps read-modify-no-op cheap.
+ *
+ * A live holder is WAITED for, briefly, and that is the part worth explaining.
+ * The write is atomic but read-modify-write is not: two consoles booting
+ * together each read the registry, each add themselves, and the second rename
+ * throws the first one's entry away. With one console per machine that never
+ * happened; with one per project it is what `phase-console start` in two
+ * terminals does, and what it costs is a lost `pid` — which is exactly the
+ * field `stop` needs to stop a console nothing is supervising. So: wait up to
+ * `LOCK_WAIT_MS`, then write anyway. Never blocking a boot still wins over
+ * never losing a write; it just should not win in the first 25ms.
  */
 export function withRegistry(mutate, env = process.env) {
   const lock = `${registryPath(env)}.lock`;
   let held = false;
   try {
     mkdirSync(dirname(lock), { recursive: true });
-    for (let attempt = 0; attempt < 2 && !held; attempt++) {
+    for (let waited = 0; !held; waited += LOCK_POLL_MS) {
       try {
         closeSync(openSync(lock, 'wx'));
         held = true;
       } catch {
-        // Someone holds it. If their file is stale they are gone; clear it and
-        // try once more. If they are alive, proceed unlocked rather than block
-        // a boot — the write itself is still atomic.
+        // Someone holds it. If their file is stale they are gone — clear it and
+        // try again immediately. If they are alive, give them a moment.
         let age = 0;
         try { age = Date.now() - statSync(lock).mtimeMs; } catch { age = LOCK_STALE_MS + 1; }
-        if (age > LOCK_STALE_MS) { try { rmSync(lock, { force: true }); } catch { /* raced */ } }
-        else break;
+        if (age > LOCK_STALE_MS) { try { rmSync(lock, { force: true }); } catch { /* raced */ } continue; }
+        if (waited >= LOCK_WAIT_MS) break;
+        sleepSync(LOCK_POLL_MS);
       }
     }
     const registry = readRegistry(env);
@@ -282,15 +359,28 @@ export function defaultInstance(env = process.env) {
  * write, so a machine can never have two defaults — which would make "the
  * default instance keeps the legacy paths" ambiguous, and the legacy paths are
  * exactly the ones with the operator's real push subscriptions in them.
+ *
+ * `default: 'auto'` asks for the ELECTION rather than a value: become the
+ * default if and only if nobody else already is, decided here, inside the lock.
+ * That distinction is load-bearing. A caller that reads `isDefaultRoot()` and
+ * then registers has two processes reading "no default yet" in the same
+ * instant and both writing `true`; the loser silently inherits the legacy port
+ * and the legacy state directory — someone else's log, someone else's push
+ * subscriptions. Two consoles starting at once is not an edge case, it is what
+ * `phase-console start` in two terminals looks like.
  */
 export function registerInstance(root, patch = {}, env = process.env) {
   const path = resolve(String(root ?? '.'));
   const id = instanceId(path);
   withRegistry((registry) => {
     const previous = registry.instances[id] ?? {};
+    const elected = patch.default === 'auto'
+      ? Object.entries(registry.instances).every(([other, value]) => other === id || value.default !== true)
+      : patch.default;
     const entry = {
       ...previous,
       ...stripUndefined(patch),
+      default: elected === undefined ? previous.default : elected,
       root: path,
       name: patch.name ?? previous.name ?? (basename(path) || id),
     };
@@ -366,6 +456,100 @@ export function looksLikeProject(dir) {
     || existsSync(join(dir, PROJECT_FILE));
 }
 
+/**
+ * Which console does this word mean — and, with no word, which one am I in?
+ *
+ * The chain, in order, and the order is the argument: an exact id is
+ * unambiguous, an exact name is what a person actually types, a root basename
+ * is what they type when they forgot they renamed the instance. Only then does
+ * position speak: the registry root that contains `cwd` (walking up, so the
+ * longest prefix wins), and finally — on a machine running exactly one console
+ * — that one, because "the console" is unambiguous when there is only one.
+ *
+ * A miss returns `ambiguous` or `none` **with the candidates attached** rather
+ * than throwing. Every caller is a lifecycle verb about to do something to a
+ * machine, and "which one did you mean, here are the four" is the only useful
+ * form of that refusal.
+ *
+ * `candidate` — a project directory that has never been started — deliberately
+ * outranks the sole-instance fallback. Standing in an unregistered project and
+ * typing `start` must not start the console for a different project; the whole
+ * point of `cd project && phase-console start` is that it means *this* one.
+ */
+export function selectInstance(selector, cwd = process.cwd(), env = process.env) {
+  const entries = listInstances(env);
+  const wanted = String(selector ?? '').trim();
+
+  if (wanted) {
+    const byId = entries.find((entry) => entry.id === wanted);
+    if (byId) return { kind: 'registered', ...byId };
+
+    for (const matches of [
+      entries.filter((entry) => entry.name === wanted),
+      entries.filter((entry) => basename(String(entry.root ?? '')) === wanted),
+    ]) {
+      if (matches.length === 1) return { kind: 'registered', ...matches[0] };
+      if (matches.length > 1) return { kind: 'ambiguous', selector: wanted, candidates: matches };
+    }
+    return { kind: 'none', selector: wanted, candidates: entries };
+  }
+
+  const here = resolveInstance(cwd, env);
+  if (here.kind === 'registered' || here.kind === 'candidate') return here;
+  if (entries.length === 1) return { kind: 'registered', ...entries[0] };
+  return { kind: 'none', selector: null, candidates: entries };
+}
+
+/**
+ * The instance for THIS EXACT root — no walking up.
+ *
+ * `selectInstance` with no selector walks toward the filesystem root looking
+ * for whoever claims where you are standing, which is right for `cd sub/dir &&
+ * phase-console status` and wrong for `install --root <dir>`: a project nested
+ * inside an already-registered one would install the parent's unit under the
+ * child's name. Naming a path is an exact statement, so it gets an exact answer.
+ */
+export function selectRoot(root, env = process.env) {
+  const path = resolve(String(root ?? '.'));
+  const id = instanceId(path);
+  const entry = getInstance(id, env);
+  if (entry) return { kind: 'registered', ...entry };
+  return { kind: 'candidate', id, root: path, name: readProjectFile(path, env).name ?? (basename(path) || id) };
+}
+
+/* ------------------------------------------------------------------ *
+ * Units — the names the supervisor knows an instance by
+ * ------------------------------------------------------------------ */
+
+/**
+ * The launchd label / systemd unit generated for an instance.
+ *
+ * The default instance keeps the bare pre-1.3.0 names, and that is not
+ * cosmetic: an operator upgrading has a loaded agent under `com.phase-console`
+ * right now, with a plist launchd is watching. Generating a new name for it
+ * would leave the old job loaded and the new one beside it, both bound for the
+ * same port — so the default keeps its name and everyone else is suffixed.
+ *
+ * Deliberately generated rather than a systemd `@` template: `install` bakes
+ * the node path, PATH, root, port, notify command and default skills into the
+ * unit text per install, and `%i` parameterises exactly one token — the rest
+ * would need an EnvironmentFile layer. launchd has no templates at all, so
+ * generated units are also the only shape that keeps both platforms symmetric.
+ */
+export function unitName(instance, platform = process.platform) {
+  const darwin = platform === 'darwin';
+  if (instance?.default) return darwin ? 'com.phase-console' : 'phase-console.service';
+  const id = safeId(instance?.id);
+  return darwin ? `com.phase-console.${id}` : `phase-console-${id}.service`;
+}
+
+/** Where the supervisor reads that unit from. */
+export function unitPath(name, platform = process.platform, env = process.env) {
+  return platform === 'darwin'
+    ? join(homedir(), 'Library', 'LaunchAgents', `${name}.plist`)
+    : join(configHome(env), 'systemd', 'user', name);
+}
+
 /* ------------------------------------------------------------------ *
  * The project file
  * ------------------------------------------------------------------ */
@@ -391,7 +575,14 @@ export function readProjectFile(root, env = process.env) {
     if (!parsed || typeof parsed !== 'object') return {};
     /** @type {{ name?: string, port?: number }} */
     const out = {};
-    if (typeof parsed.name === 'string' && parsed.name.trim()) out.name = parsed.name.trim().slice(0, 60);
+    // Control characters are stripped before anything else looks at the name.
+    // This file is COMMITTED and arrives with a clone, and the name ends up in
+    // a launchd label, a systemd unit and — through the `shell` CLI op — a
+    // `key=value` line that `deploy/agent.sh` reads a variable out of. A name
+    // carrying a newline could add a line of its own there, so cloning a
+    // repository would be a decision about what runs on your machine.
+    const named = typeof parsed.name === 'string' ? stripControl(parsed.name).trim() : '';
+    if (named) out.name = named.slice(0, 60);
     const port = Number(parsed.port);
     if (Number.isInteger(port) && port > 0 && port < 65536) out.port = port;
     return out;
@@ -470,6 +661,28 @@ export function reservedPorts(exceptRoot, env = process.env) {
  * ------------------------------------------------------------------ */
 
 /**
+ * What to say when a selector matched nothing, or matched too much.
+ *
+ * Always lists what there IS. A lifecycle verb that refuses without naming the
+ * alternatives sends the operator to `list` to ask the same question again —
+ * and the answer was already in this process's hands.
+ */
+export function selectionError(found) {
+  const names = (found.candidates ?? []).map((entry) => entry.name ?? entry.id);
+  if (found.kind === 'ambiguous') {
+    return `"${found.selector}" matches ${names.length} instances (${names.join(', ')}) — name one by id: ${(found.candidates ?? []).map((e) => e.id).join(', ')}`;
+  }
+  if (found.selector) {
+    return names.length
+      ? `no instance called "${found.selector}" — this machine has: ${names.join(', ')}`
+      : `no instance called "${found.selector}", and none are registered yet — run: phase-console start`;
+  }
+  return names.length
+    ? `not inside a registered project, and this machine has ${names.length} instances (${names.join(', ')}) — name one`
+    : 'no console is registered on this machine yet — cd to a project and run: phase-console start';
+}
+
+/**
  * One argv, one answer on stdout, exit 0 or 1. No colour, no prose.
  *
  * Kept deliberately dumb: every consumer is a shell script capturing stdout, so
@@ -530,6 +743,54 @@ export function runCli(argv, env = process.env) {
     case 'resolve':
       return { out: JSON.stringify(resolveInstance(positional[0] ?? process.cwd(), env)), code: 0 };
 
+    case 'select': {
+      const found = flag('root')
+        ? selectRoot(flag('root'), env)
+        : selectInstance(positional[0], flag('cwd') ?? process.cwd(), env);
+      if (found.kind === 'registered' || found.kind === 'candidate') {
+        return { out: JSON.stringify(found), code: 0 };
+      }
+      return { err: selectionError(found), code: 1 };
+    }
+
+    // The same selection, as `key=value` lines a shell reads with `while read`.
+    // bash gets no JSON parser here — `deploy/agent.sh` may not have jq or
+    // python — and the alternative, hand-cut JSON in sed, is how a path with a
+    // brace in it ends up as a unit filename. Values are control-stripped
+    // because a shell reading this line by line is exactly what a newline in a
+    // name would exploit.
+    case 'shell': {
+      const found = flag('root')
+        ? selectRoot(flag('root'), env)
+        : selectInstance(positional[0], flag('cwd') ?? process.cwd(), env);
+      if (found.kind !== 'registered' && found.kind !== 'candidate') {
+        return { err: selectionError(found), code: 1 };
+      }
+      const isDefault = found.default === true
+        || (found.kind === 'candidate' && isDefaultRoot(found.root, env));
+      const instance = { id: found.id, default: isDefault };
+      const unit = unitName(instance, flag('platform') ?? process.platform);
+      const port = found.port ?? preferredPort(found.root, { isDefault }, env);
+      const pairs = [
+        ['kind', found.kind],
+        ['id', found.id],
+        ['name', found.name ?? ''],
+        ['root', found.root ?? ''],
+        ['port', String(port)],
+        ['url', instanceUrl(port)],
+        ['default', isDefault ? '1' : ''],
+        // What the registry says is loaded RIGHT NOW (empty when nothing is),
+        // kept separate from the name this instance's unit would be generated
+        // under. `uninstall` clears the first and never touches the second.
+        ['unit', found.unit ?? ''],
+        ['generated_unit', unit],
+        ['unit_file', unitPath(unit, flag('platform') ?? process.platform, env)],
+        ['state_dir', instanceStateDir(found.id, isDefault, env)],
+        ['pid', String(found.pid ?? '')],
+      ];
+      return { out: pairs.map(([key, value]) => `${key}=${stripControl(value)}`).join('\n'), code: 0 };
+    }
+
     case 'port':
       return { out: String(preferredPort(positional[0] ?? '.', {}, env)), code: 0 };
 
@@ -538,7 +799,8 @@ export function runCli(argv, env = process.env) {
 
     default:
       return {
-        err: 'usage: instances.mjs id|register|update|remove|list|resolve|port|url [<path>] [--name n] [--port p] [--unit u] [--pid n] [--started-at s] [--default] [--json]',
+        err: 'usage: instances.mjs id|register|update|remove|list|resolve|select|shell|port|url [<path-or-selector>]'
+          + ' [--name n] [--port p] [--unit u] [--pid n] [--started-at s] [--cwd d] [--platform p] [--default] [--json]',
         code: 2,
       };
   }

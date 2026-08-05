@@ -2,14 +2,18 @@
 # Phase Console as a login agent — launchd on macOS, a systemd user service on
 # Linux (including WSL2 with systemd enabled).
 #
-#   agent.sh install [--root DIR] [--port N] [--notify CMD] [--default-skills CSV]
-#                    [extra console flags…]
-#   agent.sh update              # npm ci + npm run build, then restart
-#   agent.sh uninstall
-#   agent.sh status
-#   agent.sh start | stop        # start / stop the installed agent (stop ≠ uninstall)
-#   agent.sh restart
-#   agent.sh log [-f]
+#   agent.sh install --root DIR | --instance NAME  [--port N] [--notify CMD]
+#                    [--default-skills CSV] [extra console flags…]
+#   agent.sh update [<instance>]   # npm ci + npm run build, then restart
+#   agent.sh uninstall [<instance>]
+#   agent.sh status [<instance>]   # no instance: every registered console
+#   agent.sh start | stop [<instance>]   # start / stop it (stop ≠ uninstall)
+#   agent.sh restart [<instance>]
+#   agent.sh log [<instance>] [-f]
+#
+# <instance> is an id, a name, or a project's directory name — or `--instance
+# <sel>` / `--root <dir>`. With none, the console for the directory you are
+# standing in, walking up until one claims it.
 #
 # Why an agent at all: the console supervises agent sessions that run for
 # hours. A foreground process dies with its terminal, with a logout, and with
@@ -18,7 +22,10 @@
 #
 # The plist/unit is generated rather than templated, so the node path, the
 # working directory and the flags are whatever they actually are on this
-# machine.
+# machine — and, since one install now runs one console per project, so is the
+# unit's own NAME: `com.phase-console.<id>` / `phase-console-<id>.service`. The
+# default instance keeps the bare pre-1.3.0 names, so an operator upgrading
+# never has their loaded agent renamed out from under them.
 #
 # The client is built output (`client/dist`, gitignored). `install` and
 # `update` build it deliberately, and the supervisor's boot path never does: a
@@ -27,12 +34,13 @@
 # `agent.sh update`.
 set -euo pipefail
 
-LABEL="com.phase-console"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-UNIT="phase-console.service"
-UNIT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT"
 VIEWER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/phase-console"
+INSTANCES="$VIEWER_DIR/shared/instances.mjs"
+
+# Filled in by resolve_target(); every verb calls it before it touches a
+# supervisor. There is no longer a single console to have constants for.
+LABEL=""; PLIST=""; UNIT=""; UNIT_FILE=""; STATE_DIR=""
+I_ID=""; I_NAME=""; I_ROOT=""; I_PORT=""; I_DEFAULT=""; I_UNIT=""
 
 OS="$(uname -s)"
 IS_WSL=0
@@ -44,6 +52,83 @@ case "$OS" in
   Darwin|Linux) : ;;
   *) die "no supervisor here ($OS) — on Windows, run the console inside WSL2 (see docs/install.md)" ;;
 esac
+
+# ---- which instance is this verb about? -------------------------------------
+# The identity, the port derivation and the unit naming all live in
+# shared/instances.mjs and are asked for, never reimplemented here: bash cannot
+# reproduce the sha256 the rest of the system keys on (`sha256sum` reads echo's
+# trailing newline and answers a different digest), and a second copy of the
+# naming rule is a second thing to get out of step with the server.
+#
+# `shell` answers in `key=value` lines rather than JSON because this script may
+# be running somewhere with neither jq nor python, and JSON cut apart with sed
+# is how a path containing a brace becomes a unit filename.
+
+TARGET_SELECTOR=""
+TARGET_ROOT=""
+TARGET_GIVEN=0
+REST=()
+
+# Pull an instance out of a verb's arguments; everything else lands in REST.
+parse_target() {
+  TARGET_SELECTOR=""; TARGET_ROOT=""; TARGET_GIVEN=0; REST=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --instance) TARGET_SELECTOR="${2:-}"; TARGET_GIVEN=1; shift 2 ;;
+      --root)     TARGET_ROOT="${2:-}";     TARGET_GIVEN=1; shift 2 ;;
+      -*)         REST+=("$1"); shift ;;
+      *)
+        # The first bare word is the instance; anything after it belongs to the
+        # verb (there is none today, but `log alpha -f` must not lose the -f).
+        if [ "$TARGET_GIVEN" -eq 0 ]; then TARGET_SELECTOR="$1"; TARGET_GIVEN=1; else REST+=("$1"); fi
+        shift ;;
+    esac
+  done
+}
+
+resolve_target() {
+  local out args=()
+  if [ -n "$TARGET_ROOT" ]; then args=(--root "$TARGET_ROOT")
+  elif [ -n "$TARGET_SELECTOR" ]; then args=("$TARGET_SELECTOR")
+  else args=(--cwd "$PWD")
+  fi
+
+  command -v node >/dev/null 2>&1 || die "node is not on PATH"
+  out="$(node "$INSTANCES" shell "${args[@]}" 2>&1)" || die "$out"
+
+  I_ID=""; I_NAME=""; I_ROOT=""; I_PORT=""; I_DEFAULT=""; I_UNIT=""
+  local generated="" unit_file="" key value
+  # Not a pipeline: a `while read` on the right of a | runs in a subshell and
+  # every assignment below would be discarded the moment the loop ended.
+  while IFS='=' read -r key value; do
+    # Keys this script has no use for (kind, pid — the pid fallback is
+    # phase-console's, not the supervisor's) fall through and are ignored.
+    case "$key" in
+      id)             I_ID="$value" ;;
+      name)           I_NAME="$value" ;;
+      root)           I_ROOT="$value" ;;
+      port)           I_PORT="$value" ;;
+      default)        I_DEFAULT="$value" ;;
+      unit)           I_UNIT="$value" ;;
+      generated_unit) generated="$value" ;;
+      unit_file)      unit_file="$value" ;;
+      state_dir)      STATE_DIR="$value" ;;
+    esac
+  done <<TARGET_END
+$out
+TARGET_END
+
+  [ -n "$I_ID" ] || die "could not work out which console this is about"
+
+  if [ "$OS" = "Darwin" ]; then
+    LABEL="$generated"; PLIST="$unit_file"; UNIT=""; UNIT_FILE=""
+  else
+    UNIT="$generated"; UNIT_FILE="$unit_file"; LABEL=""; PLIST=""
+  fi
+}
+
+# The file this instance's unit lives in, whichever platform we are on.
+target_unit_file() { if [ "$OS" = "Darwin" ]; then echo "$PLIST"; else echo "$UNIT_FILE"; fi; }
 
 # The user manager is the whole mechanism on Linux; without it there is nothing
 # to install into. WSL2 has had systemd since 2022, but only when asked for.
@@ -83,7 +168,11 @@ xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>
 sd_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\$/$$/g' -e 's/%/%%/g'; }
 
 cmd_install() {
-  local node_bin root="" port="4123" notify="" notify_given=0
+  # No default port any more: 4123 belongs to the default instance, and handing
+  # it to every install is precisely how two projects end up fighting over one
+  # socket. Empty means "ask the instance", which answers 4123 for the default
+  # and a derived slot for everyone else.
+  local node_bin root="" port="" selector="" notify="" notify_given=0
   local default_skills="" skills_given=0 extra=()
   node_bin="$(command -v node)" || die "node is not on PATH"
   # The found node gets baked into the plist/unit — an old one would crash-loop
@@ -97,6 +186,7 @@ process.exit(maj >= 24 || (maj === 23 && min >= 6) || (maj === 22 && min >= 18) 
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --root) root="$2"; shift 2 ;;
+      --instance) selector="$2"; shift 2 ;;
       --port) port="$2"; shift 2 ;;
       --notify) notify="$2"; notify_given=1; shift 2 ;;
       --default-skills) default_skills="$2"; skills_given=1; shift 2 ;;
@@ -126,8 +216,18 @@ process.exit(maj >= 24 || (maj === 23 && min >= 6) || (maj === 22 && min >= 18) 
   if [ "$skills_given" -eq 0 ] && [ -n "${PHASE_CONSOLE_DEFAULT_SKILLS:-}" ]; then
     default_skills="$PHASE_CONSOLE_DEFAULT_SKILLS"
   fi
+  # `--instance <name>` re-installs a console that is already registered, so a
+  # reinstall after an upgrade does not need the path typed out again.
+  if [ -z "$root" ] && [ -n "$selector" ]; then
+    TARGET_SELECTOR="$selector"; TARGET_ROOT=""; resolve_target
+    root="$I_ROOT"
+  fi
   [ -n "$root" ] || die "install needs --root <dir> (the repo holding docs/plans)"
   [ -d "$root/docs/plans" ] || die "no docs/plans under $root"
+
+  # Naming the path is exact: this instance, never a registered parent of it.
+  TARGET_SELECTOR=""; TARGET_ROOT="$root"; resolve_target
+  [ -n "$port" ] || port="$I_PORT"
 
   build_client
 
@@ -152,7 +252,17 @@ process.exit(maj >= 24 || (maj === 23 && min >= 6) || (maj === 22 && min >= 18) 
     install_linux
   fi
 
-  echo "installed  $([ "$OS" = "Darwin" ] && echo "$PLIST" || echo "$UNIT_FILE")"
+  # Record what was just installed, so every other verb — and the console's own
+  # UI — can find this instance by name instead of by path. The unit goes in
+  # here too: it is what tells `phase-console start` there is something to
+  # start rather than a foreground run to spawn.
+  local register_args=("$root" --name "$I_NAME" --port "$port" --unit "$(agent_name)")
+  [ -n "$I_DEFAULT" ] && register_args+=(--default)
+  node "$INSTANCES" register "${register_args[@]}" >/dev/null \
+    || echo "note: could not record this instance in the registry — the agent is installed and running anyway" >&2
+
+  echo "installed  $(target_unit_file)"
+  echo "instance   $I_NAME  ($I_ID)$([ -n "$I_DEFAULT" ] && echo "  default" || true)"
   echo "root       $root"
   echo "url        http://127.0.0.1:$port"
   echo "logs       $STATE_DIR/console.{out,err}.log"
@@ -330,11 +440,21 @@ build_client() {
     || die "the client build failed — nothing was installed or restarted"
 }
 
+# Installed means: THIS instance's generated unit exists. Never "some console
+# is installed on this machine" — with one console per project that question
+# has no useful answer, and answering it wrongly is how `start` in project B
+# reports success while project A's agent is what came up.
 installed() {
-  if [ "$OS" = "Darwin" ]; then [ -f "$PLIST" ]; else [ -f "$UNIT_FILE" ]; fi
+  [ -f "$(target_unit_file)" ]
 }
 
 agent_name() { if [ "$OS" = "Darwin" ]; then echo "$LABEL"; else echo "$UNIT"; fi; }
+
+# The same refusal from every verb, naming the instance it was about — "not
+# installed" alone sends you to check the wrong project.
+not_installed() {
+  die "$I_NAME ($I_ID) has no agent installed — use: agent.sh install --root $I_ROOT"
+}
 
 restart_agent() {
   if [ "$OS" = "Darwin" ]; then
@@ -345,7 +465,8 @@ restart_agent() {
 }
 
 cmd_start() {
-  installed || die "not installed — use: agent.sh install --root <dir>"
+  parse_target "$@"; resolve_target
+  installed || not_installed
   if [ "$OS" = "Darwin" ]; then
     # After a stop the job is unloaded — bootstrap loads AND starts it
     # (RunAtLoad). Already loaded, bootstrap refuses; kickstart (no -k) then
@@ -359,7 +480,8 @@ cmd_start() {
 }
 
 cmd_stop() {
-  installed || die "not installed"
+  parse_target "$@"; resolve_target
+  installed || not_installed
   if [ "$OS" = "Darwin" ]; then
     launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
   else
@@ -369,27 +491,46 @@ cmd_stop() {
 }
 
 cmd_update() {
-  installed || die "not installed — use: agent.sh install --root <dir>"
+  parse_target "$@"; resolve_target
+  installed || not_installed
   build_client
   restart_agent
-  echo "rebuilt and restarted $([ "$OS" = "Darwin" ] && echo "$LABEL" || echo "$UNIT")"
+  echo "rebuilt and restarted $(agent_name)"
 }
 
 cmd_uninstall() {
+  parse_target "$@"; resolve_target
   if [ "$OS" = "Darwin" ]; then
     launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
     rm -f "$PLIST"
-    echo "removed $LABEL"
   else
     systemctl --user disable --now "$UNIT" 2>/dev/null || true
     rm -f "$UNIT_FILE"
     systemctl --user daemon-reload 2>/dev/null || true
-    echo "removed $UNIT"
   fi
+  # The registry entry stays — the instance still exists, it simply has no
+  # supervisor any more, and its port and name are still worth remembering for
+  # the next `phase-console start`. Only the unit field is cleared, because a
+  # unit named here that no longer exists is what makes `start` hand a
+  # foreground run over to a supervisor that is not there.
+  if [ -n "$I_UNIT" ]; then
+    node "$INSTANCES" update "$I_ID" --unit "" >/dev/null 2>&1 || true
+  fi
+  echo "removed $(agent_name)  ($I_NAME is still registered — forget it entirely with: node $INSTANCES remove $I_ID)"
 }
 
+# No selector, and consoles are registered? Report all of them: with one
+# console per project the honest answer to a bare "status" is the board, not
+# whichever one happens to be nearest the shell you typed it in.
 cmd_status() {
-  if ! installed; then echo "not installed"; return 1; fi
+  parse_target "$@"
+  if [ "$TARGET_GIVEN" -eq 0 ] && [ -n "$(node "$INSTANCES" list 2>/dev/null || true)" ]; then
+    status_all
+    return 0
+  fi
+  resolve_target
+  if ! installed; then echo "not installed  ($I_NAME — $I_ROOT)"; return 1; fi
+  echo "instance $I_NAME  ($I_ID)"
   if [ "$OS" = "Darwin" ]; then
     echo "plist    $PLIST"
     # print-disabled/print are noisy; the pid line is what anyone actually wants.
@@ -407,13 +548,39 @@ cmd_status() {
   fi
 }
 
+# Only the ID is read out of `list`; everything else comes from resolving that
+# id. Not a style choice — TAB is an IFS *whitespace* character, so bash's
+# `read` collapses runs of it and silently drops empty fields. An instance that
+# is not the default has an empty `default` column, so every value after it
+# shifted left by one and each non-default console reported as the default,
+# with someone else's root beside it.
+status_all() {
+  local id
+  printf '%-24s %-12s %-6s %-10s %s\n' INSTANCE NAME PORT SUPERVISOR ROOT
+  while read -r id; do
+    [ -n "$id" ] || continue
+    TARGET_SELECTOR="$id"; TARGET_ROOT=""; TARGET_GIVEN=1
+    resolve_target
+    printf '%-24s %-12s %-6s %-10s %s\n' \
+      "$I_ID" "$I_NAME" "${I_PORT:-—}" \
+      "$(installed && echo installed || echo none)" \
+      "$I_ROOT${I_DEFAULT:+  (default)}"
+  done <<STATUS_END
+$(node "$INSTANCES" list | cut -f1)
+STATUS_END
+}
+
 cmd_restart() {
-  installed || die "not installed"
+  parse_target "$@"; resolve_target
+  installed || not_installed
   restart_agent
-  echo "restarted $([ "$OS" = "Darwin" ] && echo "$LABEL" || echo "$UNIT")"
+  echo "restarted $(agent_name)"
 }
 
 cmd_log() {
+  parse_target "$@"
+  resolve_target
+  set -- ${REST[@]+"${REST[@]}"}
   local f="$STATE_DIR/console.log"
   [ -f "$f" ] || die "no log at $f yet"
   if [ "${1:-}" = "-f" ]; then tail -f "$f"; else tail -n 50 "$f"; fi
@@ -421,12 +588,14 @@ cmd_log() {
 
 case "${1:-}" in
   install)   shift; cmd_install "$@" ;;
-  update)    cmd_update ;;
-  uninstall) cmd_uninstall ;;
-  status)    cmd_status ;;
-  start)     cmd_start ;;
-  stop)      cmd_stop ;;
-  restart)   cmd_restart ;;
+  update)    shift; cmd_update "$@" ;;
+  uninstall) shift; cmd_uninstall "$@" ;;
+  status)    shift; cmd_status "$@" ;;
+  start)     shift; cmd_start "$@" ;;
+  stop)      shift; cmd_stop "$@" ;;
+  restart)   shift; cmd_restart "$@" ;;
   log)       shift; cmd_log "$@" ;;
-  *) sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  # The usage block is the header's own first paragraph — kept in one place so
+  # a verb added above cannot quietly stop being documented here.
+  *) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

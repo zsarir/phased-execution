@@ -17,10 +17,28 @@
 #
 # The console must be running with --allow-run. Point at a different one with
 # PHASE_CONSOLE_URL.
+#
+# With one console per project, "the console" is the one for the directory you
+# are standing in — asked of the registry rather than assumed to be on 4123,
+# which now belongs to the default instance and to nothing else.
 set -euo pipefail
 
-url="${PHASE_CONSOLE_URL:-http://127.0.0.1:4123}"
+url="${PHASE_CONSOLE_URL:-}"
 plan=""
+
+if [ -z "$url" ]; then
+  # Best effort: a machine with no registry, no node, or a checkout that
+  # predates instances still gets the address this has always used.
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  instances="$here/../viewer/shared/instances.mjs"
+  if [ -f "$instances" ] && command -v node >/dev/null 2>&1; then
+    # `shell --cwd` walks UP to whoever claims this directory; `url <root>`
+    # would answer for the subdirectory you happen to be in, which is a
+    # different instance id and therefore a different derived port.
+    url="$(node "$instances" shell --cwd "$PWD" 2>/dev/null | sed -n 's/^url=//p' || true)"
+  fi
+  url="${url:-http://127.0.0.1:4123}"
+fi
 
 while [ $# -gt 0 ]; do
   case "$1" in

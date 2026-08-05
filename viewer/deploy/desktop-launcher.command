@@ -68,6 +68,10 @@ LAUNCHER_REV=4
 
 set -uo pipefail
 
+# Resolved against ROOT once the viewer is located — one install now runs one
+# console per project, and this launcher speaks for exactly one of them. The
+# bare names below are the fallback for the default instance (and for a copy of
+# this file old enough to be running against a viewer with no instances module).
 LABEL="com.phase-console"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
@@ -152,7 +156,34 @@ if [ -f "$SOURCE" ]; then
   fi
 fi
 
+# ---- which instance is this launcher's? ------------------------------------
+# ROOT decides, because that is what this file is a launcher FOR. Asking the
+# instances module rather than assuming `com.phase-console`: with several
+# consoles installed, the bare label belongs to whichever one is the default,
+# and checking it would have this launcher report on somebody else's agent.
+# Best effort by design — an install too old to have the module keeps the bare
+# names, which is exactly right for the single-console machine it came from.
+if [ -f "$VIEWER/shared/instances.mjs" ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      generated_unit) [ -n "$value" ] && LABEL="$value" ;;
+      unit_file)      [ -n "$value" ] && PLIST="$value" ;;
+    esac
+  done <<INSTANCE_END
+$(node "$VIEWER/shared/instances.mjs" shell --root "$ROOT" 2>/dev/null || true)
+INSTANCE_END
+fi
+
 open_browser() { [ -z "${PHASE_CONSOLE_NO_OPEN:-}" ] && open "http://127.0.0.1:$PORT"; }
+
+# Does the console answering on PORT serve THIS launcher's root?
+#
+# It used to be enough to find something on 4123 and call it ours. With one
+# console per project, whoever holds the port may be a different project
+# entirely — and "already running, opening it" would then open the wrong one.
+serves_our_root() {
+  printf '%s' "$1" | grep -q "\"path\":\"$ROOT\""
+}
 
 wait_for_console() {  # wait_for_console <tries>
   local i
@@ -401,9 +432,9 @@ fi
 # would take it straight back the moment this window killed it. Say so instead
 # of losing a fight with KeepAlive.
 if [ -f "$PLIST" ]; then
-  echo "A launchd agent ($LABEL) is installed, and it will keep taking port $PORT back."
-  echo "Remove it first if you want this window to own the server:"
-  echo "  $VIEWER/deploy/agent.sh uninstall"
+  echo "A launchd agent ($LABEL) is installed for this project, and it will keep"
+  echo "taking port $PORT back. Remove it first if you want this window to own the server:"
+  echo "  $VIEWER/deploy/agent.sh uninstall --root \"$ROOT\""
   echo
   read -r -p "Press return to close. "
   exit 1
@@ -415,6 +446,22 @@ fi
 # --allow-run looks identical until you try to start a run and are told you
 # cannot, so a mismatch is reported and offered a restart instead of hidden.
 if STATE=$(curl -s -m 2 "http://127.0.0.1:$PORT/api/state"); then
+  # Someone else's console on our port is a COLLISION, not our console — say so
+  # rather than opening it and letting the operator wonder why their plans are
+  # gone. (`phase-console start` in this project derives a free port instead;
+  # this launcher is pinned to the one at the top of the file.)
+  if ! serves_our_root "$STATE"; then
+    echo "Port $PORT is serving a different project:"
+    echo "  $(printf '%s' "$STATE" | grep -o '"path":"[^"]*"' | head -1 | cut -d'"' -f4)"
+    echo "  wanted: $ROOT"
+    echo
+    echo "Change PORT at the top of this file, or start that project's console"
+    echo "from its own directory:  phase-console start"
+    echo
+    read -r -p "Press return to close. "
+    exit 1
+  fi
+
   MISMATCH=""
   [ "$(state_field "$STATE" allowRun)"      != "$(want "$RUNS")" ]      && MISMATCH="$MISMATCH  runs:     running=$(state_field "$STATE" allowRun) wanted=$(want "$RUNS")\n"
   [ "$(state_field "$STATE" allowWrites)"   != "$(want "$WRITES")" ]    && MISMATCH="$MISMATCH  writes:   running=$(state_field "$STATE" allowWrites) wanted=$(want "$WRITES")\n"
