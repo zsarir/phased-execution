@@ -26,6 +26,14 @@ export type StartRecoveryRequest = {
   slug: string;
   phase?: number;
   runId?: string;
+  /**
+   * The launch dialog's choices. Generic agent-ticket fields the server
+   * already validates; default skills the operator ticked ride inside
+   * `skills` — the ticket has no attach flag, so the merge is the caller's.
+   */
+  model?: string;
+  effort?: string;
+  skills?: string[];
 };
 
 /**

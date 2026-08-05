@@ -33,6 +33,7 @@ import {
   Banner, Card, CardBody, CardHeader, CardTitle, Chip, Skeleton, Tile,
 } from '@/components/ui';
 import { Bars, StackBar } from '@/components/charts';
+import { LaunchDialog } from '@/components/launch-dialog';
 import { plainText } from '@/components/markdown';
 import { phaseHref, planHref } from '@shared/routes.js';
 import type { PlanSummaryFull } from '@/lib/api';
@@ -102,7 +103,7 @@ export default function DashboardView() {
     // to start a second one. Same query the sessions card below reads.
     sessions: terminals?.sessions,
   });
-  const { onAction, busy } = useDemandActions(runs ?? []);
+  const { onAction, busy, launch, clearLaunch } = useDemandActions(runs ?? []);
 
   // The board's own recommendation, in one line — the same rule the ready view
   // leads with, so the two pages cannot suggest different things.
@@ -149,6 +150,8 @@ export default function DashboardView() {
             <AttentionRow items={attention} onAction={onAction} busy={busy} />
           </section>
         )}
+
+        {launch && <LaunchDialog request={launch} onClose={clearLaunch} />}
 
         <section aria-label="Running now" className="flex flex-col gap-4">
           {isPending

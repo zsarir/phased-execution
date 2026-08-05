@@ -61,3 +61,7 @@ clear of rot.
 The plan records a **session budget** (~0.2 × the model's window in phase weight — about 200K for a
 1M-class model) and each phase carries a `Size:` of S, M or L. The board's `SUGGESTED BATCHES` line
 is that arithmetic done for you.
+
+One nuance about branches: the plan's `**Branch:**` prose governs hand-driven sessions, while a
+console run can impose its own work branch (`pe/<slug>`) at launch — when the two disagree, the
+session is told about the mismatch and records it in its handoff.

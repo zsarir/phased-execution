@@ -57,6 +57,7 @@ import { Banner, Button, Card, CardBody, CardHeader, CardTitle, StatusStack, toa
 import { api, type AuthStatus, type ConsoleState, type RunState } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import { RECOVERY_BLURBS, RECOVERY_LABELS, type RecoveryClass } from '@/lib/recovery';
+import { LaunchDialog } from '@/components/launch-dialog';
 import { useState } from 'react';
 
 /** The declared order. Index in this array IS the priority. */
@@ -116,7 +117,8 @@ export function runNotes({
     allowAgent: boolean;
     /** A live recovery for this halt — the button becomes a link to it. */
     runningSessionId?: string;
-    onStart?: () => void;
+    /** What the recovery is about; the button opens the launch dialog on it. */
+    target?: { slug: string; phase?: number; runId?: string };
   };
 }): RunNote[] {
   const notes: RunNote[] = [];
@@ -136,7 +138,11 @@ export function runNotes({
       // here rather than in the controls strip because this is where the reason
       // is — an operator reading "did not verify" should not have to go looking
       // for the thing that fixes it.
-      action: recovery?.kind ? <RecoveryButton {...recovery} kind={recovery.kind} busy={busy === 'recovery'} /> : undefined,
+      action: recovery?.kind && recovery.target
+        ? <RecoveryButton kind={recovery.kind} allowAgent={recovery.allowAgent}
+            {...(recovery.runningSessionId ? { runningSessionId: recovery.runningSessionId } : {})}
+            target={recovery.target} />
+        : undefined,
     });
   }
 
@@ -301,20 +307,25 @@ export function runNotes({
  * a button, and a console without `--allow-agent` is a disabled button that
  * says which flag turns it on. Never simply absent — a remedy that exists and
  * is unavailable has to say so, or the card is the dead end again.
+ *
+ * Pressing it opens the launch dialog rather than firing immediately: model,
+ * effort and skills are choices, and a session minted on one click was a
+ * session nobody got to shape. The button owns its dialog the way `QaButton`
+ * always has, so a caller only names the target.
  */
 export function RecoveryButton({
   kind,
   allowAgent,
   runningSessionId,
-  onStart,
-  busy,
+  target,
 }: {
   kind: RecoveryClass;
   allowAgent: boolean;
   runningSessionId?: string;
-  onStart?: () => void;
-  busy?: boolean;
+  /** What the recovery is about — the dialog and the ticket both need it. */
+  target: { slug: string; phase?: number; runId?: string };
 }) {
+  const [open, setOpen] = useState(false);
   if (runningSessionId) {
     return (
       <Button size="sm" variant="default" asChild>
@@ -325,15 +336,29 @@ export function RecoveryButton({
     );
   }
   return (
-    <Button
-      size="sm"
-      variant="action"
-      disabled={!allowAgent || !onStart || busy}
-      title={allowAgent ? RECOVERY_BLURBS[kind] : 'Agent sessions are disabled. Restart the console with --allow-agent.'}
-      onClick={onStart}
-    >
-      <Bot size={13} aria-hidden /> {busy ? 'Starting…' : RECOVERY_LABELS[kind]}
-    </Button>
+    <>
+      <Button
+        size="sm"
+        variant="action"
+        disabled={!allowAgent}
+        title={allowAgent ? RECOVERY_BLURBS[kind] : 'Agent sessions are disabled. Restart the console with --allow-agent.'}
+        onClick={() => setOpen(true)}
+      >
+        <Bot size={13} aria-hidden /> {RECOVERY_LABELS[kind]}
+      </Button>
+      {open && (
+        <LaunchDialog
+          request={{
+            kind: 'recovery',
+            recoveryClass: kind,
+            slug: target.slug,
+            ...(target.phase != null ? { phase: target.phase } : {}),
+            ...(target.runId ? { runId: target.runId } : {}),
+          }}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
   );
 }
 

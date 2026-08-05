@@ -128,7 +128,6 @@ export function NextSteps({
   authFailure,
   sessions,
   busy,
-  onRecover,
   onRetry,
 }: {
   slug: string;
@@ -140,7 +139,6 @@ export function NextSteps({
   authFailure: boolean;
   sessions?: TerminalSession[] | undefined;
   busy?: string | null | undefined;
-  onRecover: (phase: number, recoveryClass: RecoveryClass) => void;
   onRetry: (phase: number) => void;
 }) {
   if (live) return null;
@@ -169,8 +167,7 @@ export function NextSteps({
                     kind={row.recoveryClass}
                     allowAgent={allowAgent}
                     {...(recovering ? { runningSessionId: recovering.id } : {})}
-                    onStart={() => onRecover(row.phase, row.recoveryClass!)}
-                    busy={busy === 'recover'}
+                    target={{ slug, phase: row.phase, ...(run?.id ? { runId: run.id } : {}) }}
                   />
                 )}
                 {row.retry && (

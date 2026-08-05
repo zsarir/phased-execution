@@ -21,9 +21,12 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Lock, Unlock } from 'lucide-react';
 import { Button, ButtonGroup, STATE_BOARD, asPhaseState } from '@/components/ui';
 import { weight } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { useNarrow } from '@/lib/media';
+import { usePrefs } from '@/lib/prefs';
 import type { BatchGroup, RouteNode, RouteView, SessionPlanView } from '@/lib/api';
 
 /* ------------------------------------------------------------------ *
@@ -166,11 +169,18 @@ export interface MapView {
  * rather than a statement about a rectangle. A viewBox says the thing directly:
  * this is the part of the map you can see.
  */
-export function useMapView({ width, contentH, fitKey }: {
+export function useMapView({ width, contentH, fitKey, interactive = true }: {
   width: number;
   contentH: number;
   /** Changes when the drawing changes — a new plan refits, a resize does not. */
   fitKey: string;
+  /**
+   * Whether the wheel, drag and pinch gestures are live. Off means the map is
+   * a picture the page scrolls past — the wheel listener is simply never
+   * attached and pointers are ignored — while `fit`, `zoomCentre` and the
+   * initial auto-fit keep working, so the toolbar buttons always do.
+   */
+  interactive?: boolean;
 }) {
   const [view, setView] = useState<MapView>({ k: 1, x: 0, y: 0 });
   const frame = useRef<HTMLDivElement>(null);
@@ -237,7 +247,9 @@ export function useMapView({ width, contentH, fitKey }: {
    */
   useEffect(() => {
     const node = frame.current;
-    if (!node) return undefined;
+    // Locked: no listener at all — a `preventDefault` that never runs is what
+    // lets the page scroll natively over the map.
+    if (!node || !interactive) return undefined;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const { px, py } = local(event.clientX, event.clientY);
@@ -246,13 +258,23 @@ export function useMapView({ width, contentH, fitKey }: {
     };
     node.addEventListener('wheel', onWheel, { passive: false });
     return () => node.removeEventListener('wheel', onWheel);
-  }, [local, zoomAt]);
+  }, [local, zoomAt, interactive]);
+
+  // A toggle mid-gesture must not strand a half-finished drag or pinch: the
+  // next unlock would resume a gesture whose fingers left long ago.
+  useEffect(() => {
+    if (interactive) return;
+    pointers.current.clear();
+    gesture.current = null;
+    dragged.current = false;
+  }, [interactive]);
 
   const startDrag = (clientX: number, clientY: number) => {
     gesture.current = { kind: 'drag', x: clientX, y: clientY };
   };
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!interactive) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     dragged.current = false;
@@ -381,10 +403,13 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
   const contentH = height + LABEL_DROP;
 
   const [hover, setHover] = useState<number | null>(null);
+  const [prefs, setPrefs] = usePrefs();
+  const narrow = useNarrow();
   const { frame, view, size, fit, zoomCentre, dragged, handlers } = useMapView({
     width,
     contentH,
     fitKey: `${route.nodes.length}:${width}:${height}`,
+    interactive: prefs.mapPanZoom,
   });
 
   const highlight = hover ?? selected ?? null;
@@ -448,6 +473,18 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            aria-pressed={prefs.mapPanZoom}
+            aria-label="Pan and zoom"
+            title={prefs.mapPanZoom
+              ? 'Lock the map — the page scrolls over it again.'
+              : 'Unlock to pan, drag and pinch the map. The − / + / Fit buttons always work.'}
+            onClick={() => setPrefs({ mapPanZoom: !prefs.mapPanZoom })}
+          >
+            {prefs.mapPanZoom ? <Unlock size={13} aria-hidden /> : <Lock size={13} aria-hidden />}
+            {!narrow && <span className="ml-1">Pan &amp; zoom</span>}
+          </Button>
           <span className="font-mono text-2xs text-ink-faint" aria-live="off">
             {Math.round(view.k * 100)}%
           </span>
@@ -459,7 +496,12 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
         </div>
       </div>
 
-      <div className="route-frame" ref={frame} {...handlers}>
+      <div
+        className="route-frame"
+        ref={frame}
+        data-interactive={prefs.mapPanZoom || undefined}
+        {...handlers}
+      >
         <svg
           className="route-svg"
           width="100%"

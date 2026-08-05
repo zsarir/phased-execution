@@ -122,3 +122,15 @@ out-of-band before it is sent, so an answer does not turn into a change of direc
 off, and it can be cancelled until it arrives. **Stop now** is the one that interrupts, and it
 records the phase as *interrupted* rather than *failed*, because a phase cut off partway may have
 half-finished something.
+
+## The launch options
+
+Every AI launch — the run form, a phase's "Run only this", a recovery button, a review — opens on
+the same set of choices: model, effort, permissions, skills, plus four newer knobs. **Attach
+default skills** decides whether this machine's `--default-skills` list rides along (off unless you
+turn it on). **QA gate** activates the plan's QA gating at start. **Branch** puts the whole run on
+one work branch, `pe/<slug>`, instead of whatever is checked out — and with **Open a PR** on, the
+plan's last phase pushes that branch and opens the PR after one approval tap.
+
+Settings ▸ Automation holds the defaults these forms open with; each launch can override them for
+itself.

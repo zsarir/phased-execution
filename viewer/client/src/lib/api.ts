@@ -329,9 +329,42 @@ export interface ConsoleState {
    */
   prefs?: {
     notify?: Record<string, boolean>;
+    /**
+     * Automation defaults — the opening values for every launch surface. Each
+     * launch can override them for itself. Resolve absent keys through
+     * `automationPrefs`, never ad hoc, so every surface agrees on defaults.
+     */
+    attachDefaultSkills?: boolean;
+    qaByDefault?: boolean;
+    gitMode?: 'default-branch' | 'new-branch';
+    openPrOnComplete?: boolean;
+    repoGuard?: boolean;
     [key: string]: unknown;
   };
   [key: string]: unknown;
+}
+
+/**
+ * The automation preferences with the server's own defaults applied — the one
+ * place the `?? default` chain lives. The server sanitises on load and save,
+ * so these fallbacks only matter against an older server that has never
+ * written the keys.
+ */
+export function automationPrefs(state: ConsoleState | undefined): {
+  attachDefaultSkills: boolean;
+  qaByDefault: boolean;
+  gitMode: 'default-branch' | 'new-branch';
+  openPrOnComplete: boolean;
+  repoGuard: boolean;
+} {
+  const prefs = state?.prefs ?? {};
+  return {
+    attachDefaultSkills: prefs.attachDefaultSkills ?? false,
+    qaByDefault: prefs.qaByDefault ?? false,
+    gitMode: prefs.gitMode === 'new-branch' ? 'new-branch' : 'default-branch',
+    openPrOnComplete: prefs.openPrOnComplete ?? true,
+    repoGuard: prefs.repoGuard ?? true,
+  };
 }
 
 export interface PlanSummary {
@@ -744,6 +777,15 @@ export interface RunState {
   skills?: string[];
   permissionProfile?: PermissionProfile;
   /**
+   * The run's git strategy, echoed off the state file. Absent means
+   * default-branch — including on servers from before the feature — so render
+   * nothing rather than falling back to preferences here: a header states the
+   * run's own record.
+   */
+  gitMode?: 'new-branch';
+  /** Meaningful only with `gitMode: 'new-branch'`; absent there means true. */
+  openPr?: boolean;
+  /**
    * Why this stopped run no longer wants a person — the board overtook it
    * (`auto`), or someone dismissed it. Annotation, never deletion: the run is
    * still here, still halted, still readable. See `server/runner/state.ts`.
@@ -902,6 +944,14 @@ export interface RunSettings {
   permissionProfile?: PermissionProfile;
   onlyPhases?: number[];
   resumeRunId?: string;
+  /** Work on one plan-wide branch (`pe/<slug>`) instead of what is checked out. */
+  gitMode?: 'default-branch' | 'new-branch';
+  /** New-branch runs only: the final phase pushes and opens a PR. */
+  openPr?: boolean;
+  /** Seed the machine's default skills into this run. */
+  attachDefaultSkills?: boolean;
+  /** START only: turn the plan's QA gate on before the run begins. */
+  qa?: boolean;
 }
 
 /** `{ run }` — every mutating run endpoint answers in this envelope. */

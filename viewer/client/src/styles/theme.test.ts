@@ -110,8 +110,12 @@ describe('the phone holds together', () => {
   it('leaves the vertical swipe to the page, even over the route map', () => {
     // `touch-action: none` gave the map every touch that began inside it, and
     // on a phone the map is half the screen — so the tab could not be scrolled.
-    expect(ROUTE_MAP).toMatch(/\.route-frame\s*\{[^}]*touch-action:\s*pan-y/s);
-    expect(ROUTE_MAP).not.toMatch(/\.route-frame\s*\{[^}]*touch-action:\s*none/s);
+    // The map now opens LOCKED (`auto` — every gesture is the page's) and only
+    // the unlocked `[data-interactive]` state takes the horizontal gestures,
+    // still leaving `pan-y` to the page.
+    expect(ROUTE_MAP).toMatch(/\.route-frame\s*\{[^}]*touch-action:\s*auto/s);
+    expect(ROUTE_MAP).toMatch(/\.route-frame\[data-interactive\]\s*\{[^}]*touch-action:\s*pan-y/s);
+    expect(ROUTE_MAP).not.toMatch(/touch-action:\s*none/s);
   });
 });
 

@@ -39,6 +39,13 @@ export interface Prefs {
   runsGroup: boolean;
   /** Keep the session console open on the runs page while nothing is running. */
   runsConsole: boolean;
+  /**
+   * Route map: pan, wheel-zoom and pinch are live. Off by default — a locked
+   * map scrolls with the page instead of swallowing the gesture — and
+   * persisted per browser because the route tab unmounts on every tab switch,
+   * so component state would re-lock the map on the person actually using it.
+   */
+  mapPanZoom: boolean;
 }
 
 // A key added here is safe for a browser carrying the old client's settings:
@@ -63,6 +70,7 @@ const DEFAULTS: Prefs = {
   runsOutcome: '',
   runsGroup: false,
   runsConsole: false,
+  mapPanZoom: false,
 };
 
 /** Read-only view of the shipped defaults, so a test can pin one without

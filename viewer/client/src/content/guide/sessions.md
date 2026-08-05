@@ -100,3 +100,10 @@ meant a terminal and `launchctl` — the exact situation a browser UI exists to 
 
 Restart shows the same inventory, because it has always killed every pty on its way out and never
 said so.
+
+## Recovery on a branched run
+
+A recovery of a run that works on `pe/<slug>` is told to commit there — checking the branch out
+first if the repository is not on it, or using the run's linked worktree when one exists — and a QA
+review of such a plan is pointed at the branch's state rather than the default branch. The launch
+dialog on every recovery button is where model, effort and skills for that session are chosen.

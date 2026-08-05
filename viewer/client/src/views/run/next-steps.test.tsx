@@ -90,7 +90,6 @@ describe('NextSteps', () => {
   }
 
   it('renders a stuck phase with Repair with AI, and a gated one with its confirmation chip', () => {
-    const onRecover = vi.fn();
     const onRetry = vi.fn();
     mount(<NextSteps
       slug="demo"
@@ -106,14 +105,17 @@ describe('NextSteps', () => {
       allowRun
       allowAgent
       authFailure={false}
-      onRecover={onRecover}
       onRetry={onRetry}
     />);
 
     expect(screen.getByText(/Why this is stopped/)).toBeInTheDocument();
     expect(screen.getByText(/shutdown acceptance test needs a human/)).toBeInTheDocument();
+    // The button now opens the launch dialog rather than firing on one click —
+    // the operator gets to shape the session before it exists.
     fireEvent.click(screen.getByRole('button', { name: /Repair with AI/i }));
-    expect(onRecover).toHaveBeenCalledWith(5, 'plan-repair');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getAllByText(/Repair with AI/i).length).toBeGreaterThan(1);
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
 
     expect(screen.getByText(/confirm the window/)).toBeInTheDocument();
     expect(screen.getByText(/needs your confirmation/)).toBeInTheDocument();
@@ -130,7 +132,6 @@ describe('NextSteps', () => {
       allowRun
       allowAgent
       authFailure={false}
-      onRecover={() => {}}
       onRetry={() => {}}
     />);
     expect(container).toBeEmptyDOMElement();

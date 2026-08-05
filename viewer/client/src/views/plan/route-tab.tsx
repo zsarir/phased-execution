@@ -5,6 +5,7 @@ import {
 import { RouteMap } from '@/components/dag';
 import { MarkdownInline, plainText } from '@/components/markdown';
 import { PromptCard } from '@/components/prompt-card';
+import { RouteCards } from './route-cards';
 import { api } from '@/lib/api';
 import { boardStateTitle } from '@/lib/status-vocab';
 import { keys } from '@/lib/queries';
@@ -114,6 +115,8 @@ export function RouteTab({ detail }: { detail: PlanDetail }) {
 
   return (
     <div className="flex flex-col gap-3">
+      <RouteCards detail={detail} />
+
       <RouteMap
         route={detail.route}
         batches={detail.batches}

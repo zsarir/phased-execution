@@ -9,9 +9,10 @@
  * they broke before they find out with a thumb.
  */
 
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { MAP_CONSTANTS, RouteMap, positions, trackPath, wrapLabel } from './dag';
+import { getPrefs, setPrefs } from '@/lib/prefs';
 import type { RouteView, SessionPlanView } from '@/lib/api';
 
 const { COL_W, ROW_H, PAD, R, TAP, MIN_K, MAX_K, FIT_MAX_K } = MAP_CONSTANTS;
@@ -184,5 +185,62 @@ describe('<RouteMap>', () => {
     const svg = container.querySelector('svg.route-svg')!;
     expect(svg.getAttribute('viewBox')).toMatch(/^-?[\d.]+ -?[\d.]+ [\d.]+ [\d.]+$/);
     expect(svg.getAttribute('width')).toBe('100%');
+  });
+});
+
+describe('the pan & zoom lock', () => {
+  beforeEach(() => {
+    // Prefs persist in jsdom's localStorage across tests in this file; every
+    // case below states its own opening position.
+    setPrefs({ mapPanZoom: false });
+  });
+
+  const frameOf = (container: HTMLElement) => container.querySelector('.route-frame')! as HTMLElement;
+  const viewBoxOf = (container: HTMLElement) =>
+    container.querySelector('svg.route-svg')!.getAttribute('viewBox');
+
+  it('opens locked: no interactive marker, and the toggle says so', () => {
+    const { container } = render(<RouteMap route={ROUTE} />);
+    expect(frameOf(container).hasAttribute('data-interactive')).toBe(false);
+    const toggle = screen.getByRole('button', { name: 'Pan and zoom' });
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('a locked map ignores the drag — the viewBox does not move', () => {
+    const { container } = render(<RouteMap route={ROUTE} />);
+    const frame = frameOf(container);
+    const before = viewBoxOf(container);
+    fireEvent.pointerDown(frame, { pointerId: 1, clientX: 100, clientY: 100, button: 0 });
+    fireEvent.pointerMove(frame, { pointerId: 1, clientX: 160, clientY: 160 });
+    fireEvent.pointerUp(frame, { pointerId: 1 });
+    expect(viewBoxOf(container)).toBe(before);
+  });
+
+  it('unlocking turns the same drag into a pan, and remembers the choice', () => {
+    const { container } = render(<RouteMap route={ROUTE} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Pan and zoom' }));
+    expect(getPrefs().mapPanZoom).toBe(true);
+    const frame = frameOf(container);
+    expect(frame.hasAttribute('data-interactive')).toBe(true);
+    const before = viewBoxOf(container);
+    fireEvent.pointerDown(frame, { pointerId: 1, clientX: 100, clientY: 100, button: 0 });
+    fireEvent.pointerMove(frame, { pointerId: 1, clientX: 160, clientY: 160 });
+    fireEvent.pointerUp(frame, { pointerId: 1 });
+    expect(viewBoxOf(container)).not.toBe(before);
+  });
+
+  it('the toolbar zoom buttons work while locked — locking hides nothing', () => {
+    render(<RouteMap route={ROUTE} />);
+    const readout = () => screen.getByText(/%$/).textContent;
+    const before = readout();
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(readout()).not.toBe(before);
+  });
+
+  it('stations stay tappable while locked', () => {
+    const picked: number[] = [];
+    render(<RouteMap route={ROUTE} onSelect={(phase) => picked.push(phase)} />);
+    fireEvent.click(screen.getByLabelText(/Phase 4: Cutover/));
+    expect(picked).toEqual([4]);
   });
 });

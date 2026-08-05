@@ -92,3 +92,12 @@ Sessions of both kinds are **durable**: closing the tab, navigating away or putt
 sleep detaches the socket and leaves the process running, and it stops only when you close it or
 when the console itself goes down. **Sessions** covers what follows from that — the list, the
 ended-session record, recovery and review sessions, and the off switch.
+
+## The push carve-out
+
+`git push` is on the deny wall for every run. The one exception is a run started with the work
+branch and PR-on-completion options: for that run, bare `git push` becomes an approval card and
+`gh pr create` stays a card even under Trusted — publishing takes one tap, and force-pushes stay
+denied outright. If the console process dies mid-run, that run's CLI-side deny no longer contains
+bare `git push` (the destructive shapes still do) — which is why the carve-out is per-run, never
+global.

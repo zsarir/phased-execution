@@ -73,3 +73,12 @@ under `docs/handoffs/<slug>/`, which is what a future session — or a future yo
 work up cold.
 
 Run the plan's own end-to-end verification, then mark the plan complete.
+
+## When runs share a repository
+
+The scheduler serializes runs whose repository scopes overlap — that is the **repository guard**,
+on by default (Settings ▸ Automation). A queued run says who it is waiting on. Turning the guard
+off admits overlapping runs at once; a work-branch run that overlaps a live one is then instructed
+to do its work inside a linked `git worktree` rather than switching the shared checkout, and the
+journal records the shared checkout (`phase.shared-checkout`) either way. The guard never changes
+the rule *within* one run: two lanes of the same run still never share a repository.

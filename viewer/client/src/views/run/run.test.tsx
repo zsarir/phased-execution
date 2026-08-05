@@ -66,7 +66,7 @@ describe('isLive', () => {
 
 describe('plan-prose aliases', () => {
   it('reads a model or an effort out of a plan bullet, and only a known one', () => {
-    expect(modelAlias('**Model:** Opus 4.8, because the reasoning is hard')).toBe('opus');
+    expect(modelAlias('**Model:** Opus 5, because the reasoning is hard')).toBe('opus');
     expect(effortAlias('run this at MAX effort')).toBe('max');
     expect(modelAlias('whatever is cheapest')).toBeUndefined();
     expect(effortAlias(undefined)).toBeUndefined();

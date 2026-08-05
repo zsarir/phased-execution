@@ -22,15 +22,19 @@ import { api, type RunState } from '@/lib/api';
 import { keys } from '@/lib/queries';
 import { toast } from '@/components/ui';
 import { useReleaseLock } from '@/components/release-lock';
-import { startRecovery } from '@/lib/start-recovery';
+import type { LaunchRequest } from '@/components/launch-dialog';
 import type { Demand, DemandAction } from './now';
 
 export function useDemandActions(runs: readonly RunState[]): {
   onAction: (demand: Demand, action: DemandAction) => void;
   busy?: string;
+  /** A card asked for a session — the page renders the launch dialog on this. */
+  launch: LaunchRequest | null;
+  clearLaunch: () => void;
 } {
   const client = useQueryClient();
   const [busy, setBusy] = useState<string | undefined>();
+  const [launch, setLaunch] = useState<LaunchRequest | null>(null);
   const { release, releaseAllExpired } = useReleaseLock();
 
   const onAction = useCallback((demand: Demand, action: DemandAction) => {
@@ -45,19 +49,10 @@ export function useDemandActions(runs: readonly RunState[]): {
         switch (action.id) {
           case 'continue': {
             if (!slug || !run) throw new Error('That run is no longer on the board — reload.');
-            // Continue with the settings the run already had, not this
-            // console's defaults: the route always sends an autonomy, and a
-            // bare continue would quietly move a `halt-on-everything` run to
-            // `keep-going`. `onlyPhases` is deliberately not sent — the runner
-            // reads its absence as "continue the whole plan".
-            await api.runStart(slug, {
-              resumeRunId: run.id,
-              model: run.model,
-              effort: run.effort,
-              autonomy: run.autonomy,
-              permissionProfile: run.permissionProfile,
-            });
-            toast(`Continuing ${slug}`, 'ok');
+            // The dialog opens seeded with the run's own settings — the same
+            // "never quietly re-send old choices" rule, now with the choices
+            // visible. It performs the start itself.
+            setLaunch({ kind: 'continue', slug, run });
             break;
           }
           case 'dismiss': {
@@ -100,9 +95,11 @@ export function useDemandActions(runs: readonly RunState[]): {
           }
           case 'start-recovery': {
             // A live one is a link, not a button — `AttentionRow` renders it as
-            // an anchor and never calls this. Reaching here means starting one.
+            // an anchor and never calls this. Reaching here opens the launch
+            // dialog; the dialog mints the session with the chosen settings.
             if (!slug || !action.recoveryClass) throw new Error('That card is stale — reload.');
-            await startRecovery(client, {
+            setLaunch({
+              kind: 'recovery',
               recoveryClass: action.recoveryClass,
               slug,
               ...(action.target?.phase != null ? { phase: action.target.phase } : {}),
@@ -123,5 +120,5 @@ export function useDemandActions(runs: readonly RunState[]): {
     })();
   }, [client, release, releaseAllExpired, runs]);
 
-  return { onAction, busy };
+  return { onAction, busy, launch, clearLaunch: useCallback(() => setLaunch(null), []) };
 }

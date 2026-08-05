@@ -160,7 +160,7 @@ describe('runNotes — the actions attached to a note', () => {
       status: 'halted',
       halt: { at: '2026-08-03T10:00:00Z', reason: 'phase 2 did not verify: npm test', phase: 2 },
     });
-    const recovery = { kind: 'halted-verification' as const, allowAgent: true, onStart: () => {} };
+    const recovery = { kind: 'halted-verification' as const, allowAgent: true, target: { slug: 'demo', phase: 2 } };
 
     render(<RunStatusStack run={halted} live={false} allowRun recovery={recovery} />);
     expect(screen.getByRole('button', { name: /fix/i })).toBeEnabled();

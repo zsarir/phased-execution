@@ -28,9 +28,10 @@ import { duration, elapsed, money, pad2, relativeTime } from '@/lib/format';
 import { useNow } from '@/lib/clock';
 import { useDiagnosis } from '@/lib/queries';
 import { phaseProgress } from './header';
-import { classifyBoardPhase, classifyPhase, liveRecovery, type RecoveryClass } from '@/lib/recovery';
+import { classifyBoardPhase, classifyPhase, liveRecovery } from '@/lib/recovery';
 import { canQa, liveQa } from '@/lib/qa';
 import { QaButton, QaVerdict } from '@/components/qa-launcher';
+import { LaunchDialog } from '@/components/launch-dialog';
 import { RecoveryButton } from './status';
 import { queueEntryFor, waitingLabel } from './session-panes';
 import { phaseHref } from '@shared/routes.js';
@@ -108,7 +109,6 @@ export type PhaseRecovery = {
   sessions?: readonly TerminalSession[];
   /** The run's halt looks like an authentication failure — one class overrides all. */
   authFailure?: boolean;
-  onStart: (phase: number, kind: RecoveryClass) => void;
   /** The plan's qa-mode, so a row can offer to turn it on with the review. */
   qaMode?: string;
   /** Skills the plan asks every session to invoke. */
@@ -143,6 +143,10 @@ export function PhaseTable({
   /** What each phase was expected to take. Absent on a source with no plan detail. */
   phaseEta?: PhaseEta[] | undefined;
 }) {
+  // "Run only this" opens the launch dialog on the row's phase; one dialog for
+  // the table, keyed by which phase asked. Before the early return — a hook.
+  const [launchPhase, setLaunchPhase] = useState<number | null>(null);
+
   if (!planPhases.length) {
     return (
       <Empty
@@ -210,6 +214,7 @@ export function PhaseTable({
                   allowRun={allowRun}
                   onAct={onAct}
                   recovery={recovery}
+                  onRunAlone={setLaunchPhase}
                   entry={queueEntryFor(queue, slug, p.phase)}
                   conflicts={scopes?.find((s) => s.phase === p.phase)?.conflicts}
                   eta={phaseEta?.find((e) => e.phase === p.phase)}
@@ -226,6 +231,21 @@ export function PhaseTable({
           </p>
         )}
       </CardBody>
+
+      {launchPhase != null && (
+        <LaunchDialog
+          request={{
+            kind: 'phase',
+            slug,
+            phase: launchPhase,
+            run,
+            ...(recovery?.qaMode ? { qaMode: recovery.qaMode } : {}),
+            ...(recovery?.allowWrites !== undefined ? { allowWrites: recovery.allowWrites } : {}),
+            ...(recovery?.planSkills?.length ? { planSkills: recovery.planSkills } : {}),
+          }}
+          onClose={() => setLaunchPhase(null)}
+        />
+      )}
     </Card>
   );
 }
@@ -238,6 +258,7 @@ function PhaseRows({
   allowRun,
   onAct,
   recovery,
+  onRunAlone,
   entry,
   conflicts,
   eta,
@@ -249,6 +270,8 @@ function PhaseRows({
   allowRun: boolean;
   onAct: (label: string, fn: () => Promise<unknown>) => Promise<void>;
   recovery?: PhaseRecovery;
+  /** Opens the launch dialog scoped to this phase. */
+  onRunAlone: (phase: number) => void;
   entry?: QueueEntry | undefined;
   conflicts?: string[] | undefined;
   eta?: PhaseEta | undefined;
@@ -427,16 +450,7 @@ function PhaseRows({
               <Button
                 size="sm"
                 title="Run this phase on its own, then stop — the loop does not carry on into the rest of the plan"
-                onClick={() => void onAct('only', () => api.runStart(slug, {
-                  model: run?.model,
-                  effort: run?.effort,
-                  autonomy: run?.autonomy,
-                  phaseBudgetUsd: run?.phaseBudgetUsd,
-                  runBudgetUsd: run?.runBudgetUsd,
-                  permissionProfile: run?.permissionProfile,
-                  resumeRunId: run && run.status !== 'finished' ? run.id : undefined,
-                  onlyPhases: [p.phase],
-                }))}
+                onClick={() => onRunAlone(p.phase)}
               >
                 Run only this
               </Button>
@@ -449,7 +463,7 @@ function PhaseRows({
                 kind={recoveryClass}
                 allowAgent={recovery.allowAgent}
                 {...(recovering ? { runningSessionId: recovering.id } : {})}
-                onStart={() => recovery.onStart(p.phase, recoveryClass)}
+                target={{ slug, phase: p.phase, ...(run?.id ? { runId: run.id } : {}) }}
               />
             )}
             {/* Reviewing is not recovering: it is offered for a phase that is

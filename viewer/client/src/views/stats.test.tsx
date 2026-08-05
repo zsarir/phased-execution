@@ -40,7 +40,7 @@ const PORTFOLIO: Portfolio = {
   sizeMix: [{ size: 'S', count: 4 }, { size: 'M', count: 18 }, { size: 'L', count: 8 }],
   repos: [{ repo: 'skill', count: 8 }],
   skills: [],
-  models: [{ model: 'claude-opus-4-8', count: 4 }],
+  models: [{ model: 'claude-opus-5', count: 4 }],
   stalled: [{ slug: 'other', days: 12, ready: [2, 3] }],
   busiest: [{ slug: 'demo', completions: 12 }],
 };

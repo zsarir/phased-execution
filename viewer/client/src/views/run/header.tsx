@@ -134,6 +134,14 @@ export function RunHeader({
             / {phaseProgress(phaseMs, mirrorEta.estMs)}
           </span>
         )}
+        {/* The run's own record, never a preference fallback — a header states
+            what this run IS, and an older server that echoes nothing gets
+            nothing rendered. */}
+        {run.gitMode === 'new-branch' && (
+          <Chip title="This run works on its own branch and, unless turned off, the final phase opens a PR after one approval tap.">
+            work branch{run.openPr === false ? '' : ' · PR'}
+          </Chip>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-ink-faint">
         <span>

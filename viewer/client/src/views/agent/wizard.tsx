@@ -64,6 +64,13 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
   const [model, setModel] = useState<string>(DEFAULTS.model);
   const [effort, setEffort] = useState<string>(DEFAULTS.effort);
   const [chosen, setChosen] = useState<string[]>([]);
+  // Derives from the Automation preference until the operator says otherwise —
+  // `/api/state` arrives after the first render, so a one-shot seed would miss
+  // it. The ticket has no attach flag; ticked means the names ride in `skills`.
+  const defaultSkills = state?.defaultSkills ?? [];
+  const [attachChoice, setAttachChoice] = useState<boolean | null>(null);
+  const attach = attachChoice
+    ?? ((state?.prefs?.attachDefaultSkills ?? false) === true && defaultSkills.length > 0);
   const [busy, setBusy] = useState(false);
 
   async function start() {
@@ -81,7 +88,10 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
         // session that could write a plan nobody had approved. A session for
         // ANY other purpose belongs in the launcher, which still offers every
         // mode.
-        ...(chosen.length ? { skills: chosen } : {}),
+        ...((() => {
+          const merged = [...new Set([...(attach ? defaultSkills : []), ...chosen])];
+          return merged.length ? { skills: merged } : {};
+        })()),
       });
       // Same two rules as every session the console opens: seed the list from
       // the ticket so the next render is right, and `void` the invalidation.
@@ -158,10 +168,25 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
             the steps AFTER approval).
           </p>
 
+          {rootOpen && defaultSkills.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <span className="min-w-0">
+                <span className="text-ink">Attach default skills</span>
+                <span className="mt-0.5 block text-2xs text-ink-faint">
+                  This machine's list: {defaultSkills.map((s) => <code key={s} className="mr-1">{s}</code>)}
+                </span>
+              </span>
+              <Button size="sm" aria-pressed={attach} onClick={() => setAttachChoice(!attach)}>
+                {attach ? 'Attached' : 'Off'}
+              </Button>
+            </div>
+          )}
+
           {rootOpen ? (
             <SkillPicker
               skills={skills ?? []}
               chosen={chosen}
+              defaultSkills={defaultSkills}
               onChange={setChosen}
               label="Extra skills for the authoring session"
             />

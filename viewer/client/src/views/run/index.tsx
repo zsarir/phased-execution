@@ -37,15 +37,14 @@ import { useCallback, useState } from 'react';
 import {
   Empty, Spinner, Tabs, TabsContent, TabsList, TabsTrigger, toast,
 } from '@/components/ui';
-import { api, type PhaseEta, type PlanDetail, type QueueEntry, type RunState } from '@/lib/api';
+import { api, automationPrefs, type PhaseEta, type PlanDetail, type QueueEntry, type RunState } from '@/lib/api';
 import {
   useApprovals, useAuth, useConsoleState, useQueue, useRun, useRunScopes, useSessions, useSkills,
 } from '@/lib/queries';
 import { keys } from '@/lib/queries';
 import { useNow } from '@/lib/clock';
 import { elapsed } from '@/lib/format';
-import { classifyRun, liveRecovery, type RecoveryClass } from '@/lib/recovery';
-import { startRecovery } from '@/lib/start-recovery';
+import { classifyRun, liveRecovery } from '@/lib/recovery';
 import { useQueryClient } from '@tanstack/react-query';
 import { isLive } from './defaults';
 import { ApprovalQueue, type Decide } from './approvals';
@@ -129,13 +128,6 @@ export function RunView({ detail }: { detail: PlanDetail }) {
     }
   }, [client, slug]);
 
-  /** Mint a recovery for this plan, through the same busy/invalidate path as everything else. */
-  const recover = useCallback((request: {
-    recoveryClass: RecoveryClass; phase?: number; runId?: string;
-  }) => {
-    void act('recovery', () => startRecovery(client, { slug, ...request }));
-  }, [act, client, slug]);
-
   const decide: Decide = useCallback((id, decision, reason, remember, rule) => {
     void act('decide', async () => {
       const result = await api.decide(id, decision, reason, remember, rule);
@@ -203,13 +195,11 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           allowAgent,
           ...(haltClass ? { kind: haltClass } : {}),
           ...(haltRecovery ? { runningSessionId: haltRecovery.id } : {}),
-          onStart: haltClass
-            ? () => recover({
-              recoveryClass: haltClass,
-              ...(haltPhase != null ? { phase: haltPhase } : {}),
-              ...(run?.id ? { runId: run.id } : {}),
-            })
-            : undefined,
+          target: {
+            slug,
+            ...(haltPhase != null ? { phase: haltPhase } : {}),
+            ...(run?.id ? { runId: run.id } : {}),
+          },
         }}
       />
 
@@ -225,11 +215,6 @@ export function RunView({ detail }: { detail: PlanDetail }) {
         authFailure={authFailure}
         sessions={terminals?.sessions}
         busy={busy}
-        onRecover={(phase, recoveryClass) => recover({
-          recoveryClass,
-          phase,
-          ...(run?.id ? { runId: run.id } : {}),
-        })}
         onRetry={(phase) => void act('retry', () => api.runRetry(slug, phase))}
       />
 
@@ -243,6 +228,9 @@ export function RunView({ detail }: { detail: PlanDetail }) {
         planSkills={planSkills}
         skills={skills ?? []}
         defaultSkills={state?.defaultSkills ?? []}
+        automation={automationPrefs(state)}
+        qaMode={detail.summary.qaMode}
+        allowWrites={Boolean(state?.allowWrites)}
         onAct={act}
       />
 
@@ -266,11 +254,6 @@ export function RunView({ detail }: { detail: PlanDetail }) {
             qaMode: detail.summary.qaMode,
             planSkills,
             allowWrites: Boolean(state?.allowWrites),
-            onStart: (phase, recoveryClass) => recover({
-              recoveryClass,
-              phase,
-              ...(run?.id ? { runId: run.id } : {}),
-            }),
           }}
         />
       ) : (

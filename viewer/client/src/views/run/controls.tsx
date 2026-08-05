@@ -100,6 +100,9 @@ export function Controls({
   planSkills,
   skills,
   defaultSkills = [],
+  automation,
+  qaMode,
+  allowWrites,
   onAct,
 }: {
   slug: string;
@@ -112,6 +115,15 @@ export function Controls({
   skills: SkillInfo[];
   /** What a NEW run would start with. An existing run's own list wins. */
   defaultSkills?: string[];
+  /** The Automation preferences — the opening values for the new knobs. */
+  automation?: {
+    attachDefaultSkills: boolean; qaByDefault: boolean;
+    gitMode: 'default-branch' | 'new-branch'; openPrOnComplete: boolean;
+  };
+  /** The plan's qa-mode; `off` offers the launch-time QA toggle. */
+  qaMode?: string;
+  /** Whether the console may turn QA on — a different flag from allowRun. */
+  allowWrites?: boolean;
   onAct: (label: string, fn: () => Promise<unknown>) => Promise<void>;
 }) {
   // A stable dependency for the effect below: `defaultSkills` is a fresh array
@@ -128,6 +140,24 @@ export function Controls({
   const [profile, setProfile] = useState<PermissionProfile>(
     run?.permissionProfile ?? (run ? 'guarded' : DEFAULTS.permissionProfile),
   );
+
+  // The preference-seeded knobs derive LIVE until the operator touches them —
+  // the preferences arrive with `/api/state`, after the first render, and a
+  // one-shot useState seed would show the fallback instead. An existing run's
+  // own record still wins over the preference, exactly as for skills above.
+  const [attachChoice, setAttachChoice] = useState<boolean | null>(null);
+  const attach = attachChoice
+    ?? (run ? false : (automation?.attachDefaultSkills ?? false) && defaultSkills.length > 0);
+  const [qaChoice, setQaChoice] = useState<boolean | null>(null);
+  const canQaToggle = qaMode === 'off' && allowWrites !== false;
+  const qaOn = qaChoice ?? (canQaToggle && (automation?.qaByDefault ?? false));
+  const [gitChoice, setGitChoice] = useState<'default-branch' | 'new-branch' | null>(null);
+  // An existing run answers for itself (absent = default-branch, its meaning on
+  // disk); only a run that does not exist yet opens on the preference.
+  const gitMode = gitChoice ?? run?.gitMode
+    ?? (run ? 'default-branch' : automation?.gitMode ?? 'default-branch');
+  const [prChoice, setPrChoice] = useState<boolean | null>(null);
+  const openPr = prChoice ?? run?.openPr ?? (run ? true : automation?.openPrOnComplete ?? true);
 
   // Follow the run when it changes underneath us. Note the fallbacks differ from
   // the ones above on purpose: an EXISTING run with no `permissionProfile` on it
@@ -169,6 +199,9 @@ export function Controls({
     // missing profile as `guarded`, which is the right safety rule and the reason
     // the client must say what it means.
     permissionProfile: profile,
+    gitMode,
+    ...(gitMode === 'new-branch' ? { openPr } : {}),
+    ...(attach ? { attachDefaultSkills: true } : {}),
   };
 
   const changed = live && (
@@ -178,6 +211,8 @@ export function Controls({
     || profile !== (run?.permissionProfile ?? 'guarded')
     || (Number(phaseBudget) || null) !== (run?.phaseBudgetUsd ?? null)
     || (Number(runBudget) || null) !== (run?.runBudgetUsd ?? null)
+    || gitMode !== (run?.gitMode ?? 'default-branch')
+    || (gitMode === 'new-branch' && openPr !== (run?.openPr ?? true))
     || JSON.stringify(overrides) !== JSON.stringify(run?.phaseOptions ?? {})
     || JSON.stringify(runSkills) !== JSON.stringify(run?.skills ?? [])
   );
@@ -254,7 +289,62 @@ export function Controls({
               ))}
             </select>
           </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-2xs tracking-wide text-ink-muted uppercase">Branch</span>
+            <select value={gitMode} disabled={disabled} className={field}
+              onChange={(e) => setGitChoice(e.target.value as 'default-branch' | 'new-branch')}>
+              <option value="default-branch">Work on the current branch</option>
+              <option value="new-branch">Work branch per run (pe/{slug})</option>
+            </select>
+          </label>
         </div>
+
+        {gitMode === 'new-branch' && (
+          <label className="flex flex-wrap items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1 accent-[var(--action)]" checked={openPr}
+              disabled={disabled} onChange={(e) => setPrChoice(e.target.checked)} />
+            <span className="min-w-0 flex-1">
+              Open a PR when the plan completes
+              <span className="block text-2xs text-ink-faint">
+                The final phase pushes <code className="font-mono">pe/{slug}</code> and opens the PR
+                — after one approval tap on the push. Force-pushes stay denied outright.
+              </span>
+            </span>
+          </label>
+        )}
+
+        {qaMode === 'off' && !live && (
+          <label className="flex flex-wrap items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1 accent-[var(--action)]"
+              checked={qaOn && canQaToggle} disabled={disabled || !canQaToggle}
+              title={canQaToggle ? undefined : 'Writes are disabled. Restart the console with --allow-writes.'}
+              onChange={(e) => setQaChoice(e.target.checked)} />
+            <span className="min-w-0 flex-1">
+              Turn the QA gate on for this plan
+              <span className="block text-2xs text-ink-faint">
+                Each finished phase then waits for an independent review. Phases that finished
+                before now are recorded as <em>waived</em>, so turning it on does not retroactively
+                hold the board.
+              </span>
+            </span>
+          </label>
+        )}
+
+        {defaultSkills.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span className="min-w-0">
+              <span className="text-ink">Attach default skills</span>
+              <span className="mt-0.5 block text-2xs text-ink-faint">
+                This machine's list: {defaultSkills.map((s) => <code key={s} className="mr-1">{s}</code>)}
+              </span>
+            </span>
+            <Button size="sm" aria-pressed={attach} disabled={disabled}
+              onClick={() => setAttachChoice(!attach)}>
+              {attach ? 'Attached' : 'Off'}
+            </Button>
+          </div>
+        )}
 
         <p className={cn(
           'max-w-prose text-2xs',
@@ -285,6 +375,9 @@ export function Controls({
             <Button variant="action" disabled={disabled}
               onClick={() => void onAct('start', () => api.runStart(slug, {
                 ...settings,
+                // START only — activating QA is a start-time act, never part of
+                // a mid-run settings patch.
+                ...(qaOn && canQaToggle ? { qa: true } : {}),
                 resumeRunId: resumable && run ? run.id : undefined,
               }))}>
               {busy === 'start' ? 'Starting…' : resumable ? 'Continue' : 'Start'}

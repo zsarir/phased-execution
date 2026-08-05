@@ -22,9 +22,17 @@
     background:
       radial-gradient(circle at 1px 1px, color-mix(in oklab, var(--rule) 70%, transparent) 1px, transparent 0)
       0 0 / 24px 24px;
-    cursor: grab;
     overflow: hidden;
     block-size: clamp(300px, 56vh, 640px);
+    /* Locked (the resting state): the map is a picture. Every gesture belongs
+       to the page — scroll, swipe, pinch-the-page all behave exactly as they
+       do over any other card — because the wheel listener is not even attached
+       (see `useMapView`) and pointers are ignored. Stations stay tappable. */
+    cursor: default;
+    touch-action: auto;
+  }
+  .route-frame[data-interactive] {
+    cursor: grab;
     /* `pan-y`, not `none`.
        `none` gave the map every touch that started inside it — and on a phone
        the map is half the screen, so the Route tab could not be scrolled with a
@@ -37,7 +45,7 @@
     touch-action: pan-y;
     overscroll-behavior: contain;
   }
-  .route-frame:active { cursor: grabbing; }
+  .route-frame[data-interactive]:active { cursor: grabbing; }
 
   .route-svg { display: block; user-select: none; width: 100%; height: 100%; }
 
