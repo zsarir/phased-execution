@@ -6,6 +6,7 @@ import { Markdown, MarkdownInline } from '@/components/markdown';
 import { countdown, pad2 } from '@/lib/format';
 import { phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
+import { DepsCell, LockCell } from './phase-cells';
 
 /** The plan file itself: its prose, the machine-read graph table, its memory. */
 export function OverviewTab({ detail }: { detail: PlanDetail }) {
@@ -56,14 +57,20 @@ export function OverviewTab({ detail }: { detail: PlanDetail }) {
                 <TR>
                   <TH className="w-12">#</TH>
                   <TH>Title</TH>
-                  <TH className="w-28">Depends on</TH>
+                  <TH className="w-40">Depends on</TH>
+                  {/* Joined in from the phase view: the graph table is what the
+                      engine reads, and who holds a row is the one fact about it
+                      that is not in the plan file. */}
+                  <TH className="w-40">Lock</TH>
                   <TH className="w-32">Parallel-safe</TH>
                   <TH className="w-36">Repos</TH>
                   <TH>Exit criteria</TH>
                 </TR>
               </THead>
               <TBody>
-                {plan.graph.map((row) => (
+                {plan.graph.map((row) => {
+                  const view = detail.phases.find((p) => p.phase === row.phase);
+                  return (
                   <TR key={row.phase} className="relative">
                     <TD className="font-mono">
                       <a
@@ -74,14 +81,18 @@ export function OverviewTab({ detail }: { detail: PlanDetail }) {
                       </a>
                     </TD>
                     <TD className="text-ink"><MarkdownInline text={row.title} /></TD>
-                    <TD className="font-mono text-xs">
-                      {row.dependsOn.length ? row.dependsOn.join(', ') : '—'}
+                    <TD>
+                      {view
+                        ? <DepsCell slug={plan.slug} phase={view} />
+                        : <span className="font-mono text-xs">{row.dependsOn.join(', ') || '—'}</span>}
                     </TD>
+                    <TD><LockCell lock={view?.lock} /></TD>
                     <TD className="font-mono text-xs">{row.parallelSafe || '—'}</TD>
                     <TD className="font-mono text-xs">{row.repos || '—'}</TD>
                     <TD className="text-xs"><MarkdownInline text={row.exitCriteria} /></TD>
                   </TR>
-                ))}
+                  );
+                })}
               </TBody>
             </Table>
           </TableWrap>

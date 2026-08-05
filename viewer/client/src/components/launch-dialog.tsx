@@ -28,7 +28,9 @@ import {
   Banner, Button, Dialog, DialogClose, DialogContent, DialogFooter, toast,
 } from '@/components/ui';
 import { keys, useConsoleState, useSkills } from '@/lib/queries';
-import { api, automationPrefs, type RunState } from '@/lib/api';
+import { api, automationPrefs, type PhaseLock, type RunState } from '@/lib/api';
+import { countdown, relativeTime } from '@/lib/format';
+import { ReleaseStaleButton } from '@/components/release-lock';
 import { startQa } from '@/lib/start-qa';
 import { startRecovery } from '@/lib/start-recovery';
 import { QA_PROFILES, QA_PROFILE_LABEL, isVerdict, type QaProfile } from '@/lib/qa';
@@ -58,16 +60,46 @@ export interface QaTarget {
 }
 
 export type LaunchRequest =
-  | { kind: 'recovery'; recoveryClass: RecoveryClass; slug: string; phase?: number; runId?: string }
+  | {
+    kind: 'recovery'; recoveryClass: RecoveryClass; slug: string; phase?: number; runId?: string;
+    lock?: PhaseLock;
+  }
   | {
     kind: 'phase'; slug: string; phase: number; run: RunState | null;
     qaMode?: string; allowWrites?: boolean; planSkills?: string[];
+    /** Who holds this phase, if anyone. Decides whether this dialog may submit. */
+    lock?: PhaseLock;
   }
   | {
     kind: 'continue'; slug: string; run: RunState;
     qaMode?: string; allowWrites?: boolean; planSkills?: string[];
   }
-  | { kind: 'qa'; target: QaTarget; allowWrites?: boolean };
+  | { kind: 'qa'; target: QaTarget; allowWrites?: boolean; lock?: PhaseLock };
+
+/**
+ * The claim standing between this dialog and its Start button.
+ *
+ * A `continue` names no phase — it picks the run up wherever it is, and the
+ * runner's own boarding check parks whatever it finds claimed — so it has no
+ * lock to read. Every other kind names exactly one phase, and for those a live
+ * claim is a refusal rather than a warning: the server answers 409 now, and a
+ * dialog that submits into a 409 is a dialog that lied about what its button
+ * would do.
+ */
+function claimOn(request: LaunchRequest): PhaseLock | undefined {
+  return request.kind === 'continue' ? undefined : request.lock;
+}
+
+/** Which phase this launch is about, when it is about one. */
+function phaseOfRequest(request: LaunchRequest): number | undefined {
+  return request.kind === 'qa' ? request.target.phase
+    : request.kind === 'continue' ? undefined
+      : request.phase;
+}
+
+function slugOfRequest(request: LaunchRequest): string {
+  return request.kind === 'qa' ? request.target.slug : request.slug;
+}
 
 /** What each QA profile costs, read while choosing it — the run controls' own words. */
 function QaProfileNote({ profile }: { profile: QaProfile }) {
@@ -244,6 +276,10 @@ export function LaunchDialog({ request, onClose, onDone }: {
   }
 
   const { title, description } = heading(request);
+  const claim = claimOn(request);
+  // A live claim refuses; a lapsed one does not. The server agrees with both,
+  // so this is the same rule shown early rather than a second, softer one.
+  const blocked = Boolean(claim && !claim.expired);
   const submitLabel = request.kind === 'qa' ? 'Start review'
     : request.kind === 'recovery' ? RECOVERY_LABELS[request.recoveryClass]
       : request.kind === 'phase' ? `Run phase ${request.phase}` : 'Continue';
@@ -256,6 +292,37 @@ export function LaunchDialog({ request, onClose, onDone }: {
             <p className="text-sm text-ink-muted">
               <span className="font-mono text-2xs text-ink-faint">{qaTarget.slug}</span> · {qaTarget.title}
             </p>
+          )}
+
+          {/* The refusal, before the fields rather than after them. A live
+              claim disables Start, so a person who reads top-down learns why
+              the button is grey before they reach it. */}
+          {claim && !claim.expired && (
+            <Banner severity="error">
+              <strong>
+                Phase {phaseOfRequest(request)} is claimed by <span className="font-mono">{claim.owner}</span>
+                {claim.host ? <> on <span className="font-mono">{claim.host}</span></> : null}.
+              </strong>{' '}
+              {claim.claimedAt ? `Claimed ${relativeTime(claim.claimedAt)}` : 'Claimed'}
+              {claim.leaseUntil ? `, and the lease runs ${countdown(claim.leaseUntil)} more` : ''}.
+              Booting a second session into this phase is how two agents overwrite each other.
+              Wait for that session, or release the claim from the phase's row.
+            </Banner>
+          )}
+
+          {claim?.expired && (
+            <Banner severity="warn">
+              A claim by <span className="font-mono">{claim.owner}</span> lapsed on this phase — the
+              session holding it stopped renewing, so nothing is working here. It does not block
+              this launch; releasing it just tidies the board.
+              <span className="mt-2 block">
+                <ReleaseStaleButton
+                  slug={slugOfRequest(request)}
+                  phase={phaseOfRequest(request) ?? 0}
+                  label="Release it"
+                />
+              </span>
+            </Banner>
           )}
 
           {qaTarget?.qa && isVerdict(qaTarget.qa.result) && (
@@ -424,13 +491,20 @@ export function LaunchDialog({ request, onClose, onDone }: {
 
         <DialogFooter className="items-center justify-between">
           <span className="text-2xs text-ink-faint">
-            {request.kind === 'qa'
-              ? 'The session records the verdict, not the console.'
-              : 'Opens with the Automation defaults from Settings; this launch overrides them.'}
+            {blocked
+              ? 'The claim has to be released before a session can start here.'
+              : request.kind === 'qa'
+                ? 'The session records the verdict, not the console.'
+                : 'Opens with the Automation defaults from Settings; this launch overrides them.'}
           </span>
           <div className="flex gap-2">
             <DialogClose asChild><Button variant="ghost">Cancel</Button></DialogClose>
-            <Button variant="action" disabled={busy} onClick={() => void submit()}>
+            <Button
+              variant="action"
+              disabled={busy || blocked}
+              title={blocked ? `Claimed by ${claim?.owner}` : undefined}
+              onClick={() => void submit()}
+            >
               {request.kind === 'qa'
                 ? <ShieldCheck size={15} aria-hidden />
                 : <Bot size={15} aria-hidden />} {busy ? 'Starting…' : submitLabel}

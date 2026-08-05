@@ -3,16 +3,18 @@ import {
   Table, TableWrap, TBody, TD, TH, THead, TR,
 } from '@/components/ui';
 import { RouteMap } from '@/components/dag';
-import { MarkdownInline, plainText } from '@/components/markdown';
 import { PromptCard } from '@/components/prompt-card';
 import { RouteCards } from './route-cards';
 import { api } from '@/lib/api';
 import { isClosed } from '@/lib/closure';
-import { boardStateTitle } from '@/lib/status-vocab';
 import { keys } from '@/lib/queries';
 import { pad2, weight } from '@/lib/format';
 import { navigate, phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
+import { DepsCell, FlagsCell, LockCell, ScopeCell, SizeCell, TitleCell } from './phase-cells';
+
+/** The estimate for one phase, or nothing on a source with no plan detail. */
+const etaFor = (detail: PlanDetail, phase: number) => detail.eta?.perPhase.find((e) => e.phase === phase);
 
 /**
  * The departures board.
@@ -41,9 +43,11 @@ function DeparturesBoard({ detail }: { detail: PlanDetail }) {
               <TH className="w-14">#</TH>
               <TH>Phase</TH>
               <TH className="w-24">Status</TH>
+              <TH className="w-40">Deps</TH>
+              <TH className="w-40">Lock</TH>
               <TH className="w-14">Size</TH>
               <TH className="w-36">Repos</TH>
-              <TH className="w-48">Notes</TH>
+              <TH className="w-40">Notes</TH>
             </TR>
           </THead>
           <TBody>
@@ -60,45 +64,18 @@ function DeparturesBoard({ detail }: { detail: PlanDetail }) {
                     {pad2(phase.phase)}
                   </a>
                 </TD>
-                <TD>
-                  <div className="font-medium text-ink">
-                    <MarkdownInline text={phase.title} />
-                  </div>
-                  {phase.state === 'waiting' && phase.analysis?.dependsOn.length ? (
-                    <div className="text-2xs text-ink-faint">
-                      needs {phase.analysis.dependsOn.map((d) => `P${d}`).join(' · ')}
-                    </div>
-                  ) : phase.goal ? (
-                    <div className="line-clamp-2 max-w-[46ch] text-2xs text-ink-faint">
-                      {plainText(phase.goal)}
-                    </div>
-                  ) : null}
-                </TD>
+                <TD><TitleCell phase={phase} /></TD>
                 <TD><StateChip state={phase.state} board /></TD>
-                <TD><Chip mono>{phase.size}</Chip></TD>
-                <TD className="font-mono text-2xs text-ink-faint">{phase.row?.repos ?? '—'}</TD>
-                <TD>
-                  <div className="flex flex-wrap gap-1">
-                    {phase.gated && <Chip tone="gate" title={boardStateTitle('gated')}>gated</Chip>}
-                    {phase.lock && !phase.lock.expired && (
-                      <Chip tone="busy" title={phase.lock.owner}>locked</Chip>
-                    )}
-                    {phase.lock?.expired && (
-                      <Chip tone="warn" title={phase.lock.owner}>stale lock</Chip>
-                    )}
-                    {phase.qa && phase.qa.result !== 'waived' && (
-                      <Chip tone={phase.qa.result === 'fail' ? 'bad' : 'neutral'}>
-                        QA {phase.qa.result}
-                      </Chip>
-                    )}
-                    {phase.analysis?.onCriticalPath && (
-                      <Chip title="On the longest remaining chain">critical</Chip>
-                    )}
-                    {phase.handoff && (
-                      <Chip title={`Handoff: ${phase.handoff.status}`}>handoff</Chip>
-                    )}
-                  </div>
-                </TD>
+                {/* Both directions, always — this cell used to appear only
+                    while a phase was held, so the plan's shape was invisible on
+                    every row that was moving. */}
+                <TD><DepsCell slug={slug} phase={phase} /></TD>
+                <TD><LockCell lock={phase.lock} /></TD>
+                <TD><SizeCell phase={phase} eta={etaFor(detail, phase.phase)} /></TD>
+                {/* Chips, not the raw graph cell. This was the one table of
+                    three printing Repos as a string. */}
+                <TD><ScopeCell phase={phase} /></TD>
+                <TD><FlagsCell slug={slug} phase={phase} /></TD>
               </TR>
             ))}
           </TBody>

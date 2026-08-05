@@ -45,6 +45,7 @@ type Repo = {
   setGate: (phase: number, text: string) => void;
   setStuck: (phase: number) => void;
   setLockRefused: (yes: boolean) => void;
+  setLockLapsed: (yes: boolean) => void;
   setLintFail: (yes: boolean) => void;
   /** Make the board read slow, so a control can be pressed while it is in flight. */
   setSlowBoard: (yes: boolean) => void;
@@ -106,7 +107,11 @@ set -u
 S="${state}"
 echo "$*" >> "$S/locks"
 if [ "\${2:-}" = "status" ]; then
-  if [ -f "$S/lock-refused" ]; then echo "phase \${3:-?}: held by someone/else since now, lease until later"
+  # The real script prints the holder for a LAPSED claim too, and appends the
+  # marker. Both halves are the fake's job, because reading only the first is
+  # the bug the runner had.
+  if [ -f "$S/lock-lapsed" ]; then echo "phase \${3:-?}: held by someone/else since now, lease until then (EXPIRED — free to take over)"
+  elif [ -f "$S/lock-refused" ]; then echo "phase \${3:-?}: held by someone/else since now, lease until later"
   else echo "phase \${3:-?}: free"; fi
   exit 0
 fi
@@ -128,6 +133,7 @@ echo "VALIDATE OK"
     setGate: (phase, text) => writeFileSync(join(state, `gate-${phase}`), `${text}\n`),
     setStuck: (phase) => writeFileSync(join(state, 'stuck'), `${phase}\n`),
     setLockRefused: (yes) => yes ? writeFileSync(join(state, 'lock-refused'), '') : rmSync(join(state, 'lock-refused'), { force: true }),
+    setLockLapsed: (yes) => yes ? writeFileSync(join(state, 'lock-lapsed'), '') : rmSync(join(state, 'lock-lapsed'), { force: true }),
     setLintFail: (yes) => yes ? writeFileSync(join(state, 'lint-fail'), '') : rmSync(join(state, 'lint-fail'), { force: true }),
     setSlowBoard: (yes) => yes ? writeFileSync(join(state, 'slow-board'), '') : rmSync(join(state, 'slow-board'), { force: true }),
     setSlowGate: (yes) => yes ? writeFileSync(join(state, 'slow-gate'), '') : rmSync(join(state, 'slow-gate'), { force: true }),
@@ -844,6 +850,23 @@ test('a lock held elsewhere parks the phase instead of racing for it', async () 
 
   assert.equal(instance.current()!.phases['1'].status, 'parked');
   assert.match(instance.current()!.phases['1'].note!, /locked by someone\/else/);
+  r.cleanup();
+});
+
+test('a LAPSED claim does not park the phase — it just runs', async () => {
+  // `phase-lock.sh status` prints `held by X` for an expired claim too and
+  // appends `(EXPIRED — free to take over)`. The runner used to read only the
+  // first half, so a session that died without releasing parked its phase for
+  // the whole lease — and then forever after, since nothing renews a dead
+  // claim. A lease running out is exactly the event that means "go".
+  const r = repo();
+  r.setLockLapsed(true);
+  const { instance } = runner(r, workingSession(r));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  assert.notEqual(instance.current()!.phases['1'].status, 'parked');
+  assert.ok(r.doneList().length > 0, 'the phase actually ran');
   r.cleanup();
 });
 

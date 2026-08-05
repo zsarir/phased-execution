@@ -258,3 +258,75 @@ test('a plan already under QA starts without another activation write', async ()
     assert.equal(captured.length, 2);
   } finally { cleanup(); }
 });
+
+/* ------------------------------------------------------------------ *
+ * The claim — a phase somebody else is holding
+ * ------------------------------------------------------------------ */
+
+/** Write a lock file the way `phase-lock.sh claim` does. */
+function claim(root: string, phase: number, owner: string, leaseSeconds: number) {
+  const dir = join(root, 'docs', 'handoffs', 'alpha', '.locks');
+  mkdirSync(dir, { recursive: true });
+  const now = Math.floor(Date.now() / 1000);
+  writeFileSync(
+    join(dir, `phase-0${phase}.lock`),
+    `slug=alpha\nphase=${phase}\nowner=${owner}\nhost=box\n`
+    + `claimed_at=${now}\nlease_until=${now + leaseSeconds}\nscope=app\n`,
+    'utf8',
+  );
+}
+
+test('a named phase somebody else holds refuses the launch outright', async () => {
+  // The defect this closes: this used to answer 200, mint a run, and only
+  // degrade to `parked` several subprocesses later inside the runner. The
+  // console said a run had started; nothing ran.
+  const { root, cleanup } = scratch();
+  try {
+    claim(root, 1, 'someone/else', 1800);
+    const { svc, captured } = service(root);
+    await assert.rejects(
+      () => svc.startRun('alpha', { onlyPhases: [1] }),
+      (error: Error) => {
+        assert.equal(error.name, 'PhaseClaimedError');
+        assert.match(error.message, /claimed by someone\/else/);
+        return true;
+      },
+    );
+    assert.equal(captured.length, 0, 'and no run is minted on the way out');
+  } finally { cleanup(); }
+});
+
+test('a LAPSED claim refuses nothing', async () => {
+  const { root, cleanup } = scratch();
+  try {
+    claim(root, 1, 'someone/else', -60);
+    const { svc, captured } = service(root);
+    await svc.startRun('alpha', { onlyPhases: [1] });
+    assert.equal(captured.length, 1, 'a lease that ran out is not a holder');
+  } finally { cleanup(); }
+});
+
+test('a whole-plan run is not refused by one claimed phase', async () => {
+  // Deliberate asymmetry. A run with no named phases should park the claimed
+  // one and get on with the other two; refusing the run would let a single
+  // stale-looking claim stop a plan.
+  const { root, cleanup } = scratch();
+  try {
+    claim(root, 1, 'someone/else', 1800);
+    const { svc, captured } = service(root);
+    await svc.startRun('alpha', {});
+    assert.equal(captured.length, 1);
+  } finally { cleanup(); }
+});
+
+test('retry of a claimed phase is refused too', async () => {
+  const { root, cleanup } = scratch();
+  try {
+    claim(root, 2, 'someone/else', 1800);
+    const { svc } = service(root);
+    await assert.rejects(
+      () => svc.retryPhase('alpha', 2),
+      (error: Error) => error.name === 'PhaseClaimedError',
+    );
+  } finally { cleanup(); }
+});

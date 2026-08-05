@@ -86,6 +86,7 @@ test('a finished phase offers nothing at all, whatever the run recorded', () => 
   const [, ten] = mergePhases(PLAN, RUN);
   assert.deepEqual(phaseActions(ten, opts), {
     runAlone: false, retry: false, skip: false, diagnose: false,
+    heldBy: null, staleLock: false,
   });
 
   // Even when the record looks retryable, no CONTROL is offered — but the
@@ -96,6 +97,7 @@ test('a finished phase offers nothing at all, whatever the run recorded', () => 
   const failed = { state: 'done', record: { status: 'failed' } };
   assert.deepEqual(phaseActions(failed, opts), {
     runAlone: false, retry: false, skip: false, diagnose: true,
+    heldBy: null, staleLock: false,
   });
 });
 
@@ -128,6 +130,60 @@ test('retry is offered only for a record that actually stopped badly', () => {
   }
 });
 
+test('a live claim by someone else refuses the two verbs that start work', () => {
+  const lock = { owner: 'someone/else', expired: false, leaseUntil: Date.now() + 600_000 };
+  const ready = { state: 'ready', record: { status: 'failed' }, lock };
+  const actions = phaseActions(ready, opts);
+
+  assert.equal(actions.runAlone, false, 'a claimed phase cannot be started');
+  assert.equal(actions.retry, false, 'nor retried into a session');
+  assert.deepEqual(actions.heldBy, lock, 'and the row can name who holds it');
+
+  // The two that do not start anything are untouched. Refusing to EXPLAIN a
+  // phase because someone holds it would withhold the very thing that tells
+  // you whether their session is still alive.
+  assert.equal(actions.diagnose, true, 'reading evidence is not starting work');
+  assert.equal(
+    phaseActions({ ...ready, record: { status: 'running' } }, { live: true, allowRun: true }).skip,
+    true,
+    'taking a phase off a running loop is not starting work either',
+  );
+});
+
+test('a LAPSED claim blocks nothing — that is what a lease running out means', () => {
+  // The bug this pins: an expired claim used to read as a holder, so a session
+  // that died without releasing blocked its phase for the whole lease and then
+  // kept blocking it, because nothing renews a dead claim.
+  const lock = { owner: 'someone/else', expired: true, leaseUntil: Date.now() - 60_000 };
+  const actions = phaseActions({ state: 'ready', record: { status: 'failed' }, lock }, opts);
+
+  assert.equal(actions.runAlone, true);
+  assert.equal(actions.retry, true);
+  assert.equal(actions.heldBy, null, 'nobody is working a phase whose claim lapsed');
+  assert.equal(actions.staleLock, true, 'but the debris is still worth saying out loud');
+});
+
+test('your own claim is not somebody else’s', () => {
+  // The autopilot claims phases in its own name. Without this a run would
+  // refuse to board the very phase it just claimed.
+  const lock = { owner: 'autopilot/run-7', expired: false, leaseUntil: Date.now() + 600_000 };
+  const ready = { state: 'ready', record: undefined, lock };
+
+  assert.equal(phaseActions(ready, opts).runAlone, false, 'a stranger by default');
+  assert.equal(
+    phaseActions(ready, { ...opts, owner: 'autopilot/run-7' }).runAlone,
+    true,
+    'but not when the claim is ours',
+  );
+});
+
+test('a phase with no claim at all reports none', () => {
+  const actions = phaseActions({ state: 'ready', record: undefined }, opts);
+  assert.equal(actions.heldBy, null);
+  assert.equal(actions.staleLock, false);
+  assert.equal(actions.runAlone, true);
+});
+
 test('a read-only console offers no controls — but will still say what went wrong', () => {
   const readOnly = { live: false, allowRun: false };
   const ready = { state: 'ready', record: { status: 'failed' } };
@@ -136,7 +192,10 @@ test('a read-only console offers no controls — but will still say what went wr
   // terminal to grep NDJSON. The buttons inside the panel are gated on
   // `allowRun` in the view, and the server refuses all of them without it.
   const actions = phaseActions(ready, readOnly);
-  assert.deepEqual(actions, { runAlone: false, retry: false, skip: false, diagnose: true });
+  assert.deepEqual(actions, {
+    runAlone: false, retry: false, skip: false, diagnose: true,
+    heldBy: null, staleLock: false,
+  });
 });
 
 test('there is always a way forward from a phase that stopped', () => {

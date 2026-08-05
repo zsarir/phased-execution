@@ -420,6 +420,14 @@ export interface PhaseLock {
   expired: boolean;
   leaseUntil?: number;
   host?: string;
+  /** When the claim was taken — the other half of "how long has this been held?". */
+  claimedAt?: number;
+  /**
+   * What the claim covers. Absent means the claim was taken without one, which
+   * the engine treats as colliding with everything — so an absent scope is not
+   * "no scope", it is the widest possible one.
+   */
+  scope?: string[];
 }
 
 export interface PlanSummaryFull {
@@ -540,6 +548,8 @@ export interface RouteNode {
   size: string;
   gated: boolean;
   title: string;
+  /** Claimed, and whether the claim still holds. Absent on an older server. */
+  locked?: 'live' | 'stale';
 }
 
 export interface RouteView {
@@ -1322,8 +1332,12 @@ export const api = {
      The owner comes off the lock file on the server, so nothing here asks a
      person to retype `someone@example.com/opus-p2` from a card that never
      showed it. A live lease answers 409 and stays claimed. */
-  releaseLock: (slug: string, phase: number) =>
-    post<LockRelease>('/api/locks/release', { slug, phase }),
+  /* `force` takes a claim whose lease is still running. That is the operator
+     deciding another session is gone, and it is the only way past a live claim
+     now that one blocks a run — so it is a separate argument, never a default,
+     and every caller that passes it asks for confirmation first. */
+  releaseLock: (slug: string, phase: number, force = false) =>
+    post<LockRelease>('/api/locks/release', force ? { slug, phase, force } : { slug, phase }),
   releaseExpiredLocks: () =>
     post<{ results: LockRelease[]; released: number }>('/api/locks/release', { expired: true }),
 

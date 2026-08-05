@@ -158,3 +158,19 @@ the work was finished and verified outside it. The row says "nothing to fix — 
 | `waiting` | **Held** | An earlier phase it depends on is not done yet. | Nothing here; finish what it waits on. |
 | `stuck` / `blocked` | **Blocked** | Its handoff is marked blocked — the Outstanding section says exactly why. | Read the excerpt on the phase page, or Repair with AI on the run page. |
 | `gated` | **Gated** | The plan reserves a decision for a person before this phase may run. | Confirm the gate condition (quoted on the phase page), then start or Retry. |
+
+### Claim (the "Lock" column)
+
+A claim is one session saying "I am working this phase". It lives in a file —
+`docs/handoffs/<slug>/.locks/phase-NN.lock` — written by `phase-lock.sh claim`, and it carries a
+**lease** (30 minutes by default) that the holder renews while it works. Every phase table shows it,
+because it is the one fact that decides whether the buttons beside it do anything.
+
+| State | Chip | What it means | What to do |
+|---|---|---|---|
+| `live` | **held by …** | Another session claimed this phase and its lease has not run out. Starting a second session here is refused — by this console and by the server. | Let it finish. If that session is gone, use **Release the claim** on the phase's row and confirm. |
+| `stale` | **stale claim** | The lease lapsed: whoever took it stopped renewing, so nothing is working this phase. | Nothing, unless you want a tidy board — it does **not** block a run. **Release it** clears the file. |
+
+A lapsed claim blocking work is the failure this distinction exists to prevent: a session that dies
+without releasing would otherwise hold its phase for the full lease and then keep holding it, because
+nothing renews a dead claim.

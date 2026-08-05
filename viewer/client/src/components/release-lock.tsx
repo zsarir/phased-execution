@@ -20,8 +20,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Unlock } from 'lucide-react';
 import { api } from '@/lib/api';
 import { keys } from '@/lib/queries';
-import { plural } from '@/lib/format';
-import { Button, toast } from '@/components/ui';
+import { countdown, plural, relativeTime } from '@/lib/format';
+import { AlertDialog, AlertDialogContent, AlertDialogTrigger, Button, toast } from '@/components/ui';
 
 const OFF_HINT = 'Writes are disabled. Restart the console with --allow-writes to release a claim.';
 
@@ -36,17 +36,17 @@ function useAfterRelease() {
 }
 
 export function useReleaseLock(): {
-  release: (slug: string, phase: number) => Promise<boolean>;
+  release: (slug: string, phase: number, force?: boolean) => Promise<boolean>;
   releaseAllExpired: () => Promise<number>;
   busy: boolean;
 } {
   const [busy, setBusy] = useState(false);
   const after = useAfterRelease();
 
-  const release = useCallback(async (slug: string, phase: number) => {
+  const release = useCallback(async (slug: string, phase: number, force = false) => {
     setBusy(true);
     try {
-      const result = await api.releaseLock(slug, phase);
+      const result = await api.releaseLock(slug, phase, force);
       toast(
         result.owner
           ? `Released ${slug} P${phase} — it was held by ${result.owner}`
@@ -118,6 +118,72 @@ export function ReleaseStaleButton({
       <Unlock size={13} aria-hidden />
       {label}
     </Button>
+  );
+}
+
+/**
+ * Taking a claim whose lease is still running.
+ *
+ * The console refused this for good reason: a live lease means a session is
+ * working, and two sessions on one phase is how they overwrite each other. But
+ * a live claim now BLOCKS a run, and a block with no way past it is a dead end
+ * — the holder is sometimes a session that died without releasing, and telling
+ * someone to go find a terminal is not an answer a console gets to give.
+ *
+ * So: possible, never easy. An `AlertDialog` — no dismiss corner, no
+ * outside-click close — that names the holder, the machine and the time left,
+ * and says what it costs. The server audits every forced release.
+ */
+export function ForceReleaseButton({
+  slug,
+  phase,
+  lock,
+  allowWrites = true,
+  onDone,
+}: {
+  slug: string;
+  phase: number;
+  lock: { owner: string; host?: string; leaseUntil?: number; claimedAt?: number };
+  allowWrites?: boolean;
+  onDone?: () => void;
+}) {
+  const { release, busy } = useReleaseLock();
+  const left = countdown(lock.leaseUntil);
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          size="sm"
+          disabled={!allowWrites || busy}
+          title={allowWrites ? `Release the phase ${phase} claim held by ${lock.owner}` : OFF_HINT}
+        >
+          <Unlock size={13} aria-hidden />
+          Release the claim
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent
+        title={`Phase ${phase} is claimed`}
+        destructive
+        confirmLabel="Release the claim anyway"
+        onConfirm={() => void release(slug, phase, true).then(() => onDone?.())}
+        description={
+          <>
+            <span className="block font-mono text-xs text-ink">
+              {lock.owner}{lock.host ? ` on ${lock.host}` : ''}
+            </span>
+            <span className="mt-1 block">
+              {lock.claimedAt ? `Claimed ${relativeTime(lock.claimedAt)}` : 'Claimed'}
+              {left && left !== '—' ? ` · the lease runs ${left} more.` : '.'}
+            </span>
+            <span className="mt-2 block">
+              Booting a second session into this phase is how two agents overwrite each other.
+              Release it only if you know that session has stopped.
+            </span>
+          </>
+        }
+      />
+    </AlertDialog>
   );
 }
 

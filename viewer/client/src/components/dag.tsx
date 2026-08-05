@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Lock, Unlock } from 'lucide-react';
-import { Button, ButtonGroup, STATE_BOARD, asPhaseState } from '@/components/ui';
+import { Button, ButtonGroup, STATE_BOARD, asPhaseState, type PhaseState } from '@/components/ui';
 import { weight } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { useNarrow } from '@/lib/media';
@@ -398,6 +398,25 @@ export interface RouteMapProps {
   className?: string;
 }
 
+/**
+ * Everything a station can say without being clicked.
+ *
+ * The map is the one surface where a phase has no room for columns, so its
+ * `<title>` is where the same facts the tables now carry — what it waits on,
+ * whether anyone holds it — have to live instead.
+ */
+function stationTitle(
+  node: { phase: number; title: string; size: string; locked?: 'live' | 'stale' },
+  state: PhaseState,
+  needs: number[] | undefined,
+): string {
+  const lines = [`Phase ${node.phase} — ${node.title}`, `${STATE_BOARD[state]} · size ${node.size}`];
+  if (needs?.length) lines.push(`needs ${needs.map((n) => `P${n}`).join(' · ')}`);
+  if (node.locked === 'live') lines.push('claimed by another session');
+  if (node.locked === 'stale') lines.push('a lapsed claim — release it to tidy the board');
+  return lines.join('\n');
+}
+
 export function RouteMap({ route, batches, budget, onSelect, selected, className }: RouteMapProps) {
   const { points, width, height } = useMemo(() => positions(route), [route]);
   const contentH = height + LABEL_DROP;
@@ -411,6 +430,17 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
     fitKey: `${route.nodes.length}:${width}:${height}`,
     interactive: prefs.mapPanZoom,
   });
+
+  /** What each station waits on — the edges, read the way a tooltip needs them. */
+  const incoming = useMemo(() => {
+    const map = new Map<number, number[]>();
+    for (const edge of route.edges) {
+      const list = map.get(edge.to);
+      if (list) list.push(edge.from);
+      else map.set(edge.to, [edge.from]);
+    }
+    return map;
+  }, [route]);
 
   const highlight = hover ?? selected ?? null;
   const related = useMemo(() => {
@@ -581,15 +611,21 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
                   {node.gated && (
                     <circle className="gate-ring" cx={node.x} cy={node.y} r={R + 6} fill="url(#gate-hatch)" />
                   )}
+                  {node.locked && (
+                    <circle
+                      className={cn('claim-ring', node.locked)}
+                      cx={node.x}
+                      cy={node.y}
+                      r={R + 4}
+                    />
+                  )}
                   <circle className="halo" cx={node.x} cy={node.y} r={R + 5} />
                   <circle className="dot" cx={node.x} cy={node.y} r={R} />
                   <text className="station-number" x={node.x} y={node.y + 4} textAnchor="middle">
                     {node.phase}
                   </text>
                   <StationLabel node={node} />
-                  <title>
-                    {`Phase ${node.phase} — ${node.title} · ${STATE_BOARD[state]} · size ${node.size}`}
-                  </title>
+                  <title>{stationTitle(node, state, incoming.get(node.phase))}</title>
                 </g>
               );
             })}

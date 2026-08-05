@@ -21,10 +21,12 @@ import {
   TBody, TD, TH, THead, TR, Table, TableWrap,
 } from '@/components/ui';
 import {
-  api, type PhaseEta, type PhaseRecord, type PhaseScope, type PhaseView,
+  api, type PhaseEta, type PhaseLock, type PhaseRecord, type PhaseScope, type PhaseView,
   type QueueEntry, type RunState, type TerminalSession,
 } from '@/lib/api';
-import { duration, elapsed, money, pad2, relativeTime } from '@/lib/format';
+import { countdown, duration, elapsed, money, pad2, relativeTime } from '@/lib/format';
+import { DepsCell, LockCell, PhaseDetails, SizeCell } from '@/views/plan/phase-cells';
+import { ForceReleaseButton } from '@/components/release-lock';
 import { useNow } from '@/lib/clock';
 import { useDiagnosis } from '@/lib/queries';
 import { phaseProgress } from './header';
@@ -82,6 +84,10 @@ interface Actions {
   retry: boolean;
   skip: boolean;
   diagnose: boolean;
+  /** The live claim stopping `runAlone`/`retry`, so a disabled button can name it. */
+  heldBy: PhaseLock | null;
+  /** A lapsed claim — worth tidying, never a reason to refuse. */
+  staleLock: boolean;
 }
 
 const merge = mergePhases as (planPhases: PhaseView[], run: RunState | null) => MergedPhase[];
@@ -189,11 +195,22 @@ export function PhaseTable({
                 <TH scope="col">#</TH>
                 <TH scope="col">Phase</TH>
                 <TH scope="col">Status</TH>
+                {/* The graph the whole board rests on, finally on the row that
+                    acts on it: what a phase waits for, and how much waits on
+                    it. Both were on the wire and rendered only on the phase
+                    page. */}
+                <TH scope="col">Deps</TH>
+                {/* The fact that decides whether the button beside it works.
+                    `PhaseView.lock` reached every row of this table and was
+                    read by nothing — a phase could be claimed by another
+                    session and this table would offer to start it. */}
+                <TH scope="col">Lock</TH>
                 {/* What the phase touches — the Repos cell of the plan's own
                     graph, which is what decides whether two phases may run at
                     the same time. It has been parsed by the server since before
                     there was concurrency and shown nowhere. */}
                 <TH scope="col">Repos</TH>
+                <TH scope="col">Size</TH>
                 <TH scope="col">This run</TH>
                 <TH scope="col" className="text-right">Cost</TH>
                 <TH scope="col" className="text-right">Turns</TH>
@@ -239,6 +256,12 @@ export function PhaseTable({
             slug,
             phase: launchPhase,
             run,
+            // The claim, so the dialog refuses rather than submitting into a
+            // 409 the server would answer anyway.
+            ...(() => {
+              const lock = rows.find((r) => r.phase === launchPhase)?.lock;
+              return lock ? { lock } : {};
+            })(),
             ...(recovery?.qaMode ? { qaMode: recovery.qaMode } : {}),
             ...(recovery?.allowWrites !== undefined ? { allowWrites: recovery.allowWrites } : {}),
             ...(recovery?.planSkills?.length ? { planSkills: recovery.planSkills } : {}),
@@ -282,6 +305,18 @@ function PhaseRows({
   const can = actionsFor(p, { live, allowRun });
   const detoured = fellOver(r);
   const hasNote = Boolean(r?.note || r?.verification || can.diagnose);
+
+  // What the two start-work buttons would have offered if nothing held the
+  // phase — so they can be rendered disabled rather than disappearing.
+  const blockedRunAlone = Boolean(can.heldBy) && !live && p.state === 'ready' && allowRun;
+  const blockedRetry = Boolean(can.heldBy) && !live
+    && ['failed', 'interrupted', 'parked'].includes(r?.status ?? '');
+  const heldTitle = can.heldBy
+    ? `Phase ${p.phase} is claimed by ${can.heldBy.owner}`
+      + (can.heldBy.host ? ` on ${can.heldBy.host}` : '')
+      + `${can.heldBy.leaseUntil ? ` — the lease runs ${countdown(can.heldBy.leaseUntil)} more` : ''}.`
+      + ' Release the claim to start a session here.'
+    : undefined;
 
   // A recovery is offered for a phase that is genuinely stuck — never for one
   // the BOARD calls done, however this run's record reads, and never while the
@@ -362,9 +397,12 @@ function PhaseRows({
             </div>
           )}
         </TD>
+        <TD><DepsCell slug={slug} phase={p} /></TD>
+        <TD><LockCell lock={p.lock} compact /></TD>
         <TD>
           <ScopeChips tokens={scopeOf(p.row?.repos)} conflicts={conflicts} />
         </TD>
+        <TD><SizeCell phase={p} eta={eta} /></TD>
         <TD className="text-2xs">
           {r ? (
             <>
@@ -434,9 +472,16 @@ function PhaseRows({
                 nothing to fix — done elsewhere
               </span>
             )}
-            {can.retry && (
+            {/* Disabled, not hidden. A button that vanishes when a phase is
+                claimed teaches nothing about why nothing can be started — the
+                whole complaint that put a Lock column on this table. It stays
+                in place, greyed, and says who holds it. */}
+            {(can.retry || (blockedRetry && allowRun)) && (
               <Button size="sm"
-                title="Clears this phase's failure and CONTINUES the run from here — a session starts, under normal admission."
+                disabled={!can.retry}
+                title={can.retry
+                  ? "Clears this phase's failure and CONTINUES the run from here — a session starts, under normal admission."
+                  : heldTitle}
                 onClick={() => void onAct('retry', () => api.runRetry(slug, p.phase))}>
                 Retry
               </Button>
@@ -446,14 +491,22 @@ function PhaseRows({
                 Skip
               </Button>
             )}
-            {can.runAlone && (
+            {(can.runAlone || blockedRunAlone) && (
               <Button
                 size="sm"
-                title="Run this phase on its own, then stop — the loop does not carry on into the rest of the plan"
+                disabled={!can.runAlone}
+                title={can.runAlone
+                  ? 'Run this phase on its own, then stop — the loop does not carry on into the rest of the plan'
+                  : heldTitle}
                 onClick={() => onRunAlone(p.phase)}
               >
                 Run only this
               </Button>
+            )}
+            {/* The way out, right where the refusal is. Releasing a live claim
+                is the operator's decision and asks for it explicitly. */}
+            {can.heldBy && allowRun && (
+              <ForceReleaseButton slug={slug} phase={p.phase} lock={can.heldBy} />
             )}
             {/* Last, and only when a rule cannot settle it. Retry re-runs the
                 phase unchanged and Skip abandons it; this is the middle that
@@ -492,10 +545,14 @@ function PhaseRows({
         </TD>
       </TR>
 
-      {hasNote && (
-        <TR>
-          <TD />
-          <TD colSpan={8}>
+      {/* Always rendered now: the note half is conditional as before, and the
+          disclosure below it is the answer to "put every field in the table" —
+          a row carries the eight facts you scan, and the other twenty live one
+          click away rather than in twenty more columns. */}
+      <TR>
+        <TD />
+        <TD colSpan={11}>
+          <>
             {r?.note && <div className="text-2xs text-ink-faint">{r.note}</div>}
             {r?.verification && (
               <div className={cn('text-2xs', r.verification.ok ? 'text-done' : 'text-blocked')}>
@@ -519,9 +576,17 @@ function PhaseRows({
             {can.diagnose && (
               <PhaseDiagnosis slug={slug} phase={p.phase} allowRun={allowRun} onAct={onAct} />
             )}
-          </TD>
-        </TR>
-      )}
+            <details className={cn('group', hasNote && 'mt-1')}>
+              <summary className="cursor-pointer text-2xs text-ink-faint hover:text-ink-muted">
+                Everything about phase {p.phase}
+              </summary>
+              <div className="mt-2 max-w-prose">
+                <PhaseDetails slug={slug} phase={p} eta={eta} />
+              </div>
+            </details>
+          </>
+        </TD>
+      </TR>
     </>
   );
 }

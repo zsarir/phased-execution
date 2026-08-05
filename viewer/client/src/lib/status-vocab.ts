@@ -160,6 +160,33 @@ export const BOARD_STATE_HELP: Record<PhaseState, StatusHelp> = {
   },
 };
 
+/** Whether a claim on a phase still holds. */
+export type LockState = 'live' | 'stale';
+
+/**
+ * The CLAIM — who holds a phase, and whether that still stops you.
+ *
+ * A fourth vocabulary, added when the lock started blocking runs rather than
+ * merely decorating a row. The distinction it carries is the whole point: a
+ * live claim means another session is working and the console refuses to start
+ * a second one; a lapsed claim means nobody is, and the only thing left to do
+ * is tidy up the file that says otherwise.
+ */
+export const LOCK_HELP: Record<LockState, StatusHelp> = {
+  live: {
+    means: 'Another session claimed this phase and its lease has not run out.',
+    then: 'Let it finish. If that session is gone, release the claim — the button says who holds it.',
+  },
+  stale: {
+    means: 'The claim lapsed: whoever took it stopped renewing, so nothing is working this phase.',
+    then: 'Release it to tidy the board. It does not block a run.',
+  },
+};
+
+export function lockTitle(state: LockState): string | undefined {
+  return line(LOCK_HELP[state]);
+}
+
 /** One hover-sized line: the meaning, then the move. */
 function line(help: StatusHelp | undefined): string | undefined {
   if (!help) return undefined;

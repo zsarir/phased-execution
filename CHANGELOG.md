@@ -6,6 +6,60 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [1.4.0] - 2026-08-05
+
+A claim on a phase now means something. Every phase table shows who holds a phase and for how much
+longer, all four of them agree about what a phase *is*, and the console refuses to start a session
+on work somebody else is already doing — instead of accepting the launch and discovering the
+collision three subprocesses later.
+
+### Added
+
+- **A Lock column on every phase table.** The Autopilot table carried each phase's claim in its data
+  and read it nowhere: a phase could be held by another session and the table would still offer to
+  start it. It, the Departures board, the Phases list and the Overview graph now all show **held by
+  … · 18m** or **stale claim**, with the owner in the chip rather than behind a hover — there is no
+  hover on a phone.
+- **Dependencies on every phase table.** What a phase waits on and what waits on it were on the wire
+  for every row and rendered richly in one place. Both directions now appear everywhere, always —
+  the Departures board used to show them only while a phase was *waiting*, so the plan's shape was
+  invisible on every row that was moving.
+- **An expandable sheet on every Autopilot row** carrying every remaining field: goal, gates and
+  their live check, read-first, files, steps, exit criteria, verification, handoff-must-record,
+  model, effort, weight, parallel-safe, downstream count, handoff status and outstanding work, the
+  QA report, and the full claim (owner · host · claimed · lease · scope).
+- **A claim ring on the route map**, and stations whose tooltip names what they wait on and who
+  holds them.
+- **`Release the claim`** — a confirmed, audited force-release for a claim whose lease is still
+  running. Previously a live claim could only be cleared from a terminal, which was fine while a
+  claim was decoration and a dead end once one started blocking runs. The dialog names the holder,
+  the machine and the time left before it will do it.
+- **A claim vocabulary** in the Guide's Reference, single-sourced with the chips' own tooltips.
+
+### Changed
+
+- **A live claim refuses a launch, in the server as well as the page.** `POST /api/run/<slug>/start`
+  on a claimed phase used to answer **200**, mint a run, and only degrade to `parked` deep inside the
+  runner — the console reported a run that never ran. Starting a named phase, retrying one,
+  recovering one and reviewing one all now answer **409** with the holder, the host and the lease.
+  A whole-plan run is deliberately *not* refused: it parks the claimed phase and gets on with the
+  rest, because one claim should not stop a plan.
+- **Buttons a claim blocks are disabled, not hidden** — they keep their place and say who holds the
+  phase. A button that vanishes teaches nothing about why nothing can be started.
+- **Repos renders as scope chips on the Departures board**, which was the one table of three still
+  printing the raw graph cell.
+
+### Fixed
+
+- **A lapsed claim no longer parks a phase.** `phase-lock.sh status` prints `held by X` for an
+  expired claim too and appends `(EXPIRED — free to take over)`; the runner read only the first half.
+  A session that died without releasing therefore blocked its phase for the whole lease — and then
+  kept blocking it, because nothing renews a dead claim. A lease running out is precisely the event
+  that means *go*.
+- **The per-phase claim payload no longer drops `host`, `claimedAt` and `scope`.** Two call sites
+  narrowed the parsed lock by hand and had already drifted apart, so the same claim described itself
+  differently depending on which list you found it in. One helper does it now.
+
 ## [1.3.0] - 2026-08-05
 
 One install, one console per project. `cd` into a repository and `phase-console start` — it gets its

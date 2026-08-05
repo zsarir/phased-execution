@@ -12,13 +12,15 @@
 
 import { describe, expect, it } from 'vitest';
 import reference from '@/content/guide/reference.md?raw';
-import { BOARD_STATE_HELP, PHASE_STATUS_HELP, RUN_STATUS_HELP, boardStateTitle, phaseStatusTitle, runStatusTitle } from './status-vocab';
+import { BOARD_STATE_HELP, LOCK_HELP, PHASE_STATUS_HELP, RUN_STATUS_HELP, boardStateTitle, lockTitle, phaseStatusTitle, runStatusTitle } from './status-vocab';
 import { CLOSED_HELP, closedTitle } from './closure';
 import { STATE_BOARD } from '@/components/ui/chip';
 
 describe('every status word is explained, nowhere emptily', () => {
   it('has a real meaning AND a real next move for every entry', () => {
-    for (const [table, entries] of Object.entries({ RUN_STATUS_HELP, PHASE_STATUS_HELP, BOARD_STATE_HELP })) {
+    for (const [table, entries] of Object.entries({
+      RUN_STATUS_HELP, PHASE_STATUS_HELP, BOARD_STATE_HELP, LOCK_HELP,
+    })) {
       for (const [word, help] of Object.entries(entries)) {
         expect(help.means.length, `${table}.${word}.means`).toBeGreaterThan(20);
         expect(help.then.length, `${table}.${word}.then`).toBeGreaterThan(5);
@@ -41,6 +43,22 @@ describe('every status word is explained, nowhere emptily', () => {
     for (const spelled of new Set(Object.values(STATE_BOARD))) {
       expect(reference, `departures word ${spelled}`).toContain(`**${spelled}**`);
     }
+    // The claim, the fifth vocabulary — and the only one that decides whether a
+    // button works, so the Guide owes it the same table as the rest.
+    for (const word of Object.keys(LOCK_HELP)) {
+      expect(reference, `lock state ${word}`).toContain(`\`${word}\``);
+    }
+  });
+
+  it('the claim vocabulary distinguishes the two states it exists to distinguish', () => {
+    // Live blocks a run; stale does not. If these two ever explained
+    // themselves the same way, the console would be teaching the wrong rule.
+    const live = lockTitle('live') ?? '';
+    const stale = lockTitle('stale') ?? '';
+    expect(live).toContain('→');
+    expect(stale).toContain('→');
+    expect(live).not.toBe(stale);
+    expect(stale).toContain('does not block');
   });
 
   // The fourth vocabulary. `CLOSED_HELP` lives in closure.ts rather than here —

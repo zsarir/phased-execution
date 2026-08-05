@@ -1948,10 +1948,19 @@ export class Runner {
      * deadlocks against its own worker. Seen in a real run twice.
      *
      * So the entity doing the work holds the lock. The runner only looks, so it
-     * can park rather than start a session that would immediately stop. */
+     * can park rather than start a session that would immediately stop.
+     *
+     * A LAPSED lease is not a holder. `phase-lock.sh status` prints `held by X`
+     * for an expired claim too and appends `(EXPIRED — free to take over)`;
+     * this used to read only the first half, so a session that died without
+     * releasing parked every attempt at its phase — for the thirty minutes of
+     * the lease, and then forever after, since nothing renews a dead claim. The
+     * script is still the one deciding what a claim means; we just read the
+     * whole sentence it wrote. */
     const owner = autopilotOwner(state.id);
     const status = await this.script('phase-lock.sh', [state.slug, 'status', String(phase)]);
-    const holder = /held by (\S+)/.exec(status.stdout)?.[1];
+    const expired = status.stdout.includes('EXPIRED');
+    const holder = expired ? undefined : /held by (\S+)/.exec(status.stdout)?.[1];
     if (holder && holder !== owner) {
       record.status = 'parked';
       record.note = `phase ${phase} is locked by ${holder} — ${status.stdout.trim().slice(0, 160)}`;

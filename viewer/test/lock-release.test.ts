@@ -186,6 +186,25 @@ test('a live lease is refused, and the phase stays claimed', async () => {
   } finally { cleanup(); }
 });
 
+test('force takes a live claim — the only way past one, and it is asked for by name', async () => {
+  // The refusal above is the default and stays the default. But a live claim
+  // now BLOCKS a run, and a block with no way past it strands an operator
+  // whose holder is a session that died without releasing. `force` is that way
+  // past: never a default, never inferred — the caller passes it.
+  const { root, cleanup } = scratchDocs();
+  try {
+    addPlan(root, 'demo');
+    const file = claim(root, 'demo', 1, 'someone/working', 1800);
+    const svc = service(root);
+    try {
+      const result = await svc.releaseLock('demo', 1, true);
+      assert.equal(result.ok, true, 'a forced release succeeds against a live lease');
+      assert.equal(result.owner, 'someone/working', 'and still reports whose claim it took');
+      assert.equal(existsSync(file), false, 'the lock file should be gone');
+    } finally { svc.close(); }
+  } finally { cleanup(); }
+});
+
 test('a phase nobody claimed reports free rather than failing', async () => {
   const { root, cleanup } = scratchDocs();
   try {

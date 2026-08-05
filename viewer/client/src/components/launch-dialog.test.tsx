@@ -144,3 +144,48 @@ describe('the submits', () => {
     expect('permissionProfile' in body).toBe(false);
   });
 });
+
+describe('a claimed phase', () => {
+  const HELD = {
+    owner: 'someone/else', expired: false, host: 'their-box',
+    leaseUntil: Date.now() + 18 * 60_000, claimedAt: Date.now() - 12 * 60_000,
+  };
+
+  it('refuses to submit, and says who holds it', async () => {
+    // The dialog agrees with the server rather than discovering the 409 after
+    // the click. A dialog that submits into a refusal lied about its button.
+    await mount({ kind: 'phase', slug: 'alpha', phase: 4, run: null, lock: HELD });
+
+    await screen.findByText(/is claimed by/);
+    expect(screen.getByText('someone/else')).toBeTruthy();
+    expect(screen.getByText('their-box')).toBeTruthy();
+
+    const submit = screen.getByRole('button', { name: /Run phase 4/ });
+    expect(submit.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(submit);
+    expect(runStart).not.toHaveBeenCalled();
+  });
+
+  it('a LAPSED claim warns but still launches', async () => {
+    await mount({
+      kind: 'phase',
+      slug: 'alpha',
+      phase: 4,
+      run: null,
+      lock: { ...HELD, expired: true },
+    });
+
+    await screen.findByText(/lapsed on this phase/);
+    const submit = screen.getByRole('button', { name: /Run phase 4/ });
+    expect(submit.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() => expect(runStart).toHaveBeenCalled());
+  });
+
+  it('an unclaimed phase shows no claim banner at all', async () => {
+    await mount({ kind: 'phase', slug: 'alpha', phase: 4, run: null });
+    await screen.findByText('Model');
+    expect(screen.queryByText(/is claimed by/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Run phase 4/ }).hasAttribute('disabled')).toBe(false);
+  });
+});

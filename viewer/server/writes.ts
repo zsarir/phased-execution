@@ -134,7 +134,11 @@ export function planWrite(request: WriteRequest, opts: { root: string; docsDir?:
       if (!OWNER.test(owner)) throw new WriteError('Owner must look like "account/session".');
       const verb = request.action === 'lock-claim' ? 'claim' : 'release';
       const args = [slug, verb, String(phase), '--owner', owner];
-      if (request.force && verb === 'claim') args.push('--force');
+      // `--force` on either verb now. Release used to refuse it, which left a
+      // live claim releasable only from a terminal — fine while a claim was
+      // decoration, a dead end once it started blocking runs. The console asks
+      // for confirmation before it ever sets this.
+      if (request.force) args.push('--force');
       return {
         script: 'phase-lock.sh',
         args,

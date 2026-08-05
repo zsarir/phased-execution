@@ -9,7 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import type { Service } from '../service.ts';
+import { PhaseClaimedError, type Service } from '../service.ts';
 import { agentEnabled, checkRoot, listDirs } from '../config.ts';
 import { buildAgentLaunch } from '../agent.ts';
 import { parseRecoveryRequest, type RecoveryFacts } from '../recovery.ts';
@@ -794,7 +794,10 @@ export async function handleApi(
         json(res, 400, { error: 'pass {slug, phase} for one lock, or {expired: true} for every stale one' });
         return true;
       }
-      const result = await service.releaseLock(slug, phase);
+      // `force` takes a claim whose lease is still running — the only way past a
+      // live claim, now that one refuses a run. Still write-guarded above; the
+      // console confirms it with the operator before it ever gets here.
+      const result = await service.releaseLock(slug, phase, body.force === true);
       // 409 rather than 400 on a live lease: the request is well formed, the
       // phase is simply still being worked. `error` carries the explanation
       // because that is the field `lib/api.ts` turns into the thrown message —
@@ -1083,7 +1086,18 @@ export async function handleApi(
     return true;
   } catch (error) {
     const message = error instanceof WriteError ? error.message : String((error as Error)?.message ?? error);
-    json(res, error instanceof WriteError ? 400 : 500, { error: message });
+    // 409 for a claimed phase: the request is well formed and the caller did
+    // nothing wrong — somebody else is simply working that phase. 500 would
+    // read as a console fault and send the operator looking for the wrong bug.
+    const status = error instanceof PhaseClaimedError ? 409
+      : error instanceof WriteError ? 400
+        : 500;
+    json(res, status, {
+      error: message,
+      ...(error instanceof PhaseClaimedError
+        ? { claimed: { slug: error.slug, phase: error.phase, ...error.lock } }
+        : {}),
+    });
     return true;
   }
 }

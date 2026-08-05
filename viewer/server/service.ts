@@ -98,6 +98,46 @@ export type PlanSummary = PlanStats & {
   eta?: EtaEstimate;
 };
 
+/**
+ * A claim on a phase, as a page needs to read it.
+ *
+ * Everything `parseLock` recovers from the lock file except its path — the
+ * narrower shape this used to be (`owner`/`expired`/`leaseUntil`) could say
+ * that a phase was held but never who by, on what machine, since when, or over
+ * what scope, which is exactly the set of questions someone asks before
+ * deciding whether to take a claim away from another session.
+ */
+export type PhaseLockView = {
+  owner: string;
+  expired: boolean;
+  leaseUntil?: number;
+  claimedAt?: number;
+  host?: string;
+  scope?: string[];
+};
+
+/**
+ * The one place a parsed lock becomes a lock a page can read.
+ *
+ * Two call sites used to narrow it by hand and had already drifted — the
+ * per-phase one dropped `host`, the plan-level one kept it — so the same claim
+ * described itself differently depending on which list you found it in.
+ */
+function lockView(lock: {
+  owner: string; expired: boolean; leaseUntil?: number;
+  claimedAt?: number; host?: string; scope?: string[];
+} | null | undefined): PhaseLockView | undefined {
+  if (!lock) return undefined;
+  return {
+    owner: lock.owner,
+    expired: lock.expired,
+    leaseUntil: lock.leaseUntil,
+    claimedAt: lock.claimedAt,
+    host: lock.host,
+    scope: lock.scope,
+  };
+}
+
 export type PhaseView = {
   phase: number;
   title: string;
@@ -120,7 +160,7 @@ export type PhaseView = {
   row?: PhaseRow;
   analysis?: PhaseAnalysis;
   qa?: { result: string; report?: string };
-  lock?: { owner: string; expired: boolean; leaseUntil?: number };
+  lock?: PhaseLockView;
   handoff?: {
     file: string; status: string; completed?: string; title: string;
     outstanding?: string; skillsUsed: string[]; prompts: number;
@@ -128,7 +168,18 @@ export type PhaseView = {
 };
 
 export type RouteView = {
-  nodes: { phase: number; layer: number; row: number; state: string; size: string; gated: boolean; title: string }[];
+  nodes: {
+    phase: number; layer: number; row: number; state: string; size: string; gated: boolean;
+    title: string;
+    /**
+     * Whether a station is claimed, and whether that claim still holds.
+     *
+     * A marker rather than the lock itself: the map draws a ring, and shipping
+     * the whole lock object to every node would put an owner string on the wire
+     * for a shape that has nowhere to render one.
+     */
+    locked?: 'live' | 'stale';
+  }[];
   edges: { from: number; to: number }[];
   layers: number;
   rows: number;
@@ -163,10 +214,50 @@ export type PlanDetail = {
    */
   eta: { plan: EtaEstimate | null; perPhase: PhaseEta[] };
   qa: { phase: number; result: string; report?: string }[];
-  locks: { phase: number; owner: string; expired: boolean; leaseUntil?: number; host?: string }[];
+  locks: (PhaseLockView & { phase: number })[];
   git: GitFileInfo & { dirty?: boolean };
   memory: { key: string; path: string; text: string; indexLines: string[] } | null;
 };
+
+/**
+ * A phase someone else is holding right now.
+ *
+ * Its own class because the answer is 409, not 500: the request is well formed
+ * and the caller did nothing wrong — the phase is simply being worked. Thrown
+ * by every verb that would START a session on a named phase, so the refusal
+ * cannot be an accident of which endpoint you happened to call.
+ *
+ * This used not to exist, and the consequence was worse than a missing error
+ * type: `POST /api/run/<slug>/start` on a claimed phase answered 200, minted a
+ * run, and only degraded to `parked` several subprocesses later inside the
+ * runner. The console said a run had started; nothing ran.
+ */
+export class PhaseClaimedError extends Error {
+  /* Plain fields, assigned in the body. Constructor parameter properties are
+     TypeScript that Node's strip-only loader cannot erase, and this server runs
+     straight off its `.ts` — one `readonly slug: string` in a constructor
+     signature refuses to start the whole console. */
+  slug: string;
+  phase: number;
+  lock: { owner: string; host?: string; leaseUntil?: number };
+
+  constructor(
+    slug: string,
+    phase: number,
+    lock: { owner: string; host?: string; leaseUntil?: number },
+  ) {
+    super(
+      `Phase ${phase} of ${slug} is claimed by ${lock.owner}`
+      + (lock.host ? ` on ${lock.host}` : '')
+      + (lock.leaseUntil ? ` — the lease runs until ${new Date(lock.leaseUntil).toISOString()}` : '')
+      + '. Wait for that session, or release the claim.',
+    );
+    this.name = 'PhaseClaimedError';
+    this.slug = slug;
+    this.phase = phase;
+    this.lock = lock;
+  }
+}
 
 /** What became of one release attempt. Bulk releases return one per lock. */
 export type LockRelease = {
@@ -1589,11 +1680,14 @@ export class Service {
    * the check: the owner still has to match at release time, so a phase
    * re-claimed between the read and the write fails exactly as it should.
    *
-   * A live lease is refused. A lease that has not run out is someone working,
-   * and no card on this dashboard is worth interrupting them for — `--force` is
-   * the operator's own decision to make at a terminal.
+   * A live lease is refused unless `force` is set. A lease that has not run out
+   * is someone working, and no card on this dashboard is worth interrupting
+   * them for — but a live claim now BLOCKS a run, so refusing with no way past
+   * it would strand an operator whose holder is a session that died without
+   * releasing. `force` is that way past, and it is never a default: the caller
+   * confirms it explicitly, and the audit line below records that it was used.
    */
-  async releaseLock(slug: string, phase: number): Promise<LockRelease> {
+  async releaseLock(slug: string, phase: number, force = false): Promise<LockRelease> {
     if (!this.flags.allowWrites) throw new Error('Writes are disabled. Restart with --allow-writes to enable them.');
     const handoffsDir = this.root?.handoffsDir;
 
@@ -1602,7 +1696,7 @@ export class Service {
     // two clients can both be right about a lock only one of them removed.
     const lock = handoffsDir ? readLock(handoffsDir, slug, phase) : null;
     if (!lock) return { slug, phase, ok: true, owner: null, detail: 'already free' };
-    if (!lock.expired) {
+    if (!lock.expired && !force) {
       return {
         slug,
         phase,
@@ -1615,14 +1709,20 @@ export class Service {
     }
 
     const outcome = await runWrite(
-      planWrite({ action: 'lock-release', slug, phase, owner: lock.owner }, { root: this.root!.path }),
+      planWrite(
+        { action: 'lock-release', slug, phase, owner: lock.owner, ...(force ? { force: true } : {}) },
+        { root: this.root!.path },
+      ),
       { scriptsDir: this.flags.scriptsDir, root: this.root!.path },
     );
     // Every release is audited. A claim vanishing with no record of who removed
-    // it is indistinguishable from a lock file that was never written.
+    // it is indistinguishable from a lock file that was never written — and a
+    // FORCED one, taken from a session that had not finished, is the line
+    // someone will come looking for.
     log.info('lock.released', {
       slug, phase, owner: lock.owner, ok: outcome.ok, code: outcome.code,
       claimedAt: lock.claimedAt, leaseUntil: lock.leaseUntil,
+      ...(force ? { forced: true, wasLive: !lock.expired } : {}),
     });
     if (outcome.ok) this.invalidateAll();
     return {
@@ -1887,7 +1987,7 @@ export class Service {
         row,
         analysis: analyses.find((a) => a.phase === row.phase),
         qa: qa ? { result: qa.result, report: qa.report } : undefined,
-        lock: lock ? { owner: lock.owner, expired: lock.expired, leaseUntil: lock.leaseUntil } : undefined,
+        lock: lockView(lock),
         handoff: handoff ? {
           file: handoff.file, status: handoff.status, completed: handoff.completed,
           title: handoff.title, outstanding: handoff.outstanding,
@@ -1912,12 +2012,14 @@ export class Service {
       route: {
         nodes: layout.map((node) => {
           const detail = plan?.phases[node.phase];
+          const nodeLock = lockFor(record, node.phase);
           return {
             phase: node.phase, layer: node.layer, row: node.row,
             state: ctx.board.states[node.phase] ?? 'waiting',
             size: detail?.size ?? 'M',
             gated: detail?.gated ?? false,
             title: detail?.title || rows.find((r) => r.phase === node.phase)?.title || `Phase ${node.phase}`,
+            locked: nodeLock ? (nodeLock.expired ? 'stale' as const : 'live' as const) : undefined,
           };
         }),
         edges: rows.flatMap((row) => (index.deps.get(row.phase) ?? []).map((dep) => ({ from: dep, to: row.phase }))),
@@ -1934,9 +2036,7 @@ export class Service {
       index: record.index,
       eta,
       qa: record.qa,
-      locks: record.locks.map((l) => ({
-        phase: l.phase, owner: l.owner, expired: l.expired, leaseUntil: l.leaseUntil, host: l.host,
-      })),
+      locks: record.locks.map((l) => ({ phase: l.phase, ...lockView(l)! })),
       git: { ...gitInfo, dirty: record.planPath ? this.repo.dirty.some((d) => record.planPath!.endsWith(d)) : undefined },
       memory: memoryEntry
         ? { key: memoryKey, path: memoryEntry.path, text: memoryEntry.text, indexLines: memoryIndexLines(memoryKey) }
@@ -2207,6 +2307,28 @@ export class Service {
    * ---------------------------------------------------------------- */
 
   /**
+   * Refuse to start work on a phase somebody else is holding.
+   *
+   * Only for NAMED phases. A whole-plan run that meets a claimed phase should
+   * park that one and get on with the other fourteen — refusing the run would
+   * let one stale-looking claim stop a plan. But "run only this phase", a
+   * retry, a recovery session and a QA session all name exactly one phase, and
+   * for those the claim is the whole answer.
+   *
+   * An EXPIRED lease is not a holder: nobody is working a phase whose claim
+   * lapsed, and treating debris as an owner is the bug this rail was built
+   * around (see the runner's boarding check).
+   */
+  private assertNotClaimed(slug: string, phases: readonly number[] | undefined): void {
+    const handoffsDir = this.root?.handoffsDir;
+    if (!handoffsDir || !phases?.length) return;
+    for (const phase of phases) {
+      const lock = readLock(handoffsDir, slug, phase);
+      if (lock && !lock.expired) throw new PhaseClaimedError(slug, phase, lock);
+    }
+  }
+
+  /**
    * Start or continue a run. Whether the plan is fresh or half-finished is not
    * a distinction the caller has to make — the engine derives ready phases from
    * the done-set, so both are the same code path.
@@ -2227,6 +2349,10 @@ export class Service {
         `${slug} is already running in this console. Pause or stop it first — `
         + 'another plan can start beside it, but one plan cannot run twice.');
     }
+    // Before anything is written or minted. A claimed phase used to be
+    // discovered inside the runner, after a run existed and the console had
+    // already reported success.
+    this.assertNotClaimed(slug, options.onlyPhases);
 
     // QA on launch, resolved BEFORE the runner starts so the run's first board
     // read already sees gating. The preference speaks only for a fresh run — a
@@ -2699,6 +2825,10 @@ export class Service {
   }
 
   async retryPhase(slug: string, phase: number): Promise<RunState | null> {
+    // Named phase, so the claim is the whole answer — and checked before the
+    // live-runner branch too, since `runner.retry` queues work the boarding
+    // check would only refuse much later, after the button had said yes.
+    this.assertNotClaimed(slug, [phase]);
     const runner = this.liveRunner(slug);
     if (runner) { runner.retry(phase); return runner.current(); }
     // No loop behind it: resetting the record used to be the WHOLE action —
@@ -2756,6 +2886,9 @@ export class Service {
     if (this.liveRunner(slug)) {
       throw new Error(`${slug} is in progress. Pause or stop it before recovering a phase.`);
     }
+    // A recovery spawns a session on this exact phase — the same collision a
+    // second run would be, so the same refusal.
+    this.assertNotClaimed(slug, [phase]);
     const root = this.root?.path;
     if (!root) throw new Error('No repository is open.');
 
@@ -3164,6 +3297,20 @@ export class Service {
     if (already) {
       return refuse(409,
         `A QA session for ${request.slug} P${request.phase} is already running.`, already.id);
+    }
+
+    // A claim this console cannot see the session behind. `building` above only
+    // knows about sessions THIS console started; a phase claimed from a
+    // terminal, or by an agent in another Claude home, is invisible to it and
+    // is exactly the case the lock file exists to cover.
+    const handoffsDir = this.root?.handoffsDir;
+    const claim = handoffsDir ? readLock(handoffsDir, request.slug, request.phase) : null;
+    if (claim && !claim.expired) {
+      return refuse(409,
+        `${request.slug} P${request.phase} is claimed by ${claim.owner}`
+        + (claim.host ? ` on ${claim.host}` : '')
+        + ' — a review of a phase still being changed is not a review. Wait for that session, '
+        + 'or release the claim.');
     }
 
     // Activation before the facts are read, so the brief reports the qa-mode
