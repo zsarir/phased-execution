@@ -60,7 +60,11 @@ jobs:
           chmod +x "$HOME/bin/claude"
           echo "$HOME/bin" >> "$GITHUB_PATH"
       - name: Server suite (minus the load-sensitive terminal file)
-        run: node --test $(ls test/*.test.ts | grep -v 'terminal.test.ts')
+        # Serial files on purpose: the suite is documented load-sensitive
+        # (terminal reattach is only the loudest case), and a 3-core runner
+        # under 40-odd parallel files hits event-loop-drain races that a dev
+        # machine's cores absorb. Serial is slower and honest.
+        run: node --test --test-concurrency=1 $(ls test/*.test.ts | grep -v 'terminal.test.ts')
       - name: Terminal suite, isolated with one retry (known reattach flake under full-suite load)
         run: node --test test/terminal.test.ts || node --test test/terminal.test.ts
       - name: Client suite
