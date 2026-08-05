@@ -395,6 +395,31 @@ test('two projects get two consoles from one install, and each answers for its o
   assert.equal(await probe(ports[1]), null, 'beta is down');
 });
 
+test('a value-taking flag keeps its value — it is never read as the instance', (t) => {
+  clearRegistry();
+  t.after(clearRegistry);
+  registerInstance(ALPHA, { name: 'first', port: 4199 });
+
+  // `--port 4123` names a PORT. Reading `4123` as the thing to act on answers
+  // a question nobody asked, and — because the value never reaches the server —
+  // skips the collision refusal that would have named the project owning it.
+  const port = spawnSync(process.execPath, [PHASE_CONSOLE, 'status', '--port', '4123'], { encoding: 'utf8' });
+  assert.doesNotMatch(
+    `${port.stdout}${port.stderr}`,
+    /no instance called "4123"/,
+    'the value of --port was taken as the selector',
+  );
+
+  // The same bug with a path-shaped value was worse than a bad selector: it
+  // became the ROOT, so the verb acted on a console that does not exist.
+  const log = spawnSync(process.execPath, [PHASE_CONSOLE, 'status', '--log-file', '/tmp/pc-test.log'], { encoding: 'utf8' });
+  assert.doesNotMatch(
+    `${log.stdout}${log.stderr}`,
+    /pc-test\.log/,
+    'the value of --log-file was taken as the root',
+  );
+});
+
 test('stopping a console that is not running says so, and does not signal a recycled pid', (t) => {
   clearRegistry();
   t.after(clearRegistry);

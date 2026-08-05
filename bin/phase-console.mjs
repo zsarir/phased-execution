@@ -190,6 +190,22 @@ function looksLikePath(token) {
     || existsSync(resolve(token));
 }
 
+/**
+ * Console flags that take a VALUE, so the value is never mistaken for the
+ * positional selector.
+ *
+ * Without this, `start --port 4123` reads `--port` as an unknown flag to
+ * forward and then `4123` as the instance to act on — answering *no instance
+ * called "4123"* to a command that named a port, and never reaching the server
+ * that would have refused it by name. `--log-file /tmp/x` was worse: the value
+ * looks like a path, so it became the ROOT. Kept in sync with the parser in
+ * `viewer/server/config.ts`.
+ */
+const VALUE_FLAGS = new Set([
+  '--port', '-p', '--host', '--max-sessions', '--remote', '--remote-user',
+  '--scripts', '--default-skills', '--log-file', '--notify',
+]);
+
 /** Split a verb's arguments into "which console" and "everything else". */
 function parseTarget(rest) {
   let selector;
@@ -198,7 +214,14 @@ function parseTarget(rest) {
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     if (arg === '--instance') { selector = rest[++i]; continue; }
-    if (arg === '--root') { rootArg = rest[++i]; continue; }
+    if (arg === '--root' || arg === '-r') { rootArg = rest[++i]; continue; }
+    // Forward the flag AND its value together — consuming the value here is
+    // what stops the loop below from reading it as a positional selector.
+    if (VALUE_FLAGS.has(arg)) {
+      keep.push(arg);
+      if (i + 1 < rest.length) keep.push(rest[++i]);
+      continue;
+    }
     if (!arg.startsWith('-') && selector === undefined && rootArg === undefined) {
       if (looksLikePath(arg)) rootArg = arg; else selector = arg;
       continue;
