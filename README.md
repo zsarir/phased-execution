@@ -54,13 +54,39 @@ phase-console install-skill           # copy the skill where Claude Code reads i
 phase-console start | stop | restart | status | logs   # drive the background agent
 ```
 
-**One install, one console per project.** `cd` into a repository and `phase-console start`: it gets
-its own port, its own state and its own supervisor, and your other projects keep running. The first
-console on a machine keeps port 4123 and everything it already had; the rest derive a stable port
-from their path. `phase-console list` shows them all, and every verb takes the name of one.
-
 Works on **macOS** and **Linux**, and on **Windows inside WSL2** — routes, updates, uninstall and
 the platform notes live in **[docs/install.md](docs/install.md)**.
+
+### Running several projects at once
+
+One install, one console per project. `cd` into a repository and start it — the others keep running.
+(Precedence chain, state layout and phones: **[docs/console.md](docs/console.md)**.)
+
+```bash
+cd ~/code/alpha && phase-console start   # http://127.0.0.1:4123
+cd ~/code/beta  && phase-console start   # a second console, its own port
+phase-console list                       # NAME · ROOT · PORT · STATUS · UNIT
+phase-console open beta                  # by name, from anywhere
+phase-console stop beta                  # every verb takes the same selector
+```
+
+Every verb takes `[<name>]`, `--instance <sel>` or `--root <dir>`; with none it means the console for
+the directory you are in, and `phase-console status` alone reports them all. A console belongs to a
+repository **root** and its identity comes from that path, so the same project is always the same
+console — across restarts and reboots, with nothing written down.
+
+- **Ports.** The first console on a machine keeps **4123**; every other project derives a stable one
+  in **4124–4223**, taking the next free port if that one is held. Starting on a port owned by
+  another project is refused *by name*.
+- **Name it.** Commit `{"name": "alpha", "port": 4150}` as `.phase-console.json` at the repository
+  root to decide both for everyone who clones it. Both keys are optional.
+- **What is separate.** Logs, notifications, push devices and settings are per console. The first
+  console keeps the paths, port and unit name it always had — a single-project machine gains no new
+  files and nothing moves on upgrade.
+- **At login:** `phase-console --install-agent --root ~/code/beta` gives that project its own
+  launchd/systemd unit and leaves any console you already installed alone. Undo with
+  `agent.sh uninstall beta` (keeps it registered, unsupervised); `instances.mjs remove <id>` forgets
+  it entirely.
 
 ### Or hand it to Claude Code
 
