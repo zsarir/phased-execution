@@ -13,7 +13,7 @@ Carries a `## Session budget` with a `Skills (every session):` line, so the engi
 must re-inject those skills into every boot prompt + the QA brief.
 
 ## Session budget
-**Target model:** `claude-opus-4-8`  ·  **Budget:** ~1M working set/session  ·  **Branch:** current branch (no new branch)
+**Target model:** `claude-opus-5`  ·  **Budget:** ~1M working set/session  ·  **Branch:** current branch (no new branch)
 **Skills (every session):** `design-system`, `some-plugin:test-first`
 
 ## Phase graph

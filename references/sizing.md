@@ -46,9 +46,9 @@ auto-compaction threshold.
 ## Step 1 — know your model
 
 You (the running agent) already know your own model from your system context (e.g. "powered by Opus
-4.8 / `claude-opus-4-8`"). Use it. Phases are *executed* in future sessions that may run a **different**
+5 / `claude-opus-5`"). Use it. Phases are *executed* in future sessions that may run a **different**
 model than the one planning now — the common split is **Fable plans (Mode 1), Opus executes** — so the
-plan records a **target execution model** in its `## Session budget` note (default `claude-opus-4-8`
+plan records a **target execution model** in its `## Session budget` note (default `claude-opus-5`
 when the user hasn't said otherwise), and each phase-start re-checks it. If the target is genuinely
 unknown, ask with `AskUserQuestion` ("Which Claude model will run these phases?").
 
@@ -65,7 +65,7 @@ weights under-count reality by ~3×, so a "1M budget" session would blow far pas
 
 | Model | Max window | Max output | $ in / out per MTok (as of 2026-07) | Session budget preset (weight) | Use for |
 |---|---|---|---|---|---|
-| Opus 4.8 / 4.7 / 4.6 | 1M | 128K | 5 / 25 | **~200K** (≈600K real ≈ 60%) | the default execution model; hard reasoning / architecture |
+| Opus 5 / 4.8 / 4.7 | 1M | 128K | 5 / 25 | **~200K** (≈600K real ≈ 60%) | the default execution model (Opus 5 is the latest); hard reasoning / architecture |
 | Fable 5 | 1M | 128K | 10 / 50 | **~200K** | planning (Mode 1) + the most demanding long-horizon phases; priciest |
 | Sonnet 5 / 4.6 | 1M | 64K | 2 / 10 intro (→3 / 15) · 4.6: 3 / 15 | **~200K** | balanced execution / implementation phases |
 | Haiku 4.5 | **200K** | 64K | 1 / 5 | **~40K** | mechanical / cheap phases → smaller phases, more of them |

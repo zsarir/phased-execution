@@ -455,7 +455,7 @@ plan_model() {
 # the QA brief so a cold-start session re-activates them (e.g. `design-system`,
 # `some-plugin:test-first`). Empty if none. ONLY that exact phrase
 # matches — a loose 'skill' match would swallow backticked tokens from unrelated
-# budget prose (e.g. "skill v3 sizing — `claude-opus-4-8`") into the skills list.
+# budget prose (e.g. "skill v3 sizing — `claude-opus-5`") into the skills list.
 plan_skills() {
   # `|| true`: a no-match grep mid-pipe exits 1, which under `set -euo pipefail`
   # would otherwise abort every caller (e.g. --boot-prompt) on a plan with no Skills line.

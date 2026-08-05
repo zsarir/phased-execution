@@ -30,13 +30,13 @@ load ../helpers/test_helper
 
 @test "boot-prompt: budget prose containing 'skill' + backticks is NOT read as a Skills directive" {
   # Regression (found by v3 smoke evals): a §Session budget line like
-  # "**Budget:** per skill sizing defaults · `claude-opus-4-8`" used to be swallowed
+  # "**Budget:** per skill sizing defaults · `claude-opus-5`" used to be swallowed
   # by the loose 'skill' grep, injecting the model id as a skill to invoke.
   setup_docs linear linear
-  printf '\n## Session budget\n**Target model:** `claude-opus-4-8` · **Budget:** ~200K weight/session (skill v3 sizing) · **Branch:** current\n' \
+  printf '\n## Session budget\n**Target model:** `claude-opus-5` · **Budget:** ~200K weight/session (skill v3 sizing) · **Branch:** current\n' \
     >> "$DOCS_ROOT/docs/plans/linear.md"
   run pg linear --boot-prompt 2
   [ "$status" -eq 0 ]
   refute_contains "$output" "invoke these skills"
-  refute_contains "$output" "claude-opus-4-8"
+  refute_contains "$output" "claude-opus-5"
 }

@@ -13,7 +13,7 @@ Carries a `## Session budget` naming Opus so the board's batches must size to
 the opus budget (~200K, F6), not the no-model default (~40K).
 
 ## Session budget
-- Target model: Opus 4.8
+- Target model: Opus 5
 - Per-session weight budget: ~200K
 - Branch: main
 

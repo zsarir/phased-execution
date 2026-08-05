@@ -4,7 +4,7 @@ Everything about sizing flows from the model you are running.
 
 | Model | Window | Session budget *(phase weight)* | Best used for |
 |---|---|---|---|
-| **Opus** 4.8 / 4.7 / 4.6 | 1M | **~200K** | the default executor; hard reasoning and architecture |
+| **Opus** 5 / 4.8 / 4.7 | 1M | **~200K** | the default executor (Opus 5 is the latest); hard reasoning and architecture |
 | **Fable 5** | 1M | **~200K** | planning, and the most demanding long-horizon phases |
 | **Sonnet** 5 / 4.6 | 1M | **~200K** | balanced implementation phases |
 | **Haiku 4.5** | 200K | **~40K** | mechanical, cheap phases — so: smaller phases, more of them |
