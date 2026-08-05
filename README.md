@@ -9,6 +9,8 @@ session — as a dependency graph of right-sized sessions, with a local web cons
 
 **English** · [فارسی](README.fa.md)
 
+![Console ](assets/console.gif)
+
 </div>
 
 ```
@@ -30,21 +32,21 @@ SUGGESTED BATCHES (budget ~200K, joined phases share a session): [4 5]  [6]  [7]
 Big work becomes phases with declared dependencies. Each runs in its own right-sized Claude session,
 verifies itself, and writes a handoff the next session boots from cold.
 
-*That board is the product. Nothing here stores "what phase am I on" — it is computed, every time,
+_That board is the product. Nothing here stores "what phase am I on" — it is computed, every time,
 from your plan's dependency table and the handoff files on disk, so out-of-order and resumed work
-stay correct.*
+stay correct._
 
 ---
 
 ## Install
 
-| You want | Run | Notes |
-|---|---|---|
-| The console, ready to use | `npm install -g phase-console` | Client prebuilt — no build step. Skill files ship inside for the console's own use |
-| … via Homebrew | `brew install zsarir/homebrew-tap/phase-console` | macOS **and** Linux; runs on brew's Node |
-| … without installing | `npx phase-console ~/code/your-repo` | One-off, always the latest release |
-| The **skill** in Claude Code | `/plugin marketplace add zsarir/phased-execution` then `/plugin install phased-execution@mobin` | Auto-updates from every commit. Pair with npm/brew, or build its console once |
-| An editable tree | `git clone https://github.com/zsarir/phased-execution ~/.claude/skills/phased-execution` | Skill + console from one folder you control |
+| You want                     | Run                                                                                             | Notes                                                                              |
+| ---------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| The console, ready to use    | `npm install -g phase-console`                                                                  | Client prebuilt — no build step. Skill files ship inside for the console's own use |
+| … via Homebrew               | `brew install zsarir/homebrew-tap/phase-console`                                                | macOS **and** Linux; runs on brew's Node                                           |
+| … without installing         | `npx phase-console ~/code/your-repo`                                                            | One-off, always the latest release                                                 |
+| The **skill** in Claude Code | `/plugin marketplace add zsarir/phased-execution` then `/plugin install phased-execution@mobin` | Auto-updates from every commit. Pair with npm/brew, or build its console once      |
+| An editable tree             | `git clone https://github.com/zsarir/phased-execution ~/.claude/skills/phased-execution`        | Skill + console from one folder you control                                        |
 
 Then point the console at any repository that has (or should have) `docs/plans`:
 
@@ -77,7 +79,7 @@ console — across restarts and reboots, with nothing written down.
 
 - **Ports.** The first console on a machine keeps **4123**; every other project derives a stable one
   in **4124–4223**, taking the next free port if that one is held. Starting on a port owned by
-  another project is refused *by name*.
+  another project is refused _by name_.
 - **Name it.** Commit `{"name": "alpha", "port": 4150}` as `.phase-console.json` at the repository
   root to decide both for everyone who clones it. Both keys are optional.
 - **What is separate.** Logs, notifications, push devices and settings are per console. The first
