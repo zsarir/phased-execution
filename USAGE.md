@@ -12,8 +12,14 @@ the phase's own **Verification commands green** before handing off.
 **QA subagents are opt-in (off by default).** When you ask for QA — a `**QA gate:** on` line in the
 plan's §Session budget, `new-handoff.sh --qa` at a finish, or a plan that already has a
 `test-status.md` — each finished phase is verified by a **fresh-context QA subagent** that reads the
-real diff cold and records `pass | fail | waived`; a `fail` gates every dependent until re-QA'd.
+real diff cold and records `pass | fail | waived`; a `fail` gates every dependent until re-QA'd — or
+until the plan is **closed**, which retires its reports without pretending they passed.
 `scripts/phase-graph.sh <slug> --qa-mode` tells you which regime a plan is in.
+
+**A plan you will never finish can be closed.** `scripts/close-plan.sh <slug> --reason "…"` marks it
+`abandoned` (or `superseded`, or `complete`) with a date and a reason; `--reopen` reverses it. A closed
+plan stops reporting ready phases, boot prompts, warnings and notifications, while its board, its
+history and its search results stay exactly where they were — closing quiets a plan, it never hides one.
 
 This file is a human-facing orientation. The executable procedure — the three modes, the helper scripts,
 and the guardrails — lives in `SKILL.md` + `references/`; that is what Claude loads and follows.
@@ -30,7 +36,7 @@ board, the dependency graph drawn as a route map, phase and handoff detail, the 
 ready phase, portfolio statistics (velocity, critical paths, locks, health), and full-text search
 across plans and handoffs. It updates itself as agent sessions write files, and it takes every status
 claim from `scripts/phase-graph.sh` rather than recomputing it. Read-only unless you pass
-`--allow-writes` (guarded scaffold / QA / lock verbs), `--allow-run` (the **autopilot** — one
+`--allow-writes` (guarded scaffold / QA / lock / close verbs), `--allow-run` (the **autopilot** — one
 `claude -p` per phase, driving a plan unattended, with approvals for anything reaching outside the
 working tree), `--allow-agent` (the **Agent** page — interactive `claude` sessions in a browser
 terminal, plus a *New plan with AI* wizard that authors a plan from a brief), or

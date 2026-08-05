@@ -6,7 +6,7 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
-## [Unreleased]
+## [1.2.0] - 2026-08-05
 
 A plan can be closed — an off switch for work that will never be finished.
 
@@ -66,6 +66,17 @@ A plan can be closed — an off switch for work that will never be finished.
   reports what never got done so the plan's own board can say so, and engine-parity depends on it.
   Only the portfolio aggregates are gated server-side, so anything that turns `ready` into a call to
   action must gate it itself. `viewer/client/src/lib/closure.ts` is the one place the client decides.
+
+- **Closure is documented as a plan's lifecycle, not a flag.** [The artifacts](docs/artifacts.md)
+  gains the whole story — why "does anyone still care?" is the one piece of plan state that is stored
+  rather than computed, and a table of exactly what closing stops and what it keeps. The command
+  reference, the console's write verbs and the setup prompts list the new verb; the in-app Guide's
+  "Status words" grows a **fourth** vocabulary (plan status) beside run, phase and board; and the
+  Persian mirrors move with the English.
+- **`docs/qa-gating.md` answers the question a permanent `fail` raises.** A recorded failure still
+  outlives the QA switch, and closing the plan is now the documented other exit — it retires the
+  report without a re-QA, because a closed plan claims nothing about progress. Re-QA clears a
+  failure; closure stops you caring about one. Neither pretends the other happened.
 
 ### Fixed
 

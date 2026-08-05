@@ -19,6 +19,8 @@ plain language at plan time, or edit the file yourself afterwards.
 | Say a phase depends on others | the `Depends on` column | `## Phase graph` table |
 | Block a phase behind something external | `*(GATED)*` + `- **Gates (must clear first):** …` | that `### Phase N` heading |
 | Make that gate machine-checkable | `- **Gate-check:** date 2026-09-01` | that `### Phase N` block |
+| Retire a plan nobody will finish | `status: abandoned` + a reason — set it with `close-plan.sh` | the plan's frontmatter |
+| Bring a retired plan back | `close-plan.sh <slug> --reopen` | the plan's frontmatter |
 | Put a console run on one work branch | Settings ▸ Automation ▸ Branch (or the launch form) | the console |
 | Open a PR when the plan completes | Settings ▸ Automation ▸ Open a PR (needs the work branch) | the console |
 | Queue runs whose repos overlap | Settings ▸ Automation ▸ Repository guard | the console |
@@ -64,8 +66,15 @@ scripts/phase-graph.sh <slug> --session-plan opus   # proposed session grouping
 scripts/phase-graph.sh <slug> --qa-mode          # off | on <reason> | waived <reason>
 scripts/phase-graph.sh <slug> --qa-result N      # the recorded verdict
 scripts/phase-graph.sh <slug> --qa-prompt N      # the QA subagent's brief
+scripts/phase-graph.sh <slug> --plan-status      # active | complete | abandoned | superseded
+scripts/phase-graph.sh <slug> --closed           # exit 0 if the plan is closed, 1 if open
 scripts/phase-graph.sh <slug> --memory-block     # done/ready/waiting, for the memory entry
 ```
+
+A **closed** plan answers differently on purpose: `--ready` and `--ready-after` come back empty,
+`--session-plan` returns a notice instead of groups, `--lint` still lints but exits `0`, and the board
+prints a `🔒 CLOSED` banner in place of the ready/waiting/batching lines. `validate.sh` skips it and
+`next-phase-prompt.sh` offers no boot prompts. See [the artifacts](artifacts.md#a-plan-can-be-closed).
 
 ## The helpers
 
@@ -77,6 +86,7 @@ scripts/phase-graph.sh <slug> --memory-block     # done/ready/waiting, for the m
 | `next-phase-prompt.sh <slug> <N\|none>` | End-of-phase banner, board, batching advice, and a boot prompt for every newly ready phase. |
 | `phase-lock.sh <slug> claim\|release <N> --owner <id> [--force] [--git]` | Claim or release a phase lock. |
 | `qa-record.sh <slug> <N> <pass\|fail\|waived\|pending> --report <path>` | Record a QA verdict. |
+| `close-plan.sh <slug> [--status abandoned\|superseded\|complete] [--reason "…"] [--reopen] [--force]` | Close a plan that will never finish, or `--reopen` one. Sets `status:`, `closed:` and `closed_reason:`, and releases the plan's own phase locks. Idempotent; never touches git. |
 | `validate.sh <slug>` | Full validation — plan structure *and* handoff consistency. |
 
 ---

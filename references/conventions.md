@@ -199,6 +199,11 @@ run scripts from the repo root or set `DOCS_ROOT=/path/to/repo` explicitly when 
   a dependent is `ready` only when every dependency is `done` **and** QA `pass`/`waived`. A `fail` holds
   all dependents until a re-QA passes — always commit + push the report + test-status.md so the gate
   propagates to every clone. Turning QA off by default never clears an existing `fail` row.
+- **Closing the plan is the other way out of a `fail`, and it is a different claim.** A QA failure is a
+  statement about *progress*, and a closed plan makes none — so `close-plan.sh` retires the report
+  without a re-QA, while the row, the failed phase and the search hit all stay exactly as they were
+  (reopening restores the gate, still holding). Re-QA is how you *clear* a failure; closure is how you
+  stop *caring* about one. Never reach for closure to make a live plan's failure go away.
 - On first mid-plan activation, `new-handoff.sh` backfills already-complete phases as `waived`
   (pre-activation) so gating doesn't retroactively block their dependents. Use `waived` only for a
   genuinely non-applicable check or a recorded plan-level waiver.

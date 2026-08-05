@@ -327,7 +327,7 @@ it matches the engine, so the two readings cannot drift apart unnoticed.
 
 ## Writes
 
-Off by default. With `--allow-writes` the console can run four scripts, each behind a dialog that
+Off by default. With `--allow-writes` the console can run five scripts, each behind a dialog that
 shows the exact command first:
 
 | Action | Script |
@@ -337,6 +337,7 @@ shows the exact command first:
 | Record a QA result | `qa-record.sh` |
 | Claim or release a phase | `phase-lock.sh` |
 | Turn QA on for a plan | `new-handoff.sh … --qa` (it backfills finished phases as waived) |
+| Close or reopen a plan | `close-plan.sh` (a status and a one-line reason; reopening needs neither) |
 
 `--git` is never passed, so the console never commits or pushes — that stays a deliberate act in a
 terminal. Editing plan or handoff bodies is deliberately not offered; agents write those.

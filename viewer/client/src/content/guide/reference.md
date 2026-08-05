@@ -68,10 +68,34 @@ scripts/next-phase-prompt.sh <slug> N          # the stop banner + boot prompts
 
 ## Status words
 
-Three vocabularies coexist, on purpose: a **run** has a status (what the autopilot is doing with
-the whole plan), each **phase in that run** has a record (what happened to it here), and the
-**board** states what is true of a phase on disk — spelled the way a departures board would.
-Every badge in the app says this on hover; this is the same text in one place.
+Four vocabularies coexist, on purpose, and they nest: a **plan** has a status (is anyone still
+pursuing this at all), a **run** has a status (what the autopilot is doing with the plan right now),
+each **phase in that run** has a record (what happened to it here), and the **board** states what is
+true of a phase on disk — spelled the way a departures board would. Every badge in the app says this
+on hover; this is the same text in one place.
+
+### Plan status
+
+The only one of the four that is *stored* rather than computed — because "does anyone still care?"
+cannot be read off the files. The last three are **terminal**, which is what the app calls **closed**.
+
+| Word | What it means | What to do |
+|---|---|---|
+| `active` | Live work. The plan asks for attention: ready phases, boot prompts, warnings, notifications. | Whatever the board says is boarding. |
+| `complete` | Every phase landed and the work is finished. | Nothing — it has stopped asking. |
+| `abandoned` | Dropped. It will not be finished, and that is a decision, not a failure. | Nothing. Reopen if it comes back. |
+| `superseded` | Replaced by a different plan. The reason names the replacement. | Follow the plan that replaced it. |
+
+A closed plan **goes quiet without going away**: no ready phases, no boot prompts, no session
+batching, no stuck-handoff or QA-failure warnings, no notifications, and it leaves every portfolio
+total. Its board still renders in full, search still finds it (with a `closed` badge), and real
+structural damage is still reported — as a note rather than an error. Closing quiets a plan; it never
+hides one.
+
+Close or reopen it from the plan page (**⋯ ▸ Close plan**, which asks for a status and one line saying
+why) or with `close-plan.sh`. Reopening is always available, so closing is a cheap, reversible call —
+and a closed plan may perfectly well have unfinished phases, just as a plan with every phase done is
+still open until somebody says otherwise.
 
 ### Run status
 

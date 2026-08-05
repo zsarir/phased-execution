@@ -13,7 +13,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 metadata:
-  version: 4.0.1
+  version: 4.0.2
 ---
 
 # Phased Execution
@@ -325,6 +325,8 @@ The load-bearing rules a session must not get wrong; full rationale in `referenc
   (`--qa-mode` says which regime applies). But once `test-status.md` exists — on ANY plan, old or new — a
   dependent is `ready` only when its deps are `done` **and** QA `pass`/`waived`, and a recorded `fail`
   holds every dependent until re-QA'd: turning QA "off by default" never clears an existing `fail` row.
+  **Closing the plan** (`close-plan.sh`) is the only other exit — it retires the report without a re-QA
+  because a closed plan claims nothing about progress, and reopening restores the gate untouched.
   (conventions §QA gating)
 - **Validate before you trust the board** — `scripts/validate.sh <slug>` catches malformed rows, undefined
   deps, cycles, and inconsistent handoffs; a silently-wrong board is the worst failure.

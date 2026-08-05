@@ -52,6 +52,38 @@ re-run inside the one that failed. Results are committed and pushed so the gate 
 Verdicts are recorded only through `scripts/qa-record.sh` — an idempotent upsert. Never hand-edit
 `test-status.md`.
 
+## A recorded `fail` outlives the switch
+
+Turning QA off does **not** clear one. Once `test-status.md` exists — on any plan, old or new — the
+gate binds: a `fail` holds every dependent until a re-QA passes, and flipping the plan back to
+`**QA gate:** off` changes nothing about the row. That is deliberate. A failure you can dismiss by
+turning off the thing that found it is not a gate.
+
+Which leaves an obvious question: **what about a plan you are never going to finish?** A dropped
+experiment with a red phase 3 would otherwise report a failure at you forever, and re-QA'ing work
+nobody wants is a strange price to pay for silence.
+
+**Closing the plan is the answer** — and it is a different answer, not a loophole:
+
+```bash
+scripts/close-plan.sh checkout-rewrite --reason "approach dropped after the spike"
+```
+
+A QA failure is a statement about **progress**, and a closed plan makes no claims about progress, so
+its verdicts stop being reported. Nothing is erased: the row stays in `test-status.md`, the phase still
+reads failed on the board, and search still finds all of it. Reopen the plan and the gate is exactly
+where you left it, still holding.
+
+So the two exits are not interchangeable, and it is worth being precise about which one you want:
+
+| | What it means | What it takes |
+|---|---|---|
+| **Re-QA** | the work is now correct | a fresh subagent, a passing verdict |
+| **Close** | the work no longer matters | a status and one line saying why |
+
+Re-QA is how you *clear* a failure. Closing is how you stop *caring* about one. Neither pretends the
+other happened.
+
 ---
 
 

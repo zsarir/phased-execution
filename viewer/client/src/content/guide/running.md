@@ -21,7 +21,7 @@ Set up a Phase Console launcher on my Desktop.
    "~/Desktop/Phase Console.command", and make it executable.
 3. Open the copy and walk me through the knobs at the top, one at a time:
      ROOT        the repository the console reads — it must contain docs/plans
-     WRITES      --allow-writes: scaffold plans and handoffs, record QA, take locks
+     WRITES      --allow-writes: scaffold plans/handoffs, record QA, take locks, close plans
      RUNS        --allow-run: spawn unattended Claude sessions that edit ROOT
      TERM_FLAG   --allow-terminal: a real shell in the browser, running as me
      AGENT       --allow-agent: interactive claude sessions + the New-plan wizard

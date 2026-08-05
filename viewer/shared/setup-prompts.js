@@ -28,7 +28,7 @@ export const DESKTOP_LAUNCHER_PROMPT = `Set up a Phase Console launcher on my De
    "~/Desktop/Phase Console.command", and make it executable.
 3. Open the copy and walk me through the knobs at the top, one at a time:
      ROOT        the repository the console reads — it must contain docs/plans
-     WRITES      --allow-writes: scaffold plans and handoffs, record QA, take locks
+     WRITES      --allow-writes: scaffold plans/handoffs, record QA, take locks, close plans
      RUNS        --allow-run: spawn unattended Claude sessions that edit ROOT
      TERM_FLAG   --allow-terminal: a real shell in the browser, running as me
      AGENT       --allow-agent: interactive claude sessions + the New-plan wizard
@@ -73,7 +73,8 @@ export const INSTALL_PROMPT = `Install the phased-execution skill for me, and as
    scripts and markdown. npm and brew ship it prebuilt; for a plugin or clone:
      cd <skill>/viewer && npm ci && npm run build
 4. Before enabling anything, explain these one at a time and let me answer each:
-     --allow-writes   scaffold plans and handoffs, record QA, take phase locks
+     --allow-writes   scaffold plans and handoffs, record QA, take phase locks,
+                      close and reopen plans
      --allow-run      spawn unattended Claude sessions that edit my repository
                       for hours — the widest of the four, say so plainly
      --allow-terminal a real shell in the browser, running as me
