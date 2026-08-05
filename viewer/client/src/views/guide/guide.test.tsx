@@ -71,7 +71,12 @@ describe('the guide section registry', () => {
     const ALLOWED = new Set(['127.0.0.1', '0.0.0.0']);
     // Whoever is running this, derived — never written down. A test that spells
     // out the name it forbids leaks it to everyone who reads the test.
-    const local = [userInfo().username, hostname(), homedir()].filter((s) => s.length >= 3);
+    // A generic machine account is nobody's identity: on a CI box the username
+    // is literally `runner`, and forbidding it would forbid the word this
+    // guide's autopilot chapter is made of.
+    const GENERIC = new Set(['runner', 'ci', 'build', 'agent', 'admin', 'user', 'root', 'ubuntu']);
+    const local = [userInfo().username, hostname(), homedir()]
+      .filter((s) => s.length >= 3 && !GENERIC.has(s.toLowerCase()));
     const forbidden = [/\.ts\.net\/[a-z]/i, /\/Users\//, /\/home\/[a-z]/i];
     // As a token, never a bare substring: this machine's hostname is `Mac`, and
     // the guide is full of the word "machine". A leak names the identity alone.
