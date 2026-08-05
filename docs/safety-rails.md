@@ -32,3 +32,12 @@ work in your tree is not swept in.
 
 ---
 
+
+**The one deliberate hole in the push wall.** The console's autopilot hard-denies `git push` for
+every session, at two layers (its approvals hook and the CLI-side deny list it writes into each
+run's settings). The single exception is a run started with the **work branch + open a PR**
+options: for that run — and only that run — bare `git push` moves from the wall to an approval
+card, and `gh pr create` stays a card even under the `trusted` profile, so publishing the branch
+still takes one human tap. Force-pushes, `--force-with-lease` and `--delete` stay denied outright.
+Residual risk, stated plainly: with the console process dead its hook cannot ask, and that run's
+CLI-side deny list no longer contains bare `git push` — the destructive shapes still do.

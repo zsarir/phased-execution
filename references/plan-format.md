@@ -47,8 +47,11 @@ memory: project_<slug>      # or pre-existing project_<other> when reusing an ex
    this work (then every phase-finish dispatches a fresh-context QA subagent); `**QA gate:** off` records
    an explicit waiver (rows written as `waived`, no subagents). Only that exact bolded form is
    machine-read (`phase-graph.sh --qa-mode`). See `references/sizing.md` for sizing and
-   `references/conventions.md` §Branches for the branch policy. Example:
-   > **Target model:** `claude-opus-4-8` (1M window) · **Budget:** ~200K weight/session (≈60% of the window) · **Branch:** current branch (no new branch).
+   `references/conventions.md` §Branches for the branch policy. (The console may override the
+   `**Branch:**` line per run with its own work branch — its sessions are told about the mismatch
+   and record it in their handoffs; the line here stays authoritative for hand-driven sessions.)
+   Example:
+   > **Target model:** `claude-opus-5` (1M window) · **Budget:** ~200K weight/session (≈60% of the window) · **Branch:** current branch (no new branch).
    > **Skills (every session):** `design-system`, `some-plugin:test-first`
    > Hard-reasoning phases → Opus/Fable; mechanical phases → Haiku if run in their own sessions.
 5. **`## Phase graph`** — a table that makes blocking vs parallel obvious. **This table is machine-read:**

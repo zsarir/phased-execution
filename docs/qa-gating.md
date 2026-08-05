@@ -54,3 +54,17 @@ Verdicts are recorded only through `scripts/qa-record.sh` — an idempotent upse
 
 ---
 
+
+## Turning QA on from the console
+
+The console offers QA at every launch surface: a "QA gate" toggle on the run form and the phase
+launcher, an activation checkbox on the review dialog, and a **QA by default** preference
+(Settings ▸ Automation) that pre-ticks them for every plan. Launch-time activation goes through the
+skill's own `--qa` path — it needs the console started with `--allow-writes` (activation writes
+`test-status.md`), refuses loudly when it isn't, and backfills every already-finished phase as
+`waived` so turning it on never retroactively holds the board.
+
+One behaviour worth knowing before ticking it on a big plan: activation is plan-wide and sticky, and
+a run started under QA **parks at QA boundaries** until verdicts are recorded — the autopilot does
+not spawn reviewers on its own. Reviews come from the console's QA dialog (or a hand-dispatched
+subagent), and the run continues once the verdict lands.

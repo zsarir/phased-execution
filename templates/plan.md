@@ -29,7 +29,7 @@ it is in fact committed at sha XXXXXXX. Use `git log` as the source of truth; ig
 <!-- The model these phases are SIZED FOR, so a future session can re-check it. See references/sizing.md.
      Budget is summed phase WEIGHT (S/M/L), ~0.2 × the effective window (real context runs ~3× weight,
      so a full session lands near ~60% of the window): 1M-class models → ~200K; Haiku 200K → ~40K. -->
-**Target model:** `claude-opus-4-8`  ·  **Budget:** ~200K weight/session (≈60% of a 1M window)  ·  **Branch:** current branch (no new branch)
+**Target model:** `claude-opus-5`  ·  **Budget:** ~200K weight/session (≈60% of a 1M window)  ·  **Branch:** current branch (no new branch)
 **Skills (every session):** <!-- optional — backtick each skill to use across ALL phases, e.g. `design-system`, `some-plugin:test-first`; the engine re-injects them into every phase's boot prompt + QA brief. Remove this line if none. -->
 <!-- QA is OFF by default (phase-finish runs each phase's §Verification commands instead). ONLY if the
      user asked for QA on this work, add a line with exactly:  **QA gate:** on

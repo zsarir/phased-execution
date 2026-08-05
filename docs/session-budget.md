@@ -7,7 +7,7 @@ A complete `## Session budget` note looks like this:
 ```markdown
 ## Session budget
 
-> **Target model:** `claude-opus-4-8` (1M window) · **Budget:** ~200K weight/session (≈60% of the
+> **Target model:** `claude-opus-5` (1M window) · **Budget:** ~200K weight/session (≈60% of the
 > window) · **Branch:** current branch (no new branch).
 > **Skills (every session):** `design-system`, `some-plugin:test-first`
 > **QA gate:** on
@@ -66,6 +66,12 @@ changes which phases are allowed to start.
 a plan across branches you never asked for is worse than the alternative. If you *do* ask for a
 branch, exactly **one** branch carries the whole plan — every phase, including independent ones in
 separate sessions — and the plan records its name so every cold session checks out the same one.
+
+The **console** can also impose a branch per run: its Automation settings (or any launch form) can
+put a run on the plan-wide work branch `pe/<slug>`, with an optional PR when the plan completes.
+That is a run-level choice — it wins for the sessions the console mints, warns when it contradicts
+the plan's own `**Branch:**` line, and leaves hand-driven sessions following the plan's prose.
+See the console's own docs ([controls](controls.md) § Console automation defaults).
 
 ## 7 · Which skills every session must use
 

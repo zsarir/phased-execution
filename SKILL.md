@@ -91,7 +91,7 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
 ### Mode 1 — `plan` (no plan exists yet)
 1. **Set the session budget, then minimize phase count.** Identify the model that will *run* these phases —
    you know your own from your system context; if a different model will execute them, ask
-   (`AskUserQuestion`; the common split is Fable plans, Opus executes — default `claude-opus-4-8`). Look up
+   (`AskUserQuestion`; the common split is Fable plans, Opus executes — default `claude-opus-5`). Look up
    its budget in `references/sizing.md` and **author the fewest phases that fit it**: target
    `phase count ≈ ceil(total weight / budget)`, then add a boundary only where one is *earned* — an
    external gate, a deliberate model switch, or a checkpoint the user asked for. Never split for subsystem
@@ -108,7 +108,8 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    them. Also record the **branch** in that note: by default the branch already
    checked out — **don't create a new branch**; only if the user explicitly asked, create ONE feature
    branch for the whole plan (every phase, including concurrent ones, commits to it) and record its name.
-   See `references/conventions.md` §Branches.
+   (The console can also impose a run-level work branch `pe/<slug>` at launch; the plan line stays the
+   default for hand-driven sessions.) See `references/conventions.md` §Branches.
 2. Draft the plan in the `references/plan-format.md` shape. **Every phase must be self-contained** — written
    so a session with zero prior context can execute it from the plan + its handoff alone. **Required and
    load-bearing: the `## Phase graph` table.** Its `Depends on` column is the machine-readable dependency
@@ -182,7 +183,8 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
 2. **Commit** changed files — explicit paths, never `git add -A`; commit inside the relevant submodule(s);
    end the message with the repo's `Co-Authored-By:` trailer. Commit to the plan's recorded branch — **the
    current branch by default; never `git checkout -b`** unless the user asked and the plan names a branch
-   (then that single branch carries *all* phases, sequential and concurrent). **Verify with `git log -1` —
+   (then that single branch carries *all* phases, sequential and concurrent), or the boot prompt names a
+   console-declared run branch — that prompt then owns the branch discipline. **Verify with `git log -1` —
    never copy a sha from memory; the environment may have auto-committed.**
 3. **Handoff:** `bash ~/.claude/skills/phased-execution/scripts/new-handoff.sh <slug> <N> <title>`, then
    fill the frontmatter and body (see `references/handoff-format.md`). The script auto-fills `depends_on` +
@@ -307,8 +309,9 @@ The load-bearing rules a session must not get wrong; full rationale in `referenc
   in-session lever for cost *and* rot); don't over-delegate a lone read or edit. (conventions §Session sizing)
 - **`git log -1` is the truth for shas.** Never carry a sha from memory into a handoff; stale "uncommitted"
   claims are the #1 handoff defect. (conventions §Commits)
-- **Branches off by default** — commit to the current branch; only on explicit request, one branch for the
-  whole plan, every phase on it. (conventions §Branches)
+- **Branches off by default** — commit to the current branch; only on explicit request (or a
+  console-declared run branch named in the boot prompt), one branch for the whole plan, every phase on
+  it. (conventions §Branches)
 - **The handoff is the contract.** If a fresh session can't start cold from it, fix the handoff; link to the
   plan, never re-list the roadmap. (conventions §Memory, §Docs layout)
 - **`phase-graph.sh` is the truth for done/ready/next** — never infer from phase numbers or a remembered

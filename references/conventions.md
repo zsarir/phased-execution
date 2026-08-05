@@ -132,7 +132,9 @@ run scripts from the repo root or set `DOCS_ROOT=/path/to/repo` explicitly when 
   tree.
 - **Two sessions on the same repo still need their own checkouts if you insist on overlapping** — a
   separate clone or a `git worktree`, never one shared directory. The scope rule is what tells you when you
-  don't need that at all.
+  don't need that at all. The console automates exactly this escape hatch: with its repository guard
+  turned off, a work-branch run that overlaps a live one is instructed to `git worktree add` and do the
+  phase's work inside the linked worktree rather than switching a shared checkout.
 - **Handoff, INDEX and lock commits in the docs repo are NOT part of a phase's scope.** Every session
   writes there, and treating it as scope would serialise the whole system. Git's own `index.lock` plus a
   pull-rebase retry (≤3) is the serialization; the scripts do it, and a session that races a commit or push
