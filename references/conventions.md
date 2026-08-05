@@ -60,6 +60,16 @@ keep them accurate; the plan's "Exit criteria" column is the *definition* of don
 hand-maintain a "current phase". **A plan is finished only when the board shows EVERY phase `done`**, never
 when the highest-numbered phase is reached.
 
+**Closure is the one exception, and it is a different question.** "Is every phase done?" is computed and
+never stored. "Does anyone still care?" cannot be computed at all — it is an operator decision, so it
+*is* stored, in the plan's own `status:`. A terminal status (`complete`, `abandoned`, `superseded`)
+means the plan is **closed**: it stops reporting stuck handoffs, QA failures, drift warnings, ready
+phases, boot prompts, batching and notifications, while still rendering its board in full and still
+reporting genuine structural damage as a note. Set it with `scripts/close-plan.sh` (`--reopen`
+reverses it); ask for it with `phase-graph.sh <slug> --closed`. The two ideas must not blur: a closed
+plan can have unfinished phases, and an open plan with every phase done is still open until someone
+says otherwise.
+
 ## Phase dependencies (the DAG)
 - The plan is a dependency graph. A phase's `Depends on` lists **every** phase that must finish first;
   `scripts/phase-graph.sh` parses that column (numbers, comma lists, ranges like `1–7`, `—` for none).

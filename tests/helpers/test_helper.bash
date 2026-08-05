@@ -19,6 +19,9 @@ pe_newho()    {                                                "$SYS_BASH" "$PE_
 pe_nextp()    { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_SCRIPTS/next-phase-prompt.sh"  "$@"; }
 pe_hostatus() { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_SCRIPTS/handoff-status.sh"     "$@"; }
 qa_record()   { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_SCRIPTS/qa-record.sh"          "$@"; }
+# PE_TODAY keeps closure dates off the wall clock so assertions stay stable.
+pe_close()    { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" PE_TODAY="${PE_TODAY:-2026-01-02}" \
+                "$SYS_BASH" "$PE_SCRIPTS/close-plan.sh" "$@"; }
 
 # --- fixtures / scaffolding ---------------------------------------------------
 # Create an isolated DOCS_ROOT in the bats temp dir and install a fixture plan.

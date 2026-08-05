@@ -231,6 +231,10 @@ case "$action" in
       sc="$(grep -m1 '^scope=' "$f" | sed 's/^scope=//' || true)"
       [ -n "$l" ] && [ "$now" -ge "$l" ] && continue      # expired: free to take
       [ "$o" = "$owner" ] && continue                      # our own session
+      # A closed plan has no live sessions by definition, so a lock it left behind is
+      # debris — and because this scan crosses every plan, that debris would otherwise
+      # block work on unrelated plans until its lease happened to lapse.
+      [ -n "$s" ] && bash "$SCRIPT_DIR/phase-graph.sh" "$s" --closed >/dev/null 2>&1 && continue
       scope_intersects "$scope" "$sc" || continue
       hits=$((hits + 1))
       overlap="$(scope_overlap "$scope" "$sc")"

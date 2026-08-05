@@ -73,6 +73,16 @@ fi
 # Graph-derived frontmatter. Degrade gracefully if the plan has no parseable
 # "## Phase graph" table yet (GRAPH_OK=0 → legacy linear behaviour).
 # ---------------------------------------------------------------------------
+# Scaffolding a handoff into a closed plan is almost always a mistake — someone is
+# working from a stale boot prompt on a plan that has been walked away from. Say so,
+# and name the way back, rather than silently producing a handoff nobody will read.
+if closed="$(bash "$ENGINE" "$slug" --closed 2>/dev/null)" && [ "$force" = 0 ]; then
+  echo "refusing: $slug is closed (${closed#closed })" >&2
+  echo "  → reopen it first:  scripts/close-plan.sh $slug --reopen" >&2
+  echo "  → or pass --force to scaffold into the closed plan anyway" >&2
+  exit 2
+fi
+
 GRAPH_OK=0
 if bash "$ENGINE" "$slug" --ready >/dev/null 2>&1; then GRAPH_OK=1; fi
 

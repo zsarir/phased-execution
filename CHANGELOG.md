@@ -6,6 +6,36 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [Unreleased]
+
+A plan can be closed — an off switch for work that will never be finished.
+
+### Added
+
+- **`scripts/close-plan.sh`** — close a plan with a dated reason
+  (`close-plan.sh <slug> --reason "…"`, optionally `--status superseded|complete`), or `--reopen` to
+  undo. Writes only the plan's frontmatter (`status`, `closed`, `closed_reason`) and releases that
+  plan's own phase locks. Never runs git.
+- **`phase-graph.sh --plan-status` and `--closed`** — the closure predicate, defined once so every
+  other script asks rather than re-parsing frontmatter.
+- `status: superseded` joins the documented vocabulary alongside `active`, `complete`, `abandoned`.
+
+### Changed
+
+- **A terminal status (`complete`, `abandoned`, `superseded`) now means the plan is closed**, and a
+  closed plan stops reporting: no ready phases, no QA-failure or stuck-handoff alarm, no batching,
+  no boot prompts, no "mark the plan complete" nudge. Its board still renders in full — closing
+  quiets a plan, it never hides one — and structural problems are still named, demoted to notes.
+  Previously `status:` was documented but honoured nowhere, so a finished or abandoned plan kept
+  raising errors with no way to stop it.
+- `validate.sh` skips a closed plan instead of flunking it forever; `next-phase-prompt.sh` prints a
+  closure notice instead of boot prompts; `new-handoff.sh` refuses to scaffold into a closed plan
+  (`--force` overrides).
+- **`phase-lock.sh conflicts` ignores locks belonging to a closed plan.** The scan crosses every
+  plan, so an abandoned plan's leftover lock used to block sessions on unrelated plans until its
+  lease happened to lapse.
+- The all-phases-done banner now points at `close-plan.sh` rather than asking for a hand edit.
+
 ## [1.1.0] - 2026-08-05
 
 Linux — and Windows through WSL2 — become first-class: same features, same buttons, honest

@@ -1,7 +1,7 @@
 ---
 slug: {{SLUG}}
 created: {{DATE}}
-status: active            # active | complete | abandoned
+status: active            # active | complete | abandoned | superseded (last three = closed)
 phases: TODO              # total phase count
 handoffs: docs/handoffs/{{SLUG}}/
 memory: project_{{SLUG}}  # or pre-existing project_<other> key if reusing an existing memory

@@ -29,7 +29,7 @@
 # Run from the repo root that owns docs/, or set DOCS_ROOT.
 set -euo pipefail
 
-slug="${1:?usage: phase-graph.sh <slug> [--lint|--qa-mode|--qa-result N|--qa-prompt N|--gate-status N|--memory-block|--ready|--ready-after N|--dependents N|--deps N|--gated N|--size N|--repos N|--boot-prompt N|--session-plan [model|budget]]}"
+slug="${1:?usage: phase-graph.sh <slug> [--lint|--qa-mode|--qa-result N|--qa-prompt N|--gate-status N|--memory-block|--plan-status|--closed|--ready|--ready-after N|--dependents N|--deps N|--gated N|--size N|--repos N|--boot-prompt N|--session-plan [model|budget]]}"
 mode="${2:-board}"
 arg="${3:-}"
 
@@ -73,6 +73,38 @@ fi
 memory_key="$(grep -m1 '^memory:' "$plan_file" 2>/dev/null \
   | sed 's/^memory:[[:space:]]*//; s/[[:space:]]*#.*$//' || true)"
 memory_key="${memory_key:-project_${slug}}"
+
+# ---------------------------------------------------------------------------
+# Closure. Progress is computed from the handoffs; "does anyone still care?" cannot
+# be, so it is stored in the plan's own `status:`. A terminal status means CLOSED:
+# the board still renders, but the plan stops reporting work, warnings and prompts.
+# Values in the wild carry a trailing "# active | complete | …" legend — strip it.
+# ---------------------------------------------------------------------------
+_fm_field() {  # _fm_field <name> — first frontmatter-style value, legend stripped
+  grep -m1 "^$1:" "$plan_file" 2>/dev/null \
+    | sed "s/^$1:[[:space:]]*//; s/[[:space:]]*#.*\$//; s/[[:space:]]*\$//" || true
+}
+PLAN_STATUS="$(_fm_field status)"
+PLAN_STATUS="$(printf '%s' "${PLAN_STATUS:-active}" | tr '[:upper:]' '[:lower:]')"
+PLAN_STATUS="${PLAN_STATUS%% *}"
+PLAN_CLOSED_ON="$(_fm_field closed)"
+PLAN_CLOSED_REASON="$(_fm_field closed_reason)"
+case "$PLAN_STATUS" in
+  complete|abandoned|superseded) PLAN_CLOSED=1 ;;
+  *)                             PLAN_CLOSED=0 ;;
+esac
+
+plan_is_closed() { [ "$PLAN_CLOSED" = 1 ]; }
+
+# The one-line banner every closed-plan surface prints.
+closed_banner() {
+  local extra=""
+  [ -n "$PLAN_CLOSED_REASON" ] && extra=" — $PLAN_CLOSED_REASON"
+  [ -n "$PLAN_CLOSED_ON" ] && extra="$extra (closed $PLAN_CLOSED_ON)"
+  printf '🔒 CLOSED [%s]%s\n' "$PLAN_STATUS" "$extra"
+  printf '   This plan no longer reports work or warnings. Reopen it with:\n'
+  printf '   scripts/close-plan.sh %s --reopen\n' "$slug"
+}
 
 # ---------------------------------------------------------------------------
 # Parse the Phase-graph table → "phase<TAB>dep dep …<TAB>title".
@@ -632,6 +664,17 @@ compute_groups() {  # compute_groups <budget>
 # Machine sub-commands.
 # ---------------------------------------------------------------------------
 case "$mode" in
+  --plan-status)
+    # The stored operator decision, normalised. Always one bare word.
+    printf '%s\n' "$PLAN_STATUS"
+    exit 0
+    ;;
+  --closed)
+    # The predicate every other script shells out to, so closure is read in exactly
+    # one place. 0 = closed, 1 = open.
+    if plan_is_closed; then printf 'closed %s\n' "$PLAN_STATUS"; exit 0; fi
+    printf 'open %s\n' "$PLAN_STATUS"; exit 1
+    ;;
   --lint)
     # F1/F2/F3: structural validation. Exit non-zero on any problem.
     issues="$(compute_issues)"
@@ -641,14 +684,28 @@ case "$mode" in
     fi
     issues="$(printf '%s' "$issues" | sed '/^[[:space:]]*$/d')"
     if [ -n "$issues" ]; then
+      # A closed plan still gets its problems named — they just stop being a gate.
+      # Nobody should have to repair a plan they have already walked away from.
+      if plan_is_closed; then
+        printf '%s\n' "$issues" >&2
+        printf 'LINT OK (closed): %s — %s issue[s] noted, not gating\n' "$slug" "$(printf '%s\n' "$issues" | grep -c .)"
+        exit 0
+      fi
       printf '%s\n' "$issues" >&2
       printf 'LINT FAIL: %s (%s issue[s])\n' "$slug" "$(printf '%s\n' "$issues" | grep -c .)" >&2
       exit 1
+    fi
+    if plan_is_closed; then
+      printf 'LINT OK (closed): %s — %s phases, well-formed and acyclic\n' "$slug" "${#PHASES[@]}"
+      exit 0
     fi
     printf 'LINT OK: %s — %s phases, well-formed and acyclic\n' "$slug" "${#PHASES[@]}"
     exit 0
     ;;
   --ready|--ready-after)
+    # A closed plan offers no work: nothing is ready, so nothing gets started or
+    # batched and no boot prompt is ever generated for it.
+    plan_is_closed && { echo ""; exit 0; }
     # --ready-after N already set assume_done=arg above (arg is the 3rd positional).
     out=""
     for p in "${PHASES[@]}"; do
@@ -786,6 +843,12 @@ case "$mode" in
       esac
     done
     _csv() { echo "${1# }" | sed 's/ /, /g'; }
+    if plan_is_closed; then
+      printf 'closed: %s' "$PLAN_STATUS"
+      [ -n "$PLAN_CLOSED_ON" ] && printf ' %s' "$PLAN_CLOSED_ON"
+      [ -n "$PLAN_CLOSED_REASON" ] && printf ' — %s' "$PLAN_CLOSED_REASON"
+      printf '\n'
+    fi
     printf 'done: %s\n' "$(_csv "$md_d")"
     [ -n "$md_ip" ] && printf 'in-progress: %s\n' "$(_csv "$md_ip")"
     [ -n "$md_st" ] && printf 'stuck: %s\n' "$(_csv "$md_st")"
@@ -799,6 +862,12 @@ case "$mode" in
     exit 0
     ;;
   --session-plan)
+    if plan_is_closed; then
+      printf '\nSession plan — %s\n\n' "$slug"
+      closed_banner
+      printf '\nNo sessions to plan.\n'
+      exit 0
+    fi
     budget="$(resolve_budget "$arg")"
     printf '\nSession plan — %s   (budget ~%sK/session · S=%sK M=%sK L=%sK)\n' "$slug" "$((budget / 1000))" "$((SIZE_S / 1000))" "$((SIZE_M / 1000))" "$((SIZE_L / 1000))"
     printf 'Suggestion only: remaining phases share a session while deps are met and weight fits;\n'
@@ -898,18 +967,36 @@ total="${#PHASES[@]}"
 
 printf '\nPhase graph — %s   (%s/%s done)\n' "$slug" "$done_n" "$total"
 
+# A closed plan keeps its whole board — closing quiets a plan, it never hides one —
+# but the banner goes first so nobody mistakes the phase lines for outstanding work.
+if plan_is_closed; then
+  printf '\n'
+  closed_banner
+fi
+
 # Reconcile parsed rows against the plan's declared phase count — a mismatch means
 # the table is malformed (e.g. a phase number wrapped oddly) and the board may mislead.
 declared="$(grep -m1 '^phases:' "$plan_file" | sed 's/^phases:[[:space:]]*//; s/[[:space:]]*#.*$//' || true)"
 if [ -n "$declared" ] && [ "$declared" != TODO ] && [ "$declared" != "$total" ]; then
-  printf '⚠️  plan frontmatter says phases: %s but the table parsed %s rows — check the\n' "$declared" "$total"
-  printf '    "## Phase graph" table for a row the parser skipped (odd phase-number formatting).\n'
+  if plan_is_closed; then
+    printf 'ℹ️  note: frontmatter says phases: %s but the table parsed %s rows.\n' "$declared" "$total"
+  else
+    printf '⚠️  plan frontmatter says phases: %s but the table parsed %s rows — check the\n' "$declared" "$total"
+    printf '    "## Phase graph" table for a row the parser skipped (odd phase-number formatting).\n'
+  fi
 fi
 # F1/F2/F3: surface structural problems by name instead of silently misleading.
+# On a closed plan they stay visible — a broken plan must never become invisible —
+# but demoted to a note, because nobody owes repairs to a plan they have closed.
 _issues="$(compute_issues)"
 if [ -n "$_issues" ]; then
-  printf '⚠️  STRUCTURE PROBLEMS — fix these; the board below may be wrong until you do:\n'
-  printf '%s\n' "$_issues" | sed 's/^/      • /'
+  if plan_is_closed; then
+    printf 'ℹ️  structural notes (not gating — this plan is closed):\n'
+    printf '%s\n' "$_issues" | sed 's/^/      • /'
+  else
+    printf '⚠️  STRUCTURE PROBLEMS — fix these; the board below may be wrong until you do:\n'
+    printf '%s\n' "$_issues" | sed 's/^/      • /'
+  fi
 fi
 echo
 
@@ -919,7 +1006,7 @@ for p in "${PHASES[@]}"; do
   gmark=""; [ "${GATED[$p]}" = yes ] && gmark=" 🔒GATED"
   case "$state" in
     done)        icon="✅"; extra=""
-                 if [ "$QA_GATING" = 1 ]; then
+                 if [ "$QA_GATING" = 1 ] && ! plan_is_closed; then
                    case "$(qa_result "$p")" in
                      pass|waived) extra=" · QA:verified" ;;
                      fail)        extra=" · QA:FAILED" ;;
@@ -936,6 +1023,12 @@ for p in "${PHASES[@]}"; do
 done
 
 echo
+# Everything below this line is a call to action — which is exactly what a closed
+# plan must not issue. No ready work, no batching advice, no "finish me" nudge.
+if plan_is_closed; then
+  printf 'No work is outstanding on a closed plan.\n\n'
+  exit 0
+fi
 [ -n "$ready_list" ]  && printf 'READY NOW:   %s\n' "$(echo "$ready_list" | sed 's/^ //')"
 [ -n "$inprog_list" ] && printf 'IN PROGRESS: %s\n' "$(echo "$inprog_list" | sed 's/^ //')"
 [ -n "$waiting_list" ]&& printf 'WAITING:     %s\n' "$(echo "$waiting_list" | sed 's/^ *//')"
@@ -946,7 +1039,8 @@ if [ "$HAVE_SIZES" = 1 ]; then
   printf '   model-specific grouping → scripts/phase-graph.sh %s --session-plan <model>\n' "$slug"
 fi
 if [ "$done_n" = "$total" ]; then
-  printf '\n🏁 All %s phases done — run §End-to-end verification, then mark the plan complete.\n' "$total"
+  printf '\n🏁 All %s phases done — run §End-to-end verification, then close the plan:\n' "$total"
+  printf '   scripts/close-plan.sh %s --status complete --reason "<what shipped>"\n' "$slug"
 elif [ -z "$ready_list" ] && [ -z "$inprog_list" ]; then
   printf '\n⚠️  Nothing ready and nothing in progress — every remaining phase is waiting on a dep.\n'
   printf '   Check the WAITING list above for a stuck/blocked dependency.\n'

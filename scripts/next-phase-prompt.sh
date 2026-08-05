@@ -42,7 +42,8 @@ print_closeout() {
   local qa_mode
   qa_mode="$(bash "$ENGINE" "$slug" --qa-mode 2>/dev/null || echo off)"
   printf '\n🏁  All phases complete.\n'
-  printf '   Set  status: complete  in  %s\n\n' "$plan_file"
+  printf '   Close the plan (this is what stops it appearing as outstanding work):\n'
+  printf '     scripts/close-plan.sh %s --status complete --reason "<what shipped>"\n\n' "$slug"
   case "$qa_mode" in
     on*)
       printf 'Final full-plan QA (this plan runs QA: %s) — dispatch a FRESH qa-full QA subagent\n' "$qa_mode"
@@ -63,6 +64,15 @@ print_closeout() {
   printf '  2. Check memory %s for outstanding user gates (push / prod deploy).\n' "$memory_key"
   printf '  3. /clear — this project is done.\n\n'
 }
+
+# A closed plan hands off to nobody. Printing boot prompts for one would invite a
+# fresh session to pick up work the operator has explicitly walked away from.
+if closed="$(bash "$ENGINE" "$slug" --closed 2>/dev/null)"; then
+  printf '\n🔒  %s is closed (%s) — no next phase.\n\n' "$slug" "${closed#closed }"
+  printf 'Nothing here is outstanding work. To resume this plan:\n'
+  printf '  scripts/close-plan.sh %s --reopen\n\n' "$slug"
+  exit 0
+fi
 
 if [ "$completed" = none ] || [ "$completed" = last ]; then
   print_closeout

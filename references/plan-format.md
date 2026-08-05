@@ -14,12 +14,44 @@ several phases batched per session, sized to the budget; see `references/sizing.
 ---
 slug: <kebab-slug>          # shared by plan, handoff folder, and project_<slug> memory
 created: <YYYY-MM-DD>
-status: active              # active | complete | abandoned
+status: active              # active | complete | abandoned | superseded
 phases: <N>                 # total phase count
 handoffs: docs/handoffs/<slug>/
 memory: project_<slug>      # or pre-existing project_<other> when reusing an existing memory
+closed: <YYYY-MM-DD>        # optional — set by close-plan.sh; absent while the plan is open
+closed_reason: <one line>   # optional — why it was closed; required unless closed with --force
 ---
 ```
+
+### Open vs closed
+
+`status` answers one question — **does anyone still care about this plan?**
+
+| Status | Meaning | Board |
+|---|---|---|
+| `active` | open; work is expected to continue | live |
+| `complete` | closed, having finished | **closed** |
+| `abandoned` | closed without finishing | **closed** |
+| `superseded` | closed because another plan took over | **closed** |
+
+The last three are **terminal**. A plan with a terminal status is *closed*, and closure is what stops it
+reporting: no stuck-handoff error, no QA-fail error, no missing-handoff/index-drift/stale-lock/
+depends-drift warning, no ready phases, no boot prompts, no session batching, and no notifications. Its
+board still renders in full — nothing is deleted or hidden — and genuine structural damage (an
+unparseable graph, an undefined dependency, a cycle) is still reported, demoted to a note so a broken
+closed plan stays findable.
+
+Closure is **not** the same as progress. Progress is computed from the handoffs and is never stored
+(see `conventions.md` §Status source of truth); closure is an explicit operator decision, stored here,
+and a plan may be closed with phases still unfinished. Set it with the verb, never by hand:
+
+```bash
+scripts/close-plan.sh <slug> --reason "why this stops here"     # → abandoned, dated
+scripts/close-plan.sh <slug> --status superseded --reason "…"
+scripts/close-plan.sh <slug> --reopen                           # → active, fields stripped
+```
+
+`--reopen` is always available, so closing is a reversible decision rather than a destructive one.
 
 ## Sections (in order)
 

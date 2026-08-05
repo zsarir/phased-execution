@@ -15,6 +15,15 @@ if [ -z "${DOCS_ROOT:-}" ]; then
 fi
 BASH_BIN="${BASH:-bash}"
 
+# 0) Closed plans are not validated. Validation exists to keep work runnable, and a
+# closed plan has no work; without this, an abandoned plan flunks its handoff checks
+# forever and there is no way to make it stop short of finishing what was abandoned.
+# Ask the engine rather than re-reading frontmatter — closure is defined in one place.
+if closed="$("$BASH_BIN" "$SCRIPT_DIR/phase-graph.sh" "$slug" --closed 2>/dev/null)"; then
+  echo "VALIDATE SKIPPED (${closed#closed }): $slug is closed — reopen it to validate again"
+  exit 0
+fi
+
 # 1) Structural lint of the plan (aborts here on F1/F2/F3 via the engine's exit code).
 "$BASH_BIN" "$SCRIPT_DIR/phase-graph.sh" "$slug" --lint
 
