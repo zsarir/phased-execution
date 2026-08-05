@@ -6,6 +6,51 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [1.1.0] - 2026-08-05
+
+Linux — and Windows through WSL2 — become first-class: same features, same buttons, honest
+fallbacks where a platform has no equivalent.
+
+### Added
+
+- **systemd support.** `--install-agent` on Linux writes a `systemd --user` service
+  (`Restart=always`, the same 150s stop grace, logs in the same files) instead of assuming
+  `launchctl`; `--agent-status`, `--agent-restart`, `--agent-log`, `--uninstall-agent` and
+  `--agent-update` all speak systemctl there. On WSL without systemd, install explains the one-time
+  `[boot] systemd=true` enablement instead of failing cryptically.
+- The server reads its own unit file (the unit stamps its name as `PHASE_CONSOLE_UNIT`) the way it
+  reads a launchd plist: the Restart button is offered on read evidence (`Restart=` covering a
+  clean exit), and **Shut down** ends a systemd-supervised console with `systemctl --user stop` —
+  stopped means stopped.
+- WSL-aware browser opening: `wslview` → `xdg-open` → `explorer.exe`, and a printed URL when no
+  opener exists. "Open in editor" prefers the Windows side on WSL too.
+- **Lifecycle words on the bin**: `phase-console start | stop | restart | status | logs [-f]`
+  (and `--agent-start` / `--agent-stop` on `./start`). `stop` stops the supervised console without
+  uninstalling it; `start` brings it back — or runs in the foreground when no agent is installed.
+- **`phase-console install-skill`**: copies the skill's files from a package install into
+  `~/.claude/skills/phased-execution` (or `$CLAUDE_CONFIG_DIR/skills`), so npm and Homebrew
+  installs can register the *skill* with Claude Code too — no plugin or clone required. Stamped,
+  so it refreshes or removes only its own copies and refuses to touch a git clone;
+  `uninstall-skill` undoes it.
+- CI proves it: the console suite and the bash-engine suite now each run on ubuntu as release
+  gates beside the macOS runs.
+- Releases open the Homebrew bump PR automatically (`TAP_GITHUB_TOKEN` armed).
+
+### Changed
+
+- README rebuilt around the published packages: an install table (npm / Homebrew / npx / plugin /
+  clone), CI + platform badges, and a quick start. `docs/install.md` gains **Linux, and Windows
+  through WSL2** — systemd, lingering, localhost forwarding, and the node-pty build-tools note
+  (no Linux prebuilds ship; it compiles at install, and the console degrades honestly without it).
+- `.secrets/` is now entirely gitignored — the token how-to lives in `docs/releasing.md` instead
+  of a tracked file inside the drop-point.
+
+### Fixed
+
+- Docs no longer describe the background agent as launchd-only, and name the npm package
+  unambiguously: it is `phase-console`, **unscoped** — `@zsarir/phase-console` is the
+  auth-required GitHub Packages mirror, which the default registry answers 404 for.
+
 ## [1.0.1] - 2026-08-05
 
 The same console as 1.0.0, released through the pipeline: this is the first version published by
