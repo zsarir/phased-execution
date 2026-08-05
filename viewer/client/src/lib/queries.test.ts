@@ -97,6 +97,24 @@ describe('shellCounts', () => {
     expect(counts.terminalSessions).toBe(3);
   });
 
+  // The badge links straight to the departures board, so it has to promise
+  // exactly what that board will show — and the board drops closed plans. The
+  // census beside it (`plans`, `phases`) keeps counting everything, the same
+  // split the server makes: closing a plan quiets it, it does not delete it.
+  it('leaves a closed plan out of the ready badge but keeps it in the census', () => {
+    const counts = shellCounts(
+      [
+        { slug: 'a', kind: 'plan', phases: 8, ready: [1, 2], status: 'active' },
+        { slug: 'b', kind: 'plan', phases: 4, ready: [3, 4], status: 'abandoned' },
+      ],
+      undefined,
+      0,
+    );
+    expect(counts.ready).toBe(2);   // only plan a
+    expect(counts.plans).toBe(2);   // census: both
+    expect(counts.phases).toBe(12); // census: both
+  });
+
   it('survives an empty cache', () => {
     expect(shellCounts(undefined, undefined, 0)).toEqual({
       plans: 0, phases: 0, ready: 0, approvals: 0, unread: 0,

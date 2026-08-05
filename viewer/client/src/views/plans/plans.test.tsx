@@ -152,6 +152,60 @@ describe('what is wrong with a plan', () => {
     expect(concerns(waiting)).toEqual([]);
     expect(concerns(rotting).map((c) => c.key)).toEqual(['idle']);
   });
+
+  // The client must not re-derive from `stuck`, `qaFailures` and `locks` the
+  // warnings the SERVER deliberately silenced. Those three fields stay
+  // populated on a closed plan on purpose — the plan's own board must still say
+  // what never got done — so this is the gate that stops them coming back as
+  // chips, band rows and an `attention` sort key.
+  it('drops every progress concern on a closed plan', () => {
+    const stale = Date.UTC(2026, 6, 1);
+    const fixture = {
+      activity: stale,
+      ready: [2],
+      stuck: [3],
+      qaFailures: [1],
+      locks: [{ phase: 4, owner: 'someone', expired: true }],
+    };
+    const [open] = toRows([plan(fixture)], [run({ status: 'halted' })], NOW);
+    expect(concerns(open).map((c) => c.key)).toEqual(['halted', 'stuck', 'qa', 'lock', 'idle']);
+
+    const [closed] = toRows([plan({ ...fixture, status: 'abandoned' })], [run({ status: 'halted' })], NOW);
+    expect(concerns(closed)).toEqual([]);
+  });
+
+  // Demoted, not deleted — the server keeps a closed plan's structural issues
+  // and marks them `info`. A plan nobody can parse must never become invisible;
+  // it just stops outranking a live plan's real error.
+  it('keeps a closed plan’s structural error, demoted to a warning', () => {
+    const [row] = toRows([plan({
+      status: 'superseded',
+      engineError: 'the phase table did not parse',
+    })], [], NOW);
+    expect(concerns(row).map((c) => c.key)).toEqual(['error']);
+    expect(concerns(row)[0].tone).toBe('warn');
+    expect(concerns(row)[0].text).toBe('the phase table did not parse');
+  });
+
+  it('separates closure from completeness — they are different questions', () => {
+    // All phases done but nobody has closed it: complete, not closed.
+    const [finished] = toRows([plan({ phases: 4, done: 4, ready: [] })], [], NOW);
+    expect(finished.isComplete).toBe(true);
+    expect(finished.isClosed).toBe(false);
+
+    // Given up on with work left: closed, not complete.
+    const [walkedAway] = toRows([plan({ status: 'abandoned', phases: 4, done: 1 })], [], NOW);
+    expect(walkedAway.isClosed).toBe(true);
+    expect(walkedAway.isComplete).toBe(false);
+  });
+
+  it('reads the server’s own closed flag ahead of the status word', () => {
+    // A console talking to a server that learns a new terminal word must not
+    // disagree with it. The flag wins; the word is the fallback.
+    const [row] = toRows([plan({ status: 'shelved', closed: true, closedReason: 'parked for Q4' })], [], NOW);
+    expect(row.isClosed).toBe(true);
+    expect(row.closedReason).toBe('parked for Q4');
+  });
 });
 
 /* ------------------------------------------------------------------ *
@@ -194,6 +248,23 @@ describe('the five orders', () => {
     expect(sortRows(withDone, 'progress').map((r) => r.slug)).toEqual(['nearly', 'done']);
   });
 
+  // Sunk, not dropped: the filter decides what is on the list, a sort only
+  // decides where. But "most ready" and "needs attention" both ask *where do I
+  // go next*, and a closed plan is never the answer — so with `showClosed` on,
+  // an abandoned plan holding five ready phases must not head either board.
+  it('sinks closed plans in the work-shaped orders', () => {
+    const mixed = toRows([
+      plan({ slug: 'walked-away', title: 'Walked away', status: 'abandoned', ready: [1, 2, 3, 4, 5],
+        issueCounts: { error: 1, warning: 0, info: 0 },
+        issues: [{ slug: 'walked-away', severity: 'error', kind: 'engine', message: 'unreadable' }] }),
+      plan({ slug: 'live', title: 'Live', ready: [2] }),
+    ], [], NOW);
+    expect(sortRows(mixed, 'ready').map((r) => r.slug)).toEqual(['live', 'walked-away']);
+    expect(sortRows(mixed, 'attention').map((r) => r.slug)).toEqual(['live', 'walked-away']);
+    // Untouched orders stay honest — closure is not a global demotion.
+    expect(sortRows(mixed, 'name').map((r) => r.slug)).toEqual(['live', 'walked-away']);
+  });
+
   it('does not mutate the list it was given', () => {
     const before = rows.map((r) => r.slug);
     sortRows(rows, 'name');
@@ -213,13 +284,39 @@ describe('filtering', () => {
   ], [], NOW);
 
   it('hides documents by default and brings them back on request', () => {
-    expect(applyFilters(rows, NO_FILTERS).map((r) => r.slug)).toEqual(['cart-api-endpoint', 'shipped']);
-    expect(applyFilters(rows, { ...NO_FILTERS, showDocuments: true })).toHaveLength(3);
+    // `shipped` is absent for a second, independent reason — it is `complete`,
+    // therefore closed, and closed is hidden by default. See below.
+    expect(applyFilters(rows, NO_FILTERS).map((r) => r.slug)).toEqual(['cart-api-endpoint']);
+    expect(applyFilters(rows, { ...NO_FILTERS, showDocuments: true }).map((r) => r.slug))
+      .toEqual(['cart-api-endpoint', 'notes']);
+    expect(applyFilters(rows, { ...NO_FILTERS, showDocuments: true, showClosed: true }))
+      .toHaveLength(3);
   });
 
-  it('drops finished plans when asked', () => {
-    expect(applyFilters(rows, { ...NO_FILTERS, showComplete: false }).map((r) => r.slug))
-      .toEqual(['cart-api-endpoint']);
+  // The DIVERGENCE from the toggle this replaces: `showComplete` defaulted to
+  // true, so the list opened on every finished plan in the source. Closure is
+  // the operator saying nobody is coming back — the list opens on the work.
+  it('hides closed plans by default and brings them back on request', () => {
+    expect(applyFilters(rows, NO_FILTERS).map((r) => r.slug)).toEqual(['cart-api-endpoint']);
+    expect(applyFilters(rows, { ...NO_FILTERS, showClosed: true }).map((r) => r.slug))
+      .toEqual(['cart-api-endpoint', 'shipped']);
+  });
+
+  it('hides abandoned and superseded plans too, not only complete ones', () => {
+    const terminal = toRows([
+      plan({ slug: 'live' }),
+      plan({ slug: 'walked-away', status: 'abandoned', ready: [2, 3] }),
+      plan({ slug: 'replaced', status: 'superseded' }),
+    ], [], NOW);
+    expect(applyFilters(terminal, NO_FILTERS).map((r) => r.slug)).toEqual(['live']);
+    expect(applyFilters(terminal, { ...NO_FILTERS, showClosed: true })).toHaveLength(3);
+  });
+
+  // Otherwise picking `abandoned` from the status dropdown returns nothing,
+  // which reads as a broken control rather than two filters disagreeing.
+  it('lets an explicit status filter override the closed filter', () => {
+    expect(applyFilters(rows, { ...NO_FILTERS, status: 'complete' }).map((r) => r.slug))
+      .toEqual(['shipped']);
   });
 
   it('matches words in any order, across the slug and the title', () => {
@@ -289,6 +386,26 @@ describe('the totals', () => {
     const totals = rowTotals(rows);
     expect(totals).toMatchObject({ plans: 1, documents: 1, ready: 1, sessions: 2 });
   });
+
+  // The same split the server makes in `portfolio()`: the census counts every
+  // plan, the forward-looking numbers count only the open ones. A subtitle
+  // reading "6 ready · 4 sessions of work left" that included an abandoned
+  // plan's phases is an invitation to start work nobody wants.
+  it('counts a closed plan in the census but not in the work left', () => {
+    const rows = toRows([
+      plan({ slug: 'live', phases: 4, done: 1, ready: [2], remainingSessions: 2 }),
+      plan({
+        slug: 'gone', status: 'abandoned', phases: 6, done: 2, ready: [3, 4], remainingSessions: 3,
+        issueCounts: { error: 1, warning: 0, info: 0 },
+      }),
+    ], [], NOW);
+    const totals = rowTotals(rows);
+    expect(totals).toMatchObject({
+      plans: 2, closed: 1,      // census: both counted
+      phases: 10, done: 3,      // census: history is not deleted
+      ready: 1, sessions: 2, errors: 0, // work: only the open plan
+    });
+  });
 });
 
 /* ------------------------------------------------------------------ *
@@ -314,7 +431,8 @@ function mount(node: React.ReactElement) {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  setPrefs({ sort: 'activity', showDocuments: false, showComplete: true, plansLayout: 'board', plansGroup: 'none' });
+  // The SHIPPED defaults, so the page tests exercise what an operator opens on.
+  setPrefs({ sort: 'activity', showDocuments: false, showClosed: false, plansLayout: 'board', plansGroup: 'none' });
   state.mockResolvedValue({
     autopilot: true, allowRun: true, allowWrites: false, unread: 0,
     root: { label: 'hub', path: '/hub', ok: true, planCount: 3 },
@@ -348,6 +466,58 @@ describe('the plans page', () => {
     mount(<PlansView />);
     fireEvent.click(await screen.findByRole('button', { name: 'Documents' }));
     expect(await screen.findByText('Notes')).toBeTruthy();
+  });
+
+  it('leaves a closed plan out of the list, one toggle away', async () => {
+    plans.mockResolvedValue([
+      plan({ slug: 'alpha', title: 'Alpha plan' }),
+      plan({ slug: 'gone', title: 'Walked away', status: 'abandoned', ready: [2, 3] }),
+    ]);
+    const { default: PlansView } = await import('./index');
+    mount(<PlansView />);
+    await screen.findByText('Alpha plan');
+    expect(screen.queryByText('Walked away')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show closed' }));
+    expect(await screen.findByText('Walked away')).toBeTruthy();
+  });
+
+  // The row-level half of the ready board's gate. `readyPhases` stays populated
+  // on a closed plan, and every one of these chips is a link into a phase
+  // captioned "ready" — so the card has to say what happened instead.
+  it('offers no ready chip on a closed plan, and says what did happen', async () => {
+    plans.mockResolvedValue([
+      plan({ slug: 'gone', title: 'Walked away', status: 'abandoned', phases: 4, done: 1, ready: [2, 3] }),
+    ]);
+    const { default: PlansView } = await import('./index');
+    mount(<PlansView />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Show closed' }));
+    await screen.findByText('Walked away');
+
+    expect(screen.queryByText('P2 ready')).toBeNull();
+    expect(screen.queryByText('P3 ready')).toBeNull();
+    expect(screen.getByText('abandoned — 3 of 4 phases never ran')).toBeTruthy();
+  });
+
+  it('does not name a closed plan in the attention band', async () => {
+    // The band is an error-severity call to action, and the server demotes a
+    // closed plan's structural issues to `info` for exactly this reason. The
+    // paired open plan is the control: it proves the band renders at all here,
+    // so "the closed one is absent" cannot pass by the band never appearing.
+    plans.mockResolvedValue([
+      plan({ slug: 'gone', title: 'Walked away', status: 'abandoned', engineError: 'closed plan will not parse' }),
+      plan({ slug: 'broken', title: 'Broken', engineError: 'open plan will not parse' }),
+    ]);
+    const { default: PlansView } = await import('./index');
+    mount(<PlansView />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Show closed' }));
+    await screen.findByText('Walked away');
+
+    const band = await screen.findByRole('status');
+    expect(within(band).getByText(/open plan will not parse/)).toBeTruthy();
+    expect(within(band).queryByText(/closed plan will not parse/)).toBeNull();
+    // Still visible on its own row — demoted, not deleted.
+    expect(screen.getByText('closed plan will not parse')).toBeTruthy();
   });
 
   it('does not print the slug twice when a plan has no title of its own', async () => {
@@ -415,8 +585,10 @@ describe('the plans page', () => {
   it('lights no filter amber until one of them is narrowing the view', async () => {
     // `--action` is the console's one rationed colour and it means "act on
     // this". A control that is amber in its default position has spent it
-    // saying nothing — which is why the finished toggle is worded "Hide
-    // finished" rather than "Finished".
+    // saying nothing — which is why the closed toggle had to turn round with
+    // its default: "Hide finished" when showing was the default, "Show closed"
+    // now that hiding is. Pressed still means the same thing on every filter —
+    // *you have changed the default view*.
     const { default: PlansView } = await import('./index');
     const { container } = mount(<PlansView />);
     await screen.findByText('Alpha plan');
@@ -428,8 +600,8 @@ describe('the plans page', () => {
     // own pressed member, and one order is always in force.
     expect(amber().filter((label) => label !== 'Recent')).toEqual([]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hide finished' }));
-    expect(amber()).toContain('Hide finished');
+    fireEvent.click(screen.getByRole('button', { name: 'Show closed' }));
+    expect(amber()).toContain('Show closed');
   });
 
   it('says the source is empty rather than rendering a blank list', async () => {

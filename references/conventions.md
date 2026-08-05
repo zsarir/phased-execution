@@ -70,16 +70,29 @@ reverses it); ask for it with `phase-graph.sh <slug> --closed`. The two ideas mu
 plan can have unfinished phases, and an open plan with every phase done is still open until someone
 says otherwise.
 
-Two boundaries the console draws around that, both deliberate:
+Three boundaries the console draws around that, all deliberate:
 
 - **Search still finds a closed plan.** Closing quiets a plan; it never hides one. Every attention
   surface — health issues, the ready queue, remaining work, the stalled list — drops it, and search
-  keeps it, because "I know we tried this once" is exactly the question a closed plan answers.
+  keeps it (with a `closed` badge), because "I know we tried this once" is exactly the question a
+  closed plan answers.
 - **A closed plan stops announcing its progress, not its processes.** No notification for a phase
   landing, work becoming ready, a plan finishing, or files changing. But `approval`, `needs-you`,
   `halted`, `parked`, `session` and `health` still fire: those mean a live session has stopped and
   cannot continue without a person, and a stale `status:` line must never be able to strand a
-  running agent in silence.
+  running agent in silence. The console's own surfaces draw the same line: a plan's *stuck phases*
+  and *stale locks* go quiet, its *halted autopilot run* does not.
+- **⚠️ A closed plan still reports its own `ready` phases — only the AGGREGATES are gated.**
+  `--memory-block` prints every state for a closed plan (adding only a `closed:` line, which is what
+  keeps engine-parity working) and `planStats()` passes `board.ready` through verbatim, because the
+  plan's own board must still be able to say what never got done. `portfolio()` is where the gate
+  is: `totals.ready`, `remainingWeight`, `remainingSessions`, `readyQueue` and `stalled` count only
+  the open plans. **So anything that turns `ready` into a call to action must gate it itself** — the
+  departures board, the nav badge, the dashboard's recommendation and tiles, the plan header's ready
+  chips, the list's ready chips and count, and the boot-prompt cards all do. The client reads
+  closure in exactly one place, `viewer/client/src/lib/closure.ts`; that is the third and last
+  implementation of the predicate (`plan_is_closed()` in bash, `isClosedStatus()` on the server) and
+  there must never be a fourth.
 
 ## Phase dependencies (the DAG)
 - The plan is a dependency graph. A phase's `Depends on` lists **every** phase that must finish first;

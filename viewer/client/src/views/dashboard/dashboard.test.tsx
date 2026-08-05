@@ -114,7 +114,7 @@ const PLAN = {
 const STATS = {
   generatedAt: Date.UTC(2026, 7, 3),
   totals: {
-    plans: 1, documents: 0, orphans: 0, phases: 3, done: 1, ready: 1, waiting: 1,
+    plans: 1, documents: 0, orphans: 0, closed: 0, phases: 3, done: 1, ready: 1, waiting: 1,
     inProgress: 0, stuck: 0, percent: 33, remainingWeight: 80_000, remainingSessions: 1,
   },
   byStatus: [], activeLocks: [], issues: [], velocity: [{ week: '2026-W31', count: 2 }],
@@ -250,6 +250,47 @@ describe('the dashboard', () => {
 
     const link = await screen.findByRole('link', { name: /P2 ready/ });
     expect(link.getAttribute('href')).toBe('#/plan/alpha/phase/2');
+  });
+
+  /* ---------------- closure ----------------
+   * `done < phases` is true of every abandoned plan ever written, and that was
+   * the only test the "Plans in flight" strip and the "In flight" hint applied.
+   * The recommendation line under "Nothing is running" is the other half: it
+   * becomes "Start phase N" with a button beside it. */
+
+  it('does not put a closed plan in flight, in the counts, or up as the next move', async () => {
+    plans.mockResolvedValue([
+      { ...PLAN, slug: 'gone', title: 'Walked away', status: 'abandoned', closed: true,
+        ready: [2, 3], inProgress: [1], nextBest: { phase: 2, unblocks: 9 } },
+    ]);
+    const { default: DashboardView } = await import('./index');
+    mount(<DashboardView />);
+
+    await screen.findByText(/Nothing is running/);
+    // No recommendation at all — better silence than a boot into a closed plan.
+    expect(screen.queryByText(/gone phase/)).toBeNull();
+    // No strip for it either.
+    expect(screen.queryByText('Walked away')).toBeNull();
+    // Ready and In flight both read zero: its 2 ready and 1 in-progress phases
+    // are the engine's record of what never happened, not live work.
+    await waitFor(() => expect(screen.getByText('Ready now')).toBeTruthy());
+    // A tile renders as `<value><label><hint>`, so the count is the leading run
+    // of digits — `\b0\b` would not survive `0Ready now`.
+    const tile = (label: string) =>
+      screen.getByText(label).closest('div')?.parentElement?.textContent ?? '';
+    expect(tile('Ready now')).toMatch(/^0Ready now/);
+    expect(tile('In flight')).toMatch(/^0In flight0 plans unfinished/);
+  });
+
+  it('still recommends the open plan sitting beside a closed one', async () => {
+    // The control: the gate must be closure, not the fixture losing its plans.
+    plans.mockResolvedValue([
+      { ...PLAN, slug: 'gone', status: 'abandoned', closed: true, ready: [2] },
+      PLAN,
+    ]);
+    const { default: DashboardView } = await import('./index');
+    mount(<DashboardView />);
+    await waitFor(() => expect(screen.getByText(/alpha phase 2/)).toBeTruthy());
   });
 
   it('reports what this console can do', async () => {

@@ -22,6 +22,7 @@ import {
 } from '@/components/ui';
 import { useAuth, useConsoleState, useRun, useSessions } from '@/lib/queries';
 import { money } from '@/lib/format';
+import { isClosed } from '@/lib/closure';
 import { looksLikeAuthFailure } from '@/lib/failures';
 import {
   classifyBoardPhase, classifyRun, liveRecovery, recoveryKey, type RecoveryClass,
@@ -50,7 +51,17 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
 
   const live = ['running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting']
     .includes(run?.status ?? '');
-  const stuck = detail.phases.filter((p) => p.state === 'stuck');
+  // A stuck phase is plan progress, and progress is what closure silences — the
+  // server already drops `stale-handoff` for a closed plan, so leaving the
+  // banner here would reintroduce the same warning from `phases[].state`.
+  // The RUN cards below are deliberately NOT gated: a halted run is a process
+  // that stopped and may still want a person, and a `status:` line in a
+  // markdown file must not make one disappear. Same split P2 made for
+  // notifications.
+  const closed = isClosed(detail.summary);
+  const stuck = closed ? [] : detail.phases.filter((p) => p.state === 'stuck');
+  // `--lint` already answers `LINT OK (closed)` with exit 0 on a closed plan
+  // (P1), so this is false for free — no second gate needed.
   const lintFailed = Boolean(detail.lint && !detail.lint.ok);
   const authFailure = looksLikeAuthFailure(run, auth);
   const runClass = classifyRun(run, { authFailure });

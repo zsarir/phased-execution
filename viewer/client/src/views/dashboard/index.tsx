@@ -35,6 +35,7 @@ import {
 import { Bars, StackBar } from '@/components/charts';
 import { LaunchDialog } from '@/components/launch-dialog';
 import { plainText } from '@/components/markdown';
+import { isClosed } from '@/lib/closure';
 import { phaseHref, planHref } from '@shared/routes.js';
 import type { PlanSummaryFull } from '@/lib/api';
 import { Page } from '../_page';
@@ -62,9 +63,13 @@ export default function DashboardView() {
 
   const summaries = (plans ?? []) as unknown as PlanSummaryFull[];
 
+  // "Unfinished" is not the same question as "still being worked on". `done <
+  // phases` is true of every abandoned plan ever written, and this list drives
+  // both the "In flight" hint and the six route strips — so without the closure
+  // gate the dashboard opens on a wall of plans nobody is coming back to.
   const active = useMemo(
     () => summaries
-      .filter((p) => p.kind === 'plan' && (p.done ?? 0) < (p.phases ?? 0))
+      .filter((p) => p.kind === 'plan' && !isClosed(p) && (p.done ?? 0) < (p.phases ?? 0))
       .sort((a, b) => (b.activity ?? 0) - (a.activity ?? 0)),
     [summaries],
   );
@@ -72,18 +77,28 @@ export default function DashboardView() {
   const stripSlugs = useMemo(() => stripPlans.map((p) => p.slug), [stripPlans]);
   const { bySlug, loading: stripsLoading } = usePlanDetails(stripSlugs, stripSlugs.length > 0);
 
+  // Every count below reads only the open plans — the same split the server
+  // makes in `portfolio()`. `stale-lock` is one of the progress issue kinds
+  // closure silences server-side, so a lapsed claim on an abandoned plan must
+  // not come back as a "Waiting on you" card by another route.
+  const open = useMemo(() => summaries.filter((p) => !isClosed(p)), [summaries]);
+
   const expiredLocks = useMemo(
-    () => summaries.flatMap((p) => (p.locks ?? [])
+    () => open.flatMap((p) => (p.locks ?? [])
       .filter((l) => l.expired && l.phase != null)
       .map((l) => ({ slug: p.slug, phase: l.phase! }))),
-    [summaries],
+    [open],
   );
 
+  // A LIVE claim is the exception, and stays counted across every plan: it means
+  // a session is holding that phase *right now*. A stale `status:` line must not
+  // make a running session invisible — the same argument P2 used to keep
+  // `approval`/`needs-you`/`halted` notifications firing on a closed plan.
   const claimed = summaries.reduce(
     (n, p) => n + (p.locks ?? []).filter((l) => !l.expired).length, 0,
   );
-  const readyCount = summaries.reduce((n, p) => n + (p.ready?.length ?? 0), 0);
-  const inFlight = summaries.reduce((n, p) => n + (p.inProgress?.length ?? 0), 0);
+  const readyCount = open.reduce((n, p) => n + (p.ready?.length ?? 0), 0);
+  const inFlight = open.reduce((n, p) => n + (p.inProgress?.length ?? 0), 0);
   // The issues themselves, not a count of them: the plan-error card names the
   // real ones now instead of rendering one hard-coded sentence for all of them.
   const { data: auth } = useAuth(runsEnabled);
@@ -109,7 +124,10 @@ export default function DashboardView() {
   // leads with, so the two pages cannot suggest different things.
   const next = useMemo(() => {
     let best: { slug: string; phase: number; unblocks: number } | undefined;
-    for (const plan of summaries) {
+    // `open`, not `summaries`: this line becomes "Start phase N" with a button
+    // beside it, so recommending a closed plan's phase is the same defect as the
+    // ready board offering one — and the two pages have to agree.
+    for (const plan of open) {
       for (const phase of plan.ready ?? []) {
         if ((plan.locks ?? []).some((l) => l.phase === phase && !l.expired)) continue;
         const unblocks = plan.nextBest?.phase === phase ? plan.nextBest.unblocks : 0;
@@ -117,7 +135,7 @@ export default function DashboardView() {
       }
     }
     return best;
-  }, [summaries]);
+  }, [open]);
 
   if (error) {
     return (

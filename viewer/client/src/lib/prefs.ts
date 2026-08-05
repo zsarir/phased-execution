@@ -20,8 +20,17 @@ export interface Prefs {
   sort: string;
   /** Plan list: include the documents and orphan handoffs, not only plans. */
   showDocuments: boolean;
-  /** Plan list: keep finished plans in the list. */
-  showComplete: boolean;
+  /**
+   * Plan list: keep closed plans — complete, abandoned, superseded — in view.
+   *
+   * Off by default. Deliberately a NEW key rather than the old `showComplete`
+   * with a flipped default: `setPrefs()` writes the whole object, so every
+   * browser that has ever changed any preference already carries
+   * `showComplete: true`, and a new default would have reached none of them.
+   * The stale key is harmless — `load()` spreads storage over `DEFAULTS`, and
+   * nothing reads it any more.
+   */
+  showClosed: boolean;
   model: string;
   /** Plan list: rich cards, or the dense comparison table. */
   plansLayout: 'board' | 'table';
@@ -56,7 +65,7 @@ const DEFAULTS: Prefs = {
   density: 'comfortable',
   sort: 'activity',
   showDocuments: false,
-  showComplete: true,
+  showClosed: false,
   model: '',
   plansLayout: 'board',
   plansGroup: 'none',

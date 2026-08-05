@@ -11,8 +11,9 @@
 import { useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Bot } from 'lucide-react';
-import { useConsoleState, useSessions, useStats } from '@/lib/queries';
+import { useConsoleState, usePlans, useSessions, useStats } from '@/lib/queries';
 import { countdown, plural, weight } from '@/lib/format';
+import { isClosed } from '@/lib/closure';
 import { phaseHref, planHref } from '@shared/routes.js';
 import {
   Banner, Button, ButtonGroup, Card, CardBody, CardHeader, CardTitle, Chip, Empty, Skeleton, Tile,
@@ -60,7 +61,21 @@ export default function StatsView() {
   const [severity, setSeverity] = useState<Severity>('all');
   const allowWrites = Boolean(state?.allowWrites);
   const allowAgent = Boolean(state?.allowAgent);
-  const expiredLocks = (stats?.activeLocks ?? []).filter((lock) => lock.expired).length;
+  // Debris does not count. A lapsed lease on a closed plan blocks nothing —
+  // `phase-lock.sh conflicts` skips it — so folding it into this number would
+  // put an amber "N leases ran out" band and a Release-all button in front of
+  // the operator for a chore that does not exist.
+  const expiredLocks = (stats?.activeLocks ?? []).filter((lock) => lock.expired && !lock.closed).length;
+
+  // Which slugs are closed, so an issue row can say so and can stop offering a
+  // repair the server would refuse anyway (`plan-repair` 409s on a closed plan).
+  // `/api/plans` rather than a new wire field: every other page has already
+  // fetched it, so this is a cache read, and `HealthIssue` stays five fields.
+  const { data: plans } = usePlans();
+  const closedSlugs = useMemo(
+    () => new Set((plans ?? []).filter((p) => isClosed(p)).map((p) => p.slug)),
+    [plans],
+  );
 
   const counts = useMemo(() => {
     const out = { error: 0, warning: 0, info: 0 };
@@ -182,7 +197,16 @@ export default function StatsView() {
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Plan status</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Plan status</CardTitle>
+            {/* The one place the split is worth stating outright. Every other
+                number on this page is already gated on it silently, and "23 of
+                86 are open" is the sentence that explains why "ready now" is
+                so much smaller than "phases". */}
+            <span className="text-2xs text-ink-faint">
+              {t.plans - t.closed} open · {t.closed} closed
+            </span>
+          </CardHeader>
           <CardBody>
             <BarList items={stats.byStatus.map((row) => ({ name: row.status, value: row.count }))} />
           </CardBody>
@@ -249,9 +273,16 @@ export default function StatsView() {
                       <span className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-faint">
                         {lock.owner}
                       </span>
-                      {lock.expired
-                        ? <Chip tone="bad" title="The lease ran out and nobody renewed it — the session is gone. Safe to release (Plans page offers it), and a takeover recovery may claim the phase.">expired</Chip>
-                        : <Chip tone="busy" title="A live lease — a session is (or very recently was) working this phase. Never release a live lease.">{countdown(lock.leaseUntil)}</Chip>}
+                      {/* Three readings, not two. A lapsed lease on a CLOSED plan
+                          is debris: `phase-lock.sh conflicts` skips it, so it
+                          blocks nobody and painting it `bad` would be inventing a
+                          chore. Still listed and still releasable — this card is
+                          the lock inventory — just not shouted about. */}
+                      {lock.closed
+                        ? <Chip title="This plan is closed, so the lock is leftover debris — phase-lock.sh skips it and it blocks no session. Releasing it is tidying, not a fix.">debris</Chip>
+                        : lock.expired
+                          ? <Chip tone="bad" title="The lease ran out and nobody renewed it — the session is gone. Safe to release (Plans page offers it), and a takeover recovery may claim the phase.">expired</Chip>
+                          : <Chip tone="busy" title="A live lease — a session is (or very recently was) working this phase. Never release a live lease.">{countdown(lock.leaseUntil)}</Chip>}
                       {/* The owner is right there in the row and the server
                           reads it from the file — nobody retypes it. */}
                       {lock.expired && (
@@ -327,10 +358,23 @@ export default function StatsView() {
                   >
                     {issue.slug}{issue.phase ? ` P${issue.phase}` : ''}
                   </a>
+                  {closedSlugs.has(issue.slug) && (
+                    <Chip title="This plan is closed. What is left here is structural — the engine kept it and demoted it, so it is a record, not a job.">
+                      closed
+                    </Chip>
+                  )}
                   <span className="min-w-0 flex-1 text-sm text-ink-muted">{issue.message}</span>
                   {/* Per ROW, not per card: this list mixes plans, and a repair
                       session works on one. The row is the only place that knows
-                      which plan the operator meant. */}
+                      which plan the operator meant.
+
+                      No closure check here, deliberately. `healthIssues()`
+                      demotes every issue on a closed plan to `info`, and
+                      `classifyIssue()` offers a repair only for `error` and
+                      `warning` — so the severity already is the gate, and it is
+                      the same one the server would enforce anyway (`plan-repair`
+                      409s on a closed plan). A second check here would be dead
+                      code that silently diverges the day the issue kinds move. */}
                   <RepairIssue issue={issue} allowAgent={allowAgent} sessions={terminals?.sessions} />
                 </li>
               ))}

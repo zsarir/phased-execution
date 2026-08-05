@@ -28,9 +28,11 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type PlanDetail, type PhaseView, type WriteRequest, type WriteResult } from '@/lib/api';
 import { keys } from '@/lib/queries';
 import {
+  AlertDialog, AlertDialogContent, AlertDialogTrigger,
   Banner, Button, Card, CardBody, CardHeader, CardTitle,
   Dialog, DialogClose, DialogContent, DialogFooter, toast,
 } from '@/components/ui';
+import { isClosed } from '@/lib/closure';
 import { ReleaseStaleButton } from '@/components/release-lock';
 
 const OWNER_KEY = 'phase-console.owner';
@@ -94,6 +96,24 @@ export const FORMS: Record<string, Form> = {
     hint: 'Runs new-plan.sh to create docs/plans/<slug>.md from the template. Fill in the phases yourself — that part is thinking, not scaffolding.',
     fields: [
       { name: 'slug', label: 'Slug (kebab-case)', placeholder: 'customer-tool-requests', required: true },
+    ],
+  },
+  // A form rather than a bare confirm, because closing takes two decisions: WHICH
+  // terminal word (they mean different things to the next reader) and WHY. The
+  // server rejects a reasonless close, so the reason field is required here too —
+  // caught before the round trip, where the message can be about the field.
+  // `active` is deliberately absent: reopening is its own verb, not a status.
+  'close-plan': {
+    title: 'Close this plan',
+    hint: 'Runs close-plan.sh. The plan stops reporting ready work, warnings and prompts — its board stays visible in full. Reversible: Reopen puts it back to active.',
+    fields: [
+      { name: 'status', label: 'Close as', type: 'select', options: ['abandoned', 'superseded', 'complete'] },
+      {
+        name: 'reason',
+        label: 'Why (one line)',
+        placeholder: 'superseded by console-operability',
+        required: true,
+      },
     ],
   },
 };
@@ -315,6 +335,11 @@ export function WriteMenu({
     );
   }
 
+  // The plan-level list was empty until closure gave it something to do. Only
+  // one of Close / Reopen is ever offered, because they are the two directions
+  // of one switch and showing both would make you read the plan's status off
+  // some other part of the page to know which one applies.
+  const closed = isClosed(detail.summary);
   const actions: [string, string][] = phase
     ? [
         ['new-handoff', 'Scaffold handoff'],
@@ -323,13 +348,18 @@ export function WriteMenu({
           ? ['lock-release', 'Release lock']
           : ['lock-claim', 'Claim phase'],
       ]
-    : [];
+    : closed ? [] : [['close-plan', 'Close plan']];
 
   const buttons = (
     <div className="flex flex-wrap gap-2">
       {actions.map(([id, label]) => (
         <Button key={id} size="sm" onClick={() => setAction(id)}>{label}</Button>
       ))}
+      {/* Reopen takes no input, so it gets a confirm rather than a form — but a
+          confirm and not a bare button, because it silently puts the plan's
+          phases back on the ready board and into every count on the console.
+          Not `destructive`: it restores, and red would say the opposite. */}
+      {!phase && closed && <ReopenPlanButton slug={slug} onDone={onChanged} />}
       {/* An expired lock used to offer only "Claim phase", which takes the
           phase rather than freeing it — so the one action that fixed a stale
           claim was the one the menu did not have. Both are offered now, and
@@ -360,6 +390,52 @@ export function WriteMenu({
         />
       )}
     </>
+  );
+}
+
+/**
+ * Reopen a closed plan — the one write on this console that takes no argument.
+ *
+ * It runs `close-plan.sh <slug> --reopen`, which sets the status back to
+ * `active` and clears `closed:` / `closed_reason:`. Confirmed rather than
+ * immediate: from the operator's side it is one small button, and from the
+ * console's side it is a plan reappearing on the ready board, in the nav badge,
+ * in the dashboard's recommendation and in the notification stream all at once.
+ *
+ * Invalidates exactly what closure feeds: the plan list, the portfolio, and this
+ * plan's own prefix — the same three keys `WriteDialog` settles on.
+ */
+function ReopenPlanButton({ slug, onDone }: { slug: string; onDone?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const client = useQueryClient();
+
+  const run = useMutation({
+    mutationFn: () => api.write({ action: 'reopen-plan', slug }),
+    onSuccess: (result) => {
+      void client.invalidateQueries({ queryKey: keys.plans() });
+      void client.invalidateQueries({ queryKey: keys.stats() });
+      void client.invalidateQueries({ queryKey: keys.plan(slug) });
+      toast(result.ok ? 'Reopened — the plan is active again' : 'The script reported a problem',
+        result.ok ? 'ok' : 'error');
+      onDone?.();
+    },
+    onError: (failure: Error) => toast(String(failure.message ?? failure), 'error'),
+  });
+
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogTrigger asChild>
+        <Button size="sm" disabled={run.isPending}>
+          {run.isPending ? 'Reopening…' : 'Reopen plan'}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent
+        title="Reopen this plan?"
+        description={`Sets ${slug} back to active and clears its closed reason. Its ready phases go back on the departures board, into the nav count and into the dashboard's recommendation, and it starts raising warnings again.`}
+        confirmLabel="Reopen"
+        onConfirm={() => run.mutate()}
+      />
+    </AlertDialog>
   );
 }
 

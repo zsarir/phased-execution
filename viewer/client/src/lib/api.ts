@@ -373,6 +373,10 @@ export interface PlanSummary {
   kind?: string;
   phases: number;
   ready: unknown[];
+  /** Named explicitly — the index signature below types them `unknown`, and
+   * closure is read by the nav counts, which cannot cast their way to it. */
+  status?: string;
+  closed?: boolean;
   [key: string]: unknown;
 }
 
@@ -408,6 +412,17 @@ export interface PlanSummaryFull {
   title: string;
   kind: string;
   status?: string;
+  /**
+   * The plan's status is terminal, so it reports no work and no warnings.
+   * Optional because an older server does not send it — read it through
+   * `lib/closure.ts`'s `isClosed()`, never directly, so the status fallback
+   * applies. ⚠️ `ready`, `locks`, `qaFailures` and `stuck` stay populated on a
+   * closed plan by design; gating them is the client's job.
+   */
+  closed?: boolean;
+  /** The date `close-plan.sh` recorded, when it was closed through the verb. */
+  closedOn?: string;
+  closedReason?: string;
   created?: string;
   activity: number;
   phases: number;
@@ -994,6 +1009,13 @@ export interface PortfolioTotals {
   plans: number;
   documents: number;
   orphans: number;
+  /**
+   * Plans an operator has closed. ⚠️ The census fields (`phases`, `done`,
+   * `percent`, `waiting`, `inProgress`, `stuck`) still count them; the
+   * forward-looking ones (`ready`, `remainingWeight`, `remainingSessions`) do
+   * not. Closing a plan quiets it — it never deletes its history.
+   */
+  closed: number;
   phases: number;
   done: number;
   ready: number;
@@ -1008,8 +1030,14 @@ export interface PortfolioTotals {
 export interface Portfolio {
   generatedAt: number;
   totals: PortfolioTotals;
-  byStatus: { status: string; count: number }[];
-  activeLocks: { slug: string; phase: number; owner: string; expired: boolean; leaseUntil?: number }[];
+  /** `closed`: this status word is terminal. Carried by the server so a consumer
+   * groups the terminal statuses without re-deriving the predicate. */
+  byStatus: { status: string; count: number; closed?: boolean }[];
+  /** `closed`: the lock's plan is terminal, so the lock is debris — `phase-lock.sh
+   * conflicts` skips it and it blocks nobody. Optional for an older server. */
+  activeLocks: {
+    slug: string; phase: number; owner: string; expired: boolean; leaseUntil?: number; closed?: boolean;
+  }[];
   issues: HealthIssue[];
   velocity: { week: string; count: number }[];
   calendar: { date: string; count: number }[];

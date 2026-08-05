@@ -3,6 +3,7 @@ import {
   Table, TableWrap, TBody, TD, TH, THead, TR,
 } from '@/components/ui';
 import { pad2, plural, weight } from '@/lib/format';
+import { isClosed } from '@/lib/closure';
 import { phaseHref } from '@shared/routes.js';
 import { cn } from '@/lib/cn';
 import type { PlanDetail } from '@/lib/api';
@@ -116,7 +117,19 @@ export function AnalysisTab({ detail }: { detail: PlanDetail }) {
                   </span>
                 </div>
               ))
-              : <span className="text-sm text-ink-faint">Nothing to flag — plan, handoffs and index agree.</span>}
+              : isClosed(s)
+                // The card is honest either way, but not with the same sentence.
+                // On a closed plan the engine has stopped raising the progress
+                // issues (stale handoff, missing handoff, index drift, a QA
+                // fail); claiming everything "agrees" would be asserting a check
+                // that was never run.
+                ? (
+                  <span className="text-sm text-ink-faint">
+                    Nothing structural to flag. This plan is closed, so progress issues — a stale
+                    or missing handoff, index drift, a recorded QA failure — are no longer raised.
+                  </span>
+                )
+                : <span className="text-sm text-ink-faint">Nothing to flag — plan, handoffs and index agree.</span>}
           </CardBody>
         </Card>
       </div>

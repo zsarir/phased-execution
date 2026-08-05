@@ -175,6 +175,34 @@ describe('search', () => {
     mount(<SearchView route={route(['search'], { q: 'zzzz' })} />);
     expect(await screen.findByText(/Nothing matches/i)).toBeTruthy();
   });
+
+  // Search KEEPS closed plans on purpose — an abandoned plan is often exactly
+  // what you are looking for, and a search that hides history is one you stop
+  // trusting. That is the whole reason the badge has to be there: a result with
+  // no marker reads as live work.
+  it('keeps a closed plan in the results, and says that it is closed', async () => {
+    const { api } = await import('@/lib/api');
+    vi.mocked(api.plans).mockResolvedValue([
+      { slug: 'gone', kind: 'plan', phases: 4, ready: [], status: 'abandoned', closed: true },
+      { slug: 'demo', kind: 'plan', phases: 4, ready: [2], status: 'active', closed: false },
+    ]);
+    search.mockResolvedValue({
+      query: 'cart',
+      total: 2,
+      groups: [
+        { slug: 'gone', title: 'walked away', hits: [{ slug: 'gone', kind: 'plan', section: 'Context', title: 't', score: 2, snippet: 'the cart api' }] },
+        { slug: 'demo', title: 'demo plan', hits: [{ slug: 'demo', kind: 'plan', section: 'Context', title: 't', score: 1, snippet: 'the cart api' }] },
+      ],
+    });
+    const { default: SearchView } = await import('./search');
+    mount(<SearchView route={route(['search'], { q: 'cart' })} />);
+
+    // Present, and still first — relevance is the only ranking a search has.
+    const slugs = await screen.findAllByRole('link', { name: /^(gone|demo)$/ });
+    expect(slugs.map((a) => a.textContent)).toEqual(['gone', 'demo']);
+    // Marked exactly once: the closed one.
+    expect(screen.getAllByText('closed')).toHaveLength(1);
+  });
 });
 
 /* ------------------------------------------------------------------ *
@@ -289,6 +317,73 @@ describe('the write menu', () => {
 
     const run = await screen.findByRole('button', { name: 'Run' });
     expect(run.hasAttribute('disabled')).toBe(true);
+  });
+
+  /* ---------------- closing and reopening ----------------
+   * The plan-level action list was empty until this existed. Only one direction
+   * is ever offered: they are the two ends of one switch, and showing both
+   * would make you read the plan's status off some other part of the page to
+   * know which one applies. */
+
+  const CLOSED = {
+    ...DETAIL,
+    summary: { ...DETAIL.summary, status: 'abandoned', closed: true },
+  } as unknown as PlanDetail;
+
+  it('offers Close on an open plan and Reopen on a closed one, never both', async () => {
+    const { WriteMenu } = await import('@/components/write-menu');
+    const open = mount(<WriteMenu detail={DETAIL} allowWrites />);
+    expect(screen.getByRole('button', { name: 'Close plan' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reopen plan' })).toBeNull();
+    open.unmount();
+
+    mount(<WriteMenu detail={CLOSED} allowWrites />);
+    expect(screen.getByRole('button', { name: 'Reopen plan' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Close plan' })).toBeNull();
+  });
+
+  it('asks for a reason before it will close anything', async () => {
+    // The server refuses a reasonless close, and a status select alone would
+    // leave a closed plan that tells the next reader nothing.
+    const { WriteMenu } = await import('@/components/write-menu');
+    mount(<WriteMenu detail={DETAIL} allowWrites />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close plan' }));
+
+    expect(await screen.findByRole('button', { name: 'Run' })).toHaveAttribute('disabled');
+    // `active` is not on the menu — reopening is its own verb, not a status.
+    const options = [...screen.getByRole('combobox').querySelectorAll('option')]
+      .map((o) => o.getAttribute('value'));
+    expect(options).toEqual(['abandoned', 'superseded', 'complete']);
+  });
+
+  it('previews the real close-plan.sh invocation before anything runs', async () => {
+    const { WriteMenu } = await import('@/components/write-menu');
+    mount(<WriteMenu detail={DETAIL} allowWrites />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close plan' }));
+    fireEvent.change(await screen.findByPlaceholderText(/superseded by/), {
+      target: { value: 'the approach did not survive contact' },
+    });
+
+    await waitFor(() => expect(write).toHaveBeenCalled());
+    expect(write.mock.calls.at(-1)![1]).toBe(true); // dry run, always
+    expect(write.mock.calls.at(-1)![0]).toMatchObject({
+      action: 'close-plan', slug: 'demo', status: 'abandoned',
+      reason: 'the approach did not survive contact',
+    });
+  });
+
+  it('confirms a reopen rather than firing it on one press', async () => {
+    // One small button on this side; on the other, the plan reappears on the
+    // ready board, in the nav badge and in the dashboard's recommendation.
+    const { WriteMenu } = await import('@/components/write-menu');
+    mount(<WriteMenu detail={CLOSED} allowWrites />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen plan' }));
+
+    expect(await screen.findByText('Reopen this plan?')).toBeTruthy();
+    expect(write).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }));
+    await waitFor(() => expect(write).toHaveBeenCalledWith({ action: 'reopen-plan', slug: 'demo' }));
   });
 });
 

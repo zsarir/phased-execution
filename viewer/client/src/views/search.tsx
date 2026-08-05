@@ -11,8 +11,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SearchIcon } from 'lucide-react';
-import { useSearch } from '@/lib/queries';
+import { usePlans, useSearch } from '@/lib/queries';
 import { navigate } from '@/router';
+import { closedTitle, isClosed } from '@/lib/closure';
 import { Banner, Card, Chip, Empty, Skeleton, Spinner } from '@/components/ui';
 import { handoffHref, phaseHref, planHref } from '@shared/routes.js';
 import type { SearchHit } from '@/lib/api';
@@ -98,6 +99,18 @@ export default function SearchView({ route }: { route: { query: Record<string, s
 
   const { data: result, isFetching, error } = useSearch(debounced);
 
+  // The search index is built from file text and knows nothing about a plan's
+  // status, so closure is joined on here from the plan list every other page has
+  // already fetched. A map rather than a set — the badge's tooltip wants the
+  // status word and the reason, not just the fact.
+  const { data: plans } = usePlans();
+  const closedSlugs = useMemo(
+    () => new Map(
+      (plans ?? []).filter((p) => isClosed(p)).map((p) => [p.slug, p]),
+    ),
+    [plans],
+  );
+
   const terms = useMemo(
     () => debounced.trim().toLowerCase().split(/\s+/).filter((t) => t.length > 1),
     [debounced],
@@ -158,9 +171,20 @@ export default function SearchView({ route }: { route: { query: Record<string, s
           {result.groups.map((group) => (
             <Card key={group.slug}>
               <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-rule px-3 py-2">
-                <a href={planHref(group.slug)} className="font-mono text-xs text-ink hover:text-action">
-                  {group.slug}
-                </a>
+                <span className="flex min-w-0 items-baseline gap-2">
+                  <a href={planHref(group.slug)} className="font-mono text-xs text-ink hover:text-action">
+                    {group.slug}
+                  </a>
+                  {/* Search deliberately KEEPS closed plans — an abandoned plan
+                      is often exactly what you are looking for, and a search
+                      that hides history is a search you stop trusting. But a
+                      result with no marker reads as live work, so the badge is
+                      the price of keeping the row. Order is left alone:
+                      relevance is the only ranking a search should have. */}
+                  {closedSlugs.has(group.slug) && (
+                    <Chip title={closedTitle(closedSlugs.get(group.slug))}>closed</Chip>
+                  )}
+                </span>
                 <span className="truncate text-2xs text-ink-faint">{group.title}</span>
               </div>
               <ul>

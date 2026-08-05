@@ -1,7 +1,9 @@
+import { Lock } from 'lucide-react';
 import { Banner, Chip, KeyValue, Progress, StateChip } from '@/components/ui';
 import { MarkdownInline } from '@/components/markdown';
 import { WriteMenu } from '@/components/write-menu';
 import { useConsoleState } from '@/lib/queries';
+import { closedTitle, isClosed } from '@/lib/closure';
 import { etaLabel, etaTitle, plural, weight } from '@/lib/format';
 import { phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
@@ -17,6 +19,7 @@ import type { PlanDetail } from '@/lib/api';
 export function PlanHeader({ detail }: { detail: PlanDetail }) {
   const s = detail.summary;
   const budget = detail.plan?.sessionBudget;
+  const closed = isClosed(s);
   const { data: state } = useConsoleState();
   // The detail's own estimate, not the summary's: they are computed from the
   // same rate, but the detail's `remaining` respects a scoped run and this page
@@ -28,7 +31,16 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="font-display text-3xl leading-none">{s.title}</h1>
-          {s.status && <Chip>{s.status}</Chip>}
+          {/* The status word carries the padlock rather than a second CLOSED
+              chip beside it: `abandoned` already says more than `CLOSED` would,
+              and two chips for one fact is how a header stops being scannable.
+              The banner below carries the reason. */}
+          {s.status && (
+            <Chip title={closed ? closedTitle(s) : undefined}>
+              {closed && <Lock size={11} className="shrink-0" aria-hidden />}
+              {s.status}
+            </Chip>
+          )}
           {s.kind !== 'plan' && (
             <Chip tone="warn">{s.kind === 'document' ? 'document' : 'orphan handoffs'}</Chip>
           )}
@@ -42,21 +54,29 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
         <span className="font-mono text-2xs text-ink-faint">{s.slug}</span>
         {s.phases > 0 && (
           <>
+            {/* Only `done` is painted on a closed plan — the rest is grey.
+                An amber ready notch means "this could move today", which is
+                the one claim closure withdraws. Same rule as `plans/row.tsx`. */}
             <span className="w-[min(20rem,40vw)]">
               <Progress
                 total={s.phases}
                 done={s.done}
-                inProgress={s.inProgress.length}
-                ready={s.ready.length}
-                stuck={s.stuck.length}
+                inProgress={closed ? 0 : s.inProgress.length}
+                ready={closed ? 0 : s.ready.length}
+                stuck={closed ? 0 : s.stuck.length}
               />
             </span>
             <span className="font-mono text-2xs text-ink-faint">
               {s.done}/{s.phases} · {s.percent}%
+              {closed && s.done < s.phases && ` · ${s.phases - s.done} never ran`}
             </span>
           </>
         )}
-        {s.ready.map((phase) => (
+        {/* `summary.ready` stays populated on a closed plan (the engine reports
+            what never got done), and these are action-coloured links straight
+            into a phase. Suppressed here for the same reason the ready board
+            drops the plan outright. */}
+        {!closed && s.ready.map((phase) => (
           <a
             key={phase}
             href={phaseHref(s.slug, phase)}
@@ -65,7 +85,7 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
             P{phase} ready
           </a>
         ))}
-        {s.inProgress.map((phase) => (
+        {!closed && s.inProgress.map((phase) => (
           <StateChip key={phase} state="in-progress" board label={`P${phase} on track`} />
         ))}
       </div>
@@ -113,6 +133,28 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
             : null,
         ]}
       />
+
+      {/* First banner, and `info` rather than `warn`: closure is not a problem
+          to be fixed, it is the answer to "why is this plan quiet". Stating the
+          reason here is the whole point of storing one — a closed plan with no
+          explanation tells the next reader nothing, which is why the write verb
+          refuses to close without it. */}
+      {closed && (
+        <Banner severity="info">
+          <div className="min-w-0">
+            <strong>
+              Closed{s.status ? ` — ${s.status}` : ''}
+              {s.closedOn ? ` on ${s.closedOn}` : ''}
+            </strong>
+            {s.closedReason ? <> — {s.closedReason}</> : null}
+            <div className="mt-1 text-ink-faint">
+              This plan reports no ready work, no warnings and no boot prompts, and it is left out
+              of every portfolio total. Its board below is kept in full. Reopen it to undo all of
+              that.
+            </div>
+          </div>
+        </Banner>
+      )}
 
       {s.engineError && <Banner severity="warn">Engine: {s.engineError}</Banner>}
       {detail.lint?.timedOut && <Banner severity="info">{detail.lint.summary}</Banner>}

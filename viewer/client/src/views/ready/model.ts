@@ -27,6 +27,7 @@
  * arrives are the summary's own `criticalPath` and `nextBest`, never a guess.
  */
 
+import { isClosed } from '@/lib/closure';
 import type { PhaseLock, PhaseView, PlanDetail, PlanSummaryFull } from '@/lib/api';
 
 /** One phase that could start right now, with everything needed to choose it. */
@@ -77,6 +78,19 @@ export const isClaimed = (lock: PhaseLock | undefined): boolean =>
  *
  * `now` is a parameter rather than a call to the clock so that idle days are one
  * consistent answer for the whole render — and so a test can state the date.
+ *
+ * ## Closed plans never board
+ *
+ * This is the highest-stakes closure gate in the client, and the one place the
+ * server cannot do it for us. `stats.ready` is `board.ready` verbatim — the
+ * engine deliberately still reports what a closed plan never finished, so its
+ * own page can say so — and a closed plan therefore arrives here with a
+ * populated `ready` array. Every row this function emits is an invitation to
+ * boot a session; emitting one for an abandoned plan is the console recommending
+ * work the operator has already said will never happen.
+ *
+ * Dropped outright rather than sorted last: a departure is a decision, and a
+ * decision that should never be taken does not belong on the board at any rank.
  */
 export function toDepartures(
   plans: readonly PlanSummaryFull[],
@@ -86,6 +100,7 @@ export function toDepartures(
   const out: Departure[] = [];
 
   for (const plan of plans) {
+    if (isClosed(plan)) continue;
     const ready = (plan.ready ?? []).filter((n): n is number => typeof n === 'number');
     if (!ready.length) continue;
 

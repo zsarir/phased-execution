@@ -37,8 +37,15 @@ const fieldClass =
   'h-9 min-w-0 rounded border border-rule bg-surface px-2 text-sm text-ink '
   + 'hover:border-rule-strong [@media(hover:none)]:min-h-(--tap-min)';
 
+/**
+ * How many filters are away from their default.
+ *
+ * `showClosed` counts when it is **on**, the opposite way round from the
+ * `showComplete` it replaces, because the default moved: hiding closed plans is
+ * now the resting state, and showing them is the deliberate act.
+ */
 export function activeFilterCount(filters: Filters): number {
-  return Number(filters.showDocuments) + Number(!filters.showComplete)
+  return Number(filters.showDocuments) + Number(filters.showClosed)
     + Number(Boolean(filters.repo)) + Number(Boolean(filters.status));
 }
 
@@ -170,18 +177,21 @@ function FilterFields({
         >
           Documents
         </Button>
-        {/* "Hide finished" rather than "Finished", so that pressed means the
+        {/* "Show closed" rather than "Hide closed", so pressed still means the
             same thing on both buttons: *you have changed the default view*.
-            Spelled the other way it is amber on load — and amber is the one
-            colour this system rations, so a page that opens with it lit has
-            spent it saying nothing. */}
+            The label had to turn round with the default — spelled the old way
+            it would be amber on load, and amber is the one colour this system
+            rations, so a page that opens with it lit has spent it saying
+            nothing. "Closed" not "finished": abandoned and superseded plans are
+            hidden by the same toggle and neither of them finished. */}
         <Button
           size="sm"
-          variant={!filters.showComplete ? 'action' : 'default'}
-          aria-pressed={!filters.showComplete}
-          onClick={() => onFilters({ showComplete: !filters.showComplete })}
+          variant={filters.showClosed ? 'action' : 'default'}
+          aria-pressed={filters.showClosed}
+          onClick={() => onFilters({ showClosed: !filters.showClosed })}
+          title="Complete, abandoned and superseded plans. They report no work, so the list leaves them out until you ask."
         >
-          Hide finished
+          Show closed
         </Button>
       </div>
 

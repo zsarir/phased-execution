@@ -120,6 +120,46 @@ describe('building the queue', () => {
     expect(isClaimed({ owner: 'someone', expired: true })).toBe(false);
     expect(isClaimed(undefined)).toBe(false);
   });
+
+  /* ---------------- closure ----------------
+   * The highest-stakes gate in the client, and the one the server cannot make
+   * for us. `stats.ready` is `board.ready` verbatim — the engine deliberately
+   * still reports what a closed plan never finished, so the plan's own page can
+   * say so — which means a closed plan arrives here with a POPULATED ready
+   * array. Every row this builds is an invitation to boot a session. */
+
+  it('never boards a closed plan, whichever terminal word it uses', () => {
+    for (const status of ['complete', 'abandoned', 'superseded']) {
+      expect(toDepartures([plan({ status, ready: [2, 3] })], new Map(), NOW)).toEqual([]);
+    }
+  });
+
+  it('boards the open plans in the same list', () => {
+    const queue = toDepartures([
+      plan({ slug: 'gone', status: 'abandoned', ready: [1, 2, 3] }),
+      plan({ slug: 'live', ready: [2] }),
+    ], new Map(), NOW);
+    expect(queue.map((d) => d.key)).toEqual(['live#2']);
+  });
+
+  it('reads the server’s closed flag ahead of the status word', () => {
+    expect(toDepartures([plan({ status: 'shelved', closed: true, ready: [2] })], new Map(), NOW))
+      .toEqual([]);
+    // …and an explicitly open plan boards even if the word is unfamiliar.
+    expect(toDepartures([plan({ status: 'shelved', closed: false, ready: [2] })], new Map(), NOW))
+      .toHaveLength(1);
+  });
+
+  // A closed plan contributes no departures, so its slug is not in the set
+  // `queueTotals` sums over — the session count cannot inherit its work.
+  it('leaves a closed plan out of the queue totals', () => {
+    const summaries = [
+      plan({ slug: 'gone', status: 'abandoned', ready: [1, 2], remainingSessions: 5 }),
+      plan({ slug: 'live', ready: [2], remainingSessions: 2 }),
+    ];
+    const totals = queueTotals(toDepartures(summaries, new Map(), NOW), summaries);
+    expect(totals).toMatchObject({ phases: 1, plans: 1, sessions: 2 });
+  });
 });
 
 describe('ranking', () => {

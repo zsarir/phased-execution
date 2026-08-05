@@ -264,6 +264,58 @@ describe('the plan surface renders its parts', () => {
     expect(link).toHaveAttribute('href', '#/plan/demo/phase/2');
   });
 
+  /* ---------------- a closed plan reads as closed ----------------
+   * `summary.ready` stays populated on a closed plan — the engine reports what
+   * never got done so this page can say so — and everything below turns that
+   * array into an invitation. The page has to keep the record and drop the
+   * invitations. */
+
+  const closedDetail = (over: Record<string, unknown> = {}) => ({
+    ...DETAIL,
+    summary: {
+      ...DETAIL.summary,
+      status: 'abandoned',
+      closed: true,
+      closedOn: '2026-08-05',
+      closedReason: 'the approach did not survive contact',
+      ...over,
+    },
+    batches: { groups: [], raw: '🔒 CLOSED [abandoned]\n\nNo sessions to plan.\n', budget: '200K/session' },
+  } as PlanDetail);
+
+  it('leads a closed plan with why it is closed, not with what could start', async () => {
+    vi.mocked(api.plan).mockResolvedValue(closedDetail());
+    renderPlan(['demo']);
+    // `getAllByText`: the reason sits in a text node whose parent and
+    // grandparent both match. What matters is that it is on the page once, in
+    // the banner, beside the status word and the date.
+    expect(await screen.findByText('Closed — abandoned on 2026-08-05')).toBeTruthy();
+    expect(screen.getAllByText(/the approach did not survive contact/).length).toBeGreaterThan(0);
+    // The chips and the boot-prompt card are the invitations. All gone.
+    expect(screen.queryByRole('link', { name: 'P2 ready' })).toBeNull();
+    expect(screen.queryByText('Boot prompt — phase 2')).toBeNull();
+    // The record is not: the phase is still reachable from the departures table.
+    expect(screen.getByRole('link', { name: '02' })).toHaveAttribute('href', '#/plan/demo/phase/2');
+  });
+
+  it('says why there are no suggested sessions rather than dropping the card', async () => {
+    // `--session-plan` answers a closed plan with its banner and no groups, so
+    // the card would simply vanish — which reads as a console that failed to
+    // compute one, on a plan still showing unfinished phases.
+    vi.mocked(api.plan).mockResolvedValue(closedDetail());
+    renderPlan(['demo']);
+    expect(await screen.findByText('No sessions to plan')).toBeTruthy();
+    expect(screen.queryByText('Suggested sessions')).toBeNull();
+  });
+
+  it('still offers the boot prompt and the batches on an OPEN plan', async () => {
+    // The control for the two above: they must be asserting closure, not a
+    // fixture that never had these in the first place.
+    renderPlan(['demo']);
+    expect(await screen.findByRole('link', { name: 'P2 ready' })).toBeTruthy();
+    expect(screen.getByText('Suggested sessions')).toBeTruthy();
+  });
+
   it('makes every departures row reachable by keyboard', async () => {
     renderPlan(['demo']);
     await screen.findByText('Departures');

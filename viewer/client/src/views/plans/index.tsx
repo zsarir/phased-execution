@@ -57,7 +57,7 @@ export default function PlansView() {
 
   // A repo or status filter is per-visit, like the search: it hides rows, and a
   // hidden row that survives a reload is how a plan goes missing for a week.
-  // `showDocuments` and `showComplete` persist because they are shape, not
+  // `showDocuments` and `showClosed` persist because they are shape, not
   // search — and because their toggles are on screen the whole time.
   const [local, setLocal] = useState({ query: '', repo: '', status: '' });
 
@@ -72,8 +72,8 @@ export default function PlansView() {
   const all = useMemo(() => toRows(summaries, runs ?? []), [summaries, runs]);
 
   const filters: Filters = useMemo(
-    () => ({ ...local, showDocuments: prefs.showDocuments, showComplete: prefs.showComplete }),
-    [local, prefs.showDocuments, prefs.showComplete],
+    () => ({ ...local, showDocuments: prefs.showDocuments, showClosed: prefs.showClosed }),
+    [local, prefs.showDocuments, prefs.showClosed],
   );
 
   const sortId: SortId = isSortId(prefs.sort) ? prefs.sort : 'activity';
@@ -90,15 +90,15 @@ export default function PlansView() {
   const statuses = useMemo(() => statusOptions(all), [all]);
 
   const onFilters = (patch: Partial<Filters>) => {
-    const { showDocuments, showComplete, ...rest } = patch;
+    const { showDocuments, showClosed, ...rest } = patch;
     if (showDocuments !== undefined) setPrefs({ showDocuments });
-    if (showComplete !== undefined) setPrefs({ showComplete });
+    if (showClosed !== undefined) setPrefs({ showClosed });
     if (Object.keys(rest).length) setLocal((current) => ({ ...current, ...rest }));
   };
 
   const clearFilters = () => {
     setLocal({ query: '', repo: '', status: '' });
-    setPrefs({ showDocuments: NO_FILTERS.showDocuments, showComplete: NO_FILTERS.showComplete });
+    setPrefs({ showDocuments: NO_FILTERS.showDocuments, showClosed: NO_FILTERS.showClosed });
   };
 
   const newPlan = (
@@ -157,14 +157,23 @@ export default function PlansView() {
   );
 
   if (!visible.length) {
+    // Clearing the filters restores the DEFAULTS, and hiding closed plans is now
+    // one of them — so on a source where every plan is closed, "Clear the
+    // filters" would leave the page exactly as empty as it found it. Name the
+    // real cause and offer the control that actually fixes it.
+    const allClosed = all.every((row) => row.isClosed);
     return (
       <Page title="Plans" subtitle={`${plural(all.length, 'plan')} in this source`} actions={newPlan}>
         <Card className="mb-3 p-3">{controls}</Card>
         <Empty
           icon={<Filter size={22} />}
-          title="Every plan is filtered out"
-          body={`${plural(all.length, 'plan')} are in this source. Widen the filters to see them.`}
-          action={<Button onClick={clearFilters}>Clear the filters</Button>}
+          title={allClosed ? 'Every plan here is closed' : 'Every plan is filtered out'}
+          body={allClosed
+            ? `All ${plural(all.length, 'plan')} in this source are complete, abandoned or superseded, so the list leaves them out. Nothing is wrong — there is just no open work.`
+            : `${plural(all.length, 'plan')} are in this source. Widen the filters to see them.`}
+          action={allClosed
+            ? <Button onClick={() => onFilters({ showClosed: true })}>Show the closed plans</Button>
+            : <Button onClick={clearFilters}>Clear the filters</Button>}
         />
       </Page>
     );
@@ -201,6 +210,9 @@ export default function PlansView() {
 function subtitle(totals: ReturnType<typeof rowTotals>): string {
   const parts = [plural(totals.plans, 'plan')];
   if (totals.documents) parts.push(plural(totals.documents, 'document'));
+  // Only worth saying when they are on screen — with the filter at its default
+  // the count is always zero, and a permanent "0 closed" is noise.
+  if (totals.closed) parts.push(`${totals.closed} closed`);
   if (totals.ready) parts.push(`${totals.ready} ready`);
   if (totals.sessions) parts.push(`${plural(totals.sessions, 'session')} of work left`);
   if (totals.running) parts.push(`${totals.running} running`);
@@ -214,9 +226,14 @@ function subtitle(totals: ReturnType<typeof rowTotals>): string {
  * reports zero ready phases and zero remaining sessions — numbers that look like
  * "finished" and mean "unknown". Saying so at the top is the difference between
  * a quiet list and a lie.
+ *
+ * Closed plans are left out even when they carry an `engineError`. This band is
+ * an error-severity call to action, and the server demotes a closed plan's
+ * structural issues to `info` for exactly this reason — the plan still shows the
+ * damage on its own row and its own page, it just stops interrupting.
  */
 function AttentionBand({ rows }: { rows: PlanRow[] }) {
-  const broken = rows.filter((row) => row.errors > 0);
+  const broken = rows.filter((row) => row.errors > 0 && !row.isClosed);
   if (!broken.length) return null;
 
   const notes: StatusNote[] = broken.map((row) => ({

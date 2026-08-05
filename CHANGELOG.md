@@ -47,6 +47,25 @@ A plan can be closed — an off switch for work that will never be finished.
   in silence.
 - Repairing a closed plan is refused with a 409 that says to reopen it first, rather than reporting
   that there is nothing to repair.
+- **A closed plan now reads as closed everywhere in the console, and can be closed or reopened from
+  it.** The plan page leads with a banner saying which terminal word applies, when, and why; the
+  status chip carries a padlock; and the plan's own action menu gains **Close plan** (a status and a
+  required one-line reason, previewed as the exact `close-plan.sh` invocation) and **Reopen** (a
+  confirm, because it silently puts the plan back on every board). Closed plans no longer appear on
+  the departures board, in the "Ready now" nav badge or tile, in the dashboard's "start this next"
+  recommendation, among the in-flight plan strips, or as ready chips and boot-prompt cards on the
+  plan page; their stuck / QA / stale-lock / idle warnings are silenced, their structural damage
+  stays visible but demoted, and a lapsed lock on one now reads as debris rather than a chore, since
+  `phase-lock.sh` already ignores it. Search still lists them, now with a `closed` badge.
+- **The plan list hides closed plans by default** — one toggle away, and a deliberate change of
+  behaviour: the toggle it replaces ("Hide finished") defaulted to *showing* every finished plan, so
+  a library of sixty-odd complete plans opened on all of them. A closed row that is on screen says
+  what happened to it ("abandoned — 3 of 4 phases never ran") instead of offering phases to start.
+
+  ⚠️ A plan's **per-plan** `ready` array stays populated when it is closed, on purpose — the engine
+  reports what never got done so the plan's own board can say so, and engine-parity depends on it.
+  Only the portfolio aggregates are gated server-side, so anything that turns `ready` into a call to
+  action must gate it itself. `viewer/client/src/lib/closure.ts` is the one place the client decides.
 
 ### Fixed
 

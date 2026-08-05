@@ -30,6 +30,7 @@ import { AlertTriangle, Lock } from 'lucide-react';
 import { Card, Chip, StateChip, TBody, TD, TH, THead, TR, Table, TableWrap } from '@/components/ui';
 import { Progress } from '@/components/ui';
 import { etaLabel, etaTitle, relativeTime } from '@/lib/format';
+import { closedTitle } from '@/lib/closure';
 import { cn } from '@/lib/cn';
 import { phaseHref, planHref } from '@shared/routes.js';
 import type { ChipProps } from '@/components/ui';
@@ -71,14 +72,20 @@ function Track({ row, className }: { row: PlanRow; className?: string }) {
   if (!row.phases) {
     return <span className={cn('text-2xs text-ink-faint', className)}>no phases</span>;
   }
+  // On a closed plan only `done` is painted. The engine still reports which
+  // phases *would* be ready, in progress or stuck, but those are readings of
+  // live work: an amber "ready" notch on an abandoned plan is the track saying
+  // "this one could move today", which is the single thing closure denies. What
+  // is left reads as unlaid grey — which is exactly what it is.
+  const live = !row.isClosed;
   return (
     <Progress
       className={className}
       total={row.phases}
       done={row.done}
-      inProgress={row.inProgress.length}
-      ready={row.readyPhases.length}
-      stuck={row.stuck.length}
+      inProgress={live ? row.inProgress.length : 0}
+      ready={live ? row.readyPhases.length : 0}
+      stuck={live ? row.stuck.length : 0}
     />
   );
 }
@@ -95,6 +102,33 @@ export function repoLabel(repos: string[]): { text: string; title: string } {
   const title = repos.join(' · ');
   if (repos.length <= 3) return { text: title, title };
   return { text: `${repos.slice(0, 2).join(' · ')} +${repos.length - 2}`, title };
+}
+
+/**
+ * The plan's own status word, and — when it is terminal — the fact that this
+ * makes the plan closed.
+ *
+ * One chip, not two. The status word IS the more useful label (`abandoned`
+ * says something `CLOSED` does not), so closure is carried by the padlock and
+ * the tooltip rather than by a second chip repeating the first in capitals.
+ * Non-terminal words (`proposal`, `backlog`) keep the plain rendering.
+ */
+function ClosedChip({ row }: { row: PlanRow }) {
+  if (!row.isClosed) {
+    return (
+      <Chip title={"The plan's own frontmatter status — set by hand when a plan is finished or shelved."}>
+        {row.status}
+      </Chip>
+    );
+  }
+  return (
+    // `PlanRow` already carries `status`, `closedOn` and `closedReason`, which
+    // is all `closedTitle` reads — no adapter needed.
+    <Chip title={closedTitle(row)}>
+      <Lock size={11} className="shrink-0" aria-hidden />
+      {row.status}
+    </Chip>
+  );
 }
 
 /** The one thing most wrong with this plan, when something is. */
@@ -116,7 +150,12 @@ function ConcernChip({ row }: { row: PlanRow }) {
  * ------------------------------------------------------------------ */
 
 export function PlanCard({ row, index }: { row: PlanRow; index: number }) {
-  const ready = row.readyPhases;
+  // A closed plan shows no ready chips. Each chip is a link straight into a
+  // phase captioned "P4 ready", and `readyPhases` stays populated on a closed
+  // plan by design — so without this the list is the ready board's defect again,
+  // one card at a time. `restingReason()` takes the space and says what actually
+  // happened instead.
+  const ready = row.isClosed ? [] : row.readyPhases;
 
   return (
     <Card
@@ -137,9 +176,7 @@ export function PlanCard({ row, index }: { row: PlanRow; index: number }) {
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           {!row.isPlan && <Chip>{row.kind === 'orphan-handoffs' ? 'handoffs only' : row.kind}</Chip>}
           {row.isPlan && row.status !== 'active' && row.status !== 'unknown' && (
-            <Chip title={"The plan's own frontmatter status — set by hand when a plan is finished or shelved."}>
-              {row.status}
-            </Chip>
+            <ClosedChip row={row} />
           )}
           <RunChip row={row} />
         </div>
@@ -197,8 +234,18 @@ export function PlanCard({ row, index }: { row: PlanRow; index: number }) {
   );
 }
 
-/** Why a plan has nothing ready — four different facts, not one empty state. */
+/** Why a plan has nothing ready — five different facts, not one empty state. */
 function restingReason(row: PlanRow): string {
+  // Closure comes FIRST, and says how much never got done. An abandoned plan
+  // with four phases left is not "every phase is done" and it is not "waiting on
+  // another" — it is stopped, and the number is the only part of that a row can
+  // usefully carry. `isComplete` cannot answer this: it is true of a finished
+  // plan and false of an abandoned one, and both are closed.
+  if (row.isClosed) {
+    const left = Math.max(0, row.phases - row.done);
+    if (!left) return `${row.status} — every phase is done`;
+    return `${row.status} — ${left} of ${row.phases} phases never ran`;
+  }
   if (row.isComplete) return 'every phase is done';
   if (row.inProgress.length) return `phase ${row.inProgress.join(', ')} in progress`;
   if (row.stuck.length) return `phase ${row.stuck.join(', ')} is stuck`;
@@ -303,8 +350,10 @@ export function PlanTable({
               <TD className="whitespace-nowrap text-right font-mono tabular-nums">
                 {row.phases ? `${row.done}/${row.phases}` : '—'}
               </TD>
+              {/* Same rule as the card: a closed plan reads `—`, not a live
+                  count in ready-amber linking into a phase nobody will run. */}
               <TD className="text-right font-mono tabular-nums">
-                {row.readyPhases.length
+                {!row.isClosed && row.readyPhases.length
                   ? (
                     <a
                       href={phaseHref(row.slug, row.readyPhases[0])}

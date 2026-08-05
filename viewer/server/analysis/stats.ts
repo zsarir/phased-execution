@@ -107,7 +107,20 @@ export type Portfolio = {
   /** `closed` so a consumer can group the terminal statuses without re-deriving the predicate. */
   byStatus: { status: string; count: number; closed: boolean }[];
   readyQueue: ReadyItem[];
-  activeLocks: { slug: string; phase: number; owner: string; expired: boolean; leaseUntil?: number }[];
+  /**
+   * Every lock, closed plans included — this is the inventory, and a lock file
+   * on disk is a fact whatever the plan's status says.
+   *
+   * `closed` rides along because a lock left on a closed plan is **debris, not a
+   * blocker**: `phase-lock.sh conflicts` skips it outright (the scan crosses
+   * every plan, so that debris would otherwise block unrelated work), and a
+   * surface that shows it as an expired lease needing release would be inventing
+   * a chore. Carried rather than re-derived, for the same reason `byStatus`
+   * carries it.
+   */
+  activeLocks: {
+    slug: string; phase: number; owner: string; expired: boolean; leaseUntil?: number; closed: boolean;
+  }[];
   qaModes: { mode: string; count: number }[];
   qaFailures: { slug: string; phase: number }[];
   issues: HealthIssue[];
@@ -413,9 +426,19 @@ export function portfolio(contexts: PlanContext[], sizing: Sizing, rate?: RateRe
     byStatus: tally(stats.map((s) => s.stats.status ?? 'unset'))
       .map(([status, count]) => ({ status, count, closed: isClosedStatus(status) })),
     readyQueue,
-    activeLocks: stats.flatMap(({ ctx }) => ctx.record.locks.map((l) => ({
-      slug: ctx.record.slug, phase: l.phase, owner: l.owner, expired: l.expired, leaseUntil: l.leaseUntil,
-    }))).sort((a, b) => Number(a.expired) - Number(b.expired) || (b.leaseUntil ?? 0) - (a.leaseUntil ?? 0)),
+    activeLocks: stats.flatMap(({ ctx, stats: s }) => ctx.record.locks.map((l) => ({
+      slug: ctx.record.slug,
+      phase: l.phase,
+      owner: l.owner,
+      expired: l.expired,
+      leaseUntil: l.leaseUntil,
+      closed: s.closed,
+    }))).sort((a, b) =>
+      // Debris last, then live before expired: the rows that need a decision
+      // come first, and a closed plan's leftovers never head the list.
+      Number(a.closed) - Number(b.closed)
+      || Number(a.expired) - Number(b.expired)
+      || (b.leaseUntil ?? 0) - (a.leaseUntil ?? 0)),
     qaModes: tally(plans.map((s) => s.stats.qaMode)).map(([mode, count]) => ({ mode, count })),
     qaFailures: stats.flatMap(({ ctx }) => ctx.record.qa.filter((q) => q.result === 'fail')
       .map((q) => ({ slug: ctx.record.slug, phase: q.phase }))),

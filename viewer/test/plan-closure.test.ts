@@ -245,6 +245,30 @@ test('a closed plan is not work: no ready queue, no remaining weight, not stalle
   assert.equal(view.totals.done, 2);
   assert.ok(view.byStatus.some((b) => b.status === 'complete' && b.closed === true));
   assert.ok(view.byStatus.some((b) => b.status === 'active' && b.closed === false));
+
+  /* WHERE THE GATE IS — the half of this that stops the client and the server
+   * each assuming the other did it. Asserted here, against the same Service,
+   * because it is the exact contrast to everything above: the AGGREGATE is
+   * gated, the PER-PLAN array deliberately is not.
+   *
+   * The obvious guess is that a closed plan's `ready` arrives empty, and it is
+   * wrong. `--memory-block` prints every state for a closed plan (it only adds
+   * a `closed:` line — engine-parity depends on that), and `planStats()` copies
+   * `board.ready` through verbatim, because the plan's OWN board must still be
+   * able to say what never got done.
+   *
+   * So every client surface that turns `ready` into a call to action — the
+   * departures board, the plan header's ready chips, the list's chips and
+   * count, the nav badge, the boot-prompt cards — has to gate it itself. If a
+   * future change DOES empty the array, it fails here, next to this comment,
+   * instead of silently turning all of those gates into unjustifiable dead
+   * code. */
+  const shut = (await svc.summaries()).find((s) => s.slug === 'done-plan')!;
+  assert.equal(shut.closed, true);
+  assert.deepEqual(shut.ready, [2],
+    'the engine reports what a closed plan never got to — do not "fix" this');
+  assert.ok(shut.remainingWeight > 0,
+    'and how much of it was left; only the PORTFOLIO aggregate is gated');
 });
 
 /* ------------------------------------------------------------------ *

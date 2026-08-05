@@ -38,6 +38,7 @@ import { plural } from '@/lib/format';
 import { Banner, Button, Card, Empty, Skeleton } from '@/components/ui';
 import { plainText } from '@/components/markdown';
 import { RouteStrip } from '@/components/charts';
+import { isClosed } from '@/lib/closure';
 import { planHref } from '@shared/routes.js';
 import type { PlanSummaryFull } from '@/lib/api';
 import { Page } from '../_page';
@@ -56,9 +57,11 @@ export default function ReadyView() {
 
   const summaries = (plans ?? []) as unknown as PlanSummaryFull[];
 
-  // Only plans that actually have something ready are worth an engine run.
+  // Only plans that actually have something ready are worth an engine run — and
+  // a closed plan's ready phases are never going to board, so fetching its
+  // detail is a per-plan `phase-graph.sh` run spent on a row that gets dropped.
   const slugs = useMemo(
-    () => summaries.filter((p) => (p.ready?.length ?? 0) > 0).map((p) => p.slug),
+    () => summaries.filter((p) => !isClosed(p) && (p.ready?.length ?? 0) > 0).map((p) => p.slug),
     [summaries],
   );
   const { bySlug } = usePlanDetails(slugs, slugs.length > 0);
@@ -96,12 +99,21 @@ export default function ReadyView() {
   }
 
   if (!all.length) {
+    // How many phases closure took off the board. Without this the empty state
+    // claims every phase is "done, running or waiting" while an abandoned plan
+    // sits there with five ready ones — true only if you already knew the rule.
+    const withheld = summaries
+      .filter((p) => isClosed(p))
+      .reduce((n, p) => n + (p.ready?.length ?? 0), 0);
     return (
       <Page title="Ready now">
         <Empty
           icon={<CircleCheck size={22} />}
           title="Nothing is ready"
-          body="Every phase is done, already running, or waiting on a dependency that has not landed. Finish something in flight and the board refills itself."
+          body={'Every phase is done, already running, or waiting on a dependency that has not landed. Finish something in flight and the board refills itself.'
+            + (withheld
+              ? ` ${plural(withheld, 'phase')} in closed plans are not counted — reopen a plan to put its work back on the board.`
+              : '')}
           action={<Button asChild><a href="#/plans">Open the plans</a></Button>}
         />
       </Page>
@@ -170,7 +182,9 @@ export default function ReadyView() {
 }
 
 function subtitle(count: number, summaries: PlanSummaryFull[]): string {
-  const slugs = new Set(summaries.filter((p) => (p.ready?.length ?? 0) > 0).map((p) => p.slug));
+  const slugs = new Set(
+    summaries.filter((p) => !isClosed(p) && (p.ready?.length ?? 0) > 0).map((p) => p.slug),
+  );
   return `${plural(count, 'phase')} across ${plural(slugs.size, 'plan')}`;
 }
 

@@ -9,26 +9,38 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClientConfig } from '@/lib/queries';
 import type { Portfolio } from '@/lib/api';
 
-const { stats } = vi.hoisted(() => ({ stats: vi.fn() }));
+// `plans` as well as `stats`: the page joins closure on from the plan list,
+// because the search-independent `HealthIssue` carries no status of its own.
+// Unmocked it would reach for a real fetch under jsdom.
+const { stats, plans } = vi.hoisted(() => ({ stats: vi.fn(), plans: vi.fn() }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
-  return { ...actual, api: { ...actual.api, stats } };
+  return { ...actual, api: { ...actual.api, stats, plans } };
 });
 
 const PORTFOLIO: Portfolio = {
   generatedAt: Date.parse('2026-08-03T12:00:00Z'),
   totals: {
-    plans: 4, documents: 1, orphans: 0, phases: 30, done: 21, ready: 3, waiting: 5,
+    plans: 4, documents: 1, orphans: 0, closed: 1, phases: 30, done: 21, ready: 3, waiting: 5,
     inProgress: 1, stuck: 0, percent: 70, remainingWeight: 310_000, remainingSessions: 2,
   },
-  byStatus: [{ status: 'active', count: 3 }, { status: 'complete', count: 1 }],
-  activeLocks: [{ slug: 'demo', phase: 5, owner: 'claude-a/p5', expired: false, leaseUntil: Date.now() + 900_000 }],
+  byStatus: [
+    { status: 'active', count: 3, closed: false },
+    { status: 'complete', count: 1, closed: true },
+  ],
+  activeLocks: [
+    { slug: 'demo', phase: 5, owner: 'claude-a/p5', expired: false, leaseUntil: Date.now() + 900_000, closed: false },
+    // A lapsed lease on a CLOSED plan: debris, not a chore. `phase-lock.sh
+    // conflicts` skips it, so it blocks nobody and must not be counted as an
+    // expired lease needing release.
+    { slug: 'shelved', phase: 2, owner: 'claude-b/p2', expired: true, closed: true },
+  ],
   issues: [
     { slug: 'demo', severity: 'warning', kind: 'handoff-drift', message: 'INDEX disagrees', phase: 2 },
     { slug: 'other', severity: 'error', kind: 'cycle', message: 'phase 3 depends on itself' },
@@ -55,6 +67,11 @@ function mount() {
 beforeEach(() => {
   vi.clearAllMocks();
   stats.mockResolvedValue(PORTFOLIO);
+  plans.mockResolvedValue([
+    { slug: 'demo', kind: 'plan', phases: 8, ready: [2], status: 'active', closed: false },
+    { slug: 'other', kind: 'plan', phases: 6, ready: [2, 3], status: 'active', closed: false },
+    { slug: 'shelved', kind: 'plan', phases: 4, ready: [], status: 'abandoned', closed: true },
+  ]);
 });
 
 describe('statistics', () => {
@@ -105,6 +122,59 @@ describe('statistics', () => {
   it('shows stalled plans with how long they have been idle', async () => {
     await mount();
     expect(await screen.findByText(/P2, P3 ready · idle 12 days/)).toBeTruthy();
+  });
+
+  /* ---------------- closure ---------------- */
+
+  // `phase-lock.sh conflicts` skips a closed plan's locks outright, so a lapsed
+  // lease on one blocks nobody. Counting it would put an amber band and a
+  // Release-all button in front of the operator for a chore that does not exist.
+  it('calls a lapsed lock on a closed plan debris, and does not count it as expired', async () => {
+    await mount();
+    await screen.findByRole('link', { name: 'shelved P2' });
+    expect(screen.getByText('debris')).toBeTruthy();
+    expect(screen.queryByText('expired')).toBeNull();
+    // One expired lease would not raise the band anyway; zero must not either.
+    expect(screen.queryByText(/ran out — the phases read as taken/)).toBeNull();
+  });
+
+  // The row is MARKED but not otherwise special-cased. The absence of a repair
+  // button is the SERVER's doing — `healthIssues()` demotes a closed plan's
+  // issues to `info` and `classifyIssue()` offers a repair only for
+  // error/warning — so this asserts the two layers meet, not that the client
+  // added a redundant second gate. (It had one for a while; the severity had
+  // already handled it, and the test only passed because of that.)
+  it('marks a closed plan’s issue row, and its demoted severity is what withholds the repair', async () => {
+    stats.mockResolvedValue({
+      ...PORTFOLIO,
+      issues: [
+        { slug: 'shelved', severity: 'info', kind: 'orphan', message: 'phase 9 is unreachable' },
+        { slug: 'demo', severity: 'error', kind: 'engine', message: 'will not parse' },
+      ],
+    });
+    await mount();
+    await screen.findByText('phase 9 is unreachable');
+    // Marked, because a bare row in this list reads as live work.
+    expect(screen.getByText('closed')).toBeTruthy();
+    // One offer, and it belongs to the open plan.
+    const repairs = screen.getAllByRole('button', { name: /Repair|Fix/ });
+    expect(repairs).toHaveLength(1);
+    // The proof it is severity doing the work: give the SAME closed plan an
+    // error-severity row and the button comes back. If a future change stops
+    // demoting, this line turns red and says which layer moved.
+    stats.mockResolvedValue({
+      ...PORTFOLIO,
+      issues: [{ slug: 'shelved', severity: 'error', kind: 'engine', message: 'will not parse' }],
+    });
+    cleanup();
+    await mount();
+    await screen.findByText('will not parse');
+    expect(screen.getAllByRole('button', { name: /Repair|Fix/ })).toHaveLength(1);
+  });
+
+  it('says how much of the portfolio is still open', async () => {
+    await mount();
+    expect(await screen.findByText('3 open · 1 closed')).toBeTruthy();
   });
 
   it('says “same day” rather than “0d” for a zero median gap', async () => {

@@ -28,6 +28,7 @@ import {
   type ConsoleState, type InboxQuery, type NotificationScope, type PlanDetail, type PlanSummary,
   type TerminalState,
 } from './api';
+import { isClosed } from './closure';
 import { SSE_EVENTS, onSse, type SseEvent } from './sse';
 
 /* ---------------- keys ---------------- */
@@ -708,9 +709,16 @@ export function shellCounts(
   const list = plans ?? [];
   const live = (sessions ?? []).filter((session) => !session.exited);
   return {
+    // `plans` and `phases` are the CENSUS and count everything, closed included —
+    // the same split the server makes, where `totals.phases`/`done`/`percent`
+    // still see every plan. Closing a plan quiets it; it does not delete it, and
+    // a rail that stopped counting them would disagree with the dashboard's own
+    // subtitle. `ready` is the opposite kind of number: it is a call to action
+    // with a badge on it, it links straight to the departures board, and it has
+    // to say exactly what that board will show.
     plans: list.filter((p) => p.kind === 'plan').length,
     phases: list.reduce((n, p) => n + (p.phases ?? 0), 0),
-    ready: list.reduce((n, p) => n + (p.ready?.length ?? 0), 0),
+    ready: list.reduce((n, p) => n + (isClosed(p) ? 0 : p.ready?.length ?? 0), 0),
     approvals: (approvals ?? []).filter((a) => a.status === 'pending').length,
     unread,
     agentSessions: live.filter((session) => session.kind === 'claude').length,

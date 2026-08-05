@@ -350,6 +350,13 @@ export function demands({
     });
   }
 
+  // Closed plans are already out of this: `healthIssues()` drops the progress
+  // kinds and demotes the structural ones to `info`, so a terminal plan cannot
+  // produce an `error` here at all. Do not add a second closure check — the
+  // severity IS the gate, and a client-side one would silently diverge from the
+  // server's the next time the issue kinds change. (`expiredLocks` is the one
+  // that does need gating, and gets it in `dashboard/index.tsx` where the plans
+  // are — this function only renders what it is handed.)
   const errors = issues.filter((issue) => issue.severity === 'error');
   if (errors.length) {
     // One card can list errors from several plans, and a repair session works

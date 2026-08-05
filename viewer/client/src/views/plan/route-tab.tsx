@@ -7,6 +7,7 @@ import { MarkdownInline, plainText } from '@/components/markdown';
 import { PromptCard } from '@/components/prompt-card';
 import { RouteCards } from './route-cards';
 import { api } from '@/lib/api';
+import { isClosed } from '@/lib/closure';
 import { boardStateTitle } from '@/lib/status-vocab';
 import { keys } from '@/lib/queries';
 import { pad2, weight } from '@/lib/format';
@@ -109,6 +110,7 @@ function DeparturesBoard({ detail }: { detail: PlanDetail }) {
 
 export function RouteTab({ detail }: { detail: PlanDetail }) {
   const slug = detail.summary.slug;
+  const closed = isClosed(detail.summary);
   const ready = detail.summary.ready;
   const doneNumbers = detail.phases.filter((p) => p.state === 'done').map((p) => p.phase);
   const lastDone = doneNumbers.length ? Math.max(...doneNumbers) : null;
@@ -124,7 +126,28 @@ export function RouteTab({ detail }: { detail: PlanDetail }) {
         onSelect={(phase) => navigate(phaseHref(slug, phase))}
       />
 
-      {detail.batches?.groups?.length ? (
+      {/* `--session-plan` answers a closed plan with its CLOSED banner and "No
+          sessions to plan", so `groups` is empty and the card below would simply
+          vanish. Say why instead: an absent card on a plan that still shows
+          unfinished phases reads as the console failing to compute one. */}
+      {closed ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>No sessions to plan</CardTitle>
+            <span className="text-xs text-ink-faint">this plan is closed</span>
+          </CardHeader>
+          <CardBody className="text-sm text-ink-muted">
+            {detail.summary.closedReason
+              ? <p className="mb-1">{detail.summary.closedReason}</p>
+              : null}
+            <p>
+              The engine stops batching a closed plan, so there is nothing to suggest. The route
+              above is kept in full — it is the record of where the work stopped. Reopen the plan
+              to put its remaining phases back on the board.
+            </p>
+          </CardBody>
+        </Card>
+      ) : detail.batches?.groups?.length ? (
         <Card>
           <CardHeader>
             <CardTitle>Suggested sessions</CardTitle>
@@ -147,7 +170,13 @@ export function RouteTab({ detail }: { detail: PlanDetail }) {
 
       <DeparturesBoard detail={detail} />
 
-      {ready.length > 0 && (
+      {/* `--boot-prompt` has no closure guard of its own — it will happily write
+          a full prompt for an abandoned plan's phase — so the gate has to be
+          here. A card headed "Boot prompt — phase 4" with a Copy button beside
+          it is the single most direct invitation this console makes; offering
+          one for a plan the operator has closed is the ready board's defect
+          wearing a different card. */}
+      {!closed && ready.length > 0 && (
         <div className="grid gap-3 lg:grid-cols-2">
           {ready.map((phase) => (
             <PromptCard

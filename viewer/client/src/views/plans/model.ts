@@ -30,6 +30,7 @@
 
 import { plainText } from '@/components/markdown';
 import { outcomeOf, type OutcomeId } from '../run/defaults';
+import { isClosed as readClosed } from '@/lib/closure';
 import type { EtaEstimate, PlanSummaryFull, RunState } from '@/lib/api';
 
 /** The newest run on a plan, as much of it as a list row can use. */
@@ -50,6 +51,17 @@ export interface PlanRow {
   status: string;
   isPlan: boolean;
   isComplete: boolean;
+  /**
+   * The operator closed this plan — its status is terminal. Every attention
+   * surface skips it; the row still renders in full. ⚠️ Not the same question as
+   * `isComplete`: a plan can be closed with phases left (`abandoned`), and a plan
+   * whose phases are all done is `isComplete` before anyone closes it.
+   */
+  isClosed: boolean;
+  /** The word — `complete`, `abandoned`, `superseded` — behind the CLOSED badge. */
+  closedStatus?: string;
+  closedOn?: string;
+  closedReason?: string;
 
   phases: number;
   done: number;
@@ -119,6 +131,7 @@ export function toRows(
     const errors = (plan.issueCounts?.error ?? 0) + (plan.engineError ? 1 : 0);
     const worst = issues.find((i) => i.severity === 'error') ?? issues.find((i) => i.severity === 'warning');
     const claim = (plan.locks ?? [])[0];
+    const closed = readClosed(plan);
 
     return {
       slug: plan.slug,
@@ -127,6 +140,10 @@ export function toRows(
       status: plan.status ?? 'unknown',
       isPlan: (plan.kind ?? 'plan') === 'plan',
       isComplete: plan.status === 'complete' || (phases > 0 && done >= phases),
+      isClosed: closed,
+      closedStatus: closed ? plan.status : undefined,
+      closedOn: plan.closedOn,
+      closedReason: plan.closedReason,
 
       phases,
       done,
@@ -175,13 +192,36 @@ export interface Concern {
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 
-/** Ordered worst first. An empty list means the plan is fine. */
+/**
+ * Ordered worst first. An empty list means the plan is fine.
+ *
+ * ## Closure
+ *
+ * A closed plan keeps only its **structural** concern, demoted to `warn` — the
+ * exact shape the server gives its issues (`healthIssues()` drops the progress
+ * kinds and demotes `engine` / `phase-count` / `undefined-dep` / `orphan` to
+ * `info`). Everything else here is a progress concern, and this list is the
+ * client's attention vocabulary: it is the chip on the row, the reasons in the
+ * band, and the key the `attention` sort orders by. Leaving `stuck`, `qa` and
+ * `lock` in would re-derive from `stuck` / `qaFailures` / `locks` — three fields
+ * the server deliberately leaves populated — the very warnings closing the plan
+ * was supposed to silence.
+ *
+ * The demotion, not deletion, is the point: a closed plan the engine cannot
+ * parse still says so, it just stops outranking a live plan's real error.
+ */
 export function concerns(row: PlanRow): Concern[] {
   const out: Concern[] = [];
 
   if (row.errors > 0) {
-    out.push({ key: 'error', text: row.firstIssue ?? plural(row.errors, 'error'), tone: 'bad' });
+    out.push({
+      key: 'error',
+      text: row.firstIssue ?? plural(row.errors, 'error'),
+      tone: row.isClosed ? 'warn' : 'bad',
+    });
   }
+  if (row.isClosed) return out;
+
   if (row.run?.outcome === 'halted') {
     out.push({ key: 'halted', text: 'the autopilot halted here', tone: 'bad' });
   }
@@ -269,13 +309,20 @@ const COMPARE: Record<SortId, (a: PlanRow, b: PlanRow) => number> = {
     || b.percent - a.percent
     || (a.phases - a.done) - (b.phases - b.done)
     || byName(a, b),
+  // Closed plans sink in both work-shaped orders. Their `readyPhases` are real —
+  // the engine reports what never got done — but "most ready" and "needs
+  // attention" are both the question *where should I go next*, and a plan the
+  // operator has closed is never the answer. Sunk rather than dropped: the
+  // filter decides what is on the list, a sort only decides where.
   ready: (a, b) =>
-    b.readyPhases.length - a.readyPhases.length
+    Number(a.isClosed) - Number(b.isClosed)
+    || b.readyPhases.length - a.readyPhases.length
     || b.remainingSessions - a.remainingSessions
     || b.activity - a.activity
     || byName(a, b),
   attention: (a, b) =>
-    severity(a) - severity(b)
+    Number(a.isClosed) - Number(b.isClosed)
+    || severity(a) - severity(b)
     || concerns(b).length - concerns(a).length
     || b.idleDays - a.idleDays
     || byName(a, b),
@@ -295,8 +342,20 @@ export interface Filters {
   query: string;
   /** Include documents and orphan handoff sets, not only plans. */
   showDocuments: boolean;
-  /** Keep finished plans in the list. */
-  showComplete: boolean;
+  /**
+   * Keep closed plans — complete, abandoned and superseded — in the list.
+   *
+   * **Off by default, and that is the deliberate divergence.** The toggle this
+   * replaces (`showComplete`) defaulted to *true*, so this source opened on
+   * sixty-four finished plans and three live ones. Closure is the operator
+   * saying nobody is coming back; the list should open on the work.
+   *
+   * It is a new preference key rather than a flipped default because
+   * `setPrefs()` persists the whole object — every browser that has ever
+   * touched any control already has `showComplete: true` on disk, so changing
+   * that key's default would have reached nobody. See `lib/prefs.ts`.
+   */
+  showClosed: boolean;
   /** One repo, or every repo. */
   repo: string;
   /** One status, or every status. */
@@ -306,7 +365,7 @@ export interface Filters {
 export const NO_FILTERS: Filters = {
   query: '',
   showDocuments: false,
-  showComplete: true,
+  showClosed: false,
   repo: '',
   status: '',
 };
@@ -327,7 +386,10 @@ export function matches(row: PlanRow, query: string): boolean {
 export function applyFilters(rows: readonly PlanRow[], filters: Filters): PlanRow[] {
   return rows.filter((row) => {
     if (!filters.showDocuments && !row.isPlan) return false;
-    if (!filters.showComplete && row.isComplete) return false;
+    // Asking for a status by name overrides the closed filter: picking
+    // `abandoned` from the dropdown and getting an empty list would read as a
+    // broken control rather than as a filter fighting another filter.
+    if (!filters.showClosed && row.isClosed && filters.status !== row.status) return false;
     if (filters.repo && !row.repos.includes(filters.repo)) return false;
     if (filters.status && row.status !== filters.status) return false;
     return matches(row, filters.query);
@@ -418,10 +480,18 @@ export function groupRows(rows: readonly PlanRow[], by: GroupBy): Group[] {
  * `sessions` sums the engine's own `remainingSessions` rather than dividing
  * weight by budget here — batching is the engine's decision, and a second
  * implementation of it would eventually disagree with the plan pages.
+ *
+ * **The work figures exclude closed plans; the census does not.** `ready`,
+ * `sessions` and `errors` are readings of what is left to do, and a closed plan
+ * has nothing left to do by definition — the same split the server makes in
+ * `portfolio()`, where `totals.ready` and `remainingSessions` filter to the open
+ * plans while `phases` / `done` / `percent` still count everything. Closing a
+ * plan quiets it; it does not delete its history.
  */
 export function rowTotals(rows: readonly PlanRow[]) {
   let plans = 0;
   let documents = 0;
+  let closed = 0;
   let phases = 0;
   let done = 0;
   let ready = 0;
@@ -434,11 +504,12 @@ export function rowTotals(rows: readonly PlanRow[]) {
     else documents++;
     phases += row.phases;
     done += row.done;
+    if (row.isClosed) { closed++; continue; }
     ready += row.readyPhases.length;
     sessions += row.remainingSessions;
     if (row.errors) errors++;
     if (row.run?.outcome === 'live') running++;
   }
 
-  return { plans, documents, phases, done, ready, sessions, errors, running, total: rows.length };
+  return { plans, documents, closed, phases, done, ready, sessions, errors, running, total: rows.length };
 }
