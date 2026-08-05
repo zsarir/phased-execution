@@ -64,14 +64,18 @@ jobs:
           EOF
           chmod +x "$HOME/bin/claude"
           echo "$HOME/bin" >> "$GITHUB_PATH"
-      - name: Server suite (minus the load-sensitive terminal file)
+      - name: Server suite (minus the two timing-sensitive files)
         # Serial files on purpose: the suite is documented load-sensitive
         # (terminal reattach is only the loudest case), and a 3-core runner
-        # under 40-odd parallel files hits event-loop-drain races that a dev
-        # machine's cores absorb. Serial is slower and honest.
-        run: node --test --test-concurrency=1 $(ls test/*.test.ts | grep -v 'terminal.test.ts')
-      - name: Terminal suite, isolated with one retry (known reattach flake under full-suite load)
-        run: node --test test/terminal.test.ts || node --test test/terminal.test.ts
+        # under 40-odd parallel files hits races a dev machine's cores absorb.
+        run: node --test --test-concurrency=1 $(ls test/*.test.ts | grep -vE 'terminal.test.ts|spawn-protocol.test.ts')
+      - name: Timing-sensitive files, isolated with one retry each
+        # terminal: the known reattach flake under load. spawn-protocol: the
+        # operator-echo test races a 60ms send against the stub session's
+        # natural close, and runner timing sometimes loses that race.
+        run: |
+          node --test test/terminal.test.ts || node --test test/terminal.test.ts
+          node --test test/spawn-protocol.test.ts || node --test test/spawn-protocol.test.ts
       - name: Client suite
         run: npm run test:client
       - name: Client typecheck
