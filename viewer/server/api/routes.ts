@@ -352,7 +352,14 @@ export async function handleApi(
         const refusal = guardCsrf(req);
         if (refusal) { json(res, 403, { error: refusal }); return true; }
         const body = await readBody(req);
-        const check = service.open(String(body.path ?? ''));
+        const path = String(body.path ?? '');
+        // 409, not 400: the request is well-formed and the directory may be
+        // perfectly valid. What is wrong is the state of THIS console — it
+        // already belongs to another project — and a conflict is the status
+        // that says so.
+        const pinned = service.pinnedRefusal(path);
+        if (pinned) { json(res, 409, { error: pinned, state: service.state() }); return true; }
+        const check = service.open(path);
         json(res, check.ok ? 200 : 400, { check, state: service.state() });
         return true;
       }

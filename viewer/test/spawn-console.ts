@@ -86,7 +86,18 @@ export function spawnConsole(
   viewerDir: string,
   port: number,
   args: string[] = [],
-  opts: { env?: NodeJS.ProcessEnv; sandbox?: ConsoleSandbox; withRoot?: boolean } = {},
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    sandbox?: ConsoleSandbox;
+    withRoot?: boolean;
+    /**
+     * `'pipe'` when the test is about what the console SAYS — the port-collision
+     * message is the one whose whole content is the behaviour under test, and
+     * `'ignore'` would throw it away. Everything else stays silent by default:
+     * a suite that prints every console's startup banner is unreadable.
+     */
+    stdio?: 'ignore' | 'pipe';
+  } = {},
 ): { child: ChildProcess; box: ConsoleSandbox } {
   const box = opts.sandbox ?? sandbox();
   const child = spawn(process.execPath, [
@@ -94,7 +105,7 @@ export function spawnConsole(
     '--port', String(port), '--no-open', '--no-log-file',
     ...(opts.withRoot ? ['--root', box.root] : []),
     ...args,
-  ], { stdio: 'ignore', env: { ...box.env, ...opts.env } });
+  ], { stdio: opts.stdio ?? 'ignore', env: { ...box.env, ...opts.env } });
   return { child, box };
 }
 

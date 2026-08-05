@@ -11,10 +11,11 @@
  * than no checkpoint at all, because it looks valid.
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 
+import { instanceId } from '../../shared/instances.mjs';
 import { STATE_DIR } from '../config.ts';
 import type { PermissionProfile } from './approvals.ts';
 
@@ -404,10 +405,18 @@ export type RunState = {
  * One directory per (source directory, plan). The hash keeps two checkouts of
  * the same repo apart; the basename keeps the path readable for a human who
  * goes looking, which they will the first time a run halts.
+ *
+ * The key is `instanceId()` — the same function that names a console instance,
+ * imported rather than reimplemented. It was computed here first and the
+ * instance registry adopted it, so the import direction looks backwards; it is
+ * the right way round anyway, because the two must never drift and only one of
+ * them can be the definition. `runs/` stays under the SHARED `STATE_DIR` rather
+ * than moving into a per-instance directory: it is already keyed by root, so
+ * two consoles cannot collide here, and moving it would orphan every run
+ * journal on the machine to buy nothing.
  */
 export function runDir(root: string, slug: string): string {
-  const key = `${createHash('sha256').update(root).digest('hex').slice(0, 8)}-${basename(root) || 'root'}`;
-  return join(STATE_DIR, 'runs', key, slug);
+  return join(STATE_DIR, 'runs', instanceId(root), slug);
 }
 
 export function runFile(root: string, slug: string, id: string): string {

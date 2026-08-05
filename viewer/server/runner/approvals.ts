@@ -29,12 +29,12 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { log } from '../log.ts';
-import { STATE_DIR } from '../config.ts';
+import { INSTANCE, INSTANCE_STATE_DIR } from '../config.ts';
 
 /* ------------------------------------------------------------------ *
  * The two lists
@@ -666,17 +666,39 @@ const POLICY_FILE = join(POLICY_DIR, 'autopilot.json');
  * safe everywhere. A per-plan file makes that the cheap answer instead of
  * making the global list the only place to say anything.
  */
-export function planPolicyPath(slug: string, dir = POLICY_DIR): string {
-  // The slug reaches this from a URL, so it decides a filename and nothing
-  // else. Separators are gone before any dot handling, so nothing can climb
-  // out of the directory; the dots are then collapsed as well, because a name
-  // containing `..` invites the next reader to wonder whether it can.
-  const safe = slug
+export function planPolicyPath(slug: string, dir = POLICY_DIR, instance = INSTANCE.id): string {
+  return join(dir, 'plans', pathSafe(instance), `${pathSafe(slug)}.json`);
+}
+
+/**
+ * Where a plan's rules lived before consoles had identities.
+ *
+ * Read as a fallback, never written. Two projects that both have a plan called
+ * `migration` used to share one policy file — "always allow this deploy verb"
+ * said in one repository silently applied in the other, which is precisely the
+ * kind of quiet widening a policy file exists to prevent. Keying by instance
+ * fixes it going forward; reading the old path keeps every rule an operator has
+ * already written working until they next edit it, at which point it is
+ * rewritten to the keyed location and belongs to one project.
+ */
+export function legacyPlanPolicyPath(slug: string, dir = POLICY_DIR): string {
+  return join(dir, 'plans', `${pathSafe(slug)}.json`);
+}
+
+/**
+ * A slug or an instance id as one path segment, and nothing else.
+ *
+ * Both reach this from a URL or a registry file, so each decides a filename and
+ * nothing more. Separators are gone before any dot handling, so nothing can
+ * climb out of the directory; the dots are then collapsed as well, because a
+ * name containing `..` invites the next reader to wonder whether it can.
+ */
+function pathSafe(value: string): string {
+  return value
     .replace(/[^\w.-]/g, '-')
     .replace(/\.{2,}/g, '.')
     .replace(/^[.-]+/, '')
-    .slice(0, 80);
-  return join(dir, 'plans', `${safe || 'unnamed'}.json`);
+    .slice(0, 80) || 'unnamed';
 }
 
 export type PolicyScope = 'plan' | 'global';
@@ -711,8 +733,21 @@ export function loadPolicyFor(
   slug: string | null, globalFile = POLICY_FILE, dir = POLICY_DIR,
 ): AutopilotPolicy {
   const extras = [policyExtras(globalFile)];
-  if (slug) extras.push(policyExtras(planPolicyPath(slug, dir)));
+  if (slug) extras.push(policyExtras(effectivePlanPolicyPath(slug, dir)));
   return mergePolicy(extras);
+}
+
+/**
+ * The plan-policy file actually in force: the keyed one if it exists, else the
+ * legacy unkeyed one.
+ *
+ * Never both. Merging them would resurrect a rule the operator had already
+ * edited away in the keyed copy, which is the one direction a policy file must
+ * never move on its own.
+ */
+export function effectivePlanPolicyPath(slug: string, dir = POLICY_DIR): string {
+  const keyed = planPolicyPath(slug, dir);
+  return existsSync(keyed) ? keyed : legacyPlanPolicyPath(slug, dir);
 }
 
 function mergePolicy(extras: AutopilotPolicy[]): AutopilotPolicy {
@@ -944,7 +979,7 @@ export function notifyOutOfBand(title: string, body: string, env = process.env):
  * Surviving a restart
  * ------------------------------------------------------------------ */
 
-const PENDING_FILE = join(STATE_DIR, 'approvals', 'pending.json');
+const PENDING_FILE = join(INSTANCE_STATE_DIR, 'approvals', 'pending.json');
 
 /**
  * Pending approvals, on disk.
@@ -1274,7 +1309,7 @@ export function buildSettings(opts: SettingsOptions): Record<string, unknown> {
  * in the state directory does not.
  */
 export function writeSettingsFile(runId: string, settings: Record<string, unknown>): string {
-  const dir = join(STATE_DIR, 'settings');
+  const dir = join(INSTANCE_STATE_DIR, 'settings');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `run-${runId}.json`);
   writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });

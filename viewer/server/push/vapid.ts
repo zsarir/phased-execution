@@ -20,7 +20,7 @@ import { generateKeyPairSync, createPrivateKey, createPublicKey, sign, type KeyO
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { STATE_DIR } from '../config.ts';
+import { INSTANCE_STATE_DIR } from '../config.ts';
 import { log } from '../log.ts';
 
 export type Vapid = {
@@ -31,7 +31,15 @@ export type Vapid = {
   subject: string;
 };
 
-const PUSH_DIR = join(STATE_DIR, 'push');
+/**
+ * Per instance, deliberately: each console mints its own VAPID pair on the
+ * first subscribe, and a browser's subscription is bound to the key that
+ * created it. Sharing one pair across instances would let any console deliver
+ * to any other's devices — and the default instance keeping the legacy path is
+ * what stops an upgrade from invalidating the subscriptions an operator's
+ * phone already holds.
+ */
+const PUSH_DIR = join(INSTANCE_STATE_DIR, 'push');
 const KEY_FILE = join(PUSH_DIR, 'vapid.json');
 
 /**

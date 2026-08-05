@@ -55,7 +55,13 @@ export default function SourceView() {
   });
 
   const walkTo = (target: string) => { setBrowsePath(target); setPath(target); };
-  const canOpen = Boolean(check?.ok) && !open.isPending;
+  // A pinned console serves one project and will answer 409 to any other. The
+  // picker still renders — hiding it would leave someone who navigated here
+  // staring at nothing — but Open is off, and the banner says which console
+  // they are looking at and what to run instead. Discovering the refusal by
+  // pressing a button and reading a toast is strictly worse.
+  const pinned = state?.instance?.pinned === true;
+  const canOpen = Boolean(check?.ok) && !open.isPending && !pinned;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8">
@@ -73,6 +79,15 @@ export default function SourceView() {
         </p>
       </header>
 
+      {pinned && (
+        <Banner severity="warn" className="mb-4">
+          This console is pinned to <strong>{state?.instance?.name}</strong>
+          {state?.root?.path ? <> (<code>{state.root.path}</code>)</> : null}. To open a different
+          project, run <code>phase-console start</code> in that project — it gets its own console,
+          port and state.
+        </Banner>
+      )}
+
       {state?.recentRoots?.length ? (
         <Card className="mb-4">
           <CardHeader><CardTitle>Recent</CardTitle></CardHeader>
@@ -82,7 +97,7 @@ export default function SourceView() {
                 <button
                   key={recent.path}
                   type="button"
-                  disabled={open.isPending}
+                  disabled={open.isPending || pinned}
                   onClick={() => open.mutate(recent.path)}
                   className="min-h-(--tap-min) rounded border border-rule bg-surface px-3 py-2 text-left
                              hover:border-rule-strong hover:bg-surface-raised disabled:opacity-50"

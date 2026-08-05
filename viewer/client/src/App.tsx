@@ -81,6 +81,16 @@ export function App() {
     if (cameBack) void refetchState();
   }, [online, refetchState]);
 
+  // With several consoles open, every tab is called "Phase Console" and the tab
+  // strip becomes a guessing game. The instance name goes first because that is
+  // what survives truncation — a browser given ten tabs shows about twelve
+  // characters, and "hub · Phase…" identifies the tab where "Phase Cons…" does
+  // not. A server too old to report an instance keeps the plain title.
+  const instanceName = state?.instance?.name;
+  useEffect(() => {
+    document.title = instanceName ? `${instanceName} · Phase Console` : 'Phase Console';
+  }, [instanceName]);
+
   if (stateError) {
     return (
       <Disconnected

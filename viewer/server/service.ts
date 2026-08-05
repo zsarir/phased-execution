@@ -10,8 +10,9 @@
 import { basename } from 'node:path';
 import { execFile } from 'node:child_process';
 
+import { instanceId } from '../shared/instances.mjs';
 import {
-  agentEnabled, checkRoot, rememberRoot, loadPrefs, savePrefs, serverIsStale, staticRoot,
+  INSTANCE, agentEnabled, checkRoot, rememberRoot, loadPrefs, savePrefs, serverIsStale, staticRoot,
   type Flags, type Prefs, type RootCheck,
 } from './config.ts';
 import { Store, handoffFor, lockFor, qaFor, readLock, type PlanRecord } from './store.ts';
@@ -67,7 +68,7 @@ import {
 } from './qa-session.ts';
 import {
   Approvals, classifyTool, matchedDenyRule, loadPolicy, loadPolicyFor, policyExtras, addPolicyRules,
-  editPolicy, planPolicyPath, notifyOutOfBand, carvedPolicy, suggestedRule,
+  editPolicy, planPolicyPath, effectivePlanPolicyPath, notifyOutOfBand, carvedPolicy, suggestedRule,
   parseRule, inertRules, HOOK_TOOLS, WRAPPERS_NOT_STRIPPED,
   PERMISSION_PROFILES, PROFILE_LABELS,
   DEFAULT_DENY, DEFAULT_ASK, DEFAULT_ALLOW, POLICY_PATH,
@@ -1029,6 +1030,28 @@ export class Service {
    * Opening a source directory
    * ---------------------------------------------------------------- */
 
+  /**
+   * Why this console will not be repointed, or `null` if it will.
+   *
+   * A non-default instance exists *because* someone wanted a console for one
+   * project: it has that project's id, its state directory, its port and (from
+   * P6) its own unit. Letting the browser swap its root would leave every one
+   * of those describing a project it is no longer serving — the instance would
+   * still be named `alpha`, still be writing to alpha's log, and be showing
+   * beta's plans. So it refuses, and names the verb that does what the operator
+   * actually wants: start beta's own console.
+   *
+   * The default instance keeps the picker. It is the console someone opens with
+   * no project in mind, and taking that away to buy consistency would remove
+   * the only entry point a first-time user has.
+   */
+  pinnedRefusal(path: string): string | null {
+    if (!INSTANCE.pinned || !INSTANCE.root) return null;
+    if (instanceId(path) === INSTANCE.id) return null;
+    return `This console is pinned to ${INSTANCE.root} (instance ${INSTANCE.name}). `
+      + 'Run `phase-console start` in the other project to open its own console.';
+  }
+
   open(path: string): RootCheck {
     const check = checkRoot(path);
     if (!check.ok) return check;
@@ -1962,7 +1985,11 @@ export class Service {
       extra: policyExtras(),
       // The plan's own file, so the editor can show which scope a rule is at
       // rather than presenting one merged list nobody can edit confidently.
-      plan: slug ? { slug, path: planPolicyPath(slug), extra: policyExtras(planPolicyPath(slug)) } : null,
+      // `path` is where an edit would be WRITTEN (always keyed to this
+      // instance); `extra` is what is currently in force, which on a machine
+      // that predates instances is still the unkeyed file. They differ exactly
+      // once per plan — until the first edit rewrites it to the keyed path.
+      plan: slug ? { slug, path: planPolicyPath(slug), extra: policyExtras(effectivePlanPolicyPath(slug)) } : null,
       effective: loadPolicyFor(slug ?? null),
       file: POLICY_PATH,
       profiles: PERMISSION_PROFILES.map((id) => ({ id, label: PROFILE_LABELS[id] })),
@@ -2100,6 +2127,11 @@ export class Service {
     return {
       root: this.root,
       prefs: this.prefs,
+      // Which console this is. The client needs all three: the name for the tab
+      // title (two consoles are indistinguishable in a tab strip otherwise),
+      // `pinned` to know whether the source picker can do anything, and the id
+      // because it is what every message and lifecycle verb identifies it by.
+      instance: { id: INSTANCE.id, name: INSTANCE.name, pinned: INSTANCE.pinned },
       allowWrites: this.flags.allowWrites,
       // Present only on a server that has the run endpoints at all. The client
       // is read from disk per request but the server is whatever Node loaded at

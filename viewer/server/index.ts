@@ -16,7 +16,11 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { execFile, spawn as spawnChild } from 'node:child_process';
 
-import { flagsRefusal, parseFlags, staticRoot, staticRootDir, VIEWER_DIR } from './config.ts';
+import { instanceForPort, instanceUrl } from '../shared/instances.mjs';
+import {
+  INSTANCE, claimInstance, flagsRefusal, parseFlags, probeConsole, resolvePort,
+  staticRoot, staticRootDir, VIEWER_DIR,
+} from './config.ts';
 import {
   configureLog, installExitLogging, isClientDisconnect, log, noteExit, previousRunEndedCleanly,
 } from './log.ts';
@@ -31,6 +35,8 @@ import { refuse } from './terminal.ts';
 import { HOOK_TIMEOUT_SECONDS } from './runner/approvals.ts';
 
 const flags = parseFlags(process.argv.slice(2));
+const portWasNamed = process.argv.includes('--port') || process.argv.includes('-p')
+  || Boolean(process.env.PHASE_CONSOLE_PORT);
 
 // Before anything opens a port: incoherent access flags are a refusal to start,
 // never a warning. See `flagsRefusal` for why.
@@ -315,19 +321,51 @@ server.headersTimeout = 60_000;
 server.on('error', (error: NodeJS.ErrnoException) => {
   if (error.code === 'EADDRINUSE') {
     noteExit('port-in-use', { port: flags.port });
-    process.stderr.write(
-      `\n  phase-console: port ${flags.port} is already in use.\n` +
-      `  A console may already be running — open http://${flags.host}:${flags.port}\n` +
-      `  or start this one elsewhere with --port <n>.\n\n`,
-    );
-    process.exit(1);
+    // Say WHOSE console is on that port. "A console may already be running" was
+    // true and useless: with one console per project, the question is never
+    // whether one is running — it is which project it is serving, and whether
+    // the answer is "the one you just asked for" (open it) or "a different one"
+    // (this is a collision, move).
+    //
+    // Asked twice, because either source alone can lie. The registry names a
+    // project but may be stale; the live probe is ground truth but only if the
+    // thing holding the socket is a console at all. Whichever answers, the
+    // message names a root — and when neither does, it says so plainly rather
+    // than implying a console is there.
+    void (async () => {
+      const registered = instanceForPort(flags.port);
+      const live = await probeConsole(flags.port, flags.host);
+      const root = live?.root ?? registered?.root ?? null;
+      const name = live?.instance?.name ?? registered?.name ?? null;
+      const lines = root
+        ? [
+          `  port ${flags.port} already serves ${root}`,
+          `  ${name ? `(instance ${name}) — ` : ''}open ${instanceUrl(flags.port, flags.host)}`,
+          '  or start this one elsewhere with --port <n> or --instance <name>.',
+        ]
+        : [
+          `  something else is listening there — no console this machine knows of.`,
+          '  Start this one elsewhere with --port <n>.',
+        ];
+      process.stderr.write(`\n  phase-console: port ${flags.port} is already in use.\n${lines.join('\n')}\n\n`);
+      process.exit(1);
+    })();
+    return;
   }
   markDegraded('server', error);
 });
 
+// The port the OS actually gave us, which is the only one worth recording: a
+// probe may have walked past a busy neighbour, and a registry holding the port
+// we *asked* for would send the next `open` to nothing.
+const boundPort = await resolvePort(flags.port, flags.host, INSTANCE, portWasNamed);
+flags.port = boundPort;
+
 server.listen(flags.port, flags.host, () => {
+  claimInstance(flags.port);
   const address = `http://${flags.host}:${flags.port}`;
   process.stdout.write(`\n  Phase Console  ${address}\n`);
+  process.stdout.write(`  instance      ${INSTANCE.name}${INSTANCE.default ? ' (default)' : ''}  ${INSTANCE.id}\n`);
   process.stdout.write(`  source        ${service.root?.path ?? 'not chosen yet — pick one in the browser'}\n`);
   process.stdout.write(`  scripts       ${flags.scriptsDir}\n`);
   process.stdout.write(`  writes        ${flags.allowWrites ? 'enabled (--allow-writes)' : 'read-only'}\n`);

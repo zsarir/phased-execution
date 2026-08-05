@@ -36,11 +36,11 @@ import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSy
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
-import { STATE_DIR } from './config.ts';
+import { INSTANCE_STATE_DIR } from './config.ts';
 import { log } from './log.ts';
 import { categoryOf, isCategory, routeFor, type CategoryId, type RouteContext } from './push/catalogue.ts';
 
-export const NOTIFICATIONS_DIR = join(STATE_DIR, 'notifications');
+export const NOTIFICATIONS_DIR = join(INSTANCE_STATE_DIR, 'notifications');
 
 /**
  * Retention. Generous enough that "what happened overnight" is always there,

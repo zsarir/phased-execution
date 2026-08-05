@@ -28,6 +28,7 @@ for p in \
   "viewer/server/platform.js" \
   "viewer/server/fallback-sw.js" \
   "viewer/shared/scope.js" \
+  "viewer/shared/instances.mjs" \
   "viewer/scripts/check-stamp.mjs" \
   "viewer/run" \
   "viewer/package.json" \

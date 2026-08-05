@@ -270,9 +270,24 @@ export interface PhaseScope {
   conflicts: string[];
 }
 
+export interface InstanceInfo {
+  id: string;
+  name: string;
+  /** A console that serves one project and refuses to be repointed. */
+  pinned: boolean;
+}
+
 export interface ConsoleState {
   generation?: number;
   root?: RootInfo;
+  /**
+   * Which console this is, on a machine that may be running several.
+   *
+   * Optional like everything else on this type: a new client can be talking to
+   * a server started before instances existed, and every consumer must read a
+   * missing answer as "this server cannot say" rather than inventing one.
+   */
+  instance?: InstanceInfo;
   allowWrites?: boolean;
   allowRun?: boolean;
   /** `--allow-terminal`: the shell gate the nav reads on every page. */
