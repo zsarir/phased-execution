@@ -30,7 +30,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # 24, not the 22.18 runtime floor: the SUITE leans on node:test
+          # semantics that differ on 22 (a parked promise with only unref'd
+          # handles drains the loop there and cancels every pending test —
+          # diagnosed on 22.23.1). The floor itself stays enforced by the
+          # version gates, and pack-check builds on 22 to prove the toolchain.
+          node-version: '24'
           cache: npm
           cache-dependency-path: viewer/package-lock.json
       - run: npm ci
