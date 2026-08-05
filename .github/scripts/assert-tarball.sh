@@ -24,6 +24,8 @@ for p in \
   "viewer/client/dist/.build-rev" \
   "viewer/server/index.ts" \
   "viewer/server/index.js" \
+  "viewer/server/platform.ts" \
+  "viewer/server/platform.js" \
   "viewer/server/fallback-sw.js" \
   "viewer/shared/scope.js" \
   "viewer/scripts/check-stamp.mjs" \

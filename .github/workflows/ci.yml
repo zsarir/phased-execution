@@ -20,9 +20,29 @@ jobs:
       - name: Shell suites (shellcheck + unit + integration)
         run: tests/run-tests.sh
 
+  skill-scripts-linux:
+    name: bash engine (bats on Linux bash 5 + GNU coreutils)
+    # The other half of the portability claim: the same scripts under Linux's
+    # /bin/bash and GNU userland, where every BSD-only flag would surface.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats + shellcheck
+        run: sudo apt-get update -q && sudo apt-get install -y -q bats shellcheck
+      - name: Shell suites (shellcheck + unit + integration)
+        run: tests/run-tests.sh
+
   console:
-    name: console (server suite, client suite, build gate)
-    runs-on: macos-latest
+    name: console (${{ matrix.os }} — server suite, client suite, build gate)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Both platforms are release gates; one failing must not mask the other.
+      fail-fast: false
+      matrix:
+        # ubuntu is not a nicety: Linux/WSL2 is a supported install target, and
+        # npm ci compiling node-pty from source there (no Linux prebuilds ship)
+        # is part of what this job proves.
+        os: [macos-latest, ubuntu-latest]
     defaults:
       run:
         working-directory: viewer
