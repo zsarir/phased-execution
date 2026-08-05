@@ -596,6 +596,54 @@ describe('the plans page', () => {
     expect(await screen.findByText('Finished 0')).toBeTruthy();
   });
 
+  it('can be dismissed, and the counts survive the dismissal', async () => {
+    plans.mockResolvedValue([
+      plan({ slug: 'live', title: 'Still going' }),
+      ...Array.from({ length: 8 }, (_, i) => plan({
+        slug: `done-${i}`, title: `Finished ${i}`, status: 'complete',
+      })),
+    ]);
+    const { default: PlansView } = await import('./index');
+    mount(<PlansView />);
+    await screen.findByText('Still going');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Dismiss/ }));
+    await waitFor(() => expect(screen.queryByText(/are not listed/)).toBeNull());
+
+    // The banner is the loud form of a fact that is still on screen. Closing it
+    // must not be the same as being told nothing — otherwise dismissing it puts
+    // the operator back where this whole report started.
+    expect(screen.getByRole('button', { name: 'Show closed — 8 more' })).toBeTruthy();
+    expect(screen.getByText(/8 closed hidden/)).toBeTruthy();
+  });
+
+  // The table showed NO closure marker at all. Every signal it does show is one
+  // that closure suppresses — Ready reads `—`, Left reads `—`, Health is blank
+  // — so a closed plan rendered as a live plan with nothing left to do, which
+  // is a worse reading than either truth.
+  it('marks a closed plan as closed in the table, not only on the card', async () => {
+    plans.mockResolvedValue([
+      plan({ slug: 'live', title: 'Still going' }),
+      plan({ slug: 'gone', title: 'Walked away', status: 'abandoned' }),
+    ]);
+    setPrefs({ plansLayout: 'table', showClosed: true });
+    const { default: PlansView } = await import('./index');
+    mount(<PlansView />);
+
+    // Asserted on the badge's own text, and on a fixture with no `closedOn` —
+    // the six plans closed by hand before `close-plan.sh` existed carry no
+    // date, and they are exactly the ones that must still read as closed.
+    const closedRow = (await screen.findByText('Walked away')).closest('tr');
+    expect(closedRow).toBeTruthy();
+    expect(within(closedRow as HTMLElement).getByText('abandoned')).toBeTruthy();
+
+    // The control: the open plan beside it must NOT be badged, so the assertion
+    // above cannot pass by the badge rendering on every row. (The table has no
+    // status column, so its status word appears nowhere else.)
+    const openRow = screen.getByText('Still going').closest('tr');
+    expect(within(openRow as HTMLElement).queryByText('active')).toBeNull();
+  });
+
   it('keeps quiet when the filters are only trimming the edges', async () => {
     // Proportional, not a raw count: hiding two of nine is the toggle working,
     // and a banner every visit would be the boy who cried wolf.

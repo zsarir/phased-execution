@@ -338,9 +338,27 @@ export function PlanTable({
         <TBody>
           {rows.map((row) => (
             <TR key={row.slug}>
+              {/* The table had NO closed marker at all. Every other signal it
+                  shows is one closure suppresses — Ready reads `—`, Health is
+                  blank, Left is `—` — so a closed plan rendered as a live plan
+                  with nothing to do, which is the one reading that is worse
+                  than either truth. The badge rides with the name because that
+                  is the cell the eye lands on, and it is what the card has
+                  always had. */}
               <TD className="max-w-64">
                 <a href={planHref(row.slug)} className="block min-w-0 hover:text-action">
-                  <span className="block truncate text-ink">{row.title}</span>
+                  <span className={cn('flex min-w-0 items-center gap-1.5', row.isClosed && 'text-ink-muted')}>
+                    <span className="truncate">{row.title}</span>
+                    {row.isClosed && (
+                      <span
+                        title={closedTitle(row)}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-rule bg-surface-raised px-1 py-px text-2xs font-medium uppercase tracking-wide text-ink-faint"
+                      >
+                        <Lock size={9} className="shrink-0" aria-hidden />
+                        {row.status}
+                      </span>
+                    )}
+                  </span>
                   {row.slug !== row.title && (
                     <span className="block truncate font-mono text-2xs text-ink-faint">{row.slug}</span>
                   )}

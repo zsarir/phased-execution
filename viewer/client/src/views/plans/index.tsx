@@ -28,7 +28,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { FileText, Filter } from 'lucide-react';
+import { FileText, Filter, X } from 'lucide-react';
 import { useConsoleState, usePlans, useRuns } from '@/lib/queries';
 import { usePrefs } from '@/lib/prefs';
 import { plural } from '@/lib/format';
@@ -192,7 +192,13 @@ export default function PlansView() {
     <Page title="Plans" subtitle={subtitle(totals, all.length, hiddenBy)} actions={newPlan}>
       <Card className="mb-3 p-3">{controls}</Card>
 
-      <HiddenBand hiddenBy={hiddenBy} shown={visible.length} onShowEverything={showEverything} />
+      <HiddenBand
+        hiddenBy={hiddenBy}
+        shown={visible.length}
+        dismissed={prefs.plansHiddenBannerOff === true}
+        onDismiss={() => setPrefs({ plansHiddenBannerOff: true })}
+        onShowEverything={showEverything}
+      />
       <AttentionBand rows={visible} />
 
       {groups.map((section) => (
@@ -259,28 +265,46 @@ function subtitle(
 function HiddenBand({
   hiddenBy,
   shown,
+  dismissed,
+  onDismiss,
   onShowEverything,
 }: {
   hiddenBy: ReturnType<typeof hiddenBreakdown>;
   shown: number;
+  dismissed: boolean;
+  onDismiss: () => void;
   onShowEverything: () => void;
 }) {
   const byShape = hiddenBy.closed + hiddenBy.documents;
   if (!byShape) return null;
   // Most of the source is missing, and the operator did not do it this session.
   if (byShape <= shown * 2) return null;
+  if (dismissed) return null;
 
   const parts: string[] = [];
   if (hiddenBy.closed) parts.push(`${plural(hiddenBy.closed, 'closed plan')}`);
   if (hiddenBy.documents) parts.push(`${plural(hiddenBy.documents, 'document')}`);
 
   return (
-    <Banner severity="info" className="mb-3">
-      <span>
+    <Banner severity="info" className="mb-3 flex items-start gap-2">
+      <span className="min-w-0 flex-1">
         {parts.join(' and ')} {byShape === 1 ? 'is' : 'are'} not listed. Closed plans report no
         work, so this page leaves them out until you ask — nothing is missing from the source.
       </span>
-      <Button size="sm" className="ml-2 shrink-0" onClick={onShowEverything}>Show everything</Button>
+      <Button size="sm" className="shrink-0" onClick={onShowEverything}>Show everything</Button>
+      {/* Dismissing loses nothing: the counts stay on the toggles themselves and
+          in the line under the controls. This silences the loud form of a fact
+          that is still on screen — which is the only kind of banner that has
+          earned a close button. */}
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss — the counts stay on the filter buttons"
+        title="Dismiss. The counts stay on the Show closed and Documents buttons."
+        className="-mr-1 grid size-7 shrink-0 place-items-center rounded text-ink-faint hover:bg-surface-raised hover:text-ink"
+      >
+        <X size={14} aria-hidden />
+      </button>
     </Banner>
   );
 }

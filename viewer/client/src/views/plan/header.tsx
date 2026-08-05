@@ -4,6 +4,7 @@ import { MarkdownInline } from '@/components/markdown';
 import { WriteMenu } from '@/components/write-menu';
 import { useConsoleState } from '@/lib/queries';
 import { closedTitle, isClosed } from '@/lib/closure';
+import { cn } from '@/lib/cn';
 import { etaLabel, etaTitle, plural, weight } from '@/lib/format';
 import { phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
@@ -30,17 +31,29 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
     <div className="mb-4 flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h1 className="font-display text-3xl leading-none">{s.title}</h1>
-          {/* The status word carries the padlock rather than a second CLOSED
-              chip beside it: `abandoned` already says more than `CLOSED` would,
-              and two chips for one fact is how a header stops being scannable.
-              The banner below carries the reason. */}
-          {s.status && (
-            <Chip title={closed ? closedTitle(s) : undefined}>
-              {closed && <Lock size={11} className="shrink-0" aria-hidden />}
-              {s.status}
-            </Chip>
-          )}
+          <h1 className={cn('font-display text-3xl leading-none', closed && 'text-ink-muted')}>{s.title}</h1>
+          {/* A closed plan gets a BADGE, not a chip.
+              It used to be the status word wearing a small padlock, on the
+              reasoning that `abandoned` says more than `CLOSED` and two chips
+              for one fact stop a header being scannable. That reasoning was
+              sound and still landed wrong: at chip size, beside a heading, next
+              to the `document`/`orphan` chips, it read as one more piece of
+              metadata — and closure is not metadata, it is the fact that
+              changes how everything below it should be read. So: one badge,
+              both words (`CLOSED · abandoned`), at a size that is seen before
+              it is looked for. Non-terminal statuses keep the plain chip. */}
+          {closed
+            ? (
+              <span
+                title={closedTitle(s)}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded border border-rule-strong bg-surface-raised px-2 py-1 text-xs font-medium uppercase tracking-[0.12em] text-ink-muted"
+              >
+                <Lock size={13} className="shrink-0" aria-hidden />
+                Closed
+                {s.status && <span className="font-normal normal-case tracking-normal text-ink-faint">· {s.status}</span>}
+              </span>
+            )
+            : s.status && <Chip>{s.status}</Chip>}
           {s.kind !== 'plan' && (
             <Chip tone="warn">{s.kind === 'document' ? 'document' : 'orphan handoffs'}</Chip>
           )}

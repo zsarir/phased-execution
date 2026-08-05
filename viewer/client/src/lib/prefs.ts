@@ -31,6 +31,17 @@ export interface Prefs {
    * nothing reads it any more.
    */
   showClosed: boolean;
+  /**
+   * Plan list: the operator has read the "N closed plans are not listed" banner
+   * and does not need it again.
+   *
+   * Persisted rather than component state, because a banner that returns on
+   * every navigation is the one being explained away rather than read. Nothing
+   * is lost by dismissing it: the counts stay on the toggles themselves
+   * (`Show closed +71`) and in the line under the controls, so the compact form
+   * of the same fact is always on screen. This only silences the loud one.
+   */
+  plansHiddenBannerOff: boolean;
   model: string;
   /** Plan list: rich cards, or the dense comparison table. */
   plansLayout: 'board' | 'table';
@@ -66,6 +77,7 @@ const DEFAULTS: Prefs = {
   sort: 'activity',
   showDocuments: false,
   showClosed: false,
+  plansHiddenBannerOff: false,
   model: '',
   plansLayout: 'board',
   plansGroup: 'none',

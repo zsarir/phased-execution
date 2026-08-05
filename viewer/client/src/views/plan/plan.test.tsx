@@ -283,6 +283,26 @@ describe('the plan surface renders its parts', () => {
     batches: { groups: [], raw: '🔒 CLOSED [abandoned]\n\nNo sessions to plan.\n', budget: '200K/session' },
   } as PlanDetail);
 
+  // Reported: a closed plan did not read as closed. It carried the padlock on
+  // its status chip, which is correct and, at chip size beside a heading and
+  // next to the `document` chip, was read as one more piece of metadata.
+  // Closure is not metadata — it changes how everything below it should be read.
+  it('badges a closed plan in the header, saying both CLOSED and the status word', async () => {
+    vi.mocked(api.plan).mockResolvedValue(closedDetail());
+    renderPlan(['demo']);
+    const badge = await screen.findByTitle(/Closed/);
+    expect(badge.textContent).toContain('Closed');
+    // Both words: `CLOSED` is the fact, `abandoned` is the one that says more.
+    expect(badge.textContent).toContain('abandoned');
+  });
+
+  it('leaves an open plan its plain status chip — no badge, no padlock', async () => {
+    vi.mocked(api.plan).mockResolvedValue(DETAIL);
+    renderPlan(['demo']);
+    await screen.findByText(DETAIL.summary.title);
+    expect(screen.queryByTitle(/Closed/)).toBeNull();
+  });
+
   it('leads a closed plan with why it is closed, not with what could start', async () => {
     vi.mocked(api.plan).mockResolvedValue(closedDetail());
     renderPlan(['demo']);
