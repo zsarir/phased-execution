@@ -24,17 +24,20 @@ phased-execution/
 
 There is deliberately no `plugin.json`. The marketplace entry carries the plugin's metadata itself
 (`strict: false`), which keeps this folder a plain skill when you clone it — one tree, both install
-paths, neither getting in the other's way.
+paths, neither getting in the other's way. The root `package.json` is not a plugin manifest either:
+it defines the **npm/Homebrew channel** (`phase-console` on the registry — prebuilt client, tagged
+releases) and changes nothing about how the plugin or a clone behaves.
 
 **▶ How the loop actually runs, in detail:** [USAGE.md](../USAGE.md).
 
 # Requirements
 
-**Bash** for the scripts — that is the whole skill. The console additionally needs **Node 22.6 or
-newer with npm**: its server runs TypeScript directly, and its client is built once per machine
-(`npm ci && npm run build` in `viewer/`; the console names those commands itself until they have
-run). Once built it bundles everything — fonts included — so it works offline and installs to a
-phone's home screen. No service, no configuration file.
+**Bash** for the scripts — that is the whole skill. The console additionally needs **Node 22.18 or
+newer (or 23.6+) with npm**: its server runs TypeScript directly, and its client is built once per
+machine (`npm ci && npm run build` in `viewer/`; the console names those commands itself until they
+have run — npm and Homebrew installs ship it prebuilt). Once built it bundles everything — fonts
+included — so it works offline and installs to a phone's home screen. No service, no configuration
+file.
 
 # Tests
 

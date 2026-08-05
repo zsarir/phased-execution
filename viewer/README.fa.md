@@ -17,13 +17,15 @@
 ```bash
 cd viewer && npm ci && npm run build && cd ..   # once per machine, and after an update
 ./start                                         # from the skill directory — opens your browser
+phase-console                                   # from anywhere: plugin, npm or Homebrew install
 ```
 
 </div>
 
-سرور، Node خالی است (نسخه‌ی ‎22.6 به بالا، که TypeScript را مستقیم اجرا می‌کند — آن‌جا چیزی برای ساختن
+سرور، Node خالی است (نسخه‌ی ‎22.18+ یا ‎23.6+، که TypeScript را مستقیم اجرا می‌کند — آن‌جا چیزی برای ساختن
 نیست). اما کلاینت **خروجیِ build است**: یک اپِ Vite/React که پوشه‌ی `client/dist` آن gitignore شده، پس
-هر ماشین یک بار کپیِ خودش را می‌سازد. اگر build نکنید، کنسول باز هم جواب می‌دهد — با صفحه‌ای که همان دو
+هر ماشین یک بار کپیِ خودش را می‌سازد — به‌جز نصب‌های npm و Homebrew که آن را از پیش ساخته‌شده در بسته
+دارند. اگر build نکنید، کنسول باز هم جواب می‌دهد — با صفحه‌ای که همان دو
 دستور و مسیرِ دقیقِ اجرایشان را نام می‌برد — و `npm start` هر وقت buildِ موجود از کد عقب‌تر باشد هشدار
 می‌دهد. هیچ‌چیز هرگز به‌طورِ ضمنی build نمی‌شود: آنچه سرو می‌شود همیشه همان است که آخرین بار عامدانه
 ساخته‌اید. بعد از ساخت، آفلاین هم کار می‌کند و روی Home Screen گوشی هم نصب می‌شود.
@@ -62,7 +64,10 @@ cd viewer && npm ci && npm run build && cd ..   # once per machine, and after an
 
 دستورهای `--install-agent` و `--agent-update` ساختِ کلاینت را هم خودشان انجام می‌دهند؛ مسیرِ بوتِ
 launchd هرگز build نمی‌کند — تا یک ری‌استارت دقیقاً همان چیزی را سرو کند که راستی‌آزمایی شده، و یک
-crash loop نتواند وقتش را صرفِ buildهای پیاپی کند.
+crash loop نتواند وقتش را صرفِ buildهای پیاپی کند. (در نصب‌های npm و Homebrew همین فعل‌ها روی خودِ
+دستور سوارند — <span dir="ltr">`phase-console --install-agent --root …`</span> — و به‌روزرسانی از
+مسیرِ package manager می‌آید: <span dir="ltr">`npm update -g phase-console`</span> یا
+<span dir="ltr">`brew upgrade phase-console`</span> و سپس <span dir="ltr">`phase-console --agent-restart`</span>.)
 
 از طرف دیگر، تلاش می‌کند اصلاً زمین نخورد. یک خطای مدیریت‌نشده، یک file watch که ارور می‌دهد، مرورگری که
 وسطِ استریم ناپدید می‌شود — هرکدام به‌عنوان وضعیتِ **degraded** ثبت می‌شود و از `/api/state` سرو می‌شود،

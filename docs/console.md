@@ -3,7 +3,7 @@
 > *The whole plan library in one page.*
 
 ```bash
-phase-console                      # installed as a plugin — from anywhere
+phase-console                      # installed as a plugin, via npm or via brew — from anywhere
 ./start                            # cloned — from the folder
 ./start ~/code/your-repo           # skip the picker
 ./start --allow-writes             # plus the guarded write verbs
@@ -12,7 +12,7 @@ phase-console                      # installed as a plugin — from anywhere
 
 *(First time on a machine: the client is built output — `cd viewer && npm ci && npm run build`, or
 let the console's own page tell you. As a launchd agent, `deploy/agent.sh install|update` builds it
-for you.)*
+for you. npm and Homebrew installs ship it prebuilt — nothing to run.)*
 
 A plan library outgrows a terminal: dozens of plans, hundreds of phases, hundreds of handoff files —
 and the engine answers for exactly one plan at a time. The console is the portfolio view: what is

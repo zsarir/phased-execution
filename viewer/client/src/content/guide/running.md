@@ -12,7 +12,8 @@ Paste this into Claude Code:
 Set up a Phase Console launcher on my Desktop.
 
 1. Find the skill: whichever of ~/.claude, ~/.claude-a or ~/.claude-b contains
-   skills/phased-execution/viewer/server/index.ts.
+   skills/phased-execution/viewer/server/index.ts — or, for a packaged install,
+   $(npm root -g)/phase-console or $(brew --prefix phase-console)/libexec.
 2. Copy viewer/deploy/desktop-launcher.command from there to
    "~/Desktop/Phase Console.command", and make it executable.
 3. Open the copy and walk me through the knobs at the top, one at a time:

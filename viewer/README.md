@@ -10,14 +10,16 @@ copy the boot prompt for any ready phase, and read statistics across the whole p
 ```bash
 cd viewer && npm ci && npm run build && cd ..   # once per machine, and after an update
 ./start                                         # from the skill directory — opens your browser
+phase-console                                   # from anywhere: plugin, npm or Homebrew install
 ```
 
-The server is plain Node (22.6+, which runs TypeScript directly — nothing to compile there). The
+The server is plain Node (22.18+, or 23.6+ — it runs TypeScript directly, nothing to compile). The
 client is **built output**: a Vite/React app whose `client/dist` is gitignored, so every machine
-builds its own copy once. Skip the build and the console still answers — with a page naming the two
-commands and the exact directory — and `npm start` warns when the built client is older than the
-code. Nothing ever builds implicitly: what serves is always what you last deliberately built. Once
-built, it works offline and installs to a phone's home screen.
+builds its own copy once — except npm and Homebrew installs, whose tarball ships it prebuilt. Skip
+the build and the console still answers — with a page naming the two commands and the exact
+directory — and `npm start` warns when the built client is older than the code. Nothing ever builds
+implicitly: what serves is always what you last deliberately built. Once built, it works offline and
+installs to a phone's home screen.
 
 The first screen asks which directory to read — any repository containing `docs/plans`. It remembers
 the ones you pick, and you can switch at any time from the **Source** panel in the left rail or from
@@ -42,6 +44,10 @@ Install it as a launchd agent instead and it starts at login and comes back on i
 ./start --agent-update      # after a git pull: npm ci + npm run build, then restart
 ./start --uninstall-agent
 ```
+
+(On an npm or Homebrew install the same verbs hang off the bin: `phase-console --install-agent
+--root ~/code/your-repo`, `--agent-status`, and so on. Updates come through the package manager —
+`npm update -g phase-console` / `brew upgrade phase-console`, then `phase-console --agent-restart`.)
 
 `--install-agent` and `--agent-update` build the client as part of the job; the launchd boot path
 never builds, so a restart serves exactly what was verified and a crash loop cannot spend its

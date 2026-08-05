@@ -22,7 +22,8 @@
 export const DESKTOP_LAUNCHER_PROMPT = `Set up a Phase Console launcher on my Desktop.
 
 1. Find the skill: whichever of ~/.claude, ~/.claude-a or ~/.claude-b contains
-   skills/phased-execution/viewer/server/index.ts.
+   skills/phased-execution/viewer/server/index.ts — or, for a packaged install,
+   $(npm root -g)/phase-console or $(brew --prefix phase-console)/libexec.
 2. Copy viewer/deploy/desktop-launcher.command from there to
    "~/Desktop/Phase Console.command", and make it executable.
 3. Open the copy and walk me through the knobs at the top, one at a time:
@@ -54,17 +55,21 @@ in the repo.`;
  */
 export const INSTALL_PROMPT = `Install the phased-execution skill for me, and ask before each step.
 
-1. Install the skill itself, whichever way I prefer — offer both:
+1. Install the skill itself, whichever way I prefer — offer all of these:
      Plugin:  claude plugin marketplace add zsarir/phased-execution
               claude plugin install phased-execution@mobin
      Clone:   git clone https://github.com/zsarir/phased-execution \\
                 ~/.claude/skills/phased-execution
-   If I already have it, pull instead and tell me what changed.
+     npm:     npm install -g phase-console     (console prebuilt, skill files inside)
+     Brew:    brew install zsarir/homebrew-tap/phase-console
+   Claude Code discovers the SKILL from the plugin or the clone; npm and brew
+   are for the console. If I already have it, update it the same way instead
+   and tell me what changed.
 2. Ask which repository holds my work. The console reads plans from
    <repo>/docs/plans and handoffs from <repo>/docs/handoffs; it will not start
    without docs/plans, so create it if I say to.
 3. Ask whether I want the web console at all. The skill works without it — it is
-   scripts and markdown. If I do want it:
+   scripts and markdown. npm and brew ship it prebuilt; for a plugin or clone:
      cd <skill>/viewer && npm ci && npm run build
 4. Before enabling anything, explain these one at a time and let me answer each:
      --allow-writes   scaffold plans and handoffs, record QA, take phase locks
@@ -74,6 +79,7 @@ export const INSTALL_PROMPT = `Install the phased-execution skill for me, and as
      --allow-agent    interactive claude sessions and the New-plan wizard
    Default every one of them to off. Then install with only what I chose:
      bash <skill>/viewer/deploy/agent.sh install --root <repo> [flags]
+   (from npm or brew: phase-console --install-agent --root <repo> [flags])
    That installs a launchd agent that starts at login and survives a crash.
 5. Open http://127.0.0.1:4123 and confirm it loads. If it does not, read
    ~/.local/state/phase-console/console.err.log and tell me what it says.

@@ -1,11 +1,14 @@
 # Install
 
 You need [Claude Code](https://claude.com/claude-code); the skill itself needs just Bash. The
-**console** additionally needs **Node 22.6 or newer with npm** — its client is built output, one
-`npm ci && npm run build` inside `viewer/` per machine. You do not have to remember that: an unbuilt
+**console** additionally needs **Node 22.18 or newer (or 23.6+) with npm** — its client is built
+output: one `npm ci && npm run build` inside `viewer/` per machine on the plugin and clone routes,
+already built for you on the npm and Homebrew routes. You do not have to remember that: an unbuilt
 console serves a page naming the two commands and the exact directory to run them in.
 
-Pick **one** of these two routes. They give you the same skill and the same console.
+Pick a route. A and B give you the skill **and** the console from one tree; C and D install the
+console as a package (with the skill's files inside for the console's own use — Claude Code still
+discovers the *skill* from A or B).
 
 ## Route A — as a plugin *(recommended: one line, updates itself)*
 
@@ -51,7 +54,9 @@ plugin lives in a cache directory you would otherwise have to hunt for).
 purpose, which puts it on the *commit channel*: every push to `main` counts as a new release, and
 Claude Code also refreshes in the background. Restart to apply an update. An update moves the plugin
 to a fresh directory, so the console will ask for its build once more — same two commands, same
-printed path.
+printed path. (npm and Homebrew are the **tagged channel** instead: releases are `vX.Y.Z` tags with
+a [CHANGELOG](../CHANGELOG.md), packed and published by CI with provenance. Same tree, two cadences
+— the plugin tracks every commit, the packages track releases.)
 
 **Removing it.** `/plugin uninstall phased-execution@mobin`, then optionally
 `/plugin marketplace remove mobin`.
@@ -67,18 +72,44 @@ Build the console's client once (`cd ~/.claude/skills/phased-execution/viewer &&
 build`), then start it with `~/.claude/skills/phased-execution/start`. Update with `git pull`, then
 rebuild — `./start --agent-update` does both build and restart if it runs as a launchd agent.
 
+## Route C — npm *(the console as a package, prebuilt)*
+
+```bash
+npm install -g phase-console          # or one-off: npx phase-console ~/code/your-repo
+```
+
+You get the `phase-console` command on PATH with the client **already built** — the per-machine
+build step from A/B does not exist here. The whole tree ships inside the package (at
+`$(npm root -g)/phase-console`), so the console's write verbs, prompts and QA templates all work;
+what an npm install does *not* do is register the skill with Claude Code — pair it with Route A if
+you want `/phased-execution` in your sessions. Update with `npm update -g phase-console`; if you run
+the background agent, follow with `phase-console --agent-restart`. Remove with
+`npm uninstall -g phase-console`.
+
+## Route D — Homebrew *(macOS and Linux, from the `zsarir` tap)*
+
+```bash
+brew install zsarir/homebrew-tap/phase-console
+```
+
+Route C with Homebrew's lifecycle: it lives under `$(brew --prefix phase-console)/libexec`, runs on
+Homebrew's own Node, and updates with `brew upgrade phase-console` (then
+`phase-console --agent-restart` if the background agent runs). Remove with
+`brew uninstall phase-console`.
+
 ## Which route?
 
-|  | Plugin | Clone |
-|---|---|---|
-| **Install** | two commands, inside Claude Code | one `git clone` |
-| **Updates** | automatic, every commit | when you `git pull` |
-| **Skill name** | `/phased-execution:phased-execution` | `/phased-execution` |
-| **Console** | `phase-console`, from anywhere | `./start`, from the folder |
-| **Lives at** | a per-version cache directory that moves on every update | wherever you cloned it, permanently |
-| **Suits** | wanting it present and current, with nothing to maintain | scripting against the path, or editing the skill itself |
+|  | Plugin | Clone | npm | Homebrew |
+|---|---|---|---|---|
+| **Install** | two commands, inside Claude Code | one `git clone` | `npm i -g phase-console` | `brew install zsarir/homebrew-tap/phase-console` |
+| **Updates** | automatic, every commit | when you `git pull` | `npm update -g`, tagged releases | `brew upgrade`, tagged releases |
+| **Skill name** | `/phased-execution:phased-execution` | `/phased-execution` | — (console only; pair with A or B) | — (console only; pair with A or B) |
+| **Console** | `phase-console`, from anywhere | `./start`, from the folder | `phase-console`, prebuilt | `phase-console`, prebuilt |
+| **Lives at** | a per-version cache directory that moves on every update | wherever you cloned it, permanently | `$(npm root -g)/phase-console` | `$(brew --prefix phase-console)/libexec` |
+| **Suits** | wanting it present and current, with nothing to maintain | scripting against the path, or editing the skill itself | wanting the console with no build step | brew-managed machines |
 
-Both at once works, but you would see the skill twice and pay its always-on cost twice. Pick one.
+Plugin and clone at once works, but you would see the skill twice and pay its always-on cost twice —
+pick one of those two for the *skill*; C or D can sit beside either for the *console*.
 
 ## Give yourself a launcher *(optional, and the only way Restart works)*
 
@@ -91,7 +122,8 @@ supervisor. Paste this into Claude Code:
 Set up a Phase Console launcher on my Desktop.
 
 1. Find the skill: whichever of ~/.claude, ~/.claude-a or ~/.claude-b contains
-   skills/phased-execution/viewer/server/index.ts.
+   skills/phased-execution/viewer/server/index.ts — or, for a packaged install,
+   $(npm root -g)/phase-console or $(brew --prefix phase-console)/libexec.
 2. Copy viewer/deploy/desktop-launcher.command from there to
    "~/Desktop/Phase Console.command", and make it executable.
 3. Open the copy and walk me through the knobs at the top, one at a time:

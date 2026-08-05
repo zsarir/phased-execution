@@ -22,6 +22,7 @@ and the guardrails — lives in `SKILL.md` + `references/`; that is what Claude 
 
 ```bash
 ~/.claude/skills/phased-execution/start        # opens http://127.0.0.1:4123 in your browser
+phase-console                                  # same thing, when installed as a plugin, via npm or via brew
 ```
 
 **Phase Console** (`viewer/`) is a local web app for reading this system: every plan with its live
@@ -34,14 +35,15 @@ claim from `scripts/phase-graph.sh` rather than recomputing it. Read-only unless
 working tree), `--allow-agent` (the **Agent** page — interactive `claude` sessions in a browser
 terminal, plus a *New plan with AI* wizard that authors a plan from a brief), or
 `--allow-terminal` (a real shell); it never commits or pushes. One-time setup per machine:
-`cd viewer && npm ci && npm run build` — see `viewer/README.md`.
+`cd viewer && npm ci && npm run build` — skipped entirely on an npm or Homebrew install, which ships
+the client prebuilt — see `viewer/README.md`.
 
 ## Where things live (two places)
 
-- **The skill** (this repo, cloned to `~/.claude/skills/phased-execution`): the procedure
-  (`SKILL.md`), `scripts/`, `references/`, `templates/`, `tests/` and `viewer/`. If you run several
-  Claude homes (`~/.claude`, `~/.claude-a`, …), each holds its own clone — edit one, then
-  `commit → push → pull` in the others so all stay identical.
+- **The skill** (this repo — cloned to `~/.claude/skills/phased-execution`, installed as a plugin,
+  or packaged by npm/Homebrew): the procedure (`SKILL.md`), `scripts/`, `references/`, `templates/`,
+  `tests/` and `viewer/`. If you run several Claude homes (`~/.claude`, `~/.claude-a`, …), each
+  holds its own clone — edit one, then `commit → push → pull` in the others so all stay identical.
 - **The work-state** (your project repo's `docs/`): `plans/<slug>.md` and
   `handoffs/<slug>/{phase-NN-*.md, INDEX.md, .locks/}` (+ `reports/` and `test-status.md` when QA is
   enabled) — committed + pushed, so any account or machine can pull and continue a partially-finished

@@ -5,7 +5,7 @@
 **یک اسکیلِ [Claude Code](https://claude.com/claude-code) برای اجرای کارهایی که در یک نشست جا نمی‌شوند —
 به‌شکلِ یک گرافِ وابستگی از نشست‌های هم‌اندازه، به‌همراهِ یک کنسولِ وبِ محلی برای تماشای آن.**
 
-![Skill](https://img.shields.io/badge/Claude%20Code-Agent%20Skill-d97757?style=flat-square) ![Plugin](https://img.shields.io/badge/install-plugin%20or%20clone-4FA8FF?style=flat-square) ![App](https://img.shields.io/badge/app-Phase%20Console-ffb627?style=flat-square) ![Dependencies](https://img.shields.io/badge/dependencies-none-3fb68b?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-7A8B92?style=flat-square)
+![Skill](https://img.shields.io/badge/Claude%20Code-Agent%20Skill-d97757?style=flat-square) ![Plugin](https://img.shields.io/badge/install-plugin%20·%20clone%20·%20npm%20·%20brew-4FA8FF?style=flat-square) ![npm](https://img.shields.io/npm/v/phase-console?style=flat-square&color=CB3837) ![App](https://img.shields.io/badge/app-Phase%20Console-ffb627?style=flat-square) ![Dependencies](https://img.shields.io/badge/dependencies-none-3fb68b?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-7A8B92?style=flat-square)
 
 [English](README.md) · **فارسی**
 
@@ -47,17 +47,21 @@ SUGGESTED BATCHES (budget ~200K, joined phases share a session): [4 5]  [6]  [7]
 ```
 Install the phased-execution skill for me, and ask before each step.
 
-1. Install the skill itself, whichever way I prefer — offer both:
+1. Install the skill itself, whichever way I prefer — offer all of these:
      Plugin:  claude plugin marketplace add zsarir/phased-execution
               claude plugin install phased-execution@mobin
      Clone:   git clone https://github.com/zsarir/phased-execution \
                 ~/.claude/skills/phased-execution
-   If I already have it, pull instead and tell me what changed.
+     npm:     npm install -g phase-console     (console prebuilt, skill files inside)
+     Brew:    brew install zsarir/homebrew-tap/phase-console
+   Claude Code discovers the SKILL from the plugin or the clone; npm and brew
+   are for the console. If I already have it, update it the same way instead
+   and tell me what changed.
 2. Ask which repository holds my work. The console reads plans from
    <repo>/docs/plans and handoffs from <repo>/docs/handoffs; it will not start
    without docs/plans, so create it if I say to.
 3. Ask whether I want the web console at all. The skill works without it — it is
-   scripts and markdown. If I do want it:
+   scripts and markdown. npm and brew ship it prebuilt; for a plugin or clone:
      cd <skill>/viewer && npm ci && npm run build
 4. Before enabling anything, explain these one at a time and let me answer each:
      --allow-writes   scaffold plans and handoffs, record QA, take phase locks
@@ -67,6 +71,7 @@ Install the phased-execution skill for me, and ask before each step.
      --allow-agent    interactive claude sessions and the New-plan wizard
    Default every one of them to off. Then install with only what I chose:
      bash <skill>/viewer/deploy/agent.sh install --root <repo> [flags]
+   (from npm or brew: phase-console --install-agent --root <repo> [flags])
    That installs a launchd agent that starts at login and survives a crash.
 5. Open http://127.0.0.1:4123 and confirm it loads. If it does not, read
    ~/.local/state/phase-console/console.err.log and tell me what it says.
@@ -78,7 +83,8 @@ Do not turn on a flag I did not agree to, and do not start a phase run to
 
 <div dir="rtl">
 
-اگر ترجیح می‌دهید دستی نصب کنید → **[docs/install.md](docs/install.md)** (انگلیسی)
+اگر ترجیح می‌دهید دستی نصب کنید — یا با <span dir="ltr">`npm i -g phase-console`</span> /
+<span dir="ltr">`brew install zsarir/homebrew-tap/phase-console`</span> → **[docs/install.md](docs/install.md)** (انگلیسی)
 
 ---
 
@@ -140,7 +146,7 @@ header is trustworthy only because nothing but the proxy can reach the port.
 [گیتِ QA](docs/qa-gating.md) · [حفاظ‌های ایمنی](docs/safety-rails.md) ·
 [Phase Console](docs/console.md) · [نصبِ دستی](docs/install.md) · [مرجع](docs/reference.md)
 
-به Claude Code و `bash` و `git` نیاز دارد. کنسول علاوه بر آن Node 22+ می‌خواهد و **هیچ وابستگیِ
-اجرایی** ندارد. مجوز MIT — [LICENSE](LICENSE).
+به Claude Code و `bash` و `git` نیاز دارد. کنسول علاوه بر آن Node ‏22.18+ (یا ‏23.6+) می‌خواهد و
+**هیچ وابستگیِ اجرایی** ندارد. مجوز MIT — [LICENSE](LICENSE).
 
 </div>

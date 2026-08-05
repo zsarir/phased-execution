@@ -31,6 +31,7 @@
 
 ```bash
 ~/.claude/skills/phased-execution/start        # opens http://127.0.0.1:4123 in your browser
+phase-console                                  # same thing, when installed as a plugin, via npm or via brew
 ```
 
 </div>
@@ -48,7 +49,8 @@
 
 ## چیزها کجا زندگی می‌کنند (دو جا)
 
-- **خودِ اسکیل** (همین مخزن، که در `~/.claude/skills/phased-execution` کلون می‌شود): رویه (`SKILL.md`)،
+- **خودِ اسکیل** (همین مخزن — کلون‌شده در `~/.claude/skills/phased-execution`، نصب‌شده به‌صورت پلاگین،
+  یا بسته‌بندی‌شده با npm/Homebrew): رویه (`SKILL.md`)،
   `scripts/`، `references/`، `templates/`، `tests/` و `viewer/`. اگر چند خانه‌ی Claude دارید
   (`~/.claude`، `~/.claude-a`، …)، هر کدام کلونِ خودش را دارد — یکی را ویرایش کنید، بعد در بقیه
   `commit → push → pull` کنید تا همه یکسان بمانند.
