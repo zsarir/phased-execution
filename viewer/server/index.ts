@@ -23,6 +23,7 @@ import {
 import {
   bootout, markDegraded, onRestartRequest, onShutdownRequest, runShutdownHandlers, stopPlan,
 } from './lifecycle.ts';
+import { openerCandidates } from './platform.ts';
 import { Service } from './service.ts';
 import { handleApi } from './api/routes.ts';
 import { classify } from './api/access.ts';
@@ -338,8 +339,25 @@ server.listen(flags.port, flags.host, () => {
   }
   process.stdout.write(`  log           ${flags.logFile ?? 'stderr only'}\n\n`);
   if (flags.open) {
-    const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
-    execFile(opener, [address], () => { /* opening is a convenience */ });
+    // Best-effort and platform-aware: on WSL the browser lives on the Windows
+    // side, so `wslview` goes first. A candidate that is missing falls through
+    // to the next; running out prints the URL instead of erroring — opening is
+    // a convenience, never a requirement.
+    const candidates = openerCandidates();
+    const tryNext = (i: number): void => {
+      if (i >= candidates.length) {
+        process.stdout.write(`  (no way to open a browser from here — open ${address} yourself)\n`);
+        return;
+      }
+      execFile(candidates[i], [address], (error) => {
+        if (!error) return;
+        // explorer.exe answers 1 even when it worked; only its outright
+        // absence means "try the next one".
+        if (candidates[i] === 'explorer.exe' && (error as NodeJS.ErrnoException).code !== 'ENOENT') return;
+        tryNext(i + 1);
+      });
+    };
+    tryNext(0);
   }
 });
 
@@ -412,7 +430,7 @@ const BOOTOUT_GRACE_MS = 8_000;
 onShutdownRequest((reason) => {
   setTimeout(() => {
     const plan = stopPlan();
-    if (plan.via !== 'launchctl' || !bootout(plan, spawnChild as never)) {
+    if (plan.via === 'exit' || !bootout(plan, spawnChild as never)) {
       void shutdown(reason);
       return;
     }

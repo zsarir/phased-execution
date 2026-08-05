@@ -172,6 +172,30 @@ export function detectSupervisor(
     };
   }
 
+  // `deploy/agent.sh` stamps the unit's own name into PHASE_CONSOLE_UNIT (via
+  // %n) for exactly this: systemd's INVOCATION_ID proves *a* unit started us
+  // but never says which, so without the stamp Restart= is unreadable.
+  const unit = env.PHASE_CONSOLE_UNIT;
+  if (env.INVOCATION_ID && unit) {
+    const restart = readRestartPolicy(unit, env);
+    if (restart === true) {
+      return { supervised: true, kind: 'systemd', detail: `systemd · ${unit} · its Restart= brings a clean exit straight back` };
+    }
+    if (restart === false) {
+      return {
+        supervised: false,
+        kind: 'systemd',
+        detail: `systemd · ${unit} · its Restart= does not cover a clean exit — exiting would stop the console, not restart it`,
+      };
+    }
+    return {
+      supervised: true,
+      kind: 'systemd',
+      assumed: true,
+      detail: `systemd · ${unit} · its unit file could not be read, so Restart= is assumed rather than confirmed`,
+    };
+  }
+
   if (env.INVOCATION_ID) {
     return {
       supervised: true,
@@ -187,6 +211,21 @@ export function detectSupervisor(
     detail: 'nothing is supervising this process — it was started in a terminal or by the launcher, '
       + 'so exiting would leave no console running',
   };
+}
+
+/**
+ * `true`/`false` when the unit file could be read, `null` when it could not.
+ * Only `always` and `on-success` bring a *clean* exit back — which is the
+ * question the Restart button is asking. Last assignment wins, as in systemd.
+ */
+function readRestartPolicy(unit: string, env: NodeJS.ProcessEnv): boolean | null {
+  const home = env.HOME ?? homedir();
+  const base = env.XDG_CONFIG_HOME ?? join(home, '.config');
+  let text: string;
+  try { text = readFileSync(join(base, 'systemd', 'user', unit), 'utf8'); } catch { return null; }
+  const assignments = [...text.matchAll(/^\s*Restart\s*=\s*(\S*)/gm)];
+  const value = assignments.at(-1)?.[1] ?? 'no';
+  return value === 'always' || value === 'on-success';
 }
 
 /** `true`/`false` when the plist could be read, `null` when it could not. */
@@ -245,12 +284,14 @@ export function supervisor(): Supervisor {
  * Restart button depends on is the one that makes "stop" impossible to express
  * as an exit. Ending the job means telling launchd, and `launchctl bootout
  * gui/<uid>/<label>` is that sentence — the same one `deploy/agent.sh` uses to
- * uninstall. Anywhere else, exiting IS stopping.
+ * uninstall. Under systemd `Restart=always` the same trap has the same shape,
+ * and the sentence is `systemctl --user stop <unit>`. Anywhere else, exiting
+ * IS stopping.
  *
  * Pure, so the decision can be asserted without spawning anything.
  */
 export type StopPlan =
-  | { via: 'launchctl'; file: string; args: string[]; label: string; detail: string }
+  | { via: 'launchctl' | 'systemctl'; file: string; args: string[]; label: string; detail: string }
   | { via: 'exit'; detail: string };
 
 export function stopPlan(
@@ -273,6 +314,19 @@ export function stopPlan(
       detail: `launchd · ${label} · the job is unloaded, so it stays off until you install or start it again`,
     };
   }
+  const unit = env.PHASE_CONSOLE_UNIT;
+  if (sup.kind === 'systemd' && unit) {
+    return {
+      via: 'systemctl',
+      file: 'systemctl',
+      // `stop`, which under systemd really does mean stop — Restart= only
+      // covers exits, not deliberate stops. The unit stays enabled, so it
+      // returns at the next login unless disabled.
+      args: ['--user', 'stop', unit],
+      label: unit,
+      detail: `systemd · ${unit} · the unit is stopped until you start it again (it still starts at login unless you disable it)`,
+    };
+  }
   return {
     via: 'exit',
     detail: sup.supervised
@@ -289,14 +343,14 @@ export type Spawner = (
 ) => { unref(): void };
 
 /**
- * Hand the stop order to launchd and walk away.
+ * Hand the stop order to the supervisor and walk away.
  *
  * Detached with no stdio on purpose: the command outlives this process by
  * design — it is the thing that ends it — so it must not be a child whose
  * parent dying takes it with it.
  */
 export function bootout(plan: StopPlan, spawn: Spawner): boolean {
-  if (plan.via !== 'launchctl') return false;
+  if (plan.via === 'exit') return false;
   try {
     spawn(plan.file, plan.args, { detached: true, stdio: 'ignore' }).unref();
     log.warn('shutdown.bootout', { label: plan.label, args: plan.args });

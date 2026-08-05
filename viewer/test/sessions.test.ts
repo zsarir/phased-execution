@@ -22,12 +22,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { request } from 'node:http';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { VIEWER_DIR, SKILL_DIR } from '../server/config.ts';
-import { bootout, stopPlan, type Supervisor } from '../server/lifecycle.ts';
+import { bootout, detectSupervisor, stopPlan, type Supervisor } from '../server/lifecycle.ts';
 import { Service } from '../server/service.ts';
 import { defaultCategories, routeFor } from '../server/push/catalogue.ts';
 import type { SessionEvent, SessionInfo } from '../server/terminal.ts';
@@ -277,14 +279,58 @@ test('with nothing supervising, stopping is just exiting', () => {
   // A platform with no uid (Windows) cannot name a `gui/<uid>/…` target.
   assert.equal(stopPlan(LAUNCHD, { XPC_SERVICE_NAME: 'com.example.console' }, null).via, 'exit');
 
-  // systemd is supervision this process cannot unload; it says so rather than
-  // pretending an exit is a stop.
+  // A FOREIGN systemd unit — one that never stamped PHASE_CONSOLE_UNIT — is
+  // supervision this process cannot name, so it cannot be stopped by name
+  // either; it says so rather than pretending an exit is a stop.
   const systemd = stopPlan(
     { supervised: true, kind: 'systemd', detail: 'systemd started this unit', assumed: true },
     { INVOCATION_ID: 'x' }, 501,
   );
   assert.equal(systemd.via, 'exit');
   assert.match(systemd.detail, /may be brought back/);
+});
+
+test('under systemd with a known unit, stopping means systemctl --user stop', () => {
+  // The unit agent.sh writes stamps its own name (%n) into the environment —
+  // the XPC_SERVICE_NAME of this platform. With the name known, Stop can mean
+  // what the button says.
+  const plan = stopPlan(
+    { supervised: true, kind: 'systemd', detail: 'systemd · phase-console.service' },
+    { INVOCATION_ID: 'x', PHASE_CONSOLE_UNIT: 'phase-console.service' }, 501,
+  );
+  assert.equal(plan.via, 'systemctl');
+  assert.deepEqual(plan.via === 'systemctl' && plan.args, ['--user', 'stop', 'phase-console.service']);
+  // Restart= covers exits, not deliberate stops — but the unit stays enabled,
+  // so the plan must say the login caveat out loud.
+  assert.match(plan.detail, /starts at login/);
+});
+
+test('a stamped unit file is read for Restart=, not assumed', () => {
+  const config = mkdtempSync(join(tmpdir(), 'phase-console-unit-'));
+  mkdirSync(join(config, 'systemd', 'user'), { recursive: true });
+  const env = {
+    INVOCATION_ID: 'x',
+    PHASE_CONSOLE_UNIT: 'phase-console.service',
+    XDG_CONFIG_HOME: config,
+  };
+  const unit = join(config, 'systemd', 'user', 'phase-console.service');
+
+  writeFileSync(unit, '[Service]\nExecStart=/usr/bin/node index.js\nRestart=always\n');
+  const supervised = detectSupervisor(env, 'linux');
+  assert.deepEqual(
+    { supervised: supervised.supervised, kind: supervised.kind, assumed: supervised.assumed ?? false },
+    { supervised: true, kind: 'systemd', assumed: false },
+    'Restart=always is read, so the button is offered on evidence',
+  );
+
+  // `on-failure` never re-runs a clean exit — the Restart button would be a
+  // stop button wearing the wrong label.
+  writeFileSync(unit, '[Service]\nRestart=on-failure\n');
+  assert.equal(detectSupervisor(env, 'linux').supervised, false);
+
+  // No unit file to read: supervision is assumed, and marked as assumed.
+  const foreign = detectSupervisor({ INVOCATION_ID: 'x', PHASE_CONSOLE_UNIT: 'other.service', XDG_CONFIG_HOME: config }, 'linux');
+  assert.deepEqual({ supervised: foreign.supervised, assumed: foreign.assumed }, { supervised: true, assumed: true });
 });
 
 test('bootout spawns detached, and a spawn that throws does not take the shutdown with it', () => {
@@ -306,6 +352,15 @@ test('bootout spawns detached, and a spawn that throws does not take the shutdow
   assert.equal(bootout(plan, () => { throw new Error('launchctl: not found'); }), false,
     'a missing launchctl is a false, so the caller falls through to exiting');
   assert.equal(bootout({ via: 'exit', detail: '' }, () => { throw new Error('must not spawn'); }), false);
+
+  // The systemctl plan rides the same handoff.
+  const sd = stopPlan(
+    { supervised: true, kind: 'systemd', detail: '' },
+    { INVOCATION_ID: 'x', PHASE_CONSOLE_UNIT: 'phase-console.service' }, 501,
+  );
+  const sdCalls: { file: string; args: string[] }[] = [];
+  assert.equal(bootout(sd, (file, args) => { sdCalls.push({ file, args }); return { unref() {} }; }), true);
+  assert.deepEqual(sdCalls, [{ file: 'systemctl', args: ['--user', 'stop', 'phase-console.service'] }]);
 });
 
 /* ------------------------------------------------------------------ *

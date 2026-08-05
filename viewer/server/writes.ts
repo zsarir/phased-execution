@@ -12,6 +12,8 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { isAbsolute, join, normalize, resolve } from 'node:path';
 
+import { openerCandidates } from './platform.ts';
+
 export type WriteAction = 'new-plan' | 'new-handoff' | 'qa-record' | 'lock-claim' | 'lock-release' | 'open-editor';
 
 export type WriteRequest = {
@@ -166,7 +168,9 @@ export async function openInEditor(path: string, docsDir: string): Promise<Write
   const editor = process.env.VISUAL || process.env.EDITOR;
   const [command, args] = editor
     ? [editor.split(/\s+/)[0], [...editor.split(/\s+/).slice(1), target]]
-    : [process.platform === 'darwin' ? 'open' : 'xdg-open', [target]];
+    // `open` on macOS, `wslview` on WSL (the file's viewer is on the Windows
+    // side), `xdg-open` on a Linux desktop. A miss is an honest ok:false.
+    : [openerCandidates()[0] ?? 'xdg-open', [target]];
 
   return new Promise((resolveOutcome) => {
     execFile(command, args, { timeout: 10_000 }, (error, stdout, stderr) => {

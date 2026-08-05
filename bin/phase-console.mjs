@@ -4,6 +4,10 @@
 //   phase-console                        pick the plan directory in the browser
 //   phase-console ~/code/your-repo       open that directory straight away
 //   phase-console --allow-writes         also enable the guarded write verbs
+//   phase-console start | stop | restart | status | logs [-f]
+//                                        drive the background agent (start falls
+//                                        back to a foreground run if none is installed)
+//   phase-console install-skill          copy the skill where Claude Code reads it
 //
 // The bash `bin/phase-console` next to this file serves the plugin route, where
 // Claude Code puts the real bin/ directory on PATH. npm and Homebrew instead
@@ -14,7 +18,9 @@
 // survive `brew upgrade`), and only then falls back to realpath for npm's
 // global-bin symlink chain.
 
-import { existsSync, realpathSync } from 'node:fs';
+import {
+  cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync,
+} from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 
@@ -63,20 +69,107 @@ if (!root) {
   process.exit(1);
 }
 
-// ---- agent verbs -----------------------------------------------------------
-// System operations, owned by deploy/agent.sh — mirror viewer/run and hand
-// them straight over rather than starting a server.
+// ---- the skill, where Claude Code reads it ---------------------------------
+// An npm or brew install puts the console on PATH but Claude Code discovers
+// SKILLS from ~/.claude/skills (or CLAUDE_CONFIG_DIR). `install-skill` closes
+// that gap: it copies the skill's files — never the viewer — into place, and
+// stamps the copy so only its own copies are ever overwritten or removed.
 const args = process.argv.slice(2);
-const AGENT_VERBS = {
+const SKILL_STAMP = '.installed-by-phase-console';
+const SKILL_FILES = ['SKILL.md', 'USAGE.md', 'scripts', 'templates', 'references', 'assets'];
+
+function skillDest() {
+  const base = process.env.CLAUDE_CONFIG_DIR || join(process.env.HOME ?? '', '.claude');
+  return join(base, 'skills', 'phased-execution');
+}
+
+function installSkill(force) {
+  const dest = skillDest();
+  if (safeRealpath(dest) === safeRealpath(root)) {
+    process.stdout.write(`phase-console: the skill already lives where Claude Code reads it (${dest}).\n`);
+    return 0;
+  }
+  if (existsSync(join(dest, '.git'))) {
+    process.stderr.write(
+      `phase-console: ${dest} is a git clone — update it with git pull, not by overwriting it.\n`,
+    );
+    return 1;
+  }
+  if (existsSync(dest) && !existsSync(join(dest, SKILL_STAMP)) && !force) {
+    process.stderr.write(
+      `phase-console: ${dest} exists and was not put there by this command.\n`
+      + 'Re-run with --force to replace it.\n',
+    );
+    return 1;
+  }
+  mkdirSync(dest, { recursive: true });
+  for (const f of SKILL_FILES) {
+    cpSync(join(root, f), join(dest, f), { recursive: true, force: true });
+  }
+  let version = 'unknown';
+  try { version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version ?? version; } catch { /* stamp still written */ }
+  writeFileSync(join(dest, SKILL_STAMP), `${version}\n`);
+  process.stdout.write(
+    `installed the skill at ${dest} (from phase-console ${version}).\n`
+    + 'Restart Claude Code (or /reload-plugins) and it appears as /phased-execution.\n'
+    + 'Re-run install-skill after a package update to refresh it.\n',
+  );
+  return 0;
+}
+
+function uninstallSkill() {
+  const dest = skillDest();
+  if (!existsSync(dest)) { process.stdout.write('phase-console: no skill copy to remove.\n'); return 0; }
+  if (!existsSync(join(dest, SKILL_STAMP))) {
+    process.stderr.write(
+      `phase-console: ${dest} was not installed by this command — refusing to delete it.\n`,
+    );
+    return 1;
+  }
+  rmSync(dest, { recursive: true, force: true });
+  process.stdout.write(`removed ${dest}.\n`);
+  return 0;
+}
+
+if (['install-skill', '--install-skill'].includes(args[0])) {
+  process.exit(installSkill(args.includes('--force')));
+}
+if (['uninstall-skill', '--uninstall-skill'].includes(args[0])) {
+  process.exit(uninstallSkill());
+}
+
+// ---- agent + lifecycle verbs -----------------------------------------------
+// System operations, owned by deploy/agent.sh — mirror viewer/run and hand
+// them straight over rather than starting a server. The bare words are the
+// daily set; the --agent-* flags are the long-standing spellings.
+const FLAG_VERBS = {
   '--install-agent': 'install',
   '--uninstall-agent': 'uninstall',
   '--agent-status': 'status',
+  '--agent-start': 'start',
+  '--agent-stop': 'stop',
   '--agent-restart': 'restart',
   '--agent-update': 'update',
   '--agent-log': 'log',
 };
-if (args[0] in AGENT_VERBS) {
-  const verb = AGENT_VERBS[args[0]];
+const WORD_VERBS = {
+  start: 'start', stop: 'stop', restart: 'restart',
+  status: 'status', log: 'log', logs: 'log', update: 'update',
+};
+
+function agentInstalled() {
+  const home = process.env.HOME ?? '';
+  const config = process.env.XDG_CONFIG_HOME || join(home, '.config');
+  return existsSync(join(home, 'Library', 'LaunchAgents', 'com.phase-console.plist'))
+    || existsSync(join(config, 'systemd', 'user', 'phase-console.service'));
+}
+
+const verb = FLAG_VERBS[args[0]] ?? WORD_VERBS[args[0]];
+if (verb === 'start' && !agentInstalled()) {
+  // Nothing supervises the console here — `start` means run it, in the
+  // foreground, with whatever else was asked for (root, flags).
+  args.splice(0, 1);
+} else if (verb) {
   if (verb === 'update' && !existsSync(join(root, '.git'))) {
     // A packaged install has no sources and no lockfile — there is nothing for
     // agent.sh to rebuild. The package manager owns updates.
@@ -84,7 +177,7 @@ if (args[0] in AGENT_VERBS) {
       'phase-console: this is a packaged install — update it with\n'
       + '  npm update -g phase-console     (npm)\n'
       + '  brew upgrade phase-console      (Homebrew)\n'
-      + 'then restart the agent: phase-console --agent-restart\n',
+      + 'then restart the agent: phase-console restart\n',
     );
     process.exit(1);
   }

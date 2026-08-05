@@ -1191,7 +1191,9 @@ export class Service {
       // this console says to them.
       restartHint: stop.via === 'launchctl'
         ? `launchctl kickstart -k gui/$(id -u)/${stop.label} — or reinstall it with viewer/run --install-agent`
-        : 'start it again with `bash <skill>/start` (or viewer/run)',
+        : stop.via === 'systemctl'
+          ? `systemctl --user start ${stop.label} — or reinstall it with phase-console --install-agent`
+          : 'start it again with `bash <skill>/start` (or viewer/run)',
     };
   }
 

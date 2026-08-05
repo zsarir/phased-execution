@@ -21,11 +21,14 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Agent management is a system operation, not a server one — hand it straight
-# to the script that owns launchd and never start a second console here.
+# to the script that owns the supervisor (launchd on macOS, systemd on Linux)
+# and never start a second console here.
 case "${1:-}" in
   --install-agent)   shift; exec bash "$here/deploy/agent.sh" install "$@" ;;
   --uninstall-agent) exec bash "$here/deploy/agent.sh" uninstall ;;
   --agent-status)    exec bash "$here/deploy/agent.sh" status ;;
+  --agent-start)     exec bash "$here/deploy/agent.sh" start ;;
+  --agent-stop)      exec bash "$here/deploy/agent.sh" stop ;;
   --agent-restart)   exec bash "$here/deploy/agent.sh" restart ;;
   --agent-update)    exec bash "$here/deploy/agent.sh" update ;;
   --agent-log)       shift; exec bash "$here/deploy/agent.sh" log "$@" ;;
