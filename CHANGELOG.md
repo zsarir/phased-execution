@@ -6,9 +6,17 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [1.0.1] - 2026-08-05
+
+The same console as 1.0.0, released through the pipeline: this is the first version published by
+`release.yml` from a `vX.Y.Z` tag — with npm **provenance**, the GitHub Packages mirror
+(`@zsarir/phase-console`), and a GitHub Release carrying the tarball. 1.0.0 was the one-time manual
+bootstrap publish that npm's trusted publishing requires before a publisher can be attached.
+
 ## [1.0.0] - 2026-08-05
 
-First tagged release — the console becomes installable as a package.
+First release — the console becomes installable as a package (published manually, once, to
+bootstrap trusted publishing).
 
 ### Added
 
