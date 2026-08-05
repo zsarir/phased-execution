@@ -27,7 +27,8 @@ import { loadVapid, vapidSubject, PUSH_DIR, type Vapid } from './vapid.ts';
 // switches take their defaults and their sanitising from the same table, so the
 // two tiers cannot drift apart on what a category is or what it defaults to.
 export {
-  CATEGORIES, categoryOf, defaultCategories, routeFor, sanitiseCategories, type Category, type CategoryId,
+  CATEGORIES, categoryOf, defaultCategories, isPlanProgress, routeFor, sanitiseCategories,
+  PLAN_PROGRESS_CATEGORIES, type Category, type CategoryId,
 } from './catalogue.ts';
 
 /**

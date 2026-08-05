@@ -27,7 +27,9 @@ import {
   degradedState, hasShutdownWork, onDegraded, requestRestart, requestShutdown, stopPlan, supervisor,
 } from './lifecycle.ts';
 import { log } from './log.ts';
-import { CATEGORIES, Push, routeFor, sanitiseCategories, tagFor, type CategoryId } from './push/index.ts';
+import {
+  CATEGORIES, Push, isPlanProgress, routeFor, sanitiseCategories, tagFor, type CategoryId,
+} from './push/index.ts';
 import { Notifications, type NotificationQuery, type NotificationRecord } from './notifications.ts';
 import { repoInfo, lastCommit, commitsTouching, type GitRepoInfo, type GitFileInfo } from './git.ts';
 import { findMemory, memoryIndexLines } from './memory.ts';
@@ -36,7 +38,7 @@ import {
   resolveBudget, weightOf, type Sizing, type PhaseAnalysis,
 } from './analysis/graph.ts';
 import {
-  planStats, portfolio, etaSamples, etaFrom, rateFor, phaseEtaFor, healthIssues, splitRepos,
+  planStats, portfolio, etaSamples, etaFrom, rateFor, phaseEtaFor, healthIssues, isClosedStatus, splitRepos,
   type PlanStats, type Portfolio, type PlanContext, type EtaEstimate, type EtaSample,
   type PhaseEta, type RateReading,
 } from './analysis/stats.ts';
@@ -767,6 +769,13 @@ export class Service {
     // rather than arriving here as `undefined` and silencing itself.
     if (!this.prefs.notify[category]) return null;
 
+    // And the second: a closed plan does not report progress. Here rather than at
+    // each announcer for the same reason as the first gate — a suppression that
+    // has to be remembered in five places is a suppression that will be missed in
+    // one. Only the plan-progress categories are affected; see the catalogue for
+    // why a live process keeps its voice whatever the plan's front matter says.
+    if (isPlanProgress(category) && this.isClosedPlan(context.slug)) return null;
+
     const url = routeFor(category, context);
     const record = this.notifications.record({
       category,
@@ -806,6 +815,20 @@ export class Service {
       },
     );
     return record;
+  }
+
+  /**
+   * Has the operator closed this plan?
+   *
+   * Read from the store's already-parsed front matter rather than by shelling to
+   * `phase-graph.sh --closed`: this is asked on the notification path, which must
+   * not wait on a subprocess, and the predicate is a pure function of a string
+   * the store already has. `stats.ts` owns the reading; the bash side owns its
+   * own, and `engine-parity` is what keeps the two honest.
+   */
+  isClosedPlan(slug?: string | null): boolean {
+    if (!slug) return false;
+    return isClosedStatus(this.store?.get(slug)?.plan?.status);
   }
 
   /* ---------------------------------------------------------------- *
@@ -1500,9 +1523,14 @@ export class Service {
       if (!before) return;
 
       // Only phases in plans that actually changed — a board recomputed for an
-      // unrelated reason is not news.
+      // unrelated reason is not news. And never a closed plan: the announce gate
+      // cannot catch the many-phases case, which carries no slug at all, so a
+      // closed plan would still be counted into "4 phases became ready".
       const touched = new Set(slugs);
-      const fresh = [...now].filter((key) => !before.has(key) && touched.has(key.split(':')[0]));
+      const fresh = [...now].filter((key) => {
+        const [slug] = key.split(':');
+        return !before.has(key) && touched.has(slug) && !this.isClosedPlan(slug);
+      });
       if (!fresh.length) return;
 
       const [first] = fresh;
@@ -2935,6 +2963,15 @@ export class Service {
     }
 
     if (request.class === 'plan-repair') {
+      // Refused outright, and said plainly. Closure already demotes this plan's
+      // issues to `info`, so the scan below would find nothing and answer "the
+      // board and its artefacts agree" — true of the severities, misleading about
+      // the plan. Repairing a closed plan is a real thing to want; it just starts
+      // with reopening it.
+      if (this.isClosedPlan(request.slug)) {
+        return refuse(409,
+          `${request.slug} is closed — reopen it before repairing it, or its board will go quiet again the moment it is fixed.`);
+      }
       const issues = healthIssues(await this.context(record))
         .filter((issue) => issue.severity === 'error' || issue.severity === 'warning')
         // A phase-scoped repair only wants that phase's issues; a plan-wide one

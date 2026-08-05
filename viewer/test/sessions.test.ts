@@ -19,9 +19,12 @@
  *     leave nothing behind.
  */
 
+// Redirects XDG_STATE_HOME/XDG_CONFIG_HOME before anything resolves them — the
+// console's state directory holds the operator's real push subscriptions.
+import './state-sandbox.ts';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { request } from 'node:http';
@@ -33,6 +36,7 @@ import { bootout, detectSupervisor, stopPlan, type Supervisor } from '../server/
 import { Service } from '../server/service.ts';
 import { defaultCategories, routeFor } from '../server/push/catalogue.ts';
 import type { SessionEvent, SessionInfo } from '../server/terminal.ts';
+import { spawnConsole } from './spawn-console.ts';
 
 /* ------------------------------------------------------------------ *
  * The announce policy
@@ -44,9 +48,11 @@ function service(flags: Record<string, unknown> = {}): Service {
     scriptsDir: join(SKILL_DIR, 'scripts'), logFile: null,
     ...flags,
   } as never);
-  // The push register is the OPERATOR's, read from their real state directory —
-  // a test that announces would send actual notifications to actual phones.
-  // Every other leg is exercised for real; this one is stubbed on purpose.
+  // Belt and braces on the announce path. `state-sandbox.ts` now moves the push
+  // register somewhere disposable, so this Service can no longer reach a real
+  // device — but this file asserts on announcements by the hundred, and the one
+  // failure mode worth two guards is the one that ends with a stranger's console
+  // buzzing someone's phone. Every other leg is exercised for real.
   sv.push.announce = (() => {}) as typeof sv.push.announce;
   return sv;
 }
@@ -408,14 +414,10 @@ const CONSOLE_HEADERS = { 'x-phase-console': '1', 'content-type': 'application/j
 
 test('POST /api/shutdown stops an unsupervised console, and refuses to do it by accident', async () => {
   const port = await freePort();
-  const child = spawn(process.execPath, [
-    join(VIEWER_DIR, 'server', 'index.ts'),
-    '--port', String(port), '--no-open', '--no-log-file', '--allow-terminal',
-  ], {
-    stdio: 'ignore',
+  const { child, box } = spawnConsole(VIEWER_DIR, port, ['--allow-terminal'], {
     // Nothing supervising: the graceful path, and the one that is safe to run
     // for real on the machine running the tests.
-    env: { ...process.env, PHASE_CONSOLE_SUPERVISED: '0', XPC_SERVICE_NAME: '' },
+    env: { PHASE_CONSOLE_SUPERVISED: '0', XPC_SERVICE_NAME: '' },
   });
   const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
 
@@ -461,5 +463,6 @@ test('POST /api/shutdown stops an unsupervised console, and refuses to do it by 
     assert.equal(code, 0, 'an unsupervised shutdown exits 0 after the drain');
   } finally {
     child.kill('SIGKILL');
+    box.cleanup();
   }
 });

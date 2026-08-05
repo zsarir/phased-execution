@@ -8,6 +8,10 @@
  * countdown.
  */
 
+// Redirects XDG_STATE_HOME/XDG_CONFIG_HOME before anything resolves them — the
+// console's state directory holds the operator's real push subscriptions.
+import './state-sandbox.ts';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 

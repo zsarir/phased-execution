@@ -14,7 +14,9 @@ import { isAbsolute, join, normalize, resolve } from 'node:path';
 
 import { openerCandidates } from './platform.ts';
 
-export type WriteAction = 'new-plan' | 'new-handoff' | 'qa-record' | 'lock-claim' | 'lock-release' | 'open-editor';
+export type WriteAction =
+  | 'new-plan' | 'new-handoff' | 'qa-record' | 'lock-claim' | 'lock-release'
+  | 'close-plan' | 'reopen-plan' | 'open-editor';
 
 export type WriteRequest = {
   action: WriteAction;
@@ -25,6 +27,8 @@ export type WriteRequest = {
   result?: string;
   report?: string;
   owner?: string;
+  /** Why a plan is being closed — recorded in its front matter, one line. */
+  reason?: string;
   qa?: boolean;
   force?: boolean;
   path?: string;
@@ -44,6 +48,23 @@ const TITLE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const HANDOFF_STATUS = ['complete', 'in-progress', 'blocked', 'pending'];
 const QA_RESULT = ['pass', 'fail', 'waived', 'pending'];
 const OWNER = /^[\w.@+-]{1,64}\/[\w.@+-]{1,64}$/;
+/** `active` is deliberately absent: reopening is its own action, not a status. */
+const CLOSE_STATUS = ['abandoned', 'superseded', 'complete'];
+const REASON_MAX = 200;
+
+/**
+ * One line, no `#`, no runaway length — the same shape `close-plan.sh` enforces
+ * before it writes. Duplicated rather than delegated because a validated request
+ * is the contract at this boundary: the script is the last guard, not the first.
+ */
+function cleanReason(raw?: string): string {
+  return (raw ?? '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/#/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, REASON_MAX);
+}
 
 export class WriteError extends Error {}
 
@@ -118,6 +139,37 @@ export function planWrite(request: WriteRequest, opts: { root: string; docsDir?:
         script: 'phase-lock.sh',
         args,
         description: `${verb === 'claim' ? 'Claim' : 'Release'} the phase ${phase} lock on ${slug} as ${owner}`,
+      };
+    }
+
+    case 'close-plan': {
+      const slug = requireSlug(request.slug);
+      const status = request.status ?? 'abandoned';
+      if (!CLOSE_STATUS.includes(status)) {
+        throw new WriteError(`Status must be one of ${CLOSE_STATUS.join(', ')}. Use the reopen action to reopen a plan.`);
+      }
+      const reason = cleanReason(request.reason);
+      // The script refuses a reasonless close unless forced; refuse it here too,
+      // where the message can say what to do about it.
+      if (!reason && !request.force) {
+        throw new WriteError('Say why the plan is being closed — a closed plan with no reason tells the next reader nothing.');
+      }
+      const args = [slug, '--status', status];
+      if (reason) args.push('--reason', reason);
+      if (!reason && request.force) args.push('--force');
+      return {
+        script: 'close-plan.sh',
+        args,
+        description: `Close ${slug} as ${status}${reason ? ` — ${reason}` : ''}`,
+      };
+    }
+
+    case 'reopen-plan': {
+      const slug = requireSlug(request.slug);
+      return {
+        script: 'close-plan.sh',
+        args: [slug, '--reopen'],
+        description: `Reopen ${slug} (status: active)`,
       };
     }
 

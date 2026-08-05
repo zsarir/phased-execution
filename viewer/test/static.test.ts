@@ -21,14 +21,17 @@
  *      any quote.
  */
 
+// Redirects XDG_STATE_HOME/XDG_CONFIG_HOME before anything resolves them — the
+// console's state directory holds the operator's real push subscriptions.
+import './state-sandbox.ts';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { request } from 'node:http';
-import { join } from 'node:path';
 
 import { VIEWER_DIR } from '../server/config.ts';
+import { spawnConsole } from './spawn-console.ts';
 
 type Reply = { status: number; type: string; body: string };
 
@@ -70,10 +73,8 @@ async function waitFor(port: number, tries = 100): Promise<boolean> {
 
 test('the console answers in both build states', async (t) => {
   const port = await freePort();
-  const child = spawn(process.execPath, [
-    join(VIEWER_DIR, 'server', 'index.ts'), '--port', String(port), '--no-open', '--no-log-file',
-  ], { stdio: 'ignore' });
-  t.after(() => { child.kill('SIGKILL'); });
+  const { child, box } = spawnConsole(VIEWER_DIR, port);
+  t.after(() => { child.kill('SIGKILL'); box.cleanup(); });
 
   if (!await waitFor(port)) assert.fail('the console did not come up');
 

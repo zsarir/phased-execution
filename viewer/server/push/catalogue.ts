@@ -113,6 +113,26 @@ export const CATEGORIES: readonly Category[] = [
   },
 ];
 
+/**
+ * The categories that are claims about a PLAN's progress — silenced entirely for
+ * a closed plan, wherever they are announced from.
+ *
+ * The split is deliberate and narrower than "everything with a slug". A closed
+ * plan must not keep reporting phases landing or work becoming ready: that is
+ * the pulse an operator closed the plan to stop. But `approval`, `needs-you`,
+ * `halted`, `parked`, `session` and `health` are not about the plan — they are
+ * about a live process that has stopped and cannot continue without a person.
+ * Silencing those because a plan's front matter says `abandoned` would strand a
+ * running session with nothing to tell anyone, which is a far worse failure than
+ * a stray notification: closing a plan quiets a record, it never gags a
+ * process.
+ */
+export const PLAN_PROGRESS_CATEGORIES: readonly CategoryId[] = ['phase', 'finished', 'ready', 'changed'];
+
+export function isPlanProgress(category: CategoryId): boolean {
+  return PLAN_PROGRESS_CATEGORIES.includes(category);
+}
+
 const BY_ID = new Map(CATEGORIES.map((c) => [c.id, c]));
 
 export function isCategory(value: unknown): value is CategoryId {

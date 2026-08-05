@@ -9,16 +9,19 @@
  * the event stream and the static files alike.
  */
 
+// Redirects XDG_STATE_HOME/XDG_CONFIG_HOME before anything resolves them — the
+// console's state directory holds the operator's real push subscriptions.
+import './state-sandbox.ts';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { request } from 'node:http';
-import { join } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 
 import { VIEWER_DIR, flagsRefusal, parseFlags } from '../server/config.ts';
 import { classify, hostnameOf } from '../server/api/access.ts';
+import { spawnConsole } from './spawn-console.ts';
 
 const HOST = 'console.example.ts.net';
 const USER = 'operator@example.com';
@@ -216,13 +219,8 @@ async function freePort(): Promise<number> {
 
 test('the gate runs ahead of the API, the event stream and the static files', async (t) => {
   const port = await freePort();
-  const child = spawn(process.execPath, [
-    join(VIEWER_DIR, 'server', 'index.ts'),
-    '--port', String(port), '--no-open', '--no-log-file',
-    '--remote', HOST, '--remote-user', USER,
-  ], { stdio: 'ignore' });
-
-  t.after(() => { child.kill('SIGKILL'); });
+  const { child, box } = spawnConsole(VIEWER_DIR, port, ['--remote', HOST, '--remote-user', USER]);
+  t.after(() => { child.kill('SIGKILL'); box.cleanup(); });
 
   if (!await waitFor(port)) assert.fail('the console did not come up');
 
@@ -250,10 +248,8 @@ test('the gate runs ahead of the API, the event stream and the static files', as
 
 test('POST /api/prefs and /api/root are not drivable by another page', async (t) => {
   const port = await freePort();
-  const child = spawn(process.execPath, [
-    join(VIEWER_DIR, 'server', 'index.ts'), '--port', String(port), '--no-open', '--no-log-file',
-  ], { stdio: 'ignore' });
-  t.after(() => { child.kill('SIGKILL'); });
+  const { child, box } = spawnConsole(VIEWER_DIR, port);
+  t.after(() => { child.kill('SIGKILL'); box.cleanup(); });
 
   if (!await waitFor(port)) assert.fail('the console did not come up');
 

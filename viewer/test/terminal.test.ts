@@ -16,9 +16,12 @@
  *     it is asserted rather than stepped over.
  */
 
+// Redirects XDG_STATE_HOME/XDG_CONFIG_HOME before anything resolves them — the
+// console's state directory holds the operator's real push subscriptions.
+import './state-sandbox.ts';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { request } from 'node:http';
@@ -29,6 +32,7 @@ import { VIEWER_DIR, parseFlags } from '../server/config.ts';
 import {
   Scrollback, Terminals, TERMINAL_PATH, healSpawnHelper, shouldReap, type LaunchSpec,
 } from '../server/terminal.ts';
+import { spawnConsole } from './spawn-console.ts';
 
 /* ------------------------------------------------------------------ *
  * Fakes
@@ -385,11 +389,8 @@ async function waitFor(port: number, headers: Record<string, string> = {}, tries
 
 async function console_(t: { after(fn: () => void): void }, ...args: string[]): Promise<number> {
   const port = await freePort();
-  const child = spawn(process.execPath, [
-    join(VIEWER_DIR, 'server', 'index.ts'),
-    '--port', String(port), '--no-open', '--no-log-file', ...args,
-  ], { stdio: 'ignore' });
-  t.after(() => { child.kill('SIGKILL'); });
+  const { child, box } = spawnConsole(VIEWER_DIR, port, args);
+  t.after(() => { child.kill('SIGKILL'); box.cleanup(); });
   return port;
 }
 
@@ -477,7 +478,9 @@ test('the access gate runs on the upgrade itself, not only on the page', async (
  * ------------------------------------------------------------------ */
 
 test('a real shell runs and reattaches — or says why it cannot, leaving the console intact', async (t) => {
-  const port = await console_(t, '--allow-terminal', '--root', process.env.PHASE_CONSOLE_TEST_ROOT ?? VIEWER_DIR);
+  // A sandbox root, never the operator's plan library: this console runs a real
+  // shell and a real watcher, and the test needs neither pointed at real work.
+  const port = await console_(t, '--allow-terminal');
   if (!await waitFor(port)) assert.fail('the console did not come up');
 
   const minted = await http(port, '/api/terminal', {

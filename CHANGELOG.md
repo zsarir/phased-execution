@@ -35,6 +35,28 @@ A plan can be closed — an off switch for work that will never be finished.
   plan, so an abandoned plan's leftover lock used to block sessions on unrelated plans until its
   lease happened to lapse.
 - The all-phases-done banner now points at `close-plan.sh` rather than asking for a hand edit.
+- **The console honours closure too.** A closed plan contributes no health issues (progress problems
+  are dropped; structural damage stays, demoted to `info`), no ready phases, no remaining weight or
+  sessions, and never appears as stalled — and `POST /api/write` gains `close-plan` / `reopen-plan`,
+  so a plan can be closed from the console with the same validated argv an operator would type.
+  Search still finds closed plans, by design.
+- **A closed plan no longer sends notifications about its own progress** — phases landing, work
+  becoming ready, a plan finishing, files changing. Notifications about a live *process* —
+  permission needed, a phase awaiting a person, a halted or parked run, a session ending, console
+  health — still fire, because a stale `status:` line must not be able to strand a running session
+  in silence.
+- Repairing a closed plan is refused with a 409 that says to reopen it first, rather than reporting
+  that there is nothing to repair.
+
+### Fixed
+
+- **The test suite no longer runs against the operator's own console state.** Spawned consoles
+  inherited `XDG_STATE_HOME`, so they loaded the real `push/subscriptions.json` and delivered real
+  push notifications to real devices — the shutdown test announced "Phase Console is shutting down ·
+  asked for by a test" to a subscribed browser on every run — and the suite left thousands of
+  fixture run journals in the real state directory. Every test now redirects its state and config
+  directories, spawned consoles get a sandbox root instead of whatever library the config
+  remembered, and `test/state-isolation.test.ts` fails if a new test file forgets either.
 
 ## [1.1.0] - 2026-08-05
 

@@ -81,6 +81,10 @@ export type Plan = {
   phased: boolean;
   frontMatter: FrontMatter;
   status?: string;
+  /** Date the plan was closed (`close-plan.sh`), when its status is terminal. */
+  closed?: string;
+  /** Operator's reason for closing, one line. */
+  closedReason?: string;
   created?: string;
   declaredPhases?: number;
   memoryKey: string;
@@ -293,6 +297,8 @@ export function parsePlan(text: string, slug: string, path: string): Plan {
     phased: graph.length > 0,
     frontMatter,
     status: fmString(frontMatter, 'status'),
+    closed: fmString(frontMatter, 'closed'),
+    closedReason: fmString(frontMatter, 'closed_reason'),
     created: fmString(frontMatter, 'created'),
     declaredPhases: fmNumber(frontMatter, 'phases'),
     memoryKey: fmString(frontMatter, 'memory') ?? `project_${slug}`,

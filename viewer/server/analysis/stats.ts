@@ -45,6 +45,14 @@ export type PlanStats = {
   title: string;
   kind: PlanRecord['kind'];
   status?: string;
+  /**
+   * The operator closed this plan — its status is terminal, so it reports no
+   * work, no warnings and no prompts. The board still renders in full.
+   */
+  closed: boolean;
+  /** Date `close-plan.sh` recorded, when it was closed through the verb. */
+  closedOn?: string;
+  closedReason?: string;
   created?: string;
   activity: number;
   phases: number;
@@ -84,6 +92,8 @@ export type Portfolio = {
     plans: number;
     documents: number;
     orphans: number;
+    /** Plans an operator has closed — excluded from `ready` and the remaining totals. */
+    closed: number;
     phases: number;
     done: number;
     ready: number;
@@ -94,7 +104,8 @@ export type Portfolio = {
     remainingWeight: number;
     remainingSessions: number;
   };
-  byStatus: { status: string; count: number }[];
+  /** `closed` so a consumer can group the terminal statuses without re-deriving the predicate. */
+  byStatus: { status: string; count: number; closed: boolean }[];
   readyQueue: ReadyItem[];
   activeLocks: { slug: string; phase: number; owner: string; expired: boolean; leaseUntil?: number }[];
   qaModes: { mode: string; count: number }[];
@@ -159,6 +170,9 @@ export function planStats(ctx: PlanContext, sizing: Sizing): PlanStats {
     title: plan?.title ?? record.slug,
     kind: record.kind,
     status: normalisePlanStatus(plan?.status),
+    closed: isClosedStatus(plan?.status),
+    closedOn: plan?.closed,
+    closedReason: plan?.closedReason,
     created: plan?.created,
     activity: record.activity,
     phases: rows.length,
@@ -200,6 +214,35 @@ export function normalisePlanStatus(raw?: string): string | undefined {
   return known.find((k) => first.startsWith(k)) ?? first.split(/\s+/)[0] ?? undefined;
 }
 
+/** The three statuses that mean nobody is coming back to this plan. */
+export const CLOSED_STATUSES = ['complete', 'abandoned', 'superseded'];
+
+/**
+ * Is this plan closed? — the single JS reading of closure, and the deliberate
+ * twin of `plan_is_closed()` in `scripts/phase-graph.sh`. Both decide it from
+ * the status alone, so the plans an operator hand-marked long before the verb
+ * existed close correctly: `closed:` / `closed_reason:` are what the verb
+ * *records*, never what closure *is*.
+ */
+export function isClosedStatus(raw?: string): boolean {
+  const status = normalisePlanStatus(raw);
+  return status !== undefined && CLOSED_STATUSES.includes(status);
+}
+
+/**
+ * The issue kinds that report *progress* — every one of them silenced for a
+ * closed plan. Nobody is going to unstick a handoff in a plan that was
+ * abandoned, so saying so is noise that buries the issues that do matter.
+ *
+ * What is NOT in this set is the point: `engine`, `phase-count`,
+ * `undefined-dep` and `orphan` are file corruption, and a closed plan keeps
+ * reporting them — demoted to `info`, never dropped. A broken plan nobody can
+ * see is worse than a noisy one.
+ */
+export const PROGRESS_ISSUE_KINDS = new Set([
+  'stale-handoff', 'qa-fail', 'missing-handoff', 'depends-drift', 'index-drift', 'stale-lock', 'no-handoff-dir',
+]);
+
 /**
  * The Repos cell as *repository* names — the top segment of each scope token.
  *
@@ -217,8 +260,15 @@ export function healthIssues(ctx: PlanContext): HealthIssue[] {
   const { record, board } = ctx;
   const plan = record.plan;
   const issues: HealthIssue[] = [];
-  const add = (severity: HealthIssue['severity'], kind: string, message: string, phase?: number) =>
-    issues.push({ slug: record.slug, severity, kind, message, phase });
+  const closed = isClosedStatus(plan?.status);
+  // One gate, applied where the issues are made rather than where they are
+  // drawn: every surface in the console reads this list, so filtering here is
+  // the difference between closure meaning something everywhere and meaning
+  // something on whichever page remembered to ask.
+  const add = (severity: HealthIssue['severity'], kind: string, message: string, phase?: number) => {
+    if (closed && PROGRESS_ISSUE_KINDS.has(kind)) return;
+    issues.push({ slug: record.slug, severity: closed ? 'info' : severity, kind, message, phase });
+  };
 
   if (record.kind === 'orphan-handoffs') {
     add('warning', 'orphan', 'Handoff folder with no plan file in docs/plans');
@@ -281,25 +331,32 @@ export function healthIssues(ctx: PlanContext): HealthIssue[] {
 export function portfolio(contexts: PlanContext[], sizing: Sizing, rate?: RateReading): Portfolio {
   const stats = contexts.map((ctx) => ({ ctx, stats: planStats(ctx, sizing) }));
   const plans = stats.filter((s) => s.stats.kind === 'plan');
+  // The census counts every plan; the forward-looking numbers count only the
+  // open ones. "23 phases ready" that includes an abandoned plan's phases is an
+  // invitation to start work nobody wants.
+  const open = plans.filter((s) => !s.stats.closed);
 
   const totals = {
     plans: plans.length,
     documents: stats.filter((s) => s.stats.kind === 'document').length,
     orphans: stats.filter((s) => s.stats.kind === 'orphan-handoffs').length,
+    closed: plans.length - open.length,
     phases: sum(plans.map((s) => s.stats.phases)),
     done: sum(plans.map((s) => s.stats.done)),
-    ready: sum(plans.map((s) => s.stats.ready.length)),
+    ready: sum(open.map((s) => s.stats.ready.length)),
     waiting: sum(plans.map((s) => s.stats.waiting)),
     inProgress: sum(plans.map((s) => s.stats.inProgress.length)),
     stuck: sum(plans.map((s) => s.stats.stuck.length)),
     percent: 0,
-    remainingWeight: sum(plans.filter((s) => s.stats.status !== 'complete').map((s) => s.stats.remainingWeight)),
-    remainingSessions: sum(plans.filter((s) => s.stats.status !== 'complete').map((s) => s.stats.remainingSessions)),
+    remainingWeight: sum(open.map((s) => s.stats.remainingWeight)),
+    remainingSessions: sum(open.map((s) => s.stats.remainingSessions)),
   };
   totals.percent = totals.phases ? Math.round((totals.done / totals.phases) * 100) : 0;
 
+  // Gated in step with `totals.ready` — `service.test.ts` asserts the two agree,
+  // and a queue that recommended a closed plan's phase would be the same bug.
   const readyQueue: ReadyItem[] = [];
-  for (const { ctx, stats: s } of plans) {
+  for (const { ctx, stats: s } of open) {
     const plan = ctx.record.plan!;
     const index = indexGraph(plan.graph);
     for (const phase of s.ready) {
@@ -344,8 +401,8 @@ export function portfolio(contexts: PlanContext[], sizing: Sizing, rate?: RateRe
   }
 
   const now = Date.now();
-  const stalled = plans
-    .filter((s) => s.stats.ready.length > 0 && s.stats.status !== 'complete')
+  const stalled = open
+    .filter((s) => s.stats.ready.length > 0)
     .map((s) => ({ slug: s.stats.slug, days: Math.round((now - s.stats.activity) / DAY), ready: s.stats.ready }))
     .filter((s) => s.days >= 7)
     .sort((a, b) => b.days - a.days);
@@ -353,7 +410,8 @@ export function portfolio(contexts: PlanContext[], sizing: Sizing, rate?: RateRe
   return {
     generatedAt: now,
     totals,
-    byStatus: tally(stats.map((s) => s.stats.status ?? 'unset')).map(([status, count]) => ({ status, count })),
+    byStatus: tally(stats.map((s) => s.stats.status ?? 'unset'))
+      .map(([status, count]) => ({ status, count, closed: isClosedStatus(status) })),
     readyQueue,
     activeLocks: stats.flatMap(({ ctx }) => ctx.record.locks.map((l) => ({
       slug: ctx.record.slug, phase: l.phase, owner: l.owner, expired: l.expired, leaseUntil: l.leaseUntil,

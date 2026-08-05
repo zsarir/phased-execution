@@ -70,6 +70,17 @@ reverses it); ask for it with `phase-graph.sh <slug> --closed`. The two ideas mu
 plan can have unfinished phases, and an open plan with every phase done is still open until someone
 says otherwise.
 
+Two boundaries the console draws around that, both deliberate:
+
+- **Search still finds a closed plan.** Closing quiets a plan; it never hides one. Every attention
+  surface — health issues, the ready queue, remaining work, the stalled list — drops it, and search
+  keeps it, because "I know we tried this once" is exactly the question a closed plan answers.
+- **A closed plan stops announcing its progress, not its processes.** No notification for a phase
+  landing, work becoming ready, a plan finishing, or files changing. But `approval`, `needs-you`,
+  `halted`, `parked`, `session` and `health` still fire: those mean a live session has stopped and
+  cannot continue without a person, and a stale `status:` line must never be able to strand a
+  running agent in silence.
+
 ## Phase dependencies (the DAG)
 - The plan is a dependency graph. A phase's `Depends on` lists **every** phase that must finish first;
   `scripts/phase-graph.sh` parses that column (numbers, comma lists, ranges like `1–7`, `—` for none).
