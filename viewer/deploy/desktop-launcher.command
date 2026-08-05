@@ -68,7 +68,13 @@ SUPERVISED="yes"
 # SUPERVISED knob kept starting unsupervised while this file said it would not.
 # Comparing revisions rather than bytes means your own edits to the knobs above
 # never look like staleness.
-LAUNCHER_REV=4
+#
+# 5: per-instance resolution (the unit this launcher speaks for is derived from
+#    ROOT, not assumed to be the bare one) and the npm/Homebrew viewer paths.
+#    Both landed while this number stayed at 4, so a rev-4 copy was told it was
+#    current while resolving the wrong unit — bumping here is what re-arms the
+#    warning for every copy that missed them.
+LAUNCHER_REV=5
 
 set -uo pipefail
 
