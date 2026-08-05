@@ -12,6 +12,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  packages: write
 
 jobs:
   gates:
@@ -56,6 +57,28 @@ jobs:
           notes="$(awk '/^## \[/{n++} n==1' CHANGELOG.md)"
           gh release create "$GITHUB_REF_NAME" phase-console-*.tgz \
             --title "$GITHUB_REF_NAME" --notes "$notes"
+      - name: Mirror to GitHub Packages (@zsarir/phase-console)
+        # GitHub Packages only hosts owner-scoped npm names, and reads require
+        # auth — npm stays the user-facing registry; this is the GitHub-side
+        # copy of the same bytes. Publishes the already-asserted tarball with
+        # the name rewritten; --ignore-scripts so prepack cannot re-fire in a
+        # tree that has no devDependencies. Token is the workflow's own —
+        # step-scoped, so it cannot shadow the OIDC publish above.
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ghpkg"
+          tar -xzf phase-console-*.tgz -C "$RUNNER_TEMP/ghpkg"
+          cd "$RUNNER_TEMP/ghpkg/package"
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            p.name = '@zsarir/phase-console';
+            p.publishConfig = { registry: 'https://npm.pkg.github.com' };
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2));
+          "
+          printf '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n' > .npmrc
+          npm publish --ignore-scripts
 
   tap-bump:
     # Opens a version-bump PR on zsarir/homebrew-tap — never merges it. Runs

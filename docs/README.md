@@ -40,5 +40,6 @@ below is the long version, in the order it is worth reading.
 | | |
 |---|---|
 | [Reference](reference.md) | How Agent Skills work, requirements, and how to run the tests. |
+| [Versioning and releasing](releasing.md) | The four channels, how a change becomes an update, and what every change must carry with it. |
 | [viewer/README.md](../viewer/README.md) | The console's own technical documentation — architecture, API, deploy. |
 | [USAGE.md](../USAGE.md) | The loop in operational detail. |
