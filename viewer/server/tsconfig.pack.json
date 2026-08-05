@@ -1,0 +1,28 @@
+{
+  // Pack-time emit ONLY — the server's real runtime is native type stripping.
+  // Node refuses to strip .ts under any node_modules directory
+  // (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING), which is exactly where an
+  // npm global install and the npx cache live. So `npm pack` emits stripped
+  // .js BESIDE each .ts (import specifiers rewritten .ts → .js), the tarball
+  // carries both, entrypoints pick .js only when the install path contains
+  // node_modules, and `postpack` deletes the emitted files from the tree.
+  //
+  // noCheck: `npm test` is the server's typecheck; this emit must never block
+  // on types. erasableSyntaxOnly: guarantees the emit is exactly what native
+  // stripping would run — enums/namespaces would error here before shipping.
+  "compilerOptions": {
+    "noCheck": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2023",
+    "sourceMap": false,
+    "declaration": false,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["./**/*.ts"]
+}

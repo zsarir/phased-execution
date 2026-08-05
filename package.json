@@ -1,0 +1,59 @@
+{
+  "name": "phase-console",
+  "version": "1.0.0",
+  "description": "Phase Console — local web console for the phased-execution Claude Code skill: plan boards, phase handoffs, QA gating, autopilot runs.",
+  "license": "MIT",
+  "author": "mobin (https://github.com/zsarir)",
+  "homepage": "https://github.com/zsarir/phased-execution#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zsarir/phased-execution.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zsarir/phased-execution/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "phased-execution",
+    "planning",
+    "workflow",
+    "console",
+    "handoff"
+  ],
+  "type": "module",
+  "bin": {
+    "phase-console": "bin/phase-console.mjs"
+  },
+  "engines": {
+    "node": ">=22.18 <23 || >=23.6"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "files": [
+    "SKILL.md",
+    "USAGE.md",
+    "start",
+    "bin/",
+    "scripts/",
+    "templates/",
+    "references/",
+    "assets/",
+    "viewer/run",
+    "viewer/package.json",
+    "viewer/server/",
+    "viewer/shared/scope.js",
+    "viewer/scripts/check-stamp.mjs",
+    "viewer/client/dist/",
+    "viewer/deploy/"
+  ],
+  "scripts": {
+    "prepack": "cd viewer && npm ci && npm run build && npm run check:dist && npx tsc -p server/tsconfig.pack.json",
+    "postpack": "find viewer/server -name '*.js' ! -name 'fallback-sw.js' -delete"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0",
+    "ws": "^8.21.1"
+  }
+}

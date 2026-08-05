@@ -21,6 +21,15 @@ import { fileURLToPath } from 'node:url';
 const VIEWER = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(VIEWER, 'client', 'dist');
 
+// A packaged install (npm, Homebrew) is not a git checkout: dist ships prebuilt
+// and staleness is the package manager's concern. Worse, `git rev-parse` walks
+// UP — Homebrew's Cellar sits inside Homebrew's own git repository, so the
+// comparison below would hold this build against a HEAD it was never built
+// from and cry STALE on every start. No repo at the package root → nothing to say.
+if (!existsSync(join(VIEWER, '..', '.git'))) {
+  process.exit(0);
+}
+
 const warn = (message) => process.stderr.write(`\n  phase-console: ${message}\n\n`);
 
 if (!existsSync(join(DIST, 'index.html'))) {

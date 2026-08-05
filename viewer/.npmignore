@@ -1,0 +1,10 @@
+# npm packing only — git ignoring stays in .gitignore. In a directory that has
+# both, npm reads THIS file and not .gitignore; it exists so that client/dist/
+# (gitignored build output) can ship in the npm tarball. The root package.json
+# `files` allowlist decides what enters the tarball; this file must only keep
+# never-ship artifacts out of the allowed directories.
+node_modules/
+.vite/
+coverage/
+*.local.json
+.DS_Store

@@ -2,3 +2,16 @@
 node_modules/
 dist/
 *.local.json
+# `npm pack` emits type-stripped .js beside each server .ts (see
+# viewer/server/tsconfig.pack.json) and postpack deletes them — this guards a
+# crashed pack from committing strays. fallback-sw.js is real, tracked source.
+viewer/server/**/*.js
+!viewer/server/fallback-sw.js
+
+# graphify knowledge-graph output. Machine-generated from the tree itself and
+# rebuilt on demand, so it is never source: the extraction cache, the interpreter
+# and root pins, per-chunk fragments, the graph, the report and the HTML/vault
+# exports all belong to whoever ran it, not to the repo.
+graphify-out/
+.graphify_cache/
+.graphify/

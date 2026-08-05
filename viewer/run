@@ -11,7 +11,8 @@
 #   ./run --install-agent --root ~/code/your-repo
 #   ./run --agent-status | --agent-restart | --agent-log [-f] | --uninstall-agent
 #
-# The server is plain Node (>= 22.6, which runs TypeScript directly). The
+# The server is plain Node run as TypeScript directly, which needs >= 22.18
+# (or >= 23.6 — 23.0-23.5 still kept type stripping behind a flag). The
 # client is BUILT output: on a fresh clone run `cd viewer && npm ci && npm run
 # build` first — until then the console serves a page saying exactly that.
 # `deploy/agent.sh install|update` runs the build for you.
@@ -31,18 +32,31 @@ case "${1:-}" in
 esac
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "phase-console: node is required (>= 22.6)" >&2
+  echo "phase-console: node is required (>= 22.18, or >= 23.6)" >&2
   exit 1
 fi
 
 major="$(node -p 'process.versions.node.split(".")[0]')"
 minor="$(node -p 'process.versions.node.split(".")[1]')"
-if [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -lt 6 ]; }; then
-  echo "phase-console: node $(node -v) is too old — 22.6+ runs TypeScript directly" >&2
+ok=1
+if [ "$major" -ge 24 ]; then ok=0
+elif [ "$major" -eq 23 ] && [ "$minor" -ge 6 ]; then ok=0
+elif [ "$major" -eq 22 ] && [ "$minor" -ge 18 ]; then ok=0
+fi
+if [ "$ok" -ne 0 ]; then
+  echo "phase-console: node $(node -v) is too old — >=22.18 or >=23.6 runs TypeScript directly" >&2
   exit 1
 fi
 
 # Warn — never build — when the built client is missing or older than the code.
 node "$here/scripts/check-stamp.mjs" || true
 
-exec node "$here/server/index.ts" "$@"
+# Node refuses to type-strip .ts under any node_modules directory — an npm
+# global install lives there, and its tarball ships a pre-stripped
+# server/index.js for exactly this case. Everywhere else the .ts is the truth.
+entry="$here/server/index.ts"
+case "$here" in
+  */node_modules/*) [ -f "$here/server/index.js" ] && entry="$here/server/index.js" ;;
+esac
+
+exec node "$entry" "$@"

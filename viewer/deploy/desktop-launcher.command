@@ -64,37 +64,55 @@ SUPERVISED="yes"
 # SUPERVISED knob kept starting unsupervised while this file said it would not.
 # Comparing revisions rather than bytes means your own edits to the knobs above
 # never look like staleness.
-LAUNCHER_REV=3
+LAUNCHER_REV=4
 
 set -uo pipefail
 
 LABEL="com.phase-console"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
-# ---- locate the viewer (the skill is cloned into one or more Claude homes) --
+# ---- locate the viewer -----------------------------------------------------
+# A clone lives in a Claude home; a packaged install lives wherever npm or
+# Homebrew put it. PHASE_CONSOLE_HOME (the package root) always wins.
 VIEWER=""
-for home in "$HOME/.claude" "$HOME/.claude-a" "$HOME/.claude-b"; do
-  if [ -f "$home/skills/phased-execution/viewer/server/index.ts" ]; then
-    VIEWER="$home/skills/phased-execution/viewer"
-    break
-  fi
-done
+if [ -n "${PHASE_CONSOLE_HOME:-}" ] && [ -f "$PHASE_CONSOLE_HOME/viewer/server/index.ts" ]; then
+  VIEWER="$PHASE_CONSOLE_HOME/viewer"
+fi
+if [ -z "$VIEWER" ]; then
+  for home in "$HOME/.claude" "$HOME/.claude-a" "$HOME/.claude-b"; do
+    if [ -f "$home/skills/phased-execution/viewer/server/index.ts" ]; then
+      VIEWER="$home/skills/phased-execution/viewer"
+      break
+    fi
+  done
+fi
+if [ -z "$VIEWER" ]; then
+  for pkg_root in "$(npm root -g 2>/dev/null)/phase-console" \
+                  "$(brew --prefix phase-console 2>/dev/null)/libexec"; do
+    if [ -f "$pkg_root/viewer/server/index.ts" ]; then
+      VIEWER="$pkg_root/viewer"
+      break
+    fi
+  done
+fi
 
 if [ -z "$VIEWER" ]; then
   echo "Phase Console is not installed."
-  echo "Expected it at ~/.claude/skills/phased-execution/viewer — pull the claude-skills repo."
+  echo "Expected a clone at ~/.claude/skills/phased-execution, an npm install"
+  echo "(npm i -g phase-console), or a Homebrew install — or set PHASE_CONSOLE_HOME."
   echo
   read -r -p "Press return to close. "
   exit 1
 fi
 
 # ---- node check ------------------------------------------------------------
-# The server runs TypeScript natively, which needs node 22.6+. Finding *a*
-# node is not enough — an old one produces a syntax-error stack in this window
-# that reads as "the console is broken", so the version is checked wherever a
-# candidate is found.
+# The server runs TypeScript natively, which needs node >=22.18 or >=23.6
+# (23.0-23.5 still kept type stripping behind a flag). Finding *a* node is not
+# enough — an old one produces a syntax-error stack in this window that reads
+# as "the console is broken", so the version is checked wherever a candidate
+# is found.
 node_ok() { "$1" -e 'const [maj, min] = process.versions.node.split(".").map(Number);
-process.exit(maj > 22 || (maj === 22 && min >= 6) ? 0 : 1)' 2>/dev/null; }
+process.exit(maj >= 24 || (maj === 23 && min >= 6) || (maj === 22 && min >= 18) ? 0 : 1)' 2>/dev/null; }
 
 if ! command -v node >/dev/null 2>&1 || ! node_ok "$(command -v node)"; then
   # A double-clicked .command gets a login shell without a version manager's
@@ -115,7 +133,7 @@ if ! command -v node >/dev/null 2>&1 || ! node_ok "$(command -v node)"; then
 fi
 
 if ! command -v node >/dev/null 2>&1 || ! node_ok "$(command -v node)"; then
-  echo "node 22.6 or newer is required, and none of the usual places had one"
+  echo "node 22.18+ (or 23.6+) is required, and none of the usual places had one"
   echo "(PATH, Homebrew, /usr/local, volta, nvm)."
   echo
   read -r -p "Press return to close. "

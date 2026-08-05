@@ -48,6 +48,11 @@ cmd_install() {
   local node_bin root="" port="4123" notify="" notify_given=0
   local default_skills="" skills_given=0 extra=()
   node_bin="$(command -v node)" || die "node is not on PATH"
+  # The found node gets baked into the plist — an old one would crash-loop the
+  # agent with a TypeScript syntax error instead of failing here, once, legibly.
+  "$node_bin" -e 'const [maj, min] = process.versions.node.split(".").map(Number);
+process.exit(maj >= 24 || (maj === 23 && min >= 6) || (maj === 22 && min >= 18) ? 0 : 1)' \
+    || die "node $("$node_bin" -v) is too old — the server needs >=22.18 or >=23.6 (runs TypeScript directly)"
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -88,9 +93,17 @@ cmd_install() {
 
   mkdir -p "$HOME/Library/LaunchAgents" "$STATE_DIR"
 
+  # Node refuses to type-strip .ts under any node_modules directory, which is
+  # where an npm global install lives — those tarballs ship a pre-stripped
+  # server/index.js for exactly this. Everywhere else the .ts is the truth.
+  local entry="$VIEWER_DIR/server/index.ts"
+  case "$VIEWER_DIR" in
+    */node_modules/*) [ -f "$VIEWER_DIR/server/index.js" ] && entry="$VIEWER_DIR/server/index.js" ;;
+  esac
+
   # Arguments, one <string> per line. --no-open matters: without it every
   # restart would fling a browser window at you.
-  local args=("$node_bin" "$VIEWER_DIR/server/index.ts" --root "$root" --port "$port" --no-open)
+  local args=("$node_bin" "$entry" --root "$root" --port "$port" --no-open)
   args+=("${extra[@]+"${extra[@]}"}")
 
   local arg_xml=""
@@ -187,6 +200,13 @@ PLIST_END
 # static root is picked per request, so the seconds where dist is empty degrade
 # to the not-built page and the fallback worker, never to a hang.
 build_client() {
+  # Packaged installs (npm, Homebrew) ship a prebuilt client and no sources or
+  # lockfile — there is nothing to build here, and the shipped dist is
+  # authoritative. Updates come through the package manager, not this script.
+  if [ ! -e "$VIEWER_DIR/../.git" ] && [ -f "$VIEWER_DIR/client/dist/index.html" ]; then
+    echo "packaged install — using the shipped client build"
+    return 0
+  fi
   command -v npm >/dev/null 2>&1 || die "npm is not on PATH — the client is built output"
   echo "building the client (npm ci && npm run build in $VIEWER_DIR)…"
   ( cd "$VIEWER_DIR" && npm ci --no-audit --no-fund && npm run build ) \
