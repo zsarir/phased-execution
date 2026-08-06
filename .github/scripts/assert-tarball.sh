@@ -31,6 +31,8 @@ for p in \
   "viewer/server/accounts/index.js" \
   "viewer/server/accounts/usage.ts" \
   "viewer/server/accounts/transcripts.ts" \
+  "viewer/server/launcher.ts" \
+  "viewer/server/launcher.js" \
   "viewer/shared/scope.js" \
   "viewer/shared/instances.mjs" \
   "viewer/scripts/check-stamp.mjs" \

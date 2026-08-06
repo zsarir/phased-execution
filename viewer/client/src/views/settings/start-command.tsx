@@ -2,18 +2,18 @@
  * The start command, with every capability — composed from the console's own
  * facts, never typed from memory.
  *
- * The question this card answers arrives right after a refusal: "Runs are
- * disabled. Restart with --allow-run" names one flag, and the operator who
- * wants all of it then assembles a command by hand, misspells a flag, and
- * gets a console that looks right and refuses one page. So the card renders
- * the exact line for THIS instance — its root, its port, all five switches —
- * and a copy button.
+ * Two rules shape the text. Paths render as `"$HOME/…"`, not absolute: the
+ * line works pasted on any account, and a screenshot of this page carries no
+ * username. And the command is stated PER PLATFORM, because "it works" is a
+ * per-OS claim: macOS and Linux run the same shell line (shown under this
+ * server's own OS), while Windows has no native console at all — the honest
+ * Windows answer is the same line inside WSL, said as such rather than a
+ * `cmd.exe` incantation that would fail on its first path.
  *
  * It also says which capabilities the RUNNING console lacks, because the
- * command changes nothing until something restarts with it: on a supervised
- * console the flags live in the launchd plist (the Desktop launcher card
- * beside this one manages that copy), and this line is the foreground /
- * terminal way to the same place.
+ * command changes nothing until something restarts with it — on a supervised
+ * console the flags live in the launchd plist, which the Desktop-launcher
+ * card beside this one manages.
  */
 
 import { useConsoleState } from '@/lib/queries';
@@ -28,28 +28,41 @@ const CAPABILITIES = [
   ['allowAccounts', '--allow-accounts', 'accounts'],
 ] as const;
 
-/** POSIX-quote a path for display in a command the operator will paste. */
-const sh = (value: string) => (/^[\w./~-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`);
+/**
+ * A path as a paste-anywhere shell word: under the server's home it becomes
+ * `"$HOME/…"` (double-quoted so $HOME still expands), elsewhere it is quoted
+ * verbatim. Exported for the test that pins "no absolute home paths leak".
+ */
+export function portablePath(path: string, home: string | undefined): string {
+  if (home && (path === home || path.startsWith(`${home}/`))) {
+    return `"$HOME${path.slice(home.length)}"`;
+  }
+  return /^[\w./~-]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`;
+}
+
+/** The full-options start line for one console. Exported for the test. */
+export function composeStartCommand(state: {
+  scriptsDir?: string; root?: { path?: string }; port?: number; home?: string;
+}): string {
+  const skillRoot = state.scriptsDir?.replace(/\/scripts\/?$/, '');
+  const launcher = skillRoot ? `${portablePath(`${skillRoot}/start`, state.home)}` : 'phase-console start';
+  return [
+    launcher,
+    ...(state.root?.path ? [portablePath(state.root.path, state.home)] : []),
+    ...(state.port ? [`--port ${state.port}`] : []),
+    ...CAPABILITIES.map(([, flag]) => flag),
+  ].join(' ');
+}
 
 export function StartCommandCard() {
   const { data: state } = useConsoleState();
 
-  // The skill root is one directory above the scripts dir the server reports —
-  // derived rather than hard-coded, so a clone, an npm install and a Homebrew
-  // install each render their own real path.
-  const skillRoot = state?.scriptsDir?.replace(/\/scripts\/?$/, '');
-  const launcher = skillRoot ? `${sh(skillRoot)}/start` : 'phase-console start';
-  const root = state?.root?.path;
-  const port = state?.port;
-
-  const command = [
-    launcher,
-    ...(root ? [sh(root)] : []),
-    ...(port ? [`--port ${port}`] : []),
-    ...CAPABILITIES.map(([, flag]) => flag),
-  ].join(' ');
-
-  const missing = CAPABILITIES.filter(([key]) => state && state[key] !== true).map(([, , label]) => label);
+  const command = composeStartCommand(state ?? {});
+  const missing = CAPABILITIES
+    .filter(([key]) => state && state[key] !== true)
+    .map(([, , label]) => label);
+  const os = state?.platform === 'darwin' ? 'macOS' : state?.platform === 'linux' ? 'Linux' : 'this machine';
+  const otherUnix = state?.platform === 'darwin' ? 'Linux' : 'macOS';
 
   return (
     <Card>
@@ -60,12 +73,28 @@ export function StartCommandCard() {
       <CardBody className="flex flex-col gap-3">
         <p className="text-sm text-ink-muted">
           The exact line for this console — its source directory, its port, and all five switches
-          (writes, runs, terminal, agent, accounts). Run it in a terminal; Ctrl-C stops it.
+          (writes, runs, terminal, agent, accounts). Paths are <code>$HOME</code>-relative, so the
+          line is portable and screenshots carry no username.
         </p>
 
-        <pre className="m-0 overflow-x-auto rounded bg-ground-deep p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all">
-          {command}
-        </pre>
+        <div>
+          <div className="text-2xs uppercase tracking-wide text-ink-faint">{os} — run it in a terminal, Ctrl-C stops it</div>
+          <pre className="m-0 mt-1 overflow-x-auto rounded bg-ground-deep p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all">
+            {command}
+          </pre>
+        </div>
+
+        <div className="flex flex-col gap-1 text-2xs text-ink-faint">
+          <span>
+            <strong className="text-ink-muted">{otherUnix}:</strong> the same line works — the paths
+            it shows are this machine's install, so run it where the console is installed.
+          </span>
+          <span>
+            <strong className="text-ink-muted">Windows:</strong> Phase Console runs on macOS and
+            Linux only — on Windows, install it inside WSL and run the line above in your WSL shell
+            (<code>wsl</code>, then paste it). There is no native <code>cmd.exe</code> form.
+          </span>
+        </div>
 
         {state ? (
           missing.length ? (
@@ -83,8 +112,7 @@ export function StartCommandCard() {
 
         <p className="text-2xs text-ink-faint">
           Supervised by launchd? The flags live in the agent's plist — the Desktop launcher card
-          below manages that copy (its knobs now include ACCOUNTS), and re-running it re-installs
-          the agent with the full set.
+          below writes a launcher with the full set, and re-running it re-installs the agent.
         </p>
       </CardBody>
     </Card>

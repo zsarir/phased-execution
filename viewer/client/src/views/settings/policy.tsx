@@ -153,15 +153,21 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
   const targetKnown = !planScope || Boolean(slug);
 
   const edit = useMutation({
-    mutationFn: (patch: { add?: Partial<PolicyLists>; remove?: Partial<PolicyLists> }) =>
-      api.editPolicy({ scope, slug: slug || null, ...patch }),
+    mutationFn: (patch: {
+      add?: Partial<PolicyLists>;
+      remove?: Partial<PolicyLists>;
+      reset?: (keyof PolicyLists)[];
+      restore?: { ask?: string[]; allow?: string[] };
+    }) => api.editPolicy({ scope, slug: slug || null, ...patch }),
     onSuccess: (next, patch) => {
       client.setQueryData(keys.policy(slug || ''), next);
       void client.invalidateQueries({ queryKey: ['policy'] });
       const added = patch.add && Object.entries(patch.add)[0];
-      toast(added
-        ? `Added ${added[1]?.[0]} to ${added[0]}${planScope ? ` for ${slug}` : ''}`
-        : 'Removed', 'ok');
+      toast(patch.reset?.length
+        ? `Restored ${patch.reset.join(', ')} to the shipped defaults${planScope ? ` for ${slug}` : ''}`
+        : added
+          ? `Added ${added[1]?.[0]} to ${added[0]}${planScope ? ` for ${slug}` : ''}`
+          : 'Removed', 'ok');
     },
     onError: (error: Error) => toast(String(error.message ?? error), 'error'),
   });
@@ -175,11 +181,17 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
   // and a card that renders empty controls over no data is worse than absent.
   if (!policy) return null;
 
-  // Only rules that are actually in a file can be taken out of one. A shipped
-  // default has no line to delete, and offering a Remove that silently does
-  // nothing is worse than not offering it.
+  // The rules the CURRENT scope's file holds — removable by dropping the line.
   const mine = (name: keyof PolicyLists): string[] =>
     (planScope ? policy.plan?.extra?.[name] ?? [] : policy.extra[name] ?? []);
+
+  // Shipped ask/allow defaults this scope has struck by name. They vanish from
+  // the effective list, so they render below the chips with a way back.
+  const struck = (name: keyof PolicyLists): string[] => {
+    if (name === 'deny') return [];
+    const extras = planScope ? policy.plan?.extra : policy.extra;
+    return extras?.removed?.[name] ?? [];
+  };
 
   const busy = edit.isPending;
 
@@ -241,16 +253,63 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
 
         {(['deny', 'ask', 'allow'] as const).map((name) => (
           <section key={name}>
-            <strong className="text-sm text-ink">{LIST_COPY[name].title}</strong>{' '}
-            <span className="text-2xs text-ink-faint">{LIST_COPY[name].detail}</span>
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <strong className="text-sm text-ink">{LIST_COPY[name].title}</strong>
+              <span className="min-w-0 flex-1 text-2xs text-ink-faint">{LIST_COPY[name].detail}</span>
+              {allowWrites && targetKnown && (mine(name).length > 0 || struck(name).length > 0) && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  title={name === 'deny'
+                    ? `Removes the ${mine(name).length} rule(s) you added at this scope. The shipped deny list was never editable.`
+                    : `Removes your rules and brings back any shipped defaults you struck, at ${planScope ? `the ${slug} scope` : 'the global scope'}.`}
+                  onClick={() => edit.mutate({ reset: [name] })}
+                >
+                  Restore defaults
+                </Button>
+              )}
+            </div>
             <RuleChips
               rules={policy.effective[name]}
               own={mine(name)}
-              removable={allowWrites}
+              defaults={policy.defaults[name]}
+              // The shipped deny list is the wall: everything else on this
+              // page is a preference, and a wall that can be unpicked in a
+              // browser is a preference too. Yours stay removable everywhere.
+              defaultsRemovable={name !== 'deny'}
+              removable={allowWrites && targetKnown}
               busy={busy}
               scopeLabel={planScope ? `the ${slug} scope` : 'the global scope'}
               onRemove={(r) => edit.mutate({ remove: { [name]: [r] } })}
             />
+            {struck(name).length > 0 && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                <span className="text-2xs text-ink-faint">
+                  Shipped defaults removed at {planScope ? `the ${slug} scope` : 'the global scope'}:
+                </span>
+                {struck(name).map((r) => (
+                  <span
+                    key={r}
+                    className="inline-flex items-center gap-1 rounded-sm border border-rule border-dashed px-1.5 py-0.5 font-mono text-2xs text-ink-faint line-through"
+                  >
+                    {r}
+                    {allowWrites && name !== 'deny' && (
+                      <button
+                        type="button"
+                        aria-label={`Restore ${r}`}
+                        title="Bring this shipped default back"
+                        disabled={busy}
+                        onClick={() => edit.mutate({ restore: { [name]: [r] } })}
+                        className="text-ink-faint no-underline hover:text-ink disabled:opacity-50"
+                      >
+                        ↩
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
           </section>
         ))}
 
@@ -366,8 +425,11 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
                 </span>
               ) : (
                 <span>
-                  Adding to <code>deny</code> or <code>ask</code> makes a run more careful. Shipped
-                  defaults cannot be removed from here — only rules you added.
+                  Adding to <code>deny</code> or <code>ask</code> makes a run more careful. Every
+                  rule is removable with the × on its chip — including shipped <code>ask</code> and{' '}
+                  <code>allow</code> defaults, which <em>Restore defaults</em> brings back. The one
+                  exception is the shipped <code>deny</code> list: it is the wall, and only rules
+                  you added there can come out.
                 </span>
               )}
             </Banner>
@@ -427,6 +489,8 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
 function RuleChips({
   rules,
   own,
+  defaults,
+  defaultsRemovable,
   removable,
   busy,
   scopeLabel,
@@ -434,6 +498,10 @@ function RuleChips({
 }: {
   rules: string[];
   own: string[];
+  /** The shipped list, so a chip can say which kind it is. */
+  defaults: string[];
+  /** False for `deny`: the shipped wall has no ×, and the title says why. */
+  defaultsRemovable: boolean;
   removable: boolean;
   busy: boolean;
   scopeLabel: string;
@@ -444,15 +512,25 @@ function RuleChips({
     <div className="mt-2 flex flex-wrap gap-1">
       {rules.map((r) => {
         const isOwn = own.includes(r);
+        const isDefault = defaults.includes(r);
+        // Yours are always removable; shipped ask/allow defaults are struck by
+        // name (reversible below and via Restore defaults); shipped deny rules
+        // are the one thing this page will not unpick.
+        const canRemove = removable && (isOwn || (isDefault && defaultsRemovable));
+        const title = isOwn
+          ? `yours, at ${scopeLabel}`
+          : defaultsRemovable
+            ? 'shipped default — × removes it here; Restore defaults brings it back'
+            : 'shipped deny rule — the wall. Not removable from a browser; your own additions are.';
         return (
           <span
             key={r}
-            title={isOwn ? `yours, at ${scopeLabel}` : 'shipped default — not removable from here'}
+            title={title}
             className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 font-mono text-2xs
               ${isOwn ? 'border-action/50 bg-action/10 text-ink' : 'border-rule text-ink-muted'}`}
           >
             {r}
-            {isOwn && removable && (
+            {canRemove && (
               <button
                 type="button"
                 aria-label={`Remove ${r}`}

@@ -8,6 +8,7 @@
  */
 
 import { basename } from 'node:path';
+import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
 
 import { instanceId } from '../shared/instances.mjs';
@@ -60,6 +61,7 @@ import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/t
 import { checkAuth, forgetAuth, openLoginTerminal, openCommandTerminal, shellQuote, type AuthStatus } from './runner/auth.ts';
 import { Accounts, DEFAULT_ACCOUNT_ID, profileConfigDir, type AccountView } from './accounts/index.ts';
 import { portTranscript } from './accounts/transcripts.ts';
+import { FULL_FLAGS, installDesktopLauncher, launcherPlan } from './launcher.ts';
 import {
   RECOVERY_TITLES, recoveryKey,
   type RecoveryClass, type RecoveryFacts, type RecoveryRequest,
@@ -2247,12 +2249,19 @@ export class Service {
     slug?: string | null;
     add?: { deny?: string[]; ask?: string[]; allow?: string[] };
     remove?: { deny?: string[]; ask?: string[]; allow?: string[] };
+    /** Return these parts to stock at the chosen scope — see `approvals.editPolicy`. */
+    reset?: ('deny' | 'ask' | 'allow')[];
+    /** Forgive individual strikes against shipped ask/allow defaults. */
+    restore?: { ask?: string[]; allow?: string[] };
     by?: string;
   }) {
     const scope: PolicyScope = edit.scope === 'plan' ? 'plan' : 'global';
     if (scope === 'plan' && !edit.slug) throw new Error('a plan-scoped rule needs a plan');
     const file = scope === 'plan' ? planPolicyPath(edit.slug as string) : POLICY_PATH;
-    editPolicy({ add: edit.add, remove: edit.remove, by: edit.by ?? 'console' }, file);
+    editPolicy({
+      add: edit.add, remove: edit.remove, reset: edit.reset, restore: edit.restore,
+      by: edit.by ?? 'console',
+    }, file);
     this.journalPolicy(scope, edit);
     return this.policy(edit.slug ?? null);
   }
@@ -2413,6 +2422,11 @@ export class Service {
       // somebody on `--port 5000` to publish a port nothing is listening on,
       // and the resulting 502 looks like a Tailscale problem.
       port: this.flags.port,
+      // For the same setup cards: which OS this server runs on (the commands
+      // differ), and the home dir so absolute paths render as "$HOME/…" —
+      // portable to paste, and free of the username in a screenshot.
+      platform: process.platform,
+      home: homedir(),
       // What a NEW run would start with, so the picker can pre-check them and
       // say where they came from. Not what any existing run has — that is on
       // the run.
@@ -3798,6 +3812,30 @@ export class Service {
     if (meta.kind === 'profile') return this.accounts.completeLogin(id);
     const views = await this.accounts.list();
     return views.find((v) => v.id === id);
+  }
+
+  /* ---- the desktop launcher ---- */
+
+  /** Where a one-click launcher would land on THIS platform, and whether it can. */
+  launcherPlan() {
+    return {
+      ...launcherPlan({ instanceName: INSTANCE.name, isDefault: INSTANCE.default }),
+      rootOpen: Boolean(this.root?.ok),
+      fullFlags: FULL_FLAGS,
+    };
+  }
+
+  /** Write the launcher with THIS console's root and port, every switch on. */
+  createDesktopLauncher(): { ok: true; path: string; note: string } {
+    if (!this.root?.ok) {
+      throw new Error('Open a source directory first — the launcher bakes it in as its ROOT.');
+    }
+    return installDesktopLauncher({
+      root: this.root.path,
+      port: this.flags.port,
+      instanceName: INSTANCE.name,
+      isDefault: INSTANCE.default,
+    });
   }
 
   private assertAccountsAllowed(): void {

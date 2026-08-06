@@ -50,20 +50,40 @@ case "${1:-}" in
     exec node "$here/../bin/phase-console.mjs" "$@" ;;
 esac
 
-if ! command -v node >/dev/null 2>&1; then
-  echo "phase-console: node is required (>= 22.18, or >= 23.6)" >&2
-  exit 1
+# A node that satisfies the floor (>=22.18, or >=23.6 — 23.0-23.5 kept type
+# stripping behind a flag).
+node_ok() { "$1" -e 'const [maj, min] = process.versions.node.split(".").map(Number);
+process.exit(maj >= 24 || (maj === 23 && min >= 6) || (maj === 22 && min >= 18) ? 0 : 1)' 2>/dev/null; }
+
+# PATH's node is not the last word — the same search the Desktop launcher does.
+# A machine whose default `node` is an old nvm alias (v22.6 was seen doing
+# exactly this) would otherwise refuse a command the docs promised works,
+# while a perfectly good v24 sat one directory over. nvm's versions are walked
+# newest-first because a plain glob sorts v10 before v8.
+if ! command -v node >/dev/null 2>&1 || ! node_ok "$(command -v node)"; then
+  candidates="/opt/homebrew/bin /usr/local/bin $HOME/.volta/bin"
+  if [ -d "$HOME/.nvm/versions/node" ]; then
+    for v in $(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -rV); do
+      candidates="$candidates $HOME/.nvm/versions/node/$v/bin"
+    done
+  fi
+  for candidate in $candidates; do
+    if [ -x "$candidate/node" ] && node_ok "$candidate/node"; then
+      PATH="$candidate:$PATH"
+      export PATH
+      break
+    fi
+  done
 fi
 
-major="$(node -p 'process.versions.node.split(".")[0]')"
-minor="$(node -p 'process.versions.node.split(".")[1]')"
-ok=1
-if [ "$major" -ge 24 ]; then ok=0
-elif [ "$major" -eq 23 ] && [ "$minor" -ge 6 ]; then ok=0
-elif [ "$major" -eq 22 ] && [ "$minor" -ge 18 ]; then ok=0
+if ! command -v node >/dev/null 2>&1; then
+  echo "phase-console: node is required (>= 22.18, or >= 23.6) — none found on PATH," >&2
+  echo "in Homebrew, /usr/local, volta or nvm." >&2
+  exit 1
 fi
-if [ "$ok" -ne 0 ]; then
-  echo "phase-console: node $(node -v) is too old — >=22.18 or >=23.6 runs TypeScript directly" >&2
+if ! node_ok "$(command -v node)"; then
+  echo "phase-console: node $(node -v) is too old — >=22.18 or >=23.6 runs TypeScript directly," >&2
+  echo "and no newer node was found in Homebrew, /usr/local, volta or nvm." >&2
   exit 1
 fi
 

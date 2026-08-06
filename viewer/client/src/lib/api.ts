@@ -319,6 +319,17 @@ export interface AccountsState {
   allowAccounts: boolean;
 }
 
+/** Where a one-click desktop launcher would land, and whether this platform can. */
+export interface LauncherPlanView {
+  platform: string;
+  supported: boolean;
+  path?: string;
+  kind?: 'command' | 'desktop-entry';
+  note: string;
+  rootOpen: boolean;
+  fullFlags: readonly string[];
+}
+
 export interface AccountLoginStart {
   accountId: string;
   /** The exact command, for the operator to run themselves when nothing opened. */
@@ -370,6 +381,10 @@ export interface ConsoleState {
   remoteUsers?: string[];
   /** The port this console is served on — setup commands embed it. */
   port?: number;
+  /** Which OS the SERVER runs on — the setup commands differ per platform. */
+  platform?: string;
+  /** The server's home dir, so absolute paths render as "$HOME/…". */
+  home?: string;
   sizing?: Sizing;
   searchDocs?: number;
   repo?: {
@@ -1279,10 +1294,19 @@ export interface PolicyLists {
   allow: string[];
 }
 
+/**
+ * What a policy FILE holds: the operator's own rules plus the shipped
+ * ask/allow defaults they have struck by name. Deliberately no `removed.deny`
+ * — the shipped deny list is the wall and cannot be struck from a browser.
+ */
+export interface PolicyExtras extends PolicyLists {
+  removed?: { ask: string[]; allow: string[] };
+}
+
 export interface PolicyView {
   defaults: PolicyLists;
-  extra: PolicyLists;
-  plan: { slug: string; path: string; extra: PolicyLists } | null;
+  extra: PolicyExtras;
+  plan: { slug: string; path: string; extra: PolicyExtras } | null;
   effective: PolicyLists;
   file: string;
   profiles: { id: string; label: string }[];
@@ -1300,7 +1324,12 @@ export interface PolicyEdit {
   scope: 'global' | 'plan';
   slug?: string | null;
   add?: Partial<Record<keyof PolicyLists, string[]>>;
+  /** For ask/allow this also strikes a SHIPPED default by name; shipped deny rules ignore it. */
   remove?: Partial<Record<keyof PolicyLists, string[]>>;
+  /** Return these parts to stock at the chosen scope: your rules out, strikes forgiven. */
+  reset?: (keyof PolicyLists)[];
+  /** Forgive individual strikes — the named shipped defaults apply again, as defaults. */
+  restore?: { ask?: string[]; allow?: string[] };
 }
 
 /* ---------------- restarting the console ---------------- */
@@ -1526,6 +1555,10 @@ export const api = {
     request<{ ok: boolean; reason?: string; state: TerminalState }>(
       `/api/terminal?id=${q(id)}&action=dismiss`, { method: 'DELETE' },
     ),
+
+  /* ---- the desktop launcher ---- */
+  launcherPlan: () => request<LauncherPlanView>('/api/launcher'),
+  createLauncher: () => post<{ ok: true; path: string; note: string }>('/api/launcher'),
 
   /* ---- Claude accounts ---- */
   accounts: () => request<AccountsState>('/api/accounts'),

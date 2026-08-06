@@ -255,8 +255,13 @@ the session's next call is already classified under it.
   irrelevant. The one deviation from Claude Code's own order is deliberate: a plain allow rule can
   never cancel an ask rule, so "Always allow this" would otherwise write a rule and change nothing.
 - Every write is journaled as `policy.edited` against the live run, with the author and the scope,
-  and is removable from **Settings → Permissions** with the × on its chip. Shipped defaults have no
-  line to delete and are not removable from there.
+  and is removable from **Settings → Permissions** with the × on its chip. Shipped **ask** and
+  **allow** defaults are removable the same way — struck by name at the chosen scope (so an upgrade
+  that ships a new default still applies it), listed struck-through beneath the chips with a ↩ to
+  bring one back, and each part has a **Restore defaults** button that returns it to stock in one
+  act. The one exception is the shipped **deny** list: it is the wall, verified to hold with this
+  console stopped, and a wall a browser can unpick is a preference — only deny rules you added can
+  come out.
 - **This widens as well as tightens**, which reverses the console's earlier rule that a browser could
   only ever make a run more careful. What that produced in practice was ten `git commit` cards in one
   run and a person tapping Allow without reading — the failure the strict version existed to prevent,

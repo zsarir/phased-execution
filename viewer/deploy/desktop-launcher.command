@@ -55,7 +55,9 @@
 #          respawn loop here could not tell them apart — it would turn Shut down
 #          into a restart, which is worse than no button at all.
 
-ROOT="$HOME/work/hub"
+# A placeholder on purpose — the repo copy must carry nobody's machine layout.
+# Settings ▸ Desktop launcher writes a copy with YOUR real root baked in.
+ROOT="$HOME/code/your-repo"
 WRITES="--allow-writes"
 RUNS="--allow-run"
 # Not `TERM`: that name already belongs to the terminal type every program on

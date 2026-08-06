@@ -905,3 +905,104 @@ test('the settings file a carve-out run hands its child reflects the carved wall
   assert.ok(deny.includes('Bash(git push --force:*)'), 'and still refuses a rewrite outright');
   assert.ok(deny.includes('Bash(terraform apply:*)'), 'the rest of the wall is untouched');
 });
+
+/* ------------------------------------------------------------------ *
+ * Striking shipped defaults, and the way back
+ * ------------------------------------------------------------------ */
+
+test('a shipped ask default can be struck by name, and the strike is scoped', async () => {
+  const { editPolicy, loadPolicyFor, planPolicyPath, DEFAULT_ASK: ASK } =
+    await import('../server/runner/approvals.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-strike-'));
+  const globalFile = join(dir, 'autopilot.json');
+  const rule = ASK[0];
+
+  // The × on a default chip is the same remove gesture a file rule takes; the
+  // editor records it as a strike because there is no file line to delete.
+  editPolicy({ remove: { ask: [rule] }, by: 'tester' }, planPolicyPath('alpha', dir));
+
+  assert.ok(!loadPolicyFor('alpha', globalFile, dir).ask.includes(rule), 'struck for this plan');
+  assert.ok(loadPolicyFor('beta', globalFile, dir).ask.includes(rule), 'untouched elsewhere');
+  assert.ok(loadPolicyFor(null, globalFile, dir).ask.includes(rule), 'and globally');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('restore forgives one strike without making the default look like yours', async () => {
+  const { editPolicy, loadPolicyFor, policyExtras, DEFAULT_ALLOW: ALLOW } =
+    await import('../server/runner/approvals.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-restore-'));
+  const globalFile = join(dir, 'autopilot.json');
+  const rule = ALLOW[0];
+
+  editPolicy({ remove: { allow: [rule] }, by: 'tester' }, globalFile);
+  assert.ok(!loadPolicyFor(null, globalFile, dir).allow.includes(rule));
+
+  editPolicy({ restore: { allow: [rule] }, by: 'tester' }, globalFile);
+  const after = loadPolicyFor(null, globalFile, dir);
+  assert.ok(after.allow.includes(rule), 'the default applies again');
+  assert.ok(!policyExtras(globalFile).allow.includes(rule),
+    'as a DEFAULT — a restored rule is nobody\'s edit, so it must not render as yours');
+  assert.ok(!after.always?.includes(rule), 'and it must not gain outrank-the-ask-list power');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('reset returns one part to stock: your rules out, strikes forgiven, the others untouched', async () => {
+  const { editPolicy, loadPolicyFor, policyExtras, DEFAULT_ASK: ASK } =
+    await import('../server/runner/approvals.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-reset-'));
+  const globalFile = join(dir, 'autopilot.json');
+
+  editPolicy({
+    add: { ask: ['Bash(task migrate:*)'], allow: ['Bash(task deploy:*)'] },
+    remove: { ask: [ASK[0]] },
+    by: 'tester',
+  }, globalFile);
+
+  editPolicy({ reset: ['ask'], by: 'tester' }, globalFile);
+  const after = loadPolicyFor(null, globalFile, dir);
+  assert.ok(after.ask.includes(ASK[0]), 'the struck default is back');
+  assert.ok(!after.ask.includes('Bash(task migrate:*)'), 'the added rule is gone');
+  assert.ok(after.allow.includes('Bash(task deploy:*)'), 'the OTHER part kept its rule');
+  assert.deepEqual(policyExtras(globalFile).removed, { ask: [], allow: [] });
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('the shipped deny wall cannot be struck — a removal naming it does nothing', async () => {
+  const { editPolicy, loadPolicyFor, policyExtras, DEFAULT_DENY: DENY } =
+    await import('../server/runner/approvals.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-wall-'));
+  const globalFile = join(dir, 'autopilot.json');
+
+  // Straight at the wall: git push, sudo — the exact rules the doctrine names.
+  editPolicy({ remove: { deny: [...DENY] }, by: 'tester' }, globalFile);
+  const after = loadPolicyFor(null, globalFile, dir);
+  for (const rule of DENY) assert.ok(after.deny.includes(rule), rule);
+  // And nothing on disk records an attempt as if it worked.
+  const file = policyExtras(globalFile);
+  assert.deepEqual(file.deny, []);
+  assert.deepEqual(file.removed, { ask: [], allow: [] });
+
+  // An operator-ADDED deny rule stays removable — the wall is the shipped
+  // list, not the list concept.
+  editPolicy({ add: { deny: ['Bash(task nuke:*)'] }, by: 'tester' }, globalFile);
+  assert.ok(loadPolicyFor(null, globalFile, dir).deny.includes('Bash(task nuke:*)'));
+  editPolicy({ remove: { deny: ['Bash(task nuke:*)'] }, by: 'tester' }, globalFile);
+  assert.ok(!loadPolicyFor(null, globalFile, dir).deny.includes('Bash(task nuke:*)'));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('an upgrade that ships a new default still applies it to a file with strikes', async () => {
+  const { editPolicy, policyExtras, DEFAULT_ASK: ASK } = await import('../server/runner/approvals.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-upgrade-'));
+  const globalFile = join(dir, 'autopilot.json');
+
+  editPolicy({ remove: { ask: [ASK[0]] }, by: 'tester' }, globalFile);
+  // The file records the strike BY NAME and nothing else about the defaults —
+  // which is what keeps every default it does not name, including ones that
+  // ship after this file was written.
+  const raw = JSON.parse(readFileSync(globalFile, 'utf8')) as Record<string, unknown>;
+  assert.deepEqual(raw.removed, { ask: [ASK[0]], allow: [] });
+  assert.deepEqual(raw.ask, []);
+  assert.deepEqual(policyExtras(globalFile).removed.ask, [ASK[0]]);
+  rmSync(dir, { recursive: true, force: true });
+});

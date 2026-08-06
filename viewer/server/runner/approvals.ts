@@ -713,12 +713,32 @@ export type PolicyScope = 'plan' | 'global';
  */
 const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v) => typeof v === 'string') : []);
 
-/** Just the operator's own additions, unmerged — what the file actually holds. */
-export function policyExtras(file = POLICY_FILE): AutopilotPolicy {
-  let extra: Partial<AutopilotPolicy> = {};
-  try { extra = JSON.parse(readFileSync(file, 'utf8')) as Partial<AutopilotPolicy>; }
+/**
+ * Shipped defaults the operator has struck — recorded by name rather than by
+ * replacing the default lists, so an upgrade that ships a NEW default rule
+ * still applies it (a copied-then-edited list would freeze the defaults at
+ * whatever version the first edit saw).
+ *
+ * Deliberately no `deny` key, and the shape is where that is enforced: the
+ * shipped deny list is the wall, and a wall a browser can unpick is a
+ * preference. Operator-ADDED deny rules remain removable like anything else —
+ * only the shipped ones are load-bearing.
+ */
+export type PolicyRemovals = { ask: string[]; allow: string[] };
+
+export type PolicyFileExtras = AutopilotPolicy & { removed: PolicyRemovals };
+
+/** Just the operator's own edits, unmerged — what the file actually holds. */
+export function policyExtras(file = POLICY_FILE): PolicyFileExtras {
+  let extra: Partial<AutopilotPolicy & { removed?: Partial<PolicyRemovals> }> = {};
+  try { extra = JSON.parse(readFileSync(file, 'utf8')) as typeof extra; }
   catch { /* no policy file is the normal case */ }
-  return { deny: strings(extra.deny), ask: strings(extra.ask), allow: strings(extra.allow) };
+  return {
+    deny: strings(extra.deny),
+    ask: strings(extra.ask),
+    allow: strings(extra.allow),
+    removed: { ask: strings(extra.removed?.ask), allow: strings(extra.removed?.allow) },
+  };
 }
 
 export function loadPolicy(file = POLICY_FILE): AutopilotPolicy {
@@ -750,13 +770,19 @@ export function effectivePlanPolicyPath(slug: string, dir = POLICY_DIR): string 
   return existsSync(keyed) ? keyed : legacyPlanPolicyPath(slug, dir);
 }
 
-function mergePolicy(extras: AutopilotPolicy[]): AutopilotPolicy {
-  const flat = (pick: (e: AutopilotPolicy) => string[]) => extras.flatMap(pick);
+function mergePolicy(extras: PolicyFileExtras[]): AutopilotPolicy {
+  const flat = (pick: (e: PolicyFileExtras) => string[]) => extras.flatMap(pick);
   const written = flat((e) => e.allow);
+  // Struck shipped defaults, at any contributing scope: a global strike hides
+  // the default everywhere, a plan strike only where that plan's file was
+  // merged in. Only ask/allow — the shape of `PolicyRemovals` is what keeps a
+  // struck deny from ever being expressible.
+  const struckAsk = new Set(flat((e) => e.removed.ask));
+  const struckAllow = new Set(flat((e) => e.removed.allow));
   return {
     deny: [...new Set([...DEFAULT_DENY, ...flat((e) => e.deny)])],
-    ask: [...new Set([...DEFAULT_ASK, ...flat((e) => e.ask)])],
-    allow: [...new Set([...DEFAULT_ALLOW, ...written])],
+    ask: [...new Set([...DEFAULT_ASK.filter((r) => !struckAsk.has(r)), ...flat((e) => e.ask)])],
+    allow: [...new Set([...DEFAULT_ALLOW.filter((r) => !struckAllow.has(r)), ...written])],
     // Only what a person actually wrote outranks the ask list — never the
     // built-in allow list, which exists so a phase can look around and would
     // cancel half the ask rules if it were given that power.
@@ -793,29 +819,82 @@ export function editPolicy(
   edit: {
     add?: { deny?: string[]; ask?: string[]; allow?: string[] };
     remove?: { deny?: string[]; ask?: string[]; allow?: string[] };
+    /**
+     * Return these parts to stock: the operator's own rules come out AND their
+     * strikes against shipped defaults are forgiven, in one named act. For
+     * `deny` that can only mean dropping added rules — shipped deny rules were
+     * never strikable, so there is nothing else to restore.
+     */
+    reset?: ('deny' | 'ask' | 'allow')[];
+    /**
+     * Forgive individual strikes: the named shipped defaults apply again,
+     * WITHOUT becoming file rules — an add would render them as the
+     * operator's own, and a restored default is nobody's edit.
+     */
+    restore?: { ask?: string[]; allow?: string[] };
     by?: string;
   },
   file = POLICY_FILE,
 ): AutopilotPolicy {
   const current = policyExtras(file);
+  const resets = new Set(strings(edit.reset));
   const drop = (list: string[], removals: string[]) => {
     const gone = new Set(removals.map((rule) => rule.trim()));
     return list.filter((rule) => !gone.has(rule.trim()));
   };
 
-  const next: AutopilotPolicy = {
-    deny: [...new Set([
-      ...drop(current.deny, strings(edit.remove?.deny)),
-      ...validRules(strings(edit.add?.deny)),
-    ])],
-    ask: [...new Set([
-      ...drop(current.ask, strings(edit.remove?.ask)),
-      ...validRules(strings(edit.add?.ask)),
-    ])],
-    allow: [...new Set([
-      ...drop(current.allow, strings(edit.remove?.allow)),
-      ...validRules(strings(edit.add?.allow)),
-    ])],
+  /**
+   * A removal against `ask`/`allow` means one of two things, decided here so
+   * the × on a chip is one gesture: a rule the FILE holds is dropped from it;
+   * a rule that is a SHIPPED default is struck by name instead — recorded in
+   * `removed`, filtered out at merge time, resurrected by `reset`. A removal
+   * naming a shipped DENY rule matches neither branch and does nothing, which
+   * is the wall holding.
+   */
+  const removedAsk = strings(edit.remove?.ask).map((r) => r.trim());
+  const removedAllow = strings(edit.remove?.allow).map((r) => r.trim());
+  const strikes = {
+    ask: removedAsk.filter((r) => DEFAULT_ASK.includes(r) && !current.ask.includes(r)),
+    allow: removedAllow.filter((r) => DEFAULT_ALLOW.includes(r) && !current.allow.includes(r)),
+  };
+  // Two ways back from a strike, both forgiving it: `restore` names the
+  // default and nothing else changes; an `add` of the same rule also
+  // un-strikes, because a strike sitting beside an add would win silently.
+  const unstruckAsk = new Set([
+    ...validRules(strings(edit.add?.ask)),
+    ...strings(edit.restore?.ask).map((r) => r.trim()),
+  ]);
+  const unstruckAllow = new Set([
+    ...validRules(strings(edit.add?.allow)),
+    ...strings(edit.restore?.allow).map((r) => r.trim()),
+  ]);
+
+  const removed: PolicyRemovals = {
+    ask: resets.has('ask')
+      ? []
+      : [...new Set([...current.removed.ask, ...strikes.ask])].filter((r) => !unstruckAsk.has(r)),
+    allow: resets.has('allow')
+      ? []
+      : [...new Set([...current.removed.allow, ...strikes.allow])].filter((r) => !unstruckAllow.has(r)),
+  };
+
+  const part = (
+    name: 'deny' | 'ask' | 'allow',
+  ): string[] => {
+    if (resets.has(name)) return validRules(strings(edit.add?.[name]));
+    return [...new Set([
+      ...drop(current[name], strings(edit.remove?.[name])),
+      ...validRules(strings(edit.add?.[name])),
+    ])];
+  };
+
+  const next: AutopilotPolicy & { removed?: PolicyRemovals } = {
+    deny: part('deny'),
+    ask: part('ask'),
+    allow: part('allow'),
+    // Written only when it says something — most policy files never strike a
+    // default, and an empty key would read as a feature they used.
+    ...(removed.ask.length || removed.allow.length ? { removed } : {}),
   };
 
   mkdirSync(join(file, '..'), { recursive: true });
@@ -833,6 +912,8 @@ export function editPolicy(
       ask: strings(edit.remove?.ask).length,
       allow: strings(edit.remove?.allow).length,
     },
+    struckDefaults: { ask: strikes.ask.length, allow: strikes.allow.length },
+    ...(resets.size ? { reset: [...resets] } : {}),
     now: { deny: next.deny.length, ask: next.ask.length, allow: next.allow.length },
   });
   return next;

@@ -764,6 +764,31 @@ export async function handleApi(
       }
     }
 
+    /* ---------------- the desktop launcher ----------------
+     * Above the wall like tailscale and accounts: Settings is where this
+     * renders, and the PLAN (where would it land, is this platform supported)
+     * is answerable with no root open. Only creating one needs a root, and
+     * that refusal names what to do. */
+    if (head === 'launcher') {
+      if (req.method === 'GET') {
+        json(res, 200, service.launcherPlan());
+        return true;
+      }
+      if (req.method === 'POST') {
+        const refusal = guardCsrf(req);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        try {
+          json(res, 200, service.createDesktopLauncher());
+        } catch (error) {
+          // 409 when a root is simply not open (well-formed ask, nothing to
+          // bake); 400 for an unsupported platform or a template problem.
+          const message = (error as Error).message;
+          json(res, /source directory/i.test(message) ? 409 : 400, { error: message });
+        }
+        return true;
+      }
+    }
+
     if (!service.store) { json(res, 409, { error: 'No source directory is open.' }); return true; }
 
     /* ---------------- portfolio ---------------- */
@@ -788,24 +813,32 @@ export async function handleApi(
         // `add`/`remove` is the editor's shape and may widen — deliberately,
         // named, scoped and journaled (see `editPolicy`). A bare `{deny, ask}`
         // body is the old tightening-only contract and still means what it did.
-        if ('add' in body || 'remove' in body) {
+        if ('add' in body || 'remove' in body || 'reset' in body || 'restore' in body) {
           const rules = (value: unknown) => (Array.isArray(value)
             ? value.filter((v): v is string => typeof v === 'string') : []);
           const lists = (value: unknown) => {
             const part = (value ?? {}) as Record<string, unknown>;
             return { deny: rules(part.deny), ask: rules(part.ask), allow: rules(part.allow) };
           };
+          // Only the three part names mean anything; a typo resets nothing
+          // rather than something unexpected.
+          const resets = rules(body.reset)
+            .filter((part): part is 'deny' | 'ask' | 'allow' => part === 'deny' || part === 'ask' || part === 'allow');
           const slug = typeof body.slug === 'string' ? body.slug : null;
           const scope: PolicyScope = body.scope === 'plan' ? 'plan' : 'global';
           if (scope === 'plan' && !slug) {
             json(res, 400, { error: 'a plan-scoped rule needs a plan' });
             return true;
           }
+          const restorePart = (body.restore ?? {}) as Record<string, unknown>;
+          const restore = { ask: rules(restorePart.ask), allow: rules(restorePart.allow) };
           json(res, 200, service.editPolicy({
             scope,
             slug,
             add: lists(body.add),
             remove: lists(body.remove),
+            ...(resets.length ? { reset: resets } : {}),
+            ...(restore.ask.length || restore.allow.length ? { restore } : {}),
             by: typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
           }));
           return true;

@@ -13,12 +13,36 @@
  * copies of an install procedure disagree within a release.
  */
 
+import { useState } from 'react';
 import { SETUP_PROMPTS } from '@shared/setup-prompts.js';
-import { Banner, Card, CardBody, CardHeader, CardTitle, CopyButton } from '@/components/ui';
+import { api } from '@/lib/api';
+import { useConsoleState, useLauncherPlan } from '@/lib/queries';
+import { Banner, Button, Card, CardBody, CardHeader, CardTitle, CopyButton, toast } from '@/components/ui';
 
 export function LauncherCard({ supervised }: { supervised?: boolean }) {
   const setup = SETUP_PROMPTS.find((p) => p.id === 'desktop-launcher');
+  const { data: plan } = useLauncherPlan();
+  const { data: state } = useConsoleState();
+  const [creating, setCreating] = useState(false);
+  const [created, setCreated] = useState<{ path: string; note: string } | null>(null);
   if (!setup) return null;
+
+  // "$HOME/…" in the shown path, same rule as the start-command card: portable
+  // to read, no username in a screenshot.
+  const shownPath = plan?.path && state?.home && plan.path.startsWith(`${state.home}/`)
+    ? `~${plan.path.slice(state.home.length)}`
+    : plan?.path;
+
+  const create = () => {
+    setCreating(true);
+    api.createLauncher()
+      .then((outcome) => {
+        setCreated({ path: outcome.path, note: outcome.note });
+        toast('Desktop launcher written — every capability on.', 'ok');
+      })
+      .catch((error: Error) => toast(String(error.message ?? error), 'error'))
+      .finally(() => setCreating(false));
+  };
 
   return (
     <Card>
@@ -27,6 +51,39 @@ export function LauncherCard({ supervised }: { supervised?: boolean }) {
         <CopyButton text={setup.prompt} label="Copy prompt" />
       </CardHeader>
       <CardBody className="flex flex-col gap-3">
+        {/* The one-click path first: the server writes the launcher itself —
+            this console's root and port baked in, all five switches on. The
+            AI prompt below stays for machines where the file needs judgment
+            (a different root, hand-carried plist flags). */}
+        {plan?.supported ? (
+          <div className="flex flex-col gap-2 rounded border border-rule bg-ground-deep p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="action"
+                disabled={creating || !plan.rootOpen}
+                title={plan.rootOpen
+                  ? `Writes ${shownPath ?? 'the launcher'} with this console's source directory and port, and every capability switch on.`
+                  : 'Open a source directory first — the launcher bakes it in as its ROOT.'}
+                onClick={create}
+              >
+                {creating ? 'Writing…' : 'Create the Desktop launcher — full options'}
+              </Button>
+              {shownPath ? <code className="text-2xs text-ink-faint">{shownPath}</code> : null}
+            </div>
+            <p className="m-0 text-2xs text-ink-faint">
+              {plan.platform === 'darwin'
+                ? 'macOS: a double-clickable .command with ROOT, PORT and all five --allow switches set.'
+                : 'Linux: an XDG .desktop entry that runs the start command in a terminal.'}{' '}
+              {created ? created.note : plan.note}
+            </p>
+            {created ? (
+              <p className="m-0 text-2xs text-ink-muted">Written to <code>{created.path}</code>.</p>
+            ) : null}
+          </div>
+        ) : plan ? (
+          <Banner severity="info">{plan.note}</Banner>
+        ) : null}
+
         <p className="text-sm text-ink-muted">{setup.lede}</p>
 
         {supervised === false && (

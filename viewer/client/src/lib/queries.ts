@@ -84,6 +84,7 @@ export const keys = {
   diagnosis: (slug: string, phase: number | string) => ['diagnosis', slug, String(phase)] as const,
   auth: () => ['auth'] as const,
   accounts: () => ['accounts'] as const,
+  launcher: () => ['launcher'] as const,
   skills: () => ['skills'] as const,
   notifications: () => ['notifications'] as const,
   search: (query: string) => ['search', query] as const,
@@ -271,6 +272,11 @@ export function usePlans(enabled = true) {
 /** The instance's Claude accounts with their meters — live via the `accounts` event. */
 export function useAccounts(enabled = true) {
   return useQuery({ queryKey: keys.accounts(), queryFn: api.accounts, enabled });
+}
+
+/** Where a one-click desktop launcher would land on the server's platform. */
+export function useLauncherPlan(enabled = true) {
+  return useQuery({ queryKey: keys.launcher(), queryFn: api.launcherPlan, enabled });
 }
 
 /** How long a page has to stay open before opening it counts as reading. */
