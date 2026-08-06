@@ -6,18 +6,72 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
-## [Unreleased]
+## [1.5.0] - 2026-08-06
 
-The autopilot's controls grow down to the single session, and its promise grows up to the whole
-plan. The run page now shows the **second queue** — a Waiting tab naming every dependency-waiting
-phase and exactly what it waits on, so a plan's later phases never look abandoned while the early
-ones run — and every session tab carries its own Freeze/Continue and Stop, scoped to that lane
-alone. Accounts stop being a guessing game: the picker lists every login, an expired one announces
-itself and is refused at preflight, and the meters read the worst window across all accounts,
-per-model buckets included.
+One console, many Claude accounts. Each instance now keeps its own account registry — the machine
+login, profiles you sign into, pasted `claude setup-token` tokens — with live usage meters in the
+chrome (the same numbers `/usage` shows: 5-hour, weekly, per-model, with reset countdowns). Every
+launch surface picks which account a run spends, and a run that hits its usage window no longer
+just sleeps on it: by policy it checkpoints the session and continues at once under the account
+with the most headroom, carries its transcript along, and survives a console restart with the
+resume clock intact.
+
+The autopilot's controls grow down to the single session while its promise grows up to the whole
+plan. Every session tab carries its own Freeze/Continue and Stop, scoped to that lane alone, and
+the run page shows the **second queue** — a Waiting tab naming every dependency-waiting phase and
+exactly what it waits on, so a plan's later phases never look abandoned while the early ones run.
+
+And Settings stops describing work and starts doing it: the exact start command for *this* machine,
+a Desktop launcher a button writes, and shipped permission defaults you can strike by name and put
+back. The Guide's long scrolls become cards on a line.
 
 ### Added
 
+- **Usage meters in the chrome.** Desktop rail, phone header and the More sheet all carry the
+  5-hour and worst-weekly bars — read across **every** account, so a second login nearing its wall
+  is visible before it stops anything — with a dialog listing every account × every window the
+  usage endpoint reports. Bucket keys render by name, so a window that ships tomorrow appears
+  tomorrow. Polling is deliberately gentle (single-flight, adaptive cadence, backoff on 429) and
+  failure serves the last-known numbers with their age attached rather than a blank.
+- **`--allow-accounts` — per-instance account registration.** Sign a second account in (the console
+  mints a terminal on `claude auth login` under a managed `CLAUDE_CONFIG_DIR`, then reads back the
+  email and plan) or paste a `claude setup-token` token and name it. Secrets live in the keychain
+  or a 0600 file, never in the registry, never in an API response — and the console never writes
+  the CLI's own credentials. Reading the meters needs no flag.
+- **An account per run, and an on-limit policy.** The run form, phase launcher, recovery and QA
+  dialogs and the agent launcher all offer the account (including `auto` — most 5-hour headroom)
+  and, for runs, `switch` / `wait` / `pause`. `switch` checkpoints the live session at the wall and
+  re-attempts immediately under the account that can pay, porting the transcript into that
+  account's config dir so `--resume` finds the conversation; when nothing can be ported it starts
+  from the boot prompt rather than resuming into nothing. The picker lists every login with the
+  current one marked, and the start-time auth preflight probes **the run's own account** rather
+  than the machine login — a run pinned to an expired profile is refused up front instead of
+  burning a session per phase discovering it.
+- **Switch account mid-run.** Its own verb on the run card, not a settings field: a live session is
+  checkpointed (SIGCONT+SIGTERM, session id kept) and the phase re-attempted under the other login
+  right away; a lane asleep on the old account's window is woken instead of waiting it out.
+- **Account rename and hardened removal.** `PATCH /api/accounts/:id` renames the display name
+  (ids are journal keys and never change), the machine login included; removal now also clears the
+  profile's hashed keychain item on macOS and refuses while a live run pays as that account.
+- **Expired-login alerts.** Every account's credential is watched with its meters; a login that
+  goes from good to expired/signed-out (after the CLI's own refresh is tried) announces *Sign in
+  again*, badges the account, and the run page's sign-in card names the right account with the
+  right command.
+- **Per-model walls, filed properly.** A "You've hit your Opus/Fable limit" records under its own
+  bucket (`seven_day_opus`, …), so `auto` and mid-run switching skip that account only for runs of
+  that model.
+- **Restart-safe limit waits.** A run asleep on a usage window used to reconcile to `interrupted`
+  after a console restart — self-resuming turned into waiting-for-a-person. It now reconciles to
+  `paused` with its clock intact, and the service re-arms the resume at boot (unless the run's own
+  policy was `pause`, which means what it says).
+- **Two notification categories for usage, muted from where the noise is.** *Usage limits* carries
+  every wall actually hit with its reset time and what the run did about it, the pre-flight warning
+  when a run starts against a nearly-spent window (≥97% refuses, with the reset time in the
+  message), and the sign-in alerts. **`usage-climbing`** — the 80% and 95% early warnings per
+  account and window, with hysteresis, once per window — is its own category and off by default, so
+  muting the climb never mutes the crash. Both switches sit in the meters dialog as well as the
+  notification list, because nobody forms the intention "stop telling me about usage" while reading
+  a list of categories; they form it looking at the meter that just buzzed them.
 - **Per-session Freeze and Stop**, on the autopilot's session tabs, the Runs page's lanes, and the
   session console's toolbar. Freeze SIGSTOPs one lane and the run keeps driving (`frozen` now means
   *everything* is frozen); Stop ends one session (SIGCONT → SIGTERM → SIGKILL backstop), records
@@ -30,85 +84,27 @@ per-model buckets included.
   spent.
 - **Run lifecycle from the fleet.** Live rows on the Runs page carry Freeze/Continue and Stop —
   a live run is no longer a row you can only link away from.
-- **Account rename and hardened removal.** `PATCH /api/accounts/:id` renames the display name
-  (ids are journal keys and never change), the machine login included; removal now also clears the
-  profile's hashed keychain item on macOS and refuses while a live run pays as that account.
-- **Expired-login alerts.** Every account's credential is watched with its meters; a login that
-  goes from good to expired/signed-out (after the CLI's own refresh is tried) announces *Sign in
-  again* through the `limits` category, badges the account, and the run page's sign-in card names
-  the right account with the right command.
-- **Per-model walls, filed properly.** A "You've hit your Opus/Fable limit" now records under its
-  own bucket (`seven_day_opus`, …), so `auto` and mid-run switching skip that account only for
-  runs of that model. The compact meters read the **worst window across every account**.
-- **`usage-climbing`** — the 80/95% early warning is its own notification category, off by
-  default; the wall itself and sign-in alerts stay under *Usage limits*.
-
-### Fixed
-
-- The run-page account picker showed "auto" plus everyone-but-the-current, which on a two-account
-  machine read as "the console only knows one account". It now lists every account with the
-  current one marked, and Switch arms only on a change.
-- A resumed run inherited its spent failure streak, so one more failed phase halted it instantly
-  however long ago the failures were. Start/Continue now resets the streak (journalled as
-  `run.failure-streak-reset`).
-- Run-level **Freeze now** froze only the mirror lane of a multi-lane run while calling the whole
-  run frozen; it now freezes every running session, and per-lane freezes persist on the checkpoint
-  so crash recovery names each stopped pid.
-- A phase skipped (or now stopped) while queued still spawned a session when its admission was
-  granted; a settled record is abandoned on arrival.
-- The run-start auth preflight always probed the machine login, so a run pinned to an expired
-  profile passed preflight and burned a session per phase discovering it; it now probes the run's
-  own account, and the auth-failure remediation no longer says "run /login in this workspace" when
-  the expired login is a profile's.
-- The on-limit `pause` policy test flipped at 3:45pm local time (a real reset text parsed against
-  the wall clock); the runner clock is now pinned in that test.
-
-### Changed
-
-- An old client against a new server keeps working: the `{phase}`-less stop/freeze/thaw verbs are
-  unchanged. A **new** client's per-session verbs against a pre-update server degrade to the
-  mismatch guard (409 when the phase is not the one running) — restart the console after updating,
-  as the stale-server banner already says.
-
-## [1.5.0] - 2026-08-06
-
-One console, many Claude accounts. Each instance now keeps its own account registry — the machine
-login, profiles you sign into, pasted `claude setup-token` tokens — with live usage meters in the
-chrome (the same numbers `/usage` shows: 5-hour, weekly, per-model, with reset countdowns). Every
-launch surface picks which account a run spends, and a run that hits its usage window no longer
-just sleeps on it: by policy it checkpoints the session and continues at once under the account
-with the most headroom, carries its transcript along, and survives a console restart with the
-resume clock intact.
-
-### Added
-
-- **Usage meters in the chrome.** Desktop rail, phone header and the More sheet all carry the
-  5-hour and worst-weekly bars, with a dialog listing every account × every window the usage
-  endpoint reports — bucket keys render by name, so a window that ships tomorrow appears tomorrow.
-  Polling is deliberately gentle (single-flight, adaptive cadence, backoff on 429) and failure
-  serves the last-known numbers with their age attached rather than a blank.
-- **`--allow-accounts` — per-instance account registration.** Sign a second account in (the console
-  mints a terminal on `claude auth login` under a managed `CLAUDE_CONFIG_DIR`, then reads back the
-  email and plan) or paste a `claude setup-token` token and name it. Secrets live in the keychain
-  or a 0600 file, never in the registry, never in an API response — and the console never writes
-  the CLI's own credentials. Reading the meters needs no flag.
-- **An account per run, and an on-limit policy.** The run form, phase launcher, recovery and QA
-  dialogs and the agent launcher all offer the account (including `auto` — most 5-hour headroom)
-  and, for runs, `switch` / `wait` / `pause`. `switch` checkpoints the live session at the wall and
-  re-attempts immediately under the account that can pay, porting the transcript into that
-  account's config dir so `--resume` finds the conversation; when nothing can be ported it starts
-  from the boot prompt rather than resuming into nothing.
-- **Switch account mid-run.** Its own verb on the run card, not a settings field: a live session is
-  checkpointed (SIGCONT+SIGTERM, session id kept) and the phase re-attempted under the other login
-  right away; a lane asleep on the old account's window is woken instead of waiting it out.
-- **A `limits` notification category.** Warnings at 80% and 95% per account and window (with
-  hysteresis, once per window), every wall actually hit with its reset time and what the run did
-  about it, and a pre-flight warning when a run starts against a nearly-spent window (≥97% refuses,
-  with the reset time in the message).
-- **Restart-safe limit waits.** A run asleep on a usage window used to reconcile to `interrupted`
-  after a console restart — self-resuming turned into waiting-for-a-person. It now reconciles to
-  `paused` with its clock intact, and the service re-arms the resume at boot (unless the run's own
-  policy was `pause`, which means what it says).
+- **Start with every capability, on Settings.** The full start line for *this* instance — its skill
+  root, source directory, port and all five switches — with a copy button and a note naming which
+  capabilities the running console currently lacks. Every path renders as `$HOME/…`, so the line
+  pastes on any account and a screenshot carries no username, and it is stated per OS: this
+  machine's form first, the other Unix noted, Windows answered honestly as WSL.
+- **A one-click Desktop launcher.** Create writes the artifact itself — macOS gets the shipped
+  `.command` with root and port patched in `$HOME`-relative and all five switches on; Linux gets an
+  XDG `.desktop` with absolute `Exec` paths (and GNOME's *Allow Launching* said rather than hidden);
+  Windows gets the WSL story instead of a shortcut that breaks. New `server/launcher.ts` and
+  `/api/launcher`, above the store wall.
+- **Permission defaults you can strike and put back.** Every shipped `ask`/`allow` default gets an
+  ×, struck **by name** at the chosen scope — so an upgrade's new defaults still apply, which a
+  copied-and-edited list would silently prevent — listed struck-through with ↩ to restore one, and
+  a Restore defaults button per part. The shipped **deny** list stays the wall: not removable from
+  a browser, ever, and the policy file's shape is what enforces it.
+- **The Guide as cards on a line.** Nine long scrolls become grouped, collapsible cards cut from
+  the markdown's own outline (shallowest heading present = group, one deeper = card, fence-aware),
+  with `?card=` deep links, expand-all, and a route strip of stations for the sections that really
+  are a sequence. Desktop opens every card but the bulky ones; a phone opens the first. The
+  183-line *Running* section splits in two: **Running** is how you start the console, the new
+  **Run** section is what a run then does.
 
 ### Changed
 
@@ -120,6 +116,33 @@ resume clock intact.
   instead of "fixing" anything on account of the stop. The skill's own Mode 2 gained the matching
   recovery step for hand-driven sessions (read `git status`/`git diff` first, re-claim, continue),
   and Mode 3's stop-reasons now include an exhausted usage window.
+- **The desktop launcher template carries the `ACCOUNTS` knob** (`--allow-accounts`, on by default
+  like the other four), threaded through every path a flag travels: the plist drift check, the
+  `agent.sh` install argv, the carried-flags scanner, the running-console mismatch report and both
+  foreground exec lines. `LAUNCHER_REV` is 6, so every installed copy is told it is stale rather
+  than silently starting a console whose Accounts card says the flag is off.
+- **The launcher card drops its paste-into-Claude section.** The Create button writes the launcher,
+  so the manual procedure no longer sits beside it; the walkthrough still lives where readers
+  without a running console find it — the guide and the README, from the same
+  `shared/setup-prompts.js` string the contract test asserts.
+- An old client against a new server keeps working: the `{phase}`-less stop/freeze/thaw verbs are
+  unchanged. A **new** client's per-session verbs against a pre-update server degrade to the
+  mismatch guard (409 when the phase is not the one running) — restart the console after updating,
+  as the stale-server banner already says.
+
+### Fixed
+
+- **`./start` finds a usable node** — Homebrew, `/usr/local`, volta, then the newest nvm version —
+  when the one on `PATH` is below the floor, instead of refusing. A machine whose default `node` is
+  an old nvm alias was told "phase-console: no…" while a perfectly good v24 sat one directory over.
+- A resumed run inherited its spent failure streak, so one more failed phase halted it instantly
+  however long ago the failures were. Start/Continue now resets the streak (journalled as
+  `run.failure-streak-reset`).
+- Run-level **Freeze now** froze only the mirror lane of a multi-lane run while calling the whole
+  run frozen; it now freezes every running session, and per-lane freezes persist on the checkpoint
+  so crash recovery names each stopped pid.
+- A phase skipped (or now stopped) while queued still spawned a session when its admission was
+  granted; a settled record is abandoned on arrival.
 
 ## [1.4.0] - 2026-08-05
 

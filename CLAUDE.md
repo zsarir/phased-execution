@@ -81,8 +81,51 @@ is *built output*. It **shells out to the layer-1 scripts**
 for every status claim and never recomputes them; its own JS parsing covers only what the scripts
 don't expose (prose sections, handoff bodies) plus analysis they don't provide (critical path,
 velocity). `server/service.ts` is the model, `engine.ts` the script wrapper, `store.ts` the files,
-`runner/` the autopilot, `api/routes.ts` the surface. `shared/` is dependency-free ESM imported by
-both the Node tests and the client.
+`runner/` the autopilot, `accounts/` the Claude identities it may spend, `launcher.ts` the desktop
+artifact, `api/routes.ts` the surface. `shared/` is dependency-free ESM imported by both the Node
+tests and the client.
+
+### Accounts and the usage window
+
+`server/accounts/` is per-instance, like the push keys and unlike `runs/` — two consoles on one
+machine are usually two projects with two ideas about whose quota they may burn. `store.ts` is the
+registry of three kinds (`default`, the machine's own `claude` login, synthesized on every read and
+never stored or deleted; `profile`, a console-managed `CLAUDE_CONFIG_DIR` the operator signs into;
+`token`, a pasted `claude setup-token`), `credentials.ts` is the only file that touches secrets —
+keychain or a 0600 file for ours, **read-only** for the CLI's own, because a second writer is how two
+processes corrupt one login — `usage.ts` polls the same endpoint the CLI's own `/usage` asks (gently:
+single-flight, adaptive cadence, harder backoff on 429), `transcripts.ts` copies a
+session's `.jsonl` into the target account's config dir so `--resume` finds the conversation, and
+`index.ts` is the facade whose every answer is already redacted, so the boundary is there and not in
+a route. State lives under `INSTANCE_STATE_DIR/accounts`; `accounts.json` never holds a secret.
+
+Two rules the code is built around. **Bucket names are data, not schema** (`five_hour`, `seven_day`,
+`seven_day_opus`, whatever tier ships next) — anything with a `utilization` and a `resets_at` is a
+meter, rendered by name; a per-model wall files under its own bucket so `auto` skips an account only
+for that model. And **the poller is telemetry, never the detector** — the runner's own limit
+classifier works with the meters unavailable, so a 429 or a vanished endpoint degrades to stale
+numbers with their age attached, never an error page.
+
+At a wall the run's `onLimit` policy decides: `wait` sleeps on the window (restart-safe — the run
+reconciles to `paused` with its clock intact and the service re-arms the resume at boot), `switch`
+checkpoints the live session and re-attempts at once under the account with headroom, `pause` means
+what it says. The scheduler's usage throttle is keyed **per account**, so one spent login never
+stalls a queue another account would pay for; `throttledUntil` stays as the soonest expiry for
+readers that predate that.
+
+### Getting the console started — the launcher and the start command
+
+`server/launcher.ts` behind `/api/launcher` writes the desktop artifact itself, per platform and
+honestly: macOS gets the shipped `deploy/desktop-launcher.command` with its knobs patched, Linux an
+XDG `.desktop` whose `Exec` paths are baked absolute (Exec lines expand no variables), Windows the
+WSL story rather than a shortcut that would break. Everything filesystem-shaped is a parameter, so
+tests never touch a real Desktop. **Bump `LAUNCHER_REV` whenever the template's argv changes** — that
+is what tells an installed copy it is stale instead of letting it start a console whose Settings
+disagrees with it. The Settings start-command card composes the same line from the console's own
+facts and renders every path as `$HOME/…`: the line must paste on any account and a screenshot must
+carry no username, and a scrubbed test keeps the shipped template personal-path-free. `viewer/run`
+looks past the PATH's `node` when it is below the floor (Homebrew, `/usr/local`, volta, newest nvm)
+rather than refusing.
 
 ### Invariants that tests enforce — don't break them casually
 
@@ -106,13 +149,21 @@ both the Node tests and the client.
   trustworthy because nothing but the proxy can reach the port.
 - **Permission `deny` is identical across all three run profiles.** Profiles move only the ask list.
   The PreToolUse hook fails open and carries workflow, never safety.
+- **A shipped default is struck by name; the shipped `deny` list is never struck at all.** Removing
+  an `ask`/`allow` default records it under `removed.ask`/`removed.allow` in the policy file rather
+  than copying the list out and editing it — a copied list would freeze the defaults at whatever
+  version the first edit saw, and an upgrade's new rules must still apply. Restoring is deleting that
+  name. `PolicyRemovals` has **no `deny` key**, and that shape is the enforcement: no browser can
+  unpick the wall. Operator-*added* deny rules stay removable like anything else.
 
 ### Flags gate capability, one act each
 
 `--allow-writes` (scaffold plans/handoffs, record QA, take locks — never commits or pushes, `--git` is
 never passed), `--allow-run` (spawn unattended `claude -p` sessions that edit a repo for hours),
-`--allow-terminal` (a real shell), `--allow-agent` (interactive sessions and the plan wizard). All
-default off. Shut down is deliberately *not* behind a flag.
+`--allow-terminal` (a real shell), `--allow-agent` (interactive sessions and the plan wizard),
+`--allow-accounts` (register Claude accounts for this instance, pick one per run, switch mid-run —
+*reading* the usage meters needs no flag). All five default off. Shut down is deliberately *not*
+behind a flag.
 
 ## Packaging, versions and releases
 
