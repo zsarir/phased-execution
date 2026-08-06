@@ -16,12 +16,14 @@
 
 import { useState } from 'react';
 import { Gauge } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { useAccounts } from '@/lib/queries';
+import { keys, useAccounts, useConsoleState } from '@/lib/queries';
+import { api } from '@/lib/api';
 import type { AccountView, UsageBucket } from '@/lib/api';
 import { countdown, relativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
-import { Chip, Dialog, DialogContent, Empty } from '@/components/ui';
+import { Button, Chip, Dialog, DialogContent, Empty, toast } from '@/components/ui';
 
 /** Human names for the endpoint's bucket keys; unknown keys stay readable. */
 export function bucketLabel(bucket: string): string {
@@ -148,7 +150,18 @@ export function LimitsWidget({ variant }: { variant: 'rail' | 'phone' | 'sheet' 
 
 /** Every account × every bucket, with resets and staleness. Reused by Settings. */
 export function LimitsOverview({ accounts }: { accounts: AccountView[] | undefined }) {
-  if (!accounts?.length) return <Empty title="No accounts to meter yet" />;
+  // The mute renders even with nothing to meter. A console with no REGISTERED
+  // account still runs work as the default one, and still announces when that
+  // hits a window — so "no accounts to meter yet" must not be a page with no
+  // way to switch those announcements off.
+  if (!accounts?.length) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Empty title="No accounts to meter yet" />
+        <UsageAlerts />
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-4">
       {accounts.map((account) => {
@@ -192,6 +205,71 @@ export function LimitsOverview({ accounts }: { accounts: AccountView[] | undefin
           </section>
         );
       })}
+
+      <UsageAlerts />
+    </div>
+  );
+}
+
+/**
+ * The mute, put where the noise is.
+ *
+ * The switch itself is not new — `notify.limits` has always been one of the
+ * eleven categories on Notifications ▸ Settings, and the server gates on it
+ * before the inbox record, the live event, `PHASE_CONSOLE_NOTIFY` and push
+ * alike. What was missing is that nobody forms the intention "stop telling me
+ * about usage" while reading a list of notification categories. They form it
+ * looking at the meter that just buzzed them, which is here.
+ *
+ * So this is the same preference, written from the place the irritation
+ * happens. It reads server state rather than keeping its own, because a
+ * preference that governs a server process has to render what that process
+ * holds — a local copy would show the operator their intention instead of the
+ * setting.
+ *
+ * It says what stays audible, deliberately. The category also carries a run
+ * that parked waiting for a window, an account that could not sign in, and a
+ * run refused before it started — silence about those looks exactly like a
+ * console that has stopped working.
+ */
+function UsageAlerts() {
+  const client = useQueryClient();
+  const { data: state } = useConsoleState();
+  const on = state?.prefs?.notify?.limits !== false;
+
+  const save = useMutation({
+    // A delta, not the whole map: the server merges it over what is stored, so
+    // two tabs toggling different categories do not overwrite each other.
+    mutationFn: (next: boolean) => api.savePrefs({ notify: { limits: next } }),
+    onSuccess: async () => { await client.invalidateQueries({ queryKey: keys.state() }); },
+    onError: (error: Error) => toast(String(error.message ?? error), 'error'),
+  });
+
+  if (!state) return null;
+
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-rule pt-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm">Usage alerts</span>
+        <Button
+          size="sm"
+          variant={on ? 'ghost' : 'default'}
+          disabled={save.isPending}
+          aria-pressed={on}
+          onClick={() => save.mutate(!on)}
+        >
+          {on ? 'Turn off' : 'Turn on'}
+        </Button>
+      </div>
+      <p className="text-2xs text-ink-faint">
+        {on
+          ? 'The console announces a window filling up, a run that parked waiting for one to '
+            + 'reopen, and an account that could not sign in. Turning this off silences all of '
+            + 'them everywhere — inbox, push and any notify command. The meters above keep updating.'
+          : 'Silenced everywhere — inbox, push and any notify command. Runs still wait, switch '
+            + 'account or pause as you asked; they just do it without telling you. The meters '
+            + 'above keep updating.'}
+      </p>
     </div>
   );
 }

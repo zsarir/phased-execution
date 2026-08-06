@@ -16,10 +16,11 @@
 import { homedir, hostname, userInfo } from 'node:os';
 import { render, screen, within, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GUIDE_SECTIONS } from '@shared/route-meta.js';
 import { queryClientConfig } from '@/lib/queries';
 import { SECTIONS, resolveSection, sectionIds } from './sections';
+import { splitGuide } from './split';
 import GuideView from './index';
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -30,14 +31,33 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
-function renderGuide(segments: string[]) {
+/**
+ * Viewport width, per test.
+ *
+ * `lib/media.ts` memoises each `MediaQueryList` in a module-level cache, so
+ * swapping `window.matchMedia` after import changes nothing — the first query
+ * of a run wins for the whole file. Mocking the hook is the honest way to ask
+ * "what does this render on a phone", and it is the pattern the rest of the
+ * suite already uses for `@/router` and `@/lib/api`.
+ */
+let phone = false;
+vi.mock('@/lib/media', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/media')>();
+  return { ...actual, usePhone: () => phone };
+});
+
+afterEach(() => { phone = false; });
+
+function renderGuide(segments: string[], query: Record<string, string> = {}) {
   const client = new QueryClient(queryClientConfig);
   return render(
     <QueryClientProvider client={client}>
-      <GuideView route={{ segments, query: {}, path: segments.join('/') }} />
+      <GuideView route={{ segments, query, path: segments.join('/') }} />
     </QueryClientProvider>,
   );
 }
+
+const outlineOf = (id: string) => splitGuide(SECTIONS.find((s) => s.id === id)!.body);
 
 describe('the guide section registry', () => {
   it('covers every frozen GUIDE_SECTIONS id, in both directions', () => {
@@ -110,10 +130,15 @@ describe('the guide section registry', () => {
 
 describe('the guide view', () => {
   it('renders the section named by the route, not the first one', async () => {
+    // Asserted against the section's OWN first card rather than a heading
+    // spelled out here. A test that names a heading turns editing prose into
+    // breaking the build, which is the coupling the markdown split exists to
+    // avoid — and it is how this test failed the first time the guide was
+    // rewritten.
     renderGuide(['guide', 'mobile']);
     const panel = await screen.findByRole('tabpanel');
-    expect(within(panel).getByRole('heading', { name: /Reaching the console from a phone/i }))
-      .toBeTruthy();
+    const first = outlineOf('mobile').groups[0].cards[0];
+    expect(within(panel).getByRole('heading', { name: first.title })).toBeTruthy();
   });
 
   it('marks that tab selected so a reload lands where you were', async () => {
@@ -138,7 +163,6 @@ describe('the guide view', () => {
     const panel = await screen.findByRole('tabpanel');
     expect(within(panel).getAllByRole('table').length).toBeGreaterThan(0);
   });
-});
 
   it('paints the reference glossary words as their real badges, with the hover help', async () => {
     renderGuide(['guide', 'reference']);
@@ -162,3 +186,77 @@ describe('the guide view', () => {
     const flag = [...panel.querySelectorAll('code')].find((el) => el.textContent?.startsWith('--allow'));
     if (flag) expect(flag.className).not.toContain('border-');
   });
+});
+
+describe('the section is cards, not a wall', () => {
+  it('breaks the reference glossary into separate cards', async () => {
+    // The section this refactor exists for: ~90 table rows under one heading.
+    renderGuide(['guide', 'reference']);
+    const panel = await screen.findByRole('tabpanel');
+    expect(within(panel).getAllByRole('heading', { level: 3 }).length).toBeGreaterThan(6);
+  });
+
+  it('gives every card in every section an accessible name', async () => {
+    for (const section of SECTIONS) {
+      const { unmount } = renderGuide(['guide', section.id]);
+      const panel = await screen.findByRole('tabpanel');
+      const summaries = [...panel.querySelectorAll('summary')];
+      expect(summaries.length, `${section.id} rendered no cards`).toBeGreaterThan(1);
+      for (const summary of summaries) {
+        expect(summary.textContent?.trim(), `${section.id}: a card with no name`).toBeTruthy();
+      }
+      unmount();
+    }
+  });
+
+  it('renders a group band as a real heading above its cards', async () => {
+    const banded = SECTIONS.find((s) => outlineOf(s.id).groups.some((g) => g.banded));
+    if (!banded) return; // Every file is flat today; this guards the shape, not the content.
+    renderGuide(['guide', banded.id]);
+    const panel = await screen.findByRole('tabpanel');
+    const group = outlineOf(banded.id).groups.find((g) => g.banded)!;
+    expect(within(panel).getByRole('heading', { level: 2, name: group.title })).toBeTruthy();
+  });
+
+  it('opens every card on a desktop, except the bulky ones', async () => {
+    renderGuide(['guide', 'reference']);
+    const panel = await screen.findByRole('tabpanel');
+    // No reference card is bulky — a glossary you cannot Cmd-F is not a
+    // glossary — so every one of them is open at desktop width.
+    for (const card of panel.querySelectorAll('details')) {
+      expect((card as HTMLDetailsElement).open).toBe(true);
+    }
+  });
+
+  it('opens only the first card on a phone', async () => {
+    phone = true;
+    renderGuide(['guide', 'reference']);
+    const panel = await screen.findByRole('tabpanel');
+    const cards = [...panel.querySelectorAll('details')] as HTMLDetailsElement[];
+    expect(cards.length).toBeGreaterThan(1);
+    // Asserted on `open`, not on a role query: whether jsdom exposes content
+    // inside a closed `<details>` depends on its UA stylesheet, which is not a
+    // thing to bet a test on.
+    expect(cards[0].open).toBe(true);
+    expect(cards.some((c) => !c.open)).toBe(true);
+  });
+});
+
+describe('deep links to a card', () => {
+  it('opens the card named by ?card=', async () => {
+    const target = outlineOf('reference').groups[3].cards[0];
+    renderGuide(['guide', 'reference'], { card: target.id });
+    const panel = await screen.findByRole('tabpanel');
+    const card = panel.querySelector<HTMLDetailsElement>(`#card-${CSS.escape(target.id)}`);
+    expect(card, `no card with id ${target.id}`).toBeTruthy();
+    expect(card!.open).toBe(true);
+  });
+
+  it('ignores an unknown ?card= rather than rendering nothing', async () => {
+    // Card ids come from prose, so they are deliberately NOT frozen vocabulary
+    // — which means a stale link has to degrade, not break.
+    renderGuide(['guide', 'reference'], { card: 'no-such-card' });
+    const panel = await screen.findByRole('tabpanel');
+    expect(within(panel).getAllByRole('table').length).toBeGreaterThan(0);
+  });
+});

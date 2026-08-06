@@ -1,15 +1,140 @@
-## Stop 2½ · Give yourself a launcher
+## The easiest way — let the console write the launcher
 
-Typing `./start` is fine. A launcher is better for one specific reason: started with
-`SUPERVISED="yes"` it installs a launchd agent, and **that** is what makes the app's own
-**Restart** and **Shut down** buttons work. Those buttons only exist where a clean exit comes
-back — a window you double-clicked is the server's parent, not its supervisor, so Settings
-correctly refuses there.
+**Settings ▸ Desktop launcher ▸ "Create the Desktop launcher — full options".** One click, and the
+file is on your Desktop with this console's own root and port baked in and all five switches on.
 
-(The `.command` launcher is macOS-only. On Linux, `--install-agent` gives you the same supervised
-mode as a systemd user service — Restart and Shut down work identically.)
+| | What lands on the Desktop | The first time you open it |
+|---|---|---|
+| **macOS** | `Phase Console.command` — double-click it. | It can install the login agent, which builds the client once. |
+| **Linux** | A `.desktop` entry that runs the start command in a terminal. | On GNOME, right-click it once and choose *Allow Launching* — new entries start untrusted. |
+| **Windows** | Nothing. The console runs on macOS and Linux. | Install it inside WSL and start it from your WSL shell. |
 
-Paste this into Claude Code:
+The button stays disabled until a source directory is open, because the launcher bakes that
+directory in as its `ROOT`.
+
+> The Desktop file is a **copy, not a link**. Updating the skill does not update it — it warns you
+> when it is older than the one in the repository, and pressing the button again is the whole fix.
+
+## Or copy the one line that starts it
+
+**Settings ▸ Start with every capability** composes the exact command from this console's own facts
+— its source directory, its port, and all five switches — and gives you a Copy button.
+
+Paths render as `$HOME/…` rather than absolute, so the line works pasted on any account and a
+screenshot of that page carries no username.
+
+## Pick your way in
+
+Every route below runs the same console. The switches are identical whichever you choose; which
+install you have changes only the command's name — `./start` inside a clone, `phase-console`
+everywhere else.
+
+| You want | Do this |
+|---|---|
+| An icon to double-click | **Settings ▸ Desktop launcher** — the button above |
+| It up at login, always | `phase-console --install-agent --root <repo> [switches]` |
+| To start it from a terminal, here | `phase-console start` |
+| To start it from a clone | `./start <repo> [switches]` |
+| To try it with nothing installed | `npx phase-console ~/code/your-repo` |
+| To reach it from your phone | **Mobile setup** |
+| Someone else to do all of it | Paste the prompt further down this page into Claude Code |
+
+How to *install* it in the first place — plugin, clone, npm, Homebrew — is in `docs/install.md`.
+
+## The five switches
+
+Each capability is its own flag, because they have very different blast radii and a wider one is
+never implied by a narrower one. **All five are off unless you name them.**
+
+| Flag | What it opens |
+|---|---|
+| `--allow-writes` | Scaffold plans and handoffs, record QA results, take phase locks, close and reopen plans. It never commits and never pushes. |
+| `--allow-run` | **Spawn Claude sessions that edit your repository**, unattended, for hours. The widest of the five. Nothing on the Autopilot tab starts, stops or approves anything without it. |
+| `--allow-terminal` | A **real shell** in the browser, running as you, with no policy in front of it. |
+| `--allow-agent` | Interactive `claude` sessions in that shell, and the *New plan with AI* wizard. The CLI still asks before it acts; you answer in the terminal itself. |
+| `--allow-accounts` | Register more than one Claude account, choose one per run, and let a run that hits its usage window move to one with headroom. **The usage meters work without it** — only registering accounts is gated. |
+
+The startup banner says which are on, and the line at the top of this Guide says what *this* console
+can do right now.
+
+> Flags are read once, at startup, so turning one on means restarting. Under launchd or systemd they
+> live in the plist or unit file — which is what the Desktop launcher rewrites for you.
+
+## Start, stop, restart, status
+
+The lifecycle verbs live on one command:
+
+```bash
+phase-console start | stop | restart | status | log | list | open | update
+```
+
+Each takes an optional selector — a name, an id, or a project's folder name. With none, it means the
+console for the directory you are standing in; `phase-console status` alone reports every console on
+the machine. From a clone, `viewer/run` carries the same verbs.
+
+> **`./start` takes a repository, not a verb.** Its first bare argument is rewritten to `--root`, so
+> `./start start` asks for a repository called `start` and `./start list` asks for one called
+> `list` — both fail on a directory that does not exist, which reads like the verb is broken. Use
+> `viewer/run start` or `phase-console start` for the lifecycle, and keep `./start` for what it is
+> good at: `./start ~/code/your-repo --allow-run`.
+
+## Keep it running after a reboot
+
+A supervised console starts at login and survives a crash — and it is what makes the app's own
+**Restart** and **Shut down** buttons work at all. A window you double-clicked is the server's
+parent, not its supervisor, so Settings correctly refuses there.
+
+```bash
+phase-console --install-agent --root ~/code/my-repo --allow-writes --allow-run
+phase-console --agent-status        # is it up, and on which port
+phase-console --agent-log -f        # follow its log
+phase-console --agent-restart       # after changing flags
+```
+
+launchd on macOS, a systemd user service on Linux. Installing builds the client once; the boot path
+never does, so a crash loop cannot burn its throttle interval.
+
+## One console per project
+
+One install, many consoles. `cd` into a repository and start it — the consoles for your other
+projects keep running, each on its own port with its own state.
+
+```bash
+cd ~/code/alpha && phase-console start     # http://127.0.0.1:4123
+cd ~/code/beta  && phase-console start     # a different port, a different console
+phase-console list                         # both, with roots, ports and status
+phase-console open alpha                   # by name, from anywhere
+```
+
+A console belongs to a **repository root**, and its identity comes from that path — so the same
+project is always the same console across restarts and reboots. The first console you ever ran keeps
+**4123**; every other project derives a stable port in **4124–4223** from its path. Commit a
+`.phase-console.json` at the repository root to decide the name and port for everyone who clones:
+
+```json
+{ "name": "alpha", "port": 4150 }
+```
+
+Both keys are optional. Logs, notifications, push subscriptions and settings are separate per
+console; the first keeps the paths it has always used, so a single-project machine gains nothing new.
+
+## Talk to a running phase from any terminal
+
+`btw` puts a question to whichever phase is running right now, without opening the browser:
+
+```bash
+btw "are you still on the migration, or did you move on?"
+btw --plan my-feature "skip the perf work for now"
+```
+
+It finds the console for the directory you are in, or takes `PHASE_CONSOLE_URL`. It needs
+`--allow-run`, because it is talking to a live session. The question becomes one more turn in the
+same conversation — the context is intact and the phase carries on afterwards.
+
+## Set it up by pasting a prompt
+
+If you would rather not do any of the above by hand, paste this into Claude Code and answer its
+questions:
 
 ```
 Set up a Phase Console launcher on my Desktop.
@@ -25,6 +150,8 @@ Set up a Phase Console launcher on my Desktop.
      RUNS        --allow-run: spawn unattended Claude sessions that edit ROOT
      TERM_FLAG   --allow-terminal: a real shell in the browser, running as me
      AGENT       --allow-agent: interactive claude sessions + the New-plan wizard
+     ACCOUNTS    --allow-accounts: register more than one Claude account and let a
+                 run move to one with headroom (the usage meters work without it)
      PORT        leave blank — each project derives its own; set one to pin it
      SUPERVISED  leave "yes" — it installs a launchd agent, and that is what makes
                  the app's own Restart and Shut down buttons work
@@ -37,147 +164,3 @@ The Desktop file is a copy, not a link: updating the skill does not update it.
 Re-copy it after an update — it prints a warning when it is older than the one
 in the repo.
 ```
-
-The file it copies (`viewer/deploy/desktop-launcher.command`) carries the same flags as above,
-one knob each, so the doors you open are a decision you make once and can read back later.
-
-## Stop 3 · Open the console with runs enabled
-
-Each capability is its own flag, because they have very different blast radii.
-
-```bash
-./start --root ~/code/my-repo --allow-writes --allow-run
-```
-
-| Flag | What it lets the console do |
-|---|---|
-| `--allow-writes` | Scaffold plans and handoffs, record QA results, and take phase locks. |
-| `--allow-run` | **Spawn Claude sessions that edit your repository** for hours without you watching. Off by default. Nothing on the Autopilot tab can start, stop or approve anything without it. |
-| `--allow-terminal` | Open a **real shell** in the browser — running as you, with no policy in front of it. |
-| `--allow-agent` | Open **interactive `claude` sessions** in the browser terminal, and the *New plan with AI* wizard. The CLI asks before it acts; you approve in the terminal itself. |
-
-The startup banner tells you which are on. If you upgrade the skill while a console is running,
-**restart it** — the browser reloads the page from disk, but the server is whatever Node loaded at
-startup. Settings → *This process* says whether the two have drifted apart, and can restart it for
-you when something is supervising it.
-
-## Stop 4 · Start the run
-
-Fresh plan or half-finished plan — the same button.
-
-Open the plan, go to **Autopilot**, pick a model, an effort and a budget, and start.
-
-**Model and effort.** Set for the run, and overridable per phase under *Per phase*. What a phase
-runs as is resolved from your choice for this run, then the plan's own `**Model:**` and
-`**Effort:**` bullets, then the run's defaults — field by field, so choosing a model does not throw
-away an effort the plan asked for.
-
-**Skills.** Every skill a session could invoke — yours, this repository's, and every installed
-plugin's — with what each one is for. Ticked skills are named in the boot prompt of every phase, on
-top of whatever the plan's own `Skills (every session)` line asks for, which stays fixed because it
-belongs to the plan and not to one run.
-
-**Autonomy.**
-
-- *Keep going where it safely can* — moves to the next ready phase after a failure instead of
-  stopping. It still halts on two consecutive failures, an exhausted budget, or anything needing a
-  person.
-- *Stop and ask me* — halts on anything ambiguous: a failed phase, a verification the runner could
-  not fully check, a gate.
-
-**Budgets.** Per phase and per run, in dollars. A phase that hits its cap resumes the same session
-with a larger one rather than starting over, so the work already done is kept.
-
-## Stop 5 · Each phase runs alone 🟢
-
-One phase, one process. Clearing the context between phases needs no mechanism: the process exits
-and the context goes with it.
-
-1. **Gate** — if the phase declares one and it is not clear, the phase parks and the runner tries
-   another ready phase.
-2. **Lock** — the runner checks who holds the phase. It does not take the lock; the session doing
-   the work does.
-3. **Prompt** — the boot prompt comes from the engine, unaltered.
-4. **Session** — one `claude -p` process, streamed to the Autopilot tab as it works.
-5. **Verify** — the runner runs the plan's own verification commands itself.
-6. **Lint** — `validate.sh` must still pass.
-7. **Confirm** — the board is re-read from disk and must say *done*.
-
-> The last three are the point. A session that exits cleanly claiming success while writing nothing
-> halts the run, because nothing here takes the session's word for it.
-
-### Watching it
-
-The session console shows text as it is written, the tool calls it makes, and the work of any
-subagent it dispatches — without that last one, a phase that delegates is a silent gap of several
-minutes. **Detail** adds the model's own reasoning and every hook call, which are worth having when
-something is wrong and noise when it is not.
-
-### Asking it something
-
-The box under the console puts a question to the session that is running *now*. It becomes one more
-turn in the same conversation — the context is intact and the phase carries on afterwards — rather
-than a reason to stop it. The same question works from any terminal with `btw "…"`. It is framed as
-out-of-band before it is sent, so an answer does not turn into a change of direction.
-
-### Pausing it
-
-**Pause after this phase** arms a pause and names the phase that has to finish first; nothing is cut
-off, and it can be cancelled until it arrives. **Stop now** is the one that interrupts, and it
-records the phase as *interrupted* rather than *failed*, because a phase cut off partway may have
-half-finished something.
-
-## The launch options
-
-Every AI launch — the run form, a phase's "Run only this", a recovery button, a review — opens on
-the same set of choices: model, effort, permissions, skills, plus four newer knobs. **Attach
-default skills** decides whether this machine's `--default-skills` list rides along (off unless you
-turn it on). **QA gate** activates the plan's QA gating at start. **Branch** puts the whole run on
-one work branch, `pe/<slug>`, instead of whatever is checked out — and with **Open a PR** on, the
-plan's last phase pushes that branch and opens the PR after one approval tap.
-
-Settings ▸ Automation holds the defaults these forms open with; each launch can override them for
-itself.
-
-## Running more than one project
-
-One install, one console per project. `cd` into a repository and start it — the consoles for your
-other projects keep running, each on its own port with its own state.
-
-```bash
-cd ~/code/alpha && phase-console start     # http://127.0.0.1:4123
-cd ~/code/beta  && phase-console start     # a different port, a different console
-phase-console list                         # both, with their roots, ports and status
-phase-console open alpha                   # by name, from anywhere
-```
-
-A console belongs to a **repository root**, and its identity comes from that path — so the same
-project is always the same console, across restarts and reboots, without anything being written
-down.
-
-**Which console a verb means.** The one for the directory you are standing in. Name another with
-`phase-console <verb> <name>`, `--instance <sel>` or `--root <dir>`; a selector matches an id, a
-name, or a unique folder name. `phase-console status` with no selector reports all of them.
-
-**Ports.** The first console you ever ran keeps **4123**. Every other project derives a stable one
-in **4124–4223** from its path. If something already holds that port the server takes the next free
-one and records what it actually bound, so nothing has to be guessed twice. Starting a console on a
-port that belongs to a *different* project is refused by name rather than failing with an
-address-in-use — and because a port is reserved by registration rather than by being bound, a
-stopped console still owns its port and a restart lands where it was.
-
-**Naming a project.** By default a console is named after its folder. Commit a `.phase-console.json`
-at the repository root to decide it for everyone who clones:
-
-```json
-{ "name": "alpha", "port": 4150 }
-```
-
-Both keys are optional — `port` pins one instead of deriving it.
-
-**What is per console, and what is not.** Logs, notifications, push subscriptions and settings are
-separate for each. The first console keeps the paths it has always used, so a single-project machine
-gains no new files and nothing moves on upgrade; the rest live under `instances/<id>/`. Run
-journals are keyed by repository already, so they were never shared. Each installed console also
-gets its own launchd/systemd unit — the first keeps the plain name, so installing a second never
-renames the one you already have.

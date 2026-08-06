@@ -1,5 +1,5 @@
 /**
- * The operating guide, as deep-linkable tabbed sections.
+ * The operating guide, as deep-linkable tabbed sections of cards.
  *
  * The legacy guide was one long scroll with an in-page anchor (`#verified`) that
  * a hash router ate — the link went nowhere, because `#verified` *is* the route.
@@ -7,24 +7,38 @@
  * there are no in-page anchors left to break, every section can be linked to,
  * and a reload lands where you were.
  *
+ * A section is then cut into cards at its headings (`split.ts`), because tabs
+ * alone only moved the wall of text behind a tab — `mobile.md` was still 192
+ * unbroken lines and `reference.md` ~90 table rows under one heading. Cards are
+ * where a reader can stop.
+ *
  * The prose lives in `client/src/content/guide/*.md` and renders through the
  * Phase 3 sanitizer, so the guide is text a person can edit rather than markup a
- * component owns.
+ * component owns. Nothing in this directory knows a heading by name.
  */
 
 import { useEffect, useRef } from 'react';
 import { useConsoleState } from '@/lib/queries';
-import { Markdown } from '@/components/markdown';
-import { decorateStatusWord } from '@/components/ui/chip';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { navigate } from '@/router';
 import type { ViewProps } from '@/router';
 import { Page } from '../_page';
 import { SECTIONS, resolveSection } from './sections';
+import { SectionPanel } from './section';
 
 export default function GuideView({ route }: ViewProps) {
   const { data: state } = useConsoleState();
   const section = resolveSection(route.segments[1]);
+  const list = useRef<HTMLDivElement>(null);
+
+  // Ten tabs do not fit a 390px strip, and the one you are on can be off the
+  // right-hand edge on arrival — which reads as the tab bar having forgotten
+  // where you are. `nearest` so a tab already in view is left alone.
+  useEffect(() => {
+    list.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  }, [section.id]);
 
   return (
     <Page
@@ -34,7 +48,7 @@ export default function GuideView({ route }: ViewProps) {
       <ConsolePosture state={state} />
 
       <Tabs value={section.id} onValueChange={(id) => navigate(`guide/${id}`)}>
-        <TabsList aria-label="Guide sections">
+        <TabsList aria-label="Guide sections" ref={list}>
           {SECTIONS.map((s) => (
             <TabsTrigger key={s.id} value={s.id}>{s.label}</TabsTrigger>
           ))}
@@ -42,43 +56,12 @@ export default function GuideView({ route }: ViewProps) {
 
         {SECTIONS.map((s) => (
           <TabsContent key={s.id} value={s.id} className="pt-4">
-            {s.id === section.id && (
-              <article className="mx-auto max-w-[72ch]">
-                <p className="mb-3 text-sm text-ink-muted">{s.lede}</p>
-                <GuideBody text={s.body} />
-              </article>
-            )}
+            {s.id === section.id && <SectionPanel section={s} card={route.query.card} />}
           </TabsContent>
         ))}
       </Tabs>
     </Page>
   );
-}
-
-/**
- * The section's markdown, with every status word dressed as its real badge.
- *
- * Markdown cannot colour `halted` the way the app paints it, and a glossary in
- * plain text asks the reader to imagine the mapping. After the sanitizer has
- * filled the DOM (the Markdown child's effect runs before this one), every
- * inline-code or bold token that IS a status word — including the departures
- * spellings, Departed / Boarding / Held — gets the exact class and hover title
- * its chip carries, from the same tone maps the chips read. Unknown words are
- * left alone.
- */
-function GuideBody({ text }: { text?: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const rootEl = ref.current;
-    if (!rootEl) return;
-    for (const el of rootEl.querySelectorAll('code, strong')) {
-      const worn = decorateStatusWord(el.textContent ?? '');
-      if (!worn) continue;
-      el.className = worn.className;
-      el.setAttribute('title', worn.title);
-    }
-  }, [text]);
-  return <div ref={ref}><Markdown text={text} /></div>;
 }
 
 /**

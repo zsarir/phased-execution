@@ -1,3 +1,59 @@
+## Console flags
+
+All five capability switches are off unless named. Flags are read once, at startup.
+
+| Flag | Meaning |
+|---|---|
+| `--root <dir>` / `-r` | Open this repository immediately, skipping the picker. |
+| `--allow-writes` | Scaffold plans and handoffs, record QA, take locks, close and reopen plans. Never commits, never pushes. |
+| `--allow-run` | Enable the autopilot. Separate from writes on purpose. |
+| `--allow-terminal` | Open a shell in the browser. No deny list, no approval hook: whoever is at the keyboard is the policy. |
+| `--allow-agent` | Interactive `claude` sessions — including recovery and QA reviews — and the *New plan with AI* wizard. |
+| `--allow-accounts` | Register Claude accounts and choose one per run. The usage meters need no flag. |
+| `--port <n>` / `-p` | Pin a port instead of deriving one from the repository path. Never probed past. |
+| `--host <addr>` | The bind address. Defaults to `127.0.0.1` and there is no good reason to change it — see **Mobile setup**. |
+| `--no-open` | Do not open a browser on start. `PHASE_CONSOLE_NO_OPEN=1` does the same. |
+| `--instance <sel>` | Act on a named console rather than the one for this directory. |
+| `--remote <host>` | Also answer to this hostname, behind a proxy that authenticates callers. Turns on strict `Host` checking. |
+| `--remote-user <login>` | A login allowed to arrive that way. **Required** by `--remote`. |
+| `--max-sessions <n>` | Global ceiling on concurrent sessions. Default 3; a run may ask for fewer, never more. |
+| `--default-skills <csv>` | Skills seeded into every new run. Repeatable and additive — unticking one in the console is still a real off. |
+| `--scripts <dir>` | Use a different phased-execution checkout. |
+| `--log-file <path>` / `--no-log-file` | Structured log destination. Defaults under `~/.local/state/phase-console/`. |
+
+## Environment variables
+
+| Variable | Does |
+|---|---|
+| `PHASE_CONSOLE_NOTIFY` | A command run as `cmd "<title>" "<body>"` for every announcement. Environment-only on purpose. |
+| `PHASE_CONSOLE_URL` | Which console `btw` talks to. |
+| `PHASE_CONSOLE_HOME` | Where the console's own install lives, for the launcher and the CLI. |
+| `PHASE_CONSOLE_REMOTE_USERS` | Comma-separated logins, the same as repeating `--remote-user`. |
+| `PHASE_CONSOLE_MAX_SESSIONS` | The default for `--max-sessions`. |
+| `PHASE_CONSOLE_DEFAULT_SKILLS` | The default for `--default-skills`. |
+| `PHASE_CONSOLE_NO_OPEN` | `1` suppresses the browser launch. |
+| `PHASE_CONSOLE_LOG` | The default log path; empty disables the file. |
+| `PHASE_EXEC_GATES` | `1` lets `cmd` gate checks actually run a command. |
+
+## Console verbs
+
+Every verb takes an optional instance selector — a name, an id or a unique folder name. With none, it
+means the console for the directory you are in.
+
+| Verb | Does |
+|---|---|
+| `phase-console start [sel]` | Start it — through its background agent if one is installed, in the foreground otherwise. |
+| `phase-console list` | Every console: name, root, port, status, unit. |
+| `phase-console open [sel]` | Open it in the browser. Refuses when stopped, and says how to start it. |
+| `phase-console status [sel]` | With no selector, reports **all** consoles. |
+| `phase-console stop \| restart \| logs [sel]` | The rest of the lifecycle, one console at a time. |
+| `phase-console update` | Rebuild and restart. On an npm or Homebrew install it tells you to update the package instead. |
+| `phase-console install-skill` | Put the skill files where Claude Code reads them. For npm and Homebrew installs. |
+| `phase-console --install-agent --root <repo>` | Install the login agent — launchd or systemd — with the flags you name. |
+
+`./start` is the clone's equivalent, but it takes a **repository, not a verb**: its first bare
+argument becomes `--root`. Use `viewer/run <verb>` or `phase-console <verb>` for the lifecycle.
+
 ## Gate checks
 
 Add `- **Gate-check:** <type> …` to a phase to say what holds it up. A gate the machine can read
@@ -12,35 +68,6 @@ clears itself; one it cannot waits for you.
 | `cmd <command>` | The command exits 0. **Off unless `PHASE_EXEC_GATES=1`** — running a command written in a document is worth an explicit opt-in. |
 | `manual <who>` | Never by itself. A person decides. |
 
-## Console flags
-
-| Flag | Meaning |
-|---|---|
-| `--root <dir>` | Open this repository immediately, skipping the picker. |
-| `--allow-writes` | Enable scaffolding, QA records and locks. |
-| `--allow-run` | Enable the autopilot. Separate on purpose. |
-| `--allow-agent` | Open interactive `claude` sessions — including recovery and QA reviews — and the *New plan with AI* wizard. |
-| `--allow-terminal` | Open a shell in the browser. No deny list, no approval hook: whoever is at the keyboard is the policy. |
-| `--port <n>` | Pin a port instead of deriving one from the repository path. |
-| `--instance <sel>` | Act on a named console rather than the one for this directory. |
-| `--remote <host>` | Also answer to this hostname, behind a proxy that authenticates callers. Turns on strict `Host` checking. |
-| `--remote-user <login>` | A login allowed to arrive that way. Required by `--remote`. |
-| `--scripts <dir>` | Use a different phased-execution checkout. |
-| `--log-file <path>` | Structured log. Defaults under `~/.local/state/phase-console/`. |
-
-## Console verbs
-
-Every verb takes an optional instance selector — a name, an id or a unique folder name. With none,
-it means the console for the directory you are in.
-
-| Verb | Does |
-|---|---|
-| `phase-console start [sel]` | Start it — through its background agent if one is installed, in the foreground otherwise. |
-| `phase-console list` | Every console: name, root, port, status, unit. |
-| `phase-console open [sel]` | Open it in the browser. Refuses when it is stopped, and says how to start it. |
-| `phase-console status [sel]` | With no selector, reports **all** consoles. |
-| `phase-console stop \| restart \| logs [sel]` | The rest of the lifecycle, one console at a time. |
-
 ## Where things live
 
 | Path | What is in it |
@@ -53,20 +80,18 @@ it means the console for the directory you are in.
 
 ## The engine, if you would rather drive it yourself
 
-Everything the console shows comes from these. It never recomputes status in the browser, so what
-you see here and what you get in a terminal cannot disagree.
+Everything the console shows comes from these scripts. It never recomputes status in the browser, so
+what you see here and what you get in a terminal cannot disagree.
 
 ```bash
-scripts/phase-graph.sh <slug>                  # the board
-scripts/phase-graph.sh <slug> --boot-prompt N  # the prompt for one phase
-scripts/phase-graph.sh <slug> --session-plan   # which phases to batch
-scripts/phase-graph.sh <slug> --gate-status N  # is this phase held up
-scripts/validate.sh <slug>                     # lint the plan
-scripts/new-handoff.sh <slug> N title complete # scaffold a handoff
-scripts/phase-lock.sh <slug> status N          # who is working this phase
-scripts/qa-record.sh <slug> N pass --report …  # record a QA result
-scripts/next-phase-prompt.sh <slug> N          # the stop banner + boot prompts
+scripts/phase-graph.sh <slug>              # the board
+scripts/validate.sh <slug>                 # lint the plan
+scripts/phase-lock.sh <slug> status N      # who is working this phase
+scripts/qa-record.sh <slug> N pass --report …   # record a QA result
 ```
+
+The full set — boot prompts, session batching, gate status, handoff scaffolding — is in
+`docs/controls.md`.
 
 ## Keyboard
 
@@ -81,18 +106,19 @@ scripts/next-phase-prompt.sh <slug> N          # the stop banner + boot prompts
 | `n` | Notifications |
 | `Esc` | Close a dialog |
 
-## Status words
+## The five vocabularies
 
-Four vocabularies coexist, on purpose, and they nest: a **plan** has a status (is anyone still
-pursuing this at all), a **run** has a status (what the autopilot is doing with the plan right now),
-each **phase in that run** has a record (what happened to it here), and the **board** states what is
-true of a phase on disk — spelled the way a departures board would. Every badge in the app says this
-on hover; this is the same text in one place.
+They coexist on purpose, and they nest. A **plan** has a status (is anyone still pursuing this at
+all). A **run** has a status (what the autopilot is doing with it right now). Each **phase in that
+run** has a record (what happened to it here). The **board** states what is true of a phase on disk,
+spelled the way a departures board would. And a **claim** says whether somebody is already working it.
 
-### Plan status
+Every badge in the app says this on hover; the tables below are the same text in one place.
 
-The only one of the four that is *stored* rather than computed — because "does anyone still care?"
-cannot be read off the files. The last three are **terminal**, which is what the app calls **closed**.
+## Plan status
+
+The only one that is *stored* rather than computed — "does anyone still care?" cannot be read off the
+files. The last three are **terminal**, which is what the app calls **closed**.
 
 | Word | What it means | What to do |
 |---|---|---|
@@ -101,18 +127,12 @@ cannot be read off the files. The last three are **terminal**, which is what the
 | `abandoned` | Dropped. It will not be finished, and that is a decision, not a failure. | Nothing. Reopen if it comes back. |
 | `superseded` | Replaced by a different plan. The reason names the replacement. | Follow the plan that replaced it. |
 
-A closed plan **goes quiet without going away**: no ready phases, no boot prompts, no session
-batching, no stuck-handoff or QA-failure warnings, no notifications, and it leaves every portfolio
-total. Its board still renders in full, search still finds it (with a `closed` badge), and real
-structural damage is still reported — as a note rather than an error. Closing quiets a plan; it never
-hides one.
+A closed plan **goes quiet without going away**: no ready phases, no boot prompts, no notifications,
+and it leaves every portfolio total. Its board still renders, search still finds it, and real
+structural damage is still reported. Close or reopen from **⋯ ▸ Close plan** — reopening is always
+available, so closing is a cheap, reversible call.
 
-Close or reopen it from the plan page (**⋯ ▸ Close plan**, which asks for a status and one line saying
-why) or with `close-plan.sh`. Reopening is always available, so closing is a cheap, reversible call —
-and a closed plan may perfectly well have unfinished phases, just as a plan with every phase done is
-still open until somebody says otherwise.
-
-### Run status
+## Run status
 
 | Word | What it means | What to do |
 |---|---|---|
@@ -129,14 +149,17 @@ still open until somebody says otherwise.
 | `finished` | Nothing left to run on this plan. | Nothing. |
 | `interrupted` | Nothing is driving it and nothing recorded why — a console or session died mid-flight. | Resume with AI, or press Continue — work already on disk is kept. |
 
-### Phase record (the "This run" column)
+## Phase record
+
+The "This run" column: what happened to a phase *in this run*, as opposed to what is true of it on
+disk.
 
 | Word | What it means | What to do |
 |---|---|---|
 | `pending` | This run has not started the phase yet. | Nothing — the loop reaches it when its dependencies are done. |
 | `gated` | Parked at the plan's gate — a condition the plan reserves for a person. | Confirm the condition (the note quotes it), then Retry re-checks the gate. |
 | `running` | A session is working this phase right now. | Watch its tab; Ask reaches the session mid-flight. |
-| `verifying` | The session finished; the console runs the plan's §Verification commands itself. | Nothing — green marks it done, red halts with the evidence. |
+| `verifying` | The session finished; the console runs the plan's verification commands itself. | Nothing — green marks it done, red halts with the evidence. |
 | `awaiting-verification` | The machine checks passed; steps only a person can confirm remain. | Answer the verification card — it lists exactly what needs your eyes. |
 | `done` | Finished and independently verified in this run. | Nothing. |
 | `failed` | The attempt failed — a red verification, or a session that produced nothing. | Why? shows the evidence; Fix with AI repairs it, or Retry restarts the run here. |
@@ -145,10 +168,12 @@ still open until somebody says otherwise.
 | `parked` | Needs a person before the loop will touch it again — the note says exactly why. | Read the note (gate, foreign lock, decision), act on it, then Retry. |
 | `queued` | Waiting for repos another phase or plan is holding; starts itself when they free. | Nothing — the queued chip names what it waits on. |
 
-A `failed` record under a phase the **board** calls done means: this run's attempt stopped, and
-the work was finished and verified outside it. The row says "nothing to fix — done elsewhere".
+A `failed` record under a phase the **board** calls done means: this run's attempt stopped, and the
+work was finished and verified outside it. The row says "nothing to fix — done elsewhere".
 
-### Board state (the "Status" column, departures spelling)
+## Board state
+
+The "Status" column, in departures spelling.
 
 | State | On the board | What it means | What to do |
 |---|---|---|---|
@@ -159,10 +184,10 @@ the work was finished and verified outside it. The row says "nothing to fix — 
 | `stuck` / `blocked` | **Blocked** | Its handoff is marked blocked — the Outstanding section says exactly why. | Read the excerpt on the phase page, or Repair with AI on the run page. |
 | `gated` | **Gated** | The plan reserves a decision for a person before this phase may run. | Confirm the gate condition (quoted on the phase page), then start or Retry. |
 
-### Claim (the "Lock" column)
+## The claim
 
 A claim is one session saying "I am working this phase". It lives in a file —
-`docs/handoffs/<slug>/.locks/phase-NN.lock` — written by `phase-lock.sh claim`, and it carries a
+`docs/handoffs/<slug>/.locks/phase-NN.lock` — written by `phase-lock.sh claim`, and carries a
 **lease** (30 minutes by default) that the holder renews while it works. Every phase table shows it,
 because it is the one fact that decides whether the buttons beside it do anything.
 

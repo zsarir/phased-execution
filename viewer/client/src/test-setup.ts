@@ -17,6 +17,15 @@ if (!window.matchMedia) {
   }));
 }
 
+// Nor `scrollIntoView`, which jsdom leaves unimplemented because it has no
+// layout. The guide uses it in two places — bringing the active tab into a
+// ten-tab strip, and landing on a `?card=` deep link — and neither has anything
+// to assert in a DOM with no viewport. A no-op keeps those paths exercised
+// rather than guarded in app code for a test environment's benefit.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
+
 // Neither does it have EventSource. The data plane opens exactly one on boot.
 if (!('EventSource' in globalThis)) {
   class FakeEventSource {

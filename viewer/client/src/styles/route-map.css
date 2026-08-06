@@ -169,6 +169,176 @@
     paint-order: stroke fill;
   }
 
+  /* ---------------------------------------------------------------- *
+   * The guide's line — the same network language, one dimension.
+   *
+   * The map above is a graph and needs an SVG. A section of the guide is a
+   * straight sequence, so it is markup: real buttons, real focus, text that
+   * wraps, tap targets that survive a phone. Only the paint is shared, and it
+   * is shared deliberately — a station in the guide has to read as the same
+   * object as a station on a plan, or the metaphor is decoration.
+   *
+   * Two states, and they are the ones `concepts.md` used to spend two emoji on:
+   * a SOLID station is work the machine does alone, a RINGED one waits for a
+   * person. `--line-gated` is not a new colour for "you" — it is already the
+   * engine's word for "a person must decide".
+   * ---------------------------------------------------------------- */
+  .guide-strip { --dot: 11px; --rail: 34px; }
+
+  .guide-strip ol {
+    display: flex;
+    gap: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .guide-strip ol::-webkit-scrollbar { display: none; }
+  .guide-strip li { flex: 1 0 7.5rem; min-width: 0; }
+
+  .guide-strip button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    inline-size: 100%;
+    padding-block-end: 0.5rem;
+    text-align: center;
+    cursor: pointer;
+  }
+
+  /* The track: a full-width rule through the row, with the dot sitting on it.
+     Drawn per station rather than as one line behind them so the ends stop at
+     the first and last stop instead of running off into the margin. */
+  .guide-strip-rail {
+    position: relative;
+    display: block;
+    inline-size: 100%;
+    block-size: var(--rail);
+  }
+  .guide-strip-rail::before {
+    content: '';
+    position: absolute;
+    inset-block-start: calc(50% - 1.5px);
+    inset-inline: 0;
+    block-size: 3px;
+    background: var(--track);
+    animation: draw-strip var(--duration-draw) var(--ease-transit) backwards;
+  }
+  .guide-strip li:first-child .guide-strip-rail::before { inset-inline-start: 50%; }
+  .guide-strip li:last-child .guide-strip-rail::before { inset-inline-end: 50%; }
+
+  @keyframes draw-strip { from { opacity: 0; transform: scaleX(0.2); } }
+
+  .guide-strip-dot {
+    position: absolute;
+    inset-block-start: calc(50% - var(--dot) / 2);
+    inset-inline-start: calc(50% - var(--dot) / 2);
+    inline-size: var(--dot);
+    block-size: var(--dot);
+    border-radius: 50%;
+    border: 3px solid var(--track);
+    background: var(--surface);
+    transition: transform var(--duration-fast) var(--ease-transit);
+  }
+  [data-actor='machine'] .guide-strip-dot,
+  [data-actor='machine'] > .guide-strip-dot {
+    border-color: var(--line-done);
+    background: var(--line-done);
+  }
+  [data-actor='person'] .guide-strip-dot,
+  [data-actor='person'] > .guide-strip-dot {
+    border-color: var(--line-gated);
+    background: var(--surface);
+  }
+
+  .guide-strip button:hover .guide-strip-dot,
+  .guide-strip button:focus-visible .guide-strip-dot { transform: scale(1.25); }
+  .guide-strip button[aria-current] .guide-strip-dot {
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--action) 30%, transparent);
+  }
+
+  .guide-strip-num {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    color: var(--ink-faint);
+  }
+  .guide-strip button[aria-current] .guide-strip-num { color: var(--action); }
+
+  .guide-strip-label {
+    font-family: var(--font-display);
+    font-size: var(--text-2xs);
+    line-height: 1.25;
+    color: var(--ink-muted);
+    padding-inline: 0.375rem;
+    /* Two lines, then ellipsis — a station name is a signpost, not the card. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  .guide-strip button:hover .guide-strip-label,
+  .guide-strip button[aria-current] .guide-strip-label { color: var(--ink); }
+
+  .guide-strip-key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    margin-block-start: 0.5rem;
+    font-size: var(--text-2xs);
+    color: var(--ink-faint);
+  }
+  .guide-strip-key span {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+    padding-inline-start: 0.25rem;
+  }
+  .guide-strip-key .guide-strip-dot { position: static; inline-size: 9px; block-size: 9px; }
+
+  /* The connective tissue between the cards themselves: the same track, turned
+     vertical, running down the gutter. This is what a route looks like on a
+     phone, and it is the reason the cards read as stops rather than as a list
+     that happens to be in order. */
+  .guide-route { position: relative; --stop-y: 1.35rem; --card-gap: 0.75rem; }
+  .guide-route > li { position: relative; padding-inline-start: 1.75rem; }
+  .guide-route > li::before {
+    content: '';
+    position: absolute;
+    inset-inline-start: 0.3125rem;
+    /* Down through the gap between cards, not stopping at each card's edge.
+       Track that restarts at every station is a dashed line, and a dashed line
+       already means something else here — a phase whose dependency is not met. */
+    inset-block: 0 calc(-1 * var(--card-gap));
+    inline-size: 3px;
+    background: var(--track);
+  }
+  /* The line starts at the first stop and ends at the last: a route has two
+     ends, and track running off past them says there is more to come. */
+  .guide-route > li:first-child::before { inset-block-start: var(--stop-y); }
+  .guide-route > li:last-child::before {
+    inset-block-end: calc(100% - var(--stop-y));
+  }
+  .guide-route > li > .guide-stop {
+    position: absolute;
+    inset-block-start: calc(var(--stop-y) - 6.5px);
+    inset-inline-start: 0;
+    inline-size: 13px;
+    block-size: 13px;
+    border-radius: 50%;
+    border: 3px solid var(--track);
+    background: var(--surface);
+  }
+  .guide-route > li > .guide-stop[data-actor='machine'] {
+    border-color: var(--line-done);
+    background: var(--line-done);
+  }
+  .guide-route > li > .guide-stop[data-actor='person'] { border-color: var(--line-gated); }
+
   /* The legend dot borrows the same `--state` mechanism as every chip. */
   .legend-dot {
     inline-size: 9px;

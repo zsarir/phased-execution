@@ -128,9 +128,10 @@ Install the phased-execution skill for me, and ask before each step.
      --allow-writes   scaffold plans and handoffs, record QA, take phase locks,
                       close and reopen plans
      --allow-run      spawn unattended Claude sessions that edit my repository
-                      for hours — the widest of the four, say so plainly
+                      for hours — the widest of the five, say so plainly
      --allow-terminal a real shell in the browser, running as me
      --allow-agent    interactive claude sessions and the New-plan wizard
+     --allow-accounts register Claude accounts and switch between them mid-run
    Default every one of them to off. Then install with only what I chose:
      bash <skill>/viewer/deploy/agent.sh install --root <repo> [flags]
    (from npm or brew: phase-console --install-agent --root <repo> [flags])

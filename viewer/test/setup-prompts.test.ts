@@ -36,7 +36,7 @@ const read = (rel: string) => readFileSync(join(ROOT, rel), 'utf8');
  */
 const CARRIERS: [string, string[]][] = [
   ['install', ['README.md']],
-  ['tailscale', ['README.md']],
+  ['tailscale', ['README.md', 'viewer/client/src/content/guide/mobile.md']],
   ['desktop-launcher', ['docs/install.md', 'viewer/client/src/content/guide/running.md']],
 ];
 
@@ -99,7 +99,7 @@ test('the prompt keeps the promises the launcher actually makes', () => {
   // Each knob the prompt tells a reader to set has to exist in the file it
   // tells them to open. A renamed knob would otherwise be found by a person
   // following instructions, at the point the instructions stop working.
-  for (const knob of ['ROOT', 'WRITES', 'RUNS', 'TERM_FLAG', 'AGENT', 'PORT', 'SUPERVISED']) {
+  for (const knob of ['ROOT', 'WRITES', 'RUNS', 'TERM_FLAG', 'AGENT', 'ACCOUNTS', 'PORT', 'SUPERVISED']) {
     assert.ok(DESKTOP_LAUNCHER_PROMPT.includes(knob), `prompt never mentions ${knob}`);
     assert.match(launcher, new RegExp(`^${knob}=`, 'm'), `launcher has no ${knob}= knob`);
   }

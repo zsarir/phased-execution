@@ -3,7 +3,7 @@ export {
   Chip, StateChip, chipVariants, asPhaseState, PHASE_STATES, STATE_BOARD,
   type ChipProps, type PhaseState,
 } from './chip';
-export { Card, CardHeader, CardTitle, CardBody, Tile } from './card';
+export { Card, CardHeader, CardTitle, CardBody, Tile, cardClass } from './card';
 export {
   Banner, StatusStack, noteVariants,
   type Severity, type StatusNote, type NoteOrder,

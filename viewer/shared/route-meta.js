@@ -69,11 +69,17 @@ export const PLAN_TABS = Object.freeze([
  * Guide section ids — the segment of `#/guide/:section`. The guide is rebuilt as
  * deep-linkable tabbed sections (replacing the single long scroll); `mobile` is the
  * dedicated phone-setup section. Deep links to these must survive a reload.
+ *
+ * `running` is how you START the console; `run` is what a run then DOES. They
+ * were one 183-line section until the split, and the id stayed with the install
+ * half because that is where the launcher prompt lives. `concepts` must remain
+ * first — it is the section an unknown id falls back to.
  * @type {readonly string[]}
  */
 export const GUIDE_SECTIONS = Object.freeze([
   'concepts',
   'running',
+  'run',
   'autopilot',
   'sessions',
   'notifications',

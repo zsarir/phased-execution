@@ -1,16 +1,18 @@
-## One switch per category, and it governs every way a message could reach you
+## One switch per category
 
-**Notifications → Preferences** has a switch per category. It is not a push setting. Turning a
-category off means that category produces:
+**Notifications ▸ Settings ▸ What to announce** has a switch per category, and it is not a push
+setting. Turning a category off means that category produces:
 
 - no record in the inbox,
 - no live event to an open tab,
-- no out-of-band hand-off to whatever `PHASE_CONSOLE_NOTIFY` points at,
+- no hand-off to whatever `PHASE_CONSOLE_NOTIFY` points at,
 - and no push to any device.
 
-A category that is off leaves no trace anywhere. That is worth stating because the obvious
-alternative — silencing only the buzz — leaves the badge climbing and the inbox filling, which is
-how people end up ignoring the inbox entirely.
+A category that is off leaves no trace anywhere. Worth stating, because the obvious alternative —
+silencing only the buzz — leaves the badge climbing and the inbox filling, which is how people end up
+ignoring the inbox entirely.
+
+## The eleven categories
 
 | Category | Tells you | Default |
 |---|---|---|
@@ -22,27 +24,42 @@ how people end up ignoring the inbox entirely.
 | **Plan finished** | A run reached the end of its plan. | On |
 | **A session ended** | An agent session or terminal finished while you were not watching, or exited with an error. | On |
 | **Console problems** | The console degraded, its file watch went deaf, or it restarted after a crash. | On |
-| **Usage limits** | A Claude account this console runs work as is approaching or hit a usage window — the 5-hour session, the weekly allowance, a per-model one — with when it resets and what the run did about it (waited, switched account, paused). | On |
+| **Usage limits** | A Claude account is approaching or has hit a usage window, with when it resets and what the run did about it. | On |
 | **Work became ready** | A phase became startable — including because of work you finished yourself, elsewhere. | **Off** |
 | **Plans changed on disk** | Any plan or handoff was written. An agent editing a handoff mid-phase fires this. | **Off** |
 
-The last two are off by default because they are firehoses rather than signals. `changed` fires on
-every write an agent makes to a document it is in the middle of writing; a channel that always
+The last two are off by default because they are firehoses rather than signals. A channel that always
 buzzes is a channel you turn off, and the notification it was hiding goes with it.
 
-**Urgent** is reserved for *nothing proceeds without you*. Those are the three that may interrupt a
-focus mode and buzz a wrist.
+**Urgent** is reserved for *nothing proceeds without you*. Those three may interrupt a focus mode and
+buzz a wrist.
+
+## Turning off the usage-limit alerts
+
+If the account meters are announcing more than you want to hear, there are two places with the same
+switch, and either one silences every leg:
+
+- **The usage meter** — open it from the rail (or the top bar on a phone) and use **Usage alerts**
+  at the bottom.
+- **Settings ▸ Claude accounts** — the same control, under the meters.
+- **Notifications ▸ Settings ▸ What to announce ▸ Usage limits** — the full list, where every other
+  category lives too.
+
+The meters keep updating either way; only the announcements stop. Be aware of what goes quiet with
+them: as well as *this window is filling up*, the category carries **a run that parked waiting for a
+window to reopen**, **an account that could not sign in**, and **a run refused before it started**
+because the account was already at its limit. If a run seems to have gone silent after you mute
+these, that is where to look.
 
 ## Devices only ever narrow
 
 Each browser you have subscribed for push has its own category list, and it can only **subtract**
-from the global one. A category disabled here is not deliverable, so no device can opt back into it,
-and a category enabled here still only reaches the devices that asked for it. The global switch is
-the ceiling; a device is a filter under it.
+from the global one. A category disabled globally is not deliverable, so no device can opt back into
+it; a category enabled globally still only reaches devices that asked for it.
 
-You can therefore keep `Phase finished` in the inbox on the laptop and off the phone, but you cannot
-have the phone buzz for a category the console does not raise at all — which is the correct answer,
-and it means a quiet phone is never hiding a message that exists somewhere else.
+So you can keep `Phase finished` in the inbox on the laptop and off the phone, but you cannot have
+the phone buzz for a category the console does not raise at all — which means a quiet phone is never
+hiding a message that exists somewhere else.
 
 Setting push up on a phone is its own walk-through: **Mobile setup**.
 
@@ -51,8 +68,8 @@ Setting push up on a phone is its own walk-through: **Mobile setup**.
 Every announcement that survives the switches lands on **Notifications**. A record knows what it is
 about — a plan, a run, a phase, a session — so it routes to the thing rather than to a list.
 
-- **Reading a page reads its notifications.** Sitting on a plan or a session page for a moment
-  marks that page's records read, scoped to that page. The count falls because you actually looked.
+- **Reading a page reads its notifications.** Sitting on a plan or session page for a moment marks
+  that page's records read, scoped to that page. The count falls because you actually looked.
 - **Mark all read** on the dashboard card zeroes the count in one act, for the flood you are never
   going to read item by item.
 - Nothing is deleted by either. The record stays; only its unread state changes.

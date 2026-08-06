@@ -1,16 +1,18 @@
 import type { HTMLAttributes } from 'react';
 import { cn } from '@/lib/cn';
 
+/**
+ * What a card looks like, as a string.
+ *
+ * Exported because not every card can BE a `<Card>`: a collapsible one is a
+ * `<details>`, and an element cannot be two tags. Three files retyped this by
+ * hand before it had a name, which is how a card ends up with the wrong shadow
+ * on one page and nobody notices.
+ */
+export const cardClass = 'rounded-lg border border-rule bg-surface shadow-card';
+
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn(
-        'rounded-lg border border-rule bg-surface shadow-card',
-        className,
-      )}
-      {...props}
-    />
-  );
+  return <div className={cn(cardClass, className)} {...props} />;
 }
 
 export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
