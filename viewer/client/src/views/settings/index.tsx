@@ -21,6 +21,7 @@ import { applyUpdateNow } from '@/lib/pwa';
 import { Page } from '../_page';
 import { AutomationCard } from './automation';
 import { AccountsCard } from './accounts';
+import { StartCommandCard } from './start-command';
 import { PolicyCard } from './policy';
 import { RestartButton } from './restart';
 import { ShutdownButton } from './shutdown';
@@ -114,6 +115,8 @@ export default function SettingsView() {
 
         {/* Directly after *This process*: that card is where Restart refuses,
             and this is the fix for the reason it refuses. */}
+        <StartCommandCard />
+
         <LauncherCard supervised={state.supervisor?.supervised} />
 
         {/* Between *This process* and *Source*: how this console is reached and
