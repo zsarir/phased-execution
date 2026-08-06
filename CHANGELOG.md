@@ -69,9 +69,10 @@ back. The Guide's long scrolls become cards on a line.
   when a run starts against a nearly-spent window (≥97% refuses, with the reset time in the
   message), and the sign-in alerts. **`usage-climbing`** — the 80% and 95% early warnings per
   account and window, with hysteresis, once per window — is its own category and off by default, so
-  muting the climb never mutes the crash. Both switches sit in the meters dialog as well as the
-  notification list, because nobody forms the intention "stop telling me about usage" while reading
-  a list of categories; they form it looking at the meter that just buzzed them.
+  muting the climb never mutes the crash. The *Usage limits* mute is repeated in the meters dialog
+  itself, saying what it silences and what stays on: nobody forms the intention "stop telling me
+  about usage" while reading a list of notification categories; they form it looking at the meter
+  that just buzzed them.
 - **Per-session Freeze and Stop**, on the autopilot's session tabs, the Runs page's lanes, and the
   session console's toolbar. Freeze SIGSTOPs one lane and the run keeps driving (`frozen` now means
   *everything* is frozen); Stop ends one session (SIGCONT → SIGTERM → SIGKILL backstop), records
@@ -92,8 +93,7 @@ back. The Guide's long scrolls become cards on a line.
 - **A one-click Desktop launcher.** Create writes the artifact itself — macOS gets the shipped
   `.command` with root and port patched in `$HOME`-relative and all five switches on; Linux gets an
   XDG `.desktop` with absolute `Exec` paths (and GNOME's *Allow Launching* said rather than hidden);
-  Windows gets the WSL story instead of a shortcut that breaks. New `server/launcher.ts` and
-  `/api/launcher`, above the store wall.
+  Windows gets the WSL story instead of a shortcut that breaks.
 - **Permission defaults you can strike and put back.** Every shipped `ask`/`allow` default gets an
   ×, struck **by name** at the chosen scope — so an upgrade's new defaults still apply, which a
   copied-and-edited list would silently prevent — listed struck-through with ↩ to restore one, and
