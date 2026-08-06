@@ -10,9 +10,11 @@ Enforced inside Claude Code itself. **Measured still blocking with the console u
 
 `git push`, `terraform apply`, `terraform destroy`, `sudo`, publishing a package, `kubectl delete`.
 
-Nothing can approve past these. You run them yourself, deliberately. Add your own in
+Nothing can approve past these at run time. Add your own in
 `~/.config/phase-console/autopilot.json`, or from **Settings** — your rules merge on top of the
-defaults and can only add to them.
+defaults, and shipped defaults can be struck by name (each list has ↩ and **Restore defaults** as
+the ways back). Striking a shipped **deny** rule is the one edit Settings confirms first: it widens
+what every future run may do, with this console dead included.
 
 ## The approval hook does not
 
@@ -29,7 +31,7 @@ between an agent and a deploy.
 
 | List | Enforced by | Behaviour |
 |---|---|---|
-| `deny` | The CLI | Never runs, whatever you click. The wall. |
+| `deny` | The CLI | Never runs, whatever you click. The wall — editable in Settings, behind its one confirm. |
 | `ask` | The HTTP hook | Raises a card and waits. **Fails open** if the console is not running. |
 | `allow` | The CLI | Runs unasked. The ones *you* add outrank the ask list. |
 

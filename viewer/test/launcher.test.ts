@@ -48,11 +48,50 @@ test('a written copy bakes in the root as $HOME-relative, the port, and every sw
     assert.ok(patched.includes(knob), knob);
   }
   assert.match(patched, /^LAUNCHER_REV=\d+$/m, 'the staleness check survives the patch');
+  // A plain console leaves the rev-7 knobs empty — the copy composes exactly
+  // the line a rev-6 one did, so nothing churns for the common case.
+  assert.match(patched, /^REMOTE=""$/m);
+  assert.match(patched, /^REMOTE_USERS=""$/m);
+  assert.match(patched, /^MAX_SESSIONS=""$/m);
+  assert.match(patched, /^DEFAULT_SKILLS=""$/m);
 
   // A root OUTSIDE home stays absolute — $HOME-relative would point at the
   // wrong disk on the very machine it was written for.
   const elsewhere = renderCommandFile(TEMPLATE, { root: '/srv/repo', port: 4123, home: '/home/someone' });
   assert.match(elsewhere, /^ROOT="\/srv\/repo"$/m);
+});
+
+test('PIN: the template is at LAUNCHER_REV 7 — bump it whenever the argv changes', () => {
+  // The rev is what tells an installed copy it is stale. Adding a knob or a
+  // flag without bumping this leaves every Desktop copy silently behind.
+  assert.match(TEMPLATE, /^LAUNCHER_REV=7$/m);
+});
+
+test('the rev-7 knobs bake this console\'s remote, session and skills settings', () => {
+  const patched = renderCommandFile(TEMPLATE, {
+    root: '/home/someone/code/my-repo', port: 4199, home: '/home/someone',
+    remoteHosts: ['console.tail1234.ts.net'], remoteUsers: ['op@github'],
+    maxSessions: 5, defaultSkills: ['qa', 'design-review'],
+  });
+  assert.match(patched, /^REMOTE="console\.tail1234\.ts\.net"$/m);
+  assert.match(patched, /^REMOTE_USERS="op@github"$/m);
+  assert.match(patched, /^MAX_SESSIONS="5"$/m);
+  assert.match(patched, /^DEFAULT_SKILLS="qa,design-review"$/m);
+
+  // The default ceiling is not pinned: the console's own default keeps ruling,
+  // including a future one.
+  const plain = renderCommandFile(TEMPLATE, {
+    root: '/home/someone/code/my-repo', port: 4199, home: '/home/someone', maxSessions: 3,
+  });
+  assert.match(plain, /^MAX_SESSIONS=""$/m);
+});
+
+test('a template without the rev-7 knobs is refused rather than silently dropping them', () => {
+  const old = TEMPLATE.replace(/^REMOTE=.*\n/m, '');
+  assert.throws(
+    () => renderCommandFile(old, { root: '/r', port: 1, home: '/h' }),
+    /REMOTE knob/,
+  );
 });
 
 test('a template with no LAUNCHER_REV is refused rather than copied blind', () => {
@@ -71,6 +110,26 @@ test('the Linux entry is a terminal XDG launcher with absolute paths and the ful
   assert.ok(entry.includes('/opt/phased-execution/start'));
   assert.ok(entry.includes('/home/dev/repo'));
   for (const flag of FULL_FLAGS) assert.ok(entry.includes(flag), flag);
+});
+
+test('the Linux entry carries the extras and names its instance', () => {
+  const entry = renderDesktopEntry({
+    skillDir: '/opt/pe', root: '/srv/repo', port: 4125,
+    remoteHosts: ['console.tail1234.ts.net'], remoteUsers: ['op@github'],
+    maxSessions: 5, defaultSkills: ['qa'],
+    instanceName: 'hub', isDefault: false,
+  });
+  assert.ok(entry.includes('--remote console.tail1234.ts.net'));
+  assert.ok(entry.includes('--remote-user op@github'));
+  assert.ok(entry.includes('--max-sessions 5'));
+  assert.ok(entry.includes('--default-skills qa'));
+  // Two projects must not put two identically-labelled icons on one desktop.
+  assert.match(entry, /^Name=Phase Console — hub$/m);
+
+  const plain = renderDesktopEntry({ skillDir: '/opt/pe', root: '/srv/repo', port: 4123 });
+  assert.match(plain, /^Name=Phase Console$/m);
+  assert.ok(!plain.includes('--remote '), 'a plain console composes the plain line');
+  assert.ok(!plain.includes('--max-sessions'));
 });
 
 test('the plan per platform: mac gets a .command, linux a .desktop, windows the WSL story', () => {

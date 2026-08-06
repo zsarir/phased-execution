@@ -344,7 +344,14 @@ export type RunState = {
    */
   children?: Record<string, ChildRef>;
   waitUntil: string | null;
-  halt: { at: string; reason: string; phase?: number } | null;
+  /**
+   * Why the run stopped and started asking for a person. `kind` is the
+   * machine-readable class (`verify-failed`, `needs-human`, …) written at the
+   * halt site so the auto-recovery classifier reads a name instead of parsing
+   * a sentence; absent on records written before kinds existed, which is why
+   * every reader keeps a fallback on the words.
+   */
+  halt: { at: string; reason: string; phase?: number; kind?: string } | null;
   /**
    * A pause that has been asked for but not yet reached.
    *
@@ -431,6 +438,22 @@ export type RunState = {
    * dismiss it themselves.
    */
   reopenedAt?: string | null;
+  /**
+   * Recovery bookkeeping, keyed by phase number as a string (`plan` for a
+   * plan-wide repair). `attempts` counts sessions the console launched BY
+   * ITSELF — bumped at launch, so a console that dies mid-recovery still
+   * remembers it tried — while `lastAt` / `lastReason` / `fixed` record how
+   * the newest session ended, whoever started it. Absent on runs that predate
+   * the feature, which reads as "never tried".
+   */
+  recoveries?: Record<string, { attempts: number; lastAt: string; lastReason?: string; fixed?: boolean }>;
+  /**
+   * The run heals itself: an auto-recoverable halt launches the fix agent, and
+   * a fixed board resumes the run. Absent means off — a run file written
+   * before the feature keeps meaning what it meant; new runs get it from the
+   * launch dialog, seeded by the `autoRecoverByDefault` pref.
+   */
+  autoRecover?: { attempts: number };
   phases: Record<string, PhaseRecord>;
 };
 
@@ -494,6 +517,8 @@ export type NewRunOptions = {
   maxParallel?: number;
   gitMode?: 'default-branch' | 'new-branch';
   openPr?: boolean;
+  /** Heal halts automatically. `true` takes the default budget; an object names it. */
+  autoRecover?: boolean | { attempts?: number };
 };
 
 export function newRun(opts: NewRunOptions): RunState {
@@ -561,6 +586,17 @@ export function newRun(opts: NewRunOptions): RunState {
     // both ways under new-branch so the header can show the run's own record.
     ...(opts.gitMode === 'new-branch'
       ? { gitMode: 'new-branch' as const, openPr: opts.openPr !== false }
+      : {}),
+    // Off is the absent state, like everything above — but unlike them the ON
+    // value is chosen by the caller (the pref-resolved default), not here: a
+    // pure constructor does not get to decide what "unset" means for automation.
+    ...(opts.autoRecover
+      ? {
+        autoRecover: {
+          attempts: Math.max(1,
+            (typeof opts.autoRecover === 'object' ? opts.autoRecover.attempts ?? 0 : 0) || 2),
+        },
+      }
       : {}),
     phases: {},
   };

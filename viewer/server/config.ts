@@ -517,7 +517,10 @@ function printHelp(): void {
   --root <dir>      open this source directory immediately (skips the picker)
   --port <n>        port to listen on (default 4123)
   --host <addr>     interface to bind (default 127.0.0.1 — localhost only)
-  --no-open         do not open the browser (it opens by default)
+  --instance <sel>  act as a registered instance (its root, port and state) —
+                    an id, a name, or a path prefix from \`phase-console list\`
+  --open            open the browser (the default; overrides PHASE_CONSOLE_NO_OPEN)
+  --no-open         do not open the browser
   --allow-writes    enable the guarded write verbs (scaffold, QA record, locks)
   --allow-run       enable the autopilot: spawn \`claude -p\` sessions per phase
   --allow-terminal  enable the Terminal page: a real shell over a WebSocket,
@@ -537,6 +540,9 @@ function printHelp(): void {
                     plan names. Repeatable; also PHASE_CONSOLE_DEFAULT_SKILLS.
                     Seeds the run at start — unchecking one in the console is
                     then a real "off" for that run.
+  --max-sessions <n>
+                    how many sessions may run at once, across every plan
+                    (default ${DEFAULT_MAX_SESSIONS}; also PHASE_CONSOLE_MAX_SESSIONS)
   --scripts <dir>   phased-execution scripts dir (default: the skill this lives in)
   --log-file <p>    structured log (default ${defaultLogFile()})
   --no-log-file     log to stderr only
@@ -548,6 +554,27 @@ function printHelp(): void {
  * ------------------------------------------------------------------ */
 
 export const DIST_DIR = join(VIEWER_DIR, 'client', 'dist');
+
+let distRevCache: { at: number; value: string | null } | null = null;
+
+/**
+ * The commit `client/dist` was built from — `dist/.build-rev`, cached briefly.
+ *
+ * `null` means no readable stamp (no build, or one old enough to predate
+ * stamping); the literal `unknown` (a tarball build) passes through, because
+ * "built from an unknowable commit" and "not built" are different answers.
+ * Cached like `serverIsStale`'s probe: `/api/state` is polled and the disk is
+ * not the interesting part of that poll.
+ */
+export function distRev(): string | null {
+  const now = Date.now();
+  if (distRevCache && now - distRevCache.at < 5_000) return distRevCache.value;
+  let value: string | null = null;
+  try { value = readFileSync(join(DIST_DIR, '.build-rev'), 'utf8').trim() || null; }
+  catch { /* not built, or unstamped */ }
+  distRevCache = { at: now, value };
+  return value;
+}
 
 /**
  * Which client this console can serve, as a live fact rather than a startup one.
@@ -644,12 +671,21 @@ export type Prefs = {
    * - `repoGuard`: queue runs whose repository scopes overlap (the scheduler's
    *   cross-run serialization). Turning it off admits overlapping runs; a
    *   new-branch run that overlaps a live one is steered into a git worktree.
+   * - `autoRecoverByDefault`: new runs heal themselves — an auto-recoverable
+   *   halt (failed verification, lint, missing handoff, crash) launches the fix
+   *   agent, bounded per phase and per run. Each launch dialog can turn it off
+   *   for one run.
+   * - `autoContinueRecovery`: when a recovery session ends and the board reads
+   *   fixed, the run resumes by itself instead of waiting for Continue. Governs
+   *   manual recoveries too — a fixed run is a run to carry on.
    */
   attachDefaultSkills?: boolean;
   qaByDefault?: boolean;
   gitMode?: 'default-branch' | 'new-branch';
   openPrOnComplete?: boolean;
   repoGuard?: boolean;
+  autoRecoverByDefault?: boolean;
+  autoContinueRecovery?: boolean;
   /**
    * Which categories the console is allowed to announce **at all** — the switch
    * an operator actually means when they turn a notification off.
@@ -676,6 +712,7 @@ const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const DEFAULT_PREFS: Prefs = {
   recentRoots: [], theme: 'system', density: 'comfortable', sort: 'activity',
   attachDefaultSkills: false, qaByDefault: false, gitMode: 'default-branch', openPrOnComplete: true, repoGuard: true,
+  autoRecoverByDefault: true, autoContinueRecovery: true,
   notify: sanitiseCategories(undefined),
 };
 
@@ -686,7 +723,8 @@ const DEFAULT_PREFS: Prefs = {
  * never mint branches.
  */
 export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
-  'attachDefaultSkills' | 'qaByDefault' | 'gitMode' | 'openPrOnComplete' | 'repoGuard'> {
+  'attachDefaultSkills' | 'qaByDefault' | 'gitMode' | 'openPrOnComplete' | 'repoGuard'
+  | 'autoRecoverByDefault' | 'autoContinueRecovery'> {
   const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback);
   return {
     attachDefaultSkills: bool(parsed.attachDefaultSkills, false),
@@ -694,6 +732,8 @@ export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
     gitMode: parsed.gitMode === 'new-branch' ? 'new-branch' : 'default-branch',
     openPrOnComplete: bool(parsed.openPrOnComplete, true),
     repoGuard: bool(parsed.repoGuard, true),
+    autoRecoverByDefault: bool(parsed.autoRecoverByDefault, true),
+    autoContinueRecovery: bool(parsed.autoContinueRecovery, true),
   };
 }
 

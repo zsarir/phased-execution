@@ -128,6 +128,10 @@ export interface TerminalSession {
   exited?: { code: number; signal?: number; closedByOperator?: boolean };
   /** When it ended. */
   exitedAt?: number;
+  /** Set while the process group sits under SIGSTOP — who asked, since when. */
+  frozen?: { at: number; by: string };
+  /** A graceful stop is in flight: SIGTERM sent, SIGKILL armed on a grace. */
+  stopping?: { at: number; by: string };
 }
 
 export interface TerminalState {
@@ -366,6 +370,8 @@ export interface ConsoleState {
   serverStale?: boolean;
   /** Which static root answered — the migration seam, surfaced in Settings. */
   staticRoot?: 'dist' | 'not-built';
+  /** The commit `dist` was built from (`dist/.build-rev`); null when unstamped. */
+  distRev?: string | null;
   supervisor?: SupervisorInfo;
   unread?: number;
   scriptsDir?: string;
@@ -425,6 +431,8 @@ export interface ConsoleState {
     gitMode?: 'default-branch' | 'new-branch';
     openPrOnComplete?: boolean;
     repoGuard?: boolean;
+    autoRecoverByDefault?: boolean;
+    autoContinueRecovery?: boolean;
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -442,6 +450,8 @@ export function automationPrefs(state: ConsoleState | undefined): {
   gitMode: 'default-branch' | 'new-branch';
   openPrOnComplete: boolean;
   repoGuard: boolean;
+  autoRecoverByDefault: boolean;
+  autoContinueRecovery: boolean;
 } {
   const prefs = state?.prefs ?? {};
   return {
@@ -450,6 +460,8 @@ export function automationPrefs(state: ConsoleState | undefined): {
     gitMode: prefs.gitMode === 'new-branch' ? 'new-branch' : 'default-branch',
     openPrOnComplete: prefs.openPrOnComplete ?? true,
     repoGuard: prefs.repoGuard ?? true,
+    autoRecoverByDefault: prefs.autoRecoverByDefault ?? true,
+    autoContinueRecovery: prefs.autoContinueRecovery ?? true,
   };
 }
 
@@ -885,7 +897,8 @@ export interface RunState {
   /** How many lanes this run may hold at once. Never more than the console's cap. */
   maxParallel?: number;
   waitUntil: string | null;
-  halt: { at: string; reason: string; phase?: number } | null;
+  /** `kind` is the halt's machine-readable class; absent on older records. */
+  halt: { at: string; reason: string; phase?: number; kind?: string } | null;
   pause: { requestedAt: string; afterPhase: number | null; by: string } | null;
   freeze: { at: string; phase: number | null; pid: number; by: string; escalateAt: string } | null;
   finishedReason?: string;
@@ -914,6 +927,10 @@ export interface RunState {
   resolved?: RunResolution | null;
   /** A person put the card back; the board resolver leaves it alone from then on. */
   reopenedAt?: string | null;
+  /** Recovery bookkeeping, keyed by phase (`plan` for a plan-wide repair). */
+  recoveries?: Record<string, { attempts: number; lastAt: string; lastReason?: string; fixed?: boolean }>;
+  /** Present when the run heals its own auto-recoverable halts. */
+  autoRecover?: { attempts: number };
   phases: Record<string, PhaseRecord>;
 }
 
@@ -1077,6 +1094,8 @@ export interface RunSettings {
   accountId?: string;
   /** What to do at the shared usage window. */
   onLimit?: OnLimitPolicy;
+  /** Heal auto-recoverable halts by launching the fix agent. Sticky on resume. */
+  autoRecover?: boolean;
 }
 
 /** The on-limit policies a run can carry. `wait` is the pre-accounts behavior. */
@@ -1308,7 +1327,8 @@ export interface PolicyLists {
  * — the shipped deny list is the wall and cannot be struck from a browser.
  */
 export interface PolicyExtras extends PolicyLists {
-  removed?: { ask: string[]; allow: string[] };
+  /** `deny` is optional: servers from before the 2026-08 parity omit it. */
+  removed?: { deny?: string[]; ask: string[]; allow: string[] };
 }
 
 export interface PolicyView {
@@ -1332,12 +1352,12 @@ export interface PolicyEdit {
   scope: 'global' | 'plan';
   slug?: string | null;
   add?: Partial<Record<keyof PolicyLists, string[]>>;
-  /** For ask/allow this also strikes a SHIPPED default by name; shipped deny rules ignore it. */
+  /** Also strikes a SHIPPED default by name — deny included since the 2026-08 parity. */
   remove?: Partial<Record<keyof PolicyLists, string[]>>;
   /** Return these parts to stock at the chosen scope: your rules out, strikes forgiven. */
   reset?: (keyof PolicyLists)[];
   /** Forgive individual strikes — the named shipped defaults apply again, as defaults. */
-  restore?: { ask?: string[]; allow?: string[] };
+  restore?: { deny?: string[]; ask?: string[]; allow?: string[] };
 }
 
 /* ---------------- restarting the console ---------------- */
@@ -1563,6 +1583,19 @@ export const api = {
     request<{ ok: boolean; reason?: string; state: TerminalState }>(
       `/api/terminal?id=${q(id)}&action=dismiss`, { method: 'DELETE' },
     ),
+  /** SIGSTOP the session's process group — the lane-freeze verb at session size. */
+  sessionFreeze: (id: string) =>
+    post<{ ok: boolean; reason?: string; state: TerminalState }>(`/api/terminal/${q(id)}/freeze`),
+  /** SIGCONT — the session picks up exactly where it stopped. */
+  sessionThaw: (id: string) =>
+    post<{ ok: boolean; reason?: string; state: TerminalState }>(`/api/terminal/${q(id)}/thaw`),
+  /**
+   * End a session politely: SIGTERM, SIGKILL only after a grace it ignored.
+   * Unlike `terminalClose`, the record stays — outcome checks and the
+   * `--resume` id survive the stop.
+   */
+  sessionStop: (id: string) =>
+    post<{ ok: boolean; reason?: string; state: TerminalState }>(`/api/terminal/${q(id)}/stop`),
 
   /* ---- the desktop launcher ---- */
   launcherPlan: () => request<LauncherPlanView>('/api/launcher'),

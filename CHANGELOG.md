@@ -6,6 +6,76 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [Unreleased]
+
+The run heals itself, and the console stops keeping secrets from its own surfaces. A recovery
+session's success now *moves the run record* — phase done, halt cleared, run resumed — instead of
+vanishing into a notification while the board stayed "halted"; halts an agent can clear launch that
+session by themselves, bounded, so one press of autopilot carries a plan to the end or parks it on
+something only a person can do, named. Agent sessions gain the lane verbs (Freeze / Continue / a
+polite Stop). The shipped deny list joins strike-and-restore, behind the one confirm on the policy
+page. And a stale browser shell stops being a mystery: waiting interface updates apply themselves
+at the safe boundaries, and Settings says which build this tab actually is.
+
+### Added
+
+- **Recovery write-back.** When a Fix-with-AI session ends and the board reads fixed, the run
+  record moves with it: the phase flips to `done`, the halt clears, the failure streak resets, and
+  the run lands on `parked` with `Runner.recover`'s own wording. A not-fixed outcome annotates the
+  attempt and leaves the halt standing. The write goes to the pooled runner's in-memory state when
+  one holds the run (the object `runFor` actually serves), never under a live loop.
+- **Auto-continue.** A fixed run resumes by itself — the same resume Retry and the limit clock make,
+  sticky scope and skills included — under the new `autoContinueRecovery` automation pref (on by
+  default). Manual recoveries count too: a fixed run is a run to carry on.
+- **Auto-recovery.** A halt whose named kind an agent can clear (`verify-failed`, `plan-lint`,
+  `no-handoff`, `phase-crashed`, an interrupted run) launches the recovery agent by itself: at most
+  2 launches per phase, 5 per run, never the identical failure twice, never the human-shaped halts
+  (auth, budget, models exhausted, a failure streak), spawned as the run's own account, bumped and
+  persisted at launch so a console crash cannot forget an attempt, re-armed at boot. Per-run toggle
+  in every launch dialog (needs `--allow-agent`), `autoRecoverByDefault` pref in Automation.
+- **Halt kinds.** `run.halt` now carries a machine-readable `kind` written at the halt site; the
+  classifier reads names, and only the unmistakable sentences of pre-kind records.
+- **Per-session Freeze / Continue / Stop for agents.** Every pty session (recovery, QA,
+  interactive, shell) gains the lane verbs: SIGSTOP/SIGCONT to the process group, and a polite stop
+  (SIGCONT → SIGTERM → SIGKILL only after a 15 s grace) that KEEPS the record — a stopped verdict
+  session still gets its outcome read against the board, and the `--resume` id survives. In the
+  agent and terminal keybars, with frozen/stopping markers on the tabs;
+  `POST /api/terminal/<id>/(freeze|thaw|stop)`.
+- **Shipped deny rules strike and restore** like ask/allow — by name, scoped, journaled, reversible
+  (↩ and Restore defaults) — a deliberate reversal of "no browser can unpick the wall", on its
+  terms: the browser confirms a shipped-deny strike before writing it (the one confirm on the
+  page), the per-run push carve-out never resurrects a struck wall, and profiles still move only
+  the ask list. The strike reaches the CLI-side settings every child runs under — that is the
+  point, and the docs say the risk plainly.
+- **Desktop launcher rev 7.** The template gains managed `REMOTE`, `REMOTE_USERS`, `MAX_SESSIONS`
+  and `DEFAULT_SKILLS` knobs, composed into every start path (supervised install and both
+  foreground exec lines); Settings bakes this console's own values in. The Linux entry carries the
+  same extras and names its instance. A rev-6 copy is told it is stale.
+- **The start-command card composes the whole console**: remote hosts and users, a non-default
+  session ceiling, default skills — plus a footnote naming the flags deliberately left out.
+- **Interface updates apply themselves** at the two boundaries where nothing can be lost — page
+  load and return-to-tab — guarded against loops (a one-shot marker falls back to the toast) and
+  suppressed over live pty surfaces and focused inputs. Mid-session updates keep the toast.
+- **Settings says which build this tab is.** A new Interface row compares the tab's baked commit
+  (`__BUILD_REV__`, same computation as `dist/.build-rev`) against what the server serves.
+- **`phase-console remove <sel>`** forgets a stopped console's registry row (state stays put);
+  `list` hints it for stopped rows. Removal refuses a running instance.
+- **Honest surfaces**: the Permissions card renders with no source directory open (the policy
+  routes moved above the no-root wall — the global policy is an instance fact); run notes say
+  "Parked — needs you." with the needs-human hint and the failure-streak counter; `--help` gains
+  the `--open`, `--instance` and `--max-sessions` lines it always should have had.
+
+### Changed
+
+- **`POST /api/launcher` now requires `--allow-writes`** — writing a 0755 executable to the Desktop
+  is a write, and a read-only console refuses it like every other one. The card's button says so.
+
+### Fixed
+
+- The `recovery-outcome` event finally has client consumers: the run/plan queries re-read
+  themselves off it and a toast states the verdict — previously the run was fixed on disk while
+  every open tab kept the halt banner until a manual reload.
+
 ## [1.5.0] - 2026-08-06
 
 One console, many Claude accounts. Each instance now keeps its own account registry — the machine

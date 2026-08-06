@@ -174,6 +174,8 @@ export type StartOptions = {
   gitMode?: 'default-branch' | 'new-branch';
   /** New-branch runs only: tell the final phase to push and open a PR. */
   openPr?: boolean;
+  /** Heal auto-recoverable halts by launching the fix agent. Sticky on resume. */
+  autoRecover?: boolean | { attempts?: number };
   /** The account sessions spawn as. Absent/`default` = the machine login. */
   accountId?: string;
   /** What to do at the shared usage window. Absent = `wait`, the old behavior. */
@@ -610,6 +612,7 @@ export class Runner {
       openPr: options.openPr,
       accountId: options.accountId,
       onLimit: options.onLimit,
+      autoRecover: options.autoRecover,
     });
 
     if (state) {
@@ -667,6 +670,19 @@ export class Runner {
       if (options.onLimit !== undefined) {
         if (options.onLimit !== 'wait') this.state.onLimit = options.onLimit;
         else delete this.state.onLimit;
+      }
+      // Auto-recovery is sticky the same way: absent means "keep what the run
+      // already is", and an explicit false returns it to the omission state.
+      if (options.autoRecover !== undefined) {
+        if (options.autoRecover) {
+          this.state.autoRecover = {
+            attempts: Math.max(1,
+              (typeof options.autoRecover === 'object' ? options.autoRecover.attempts ?? 0 : 0)
+              || this.state.autoRecover?.attempts || 2),
+          };
+        } else {
+          delete this.state.autoRecover;
+        }
       }
       // The git strategy is sticky the same way: absent means "keep what the
       // run already is" — a resume must never re-read the machine defaults and
@@ -2023,7 +2039,7 @@ export class Runner {
         }
         if (state.runBudgetUsd && state.spentUsd >= state.runBudgetUsd) {
           if (await draining()) continue;
-          this.halt(`the run budget of $${state.runBudgetUsd} is spent`);
+          this.halt(`the run budget of $${state.runBudgetUsd} is spent`, undefined, 'budget');
           break;
         }
 
@@ -2039,7 +2055,7 @@ export class Runner {
         if (state.status === 'pausing' || state.status === 'halting') continue;
         if (board.error) {
           if (await draining()) continue;
-          this.halt(`the engine could not read the plan: ${board.error}`);
+          this.halt(`the engine could not read the plan: ${board.error}`, undefined, 'plan-unreadable');
           break;
         }
 
@@ -2184,7 +2200,7 @@ export class Runner {
       (carryOn) => ({ phase, carryOn }),
       (error: unknown) => {
         log.error('runner.lane.crashed', { phase, error });
-        this.halt(`phase ${phase} failed inside the runner: ${(error as Error)?.message ?? error}`, phase);
+        this.halt(`phase ${phase} failed inside the runner: ${(error as Error)?.message ?? error}`, phase, 'phase-crashed');
         return { phase, carryOn: false };
       },
     );
@@ -2857,7 +2873,7 @@ export class Runner {
           }
           const next = nextModel(currentModel);
           if (!next) {
-            this.halt(`every model is exhausted or at capacity (${disposition.reason})`, phase);
+            this.halt(`every model is exhausted or at capacity (${disposition.reason})`, phase, 'models-exhausted');
             return { carryOn: false, completed: false };
           }
           this.record('phase.model-switch', { from: currentModel, to: next, reason: disposition.reason }, phase);
@@ -2909,7 +2925,7 @@ export class Runner {
             // Anything a person must fix is usually global — an expired login does
             // not get better on the next phase. Stop rather than burn through the
             // rest of the plan failing identically.
-            this.halt(reason, phase);
+            this.halt(reason, phase, 'needs-human');
             return { carryOn: false, completed: false };
           }
 
@@ -2926,7 +2942,7 @@ export class Runner {
     state.consecutiveFailures++;
     this.record('phase.failed', { attempts: record.attempts, note: record.note }, phase);
     if (state.consecutiveFailures >= state.maxConsecutiveFailures) {
-      this.halt(`${state.consecutiveFailures} phases failed in a row`, phase);
+      this.halt(`${state.consecutiveFailures} phases failed in a row`, phase, 'failure-streak');
       return { carryOn: false, completed: false };
     }
     return { carryOn: state.autonomy === 'keep-going', completed: false };
@@ -2997,6 +3013,7 @@ export class Runner {
         + `— ${broke.map((r) => r.command).join(', ')}`
         + await this.verifyHint(phase),
         phase,
+        'verify-failed',
       );
       return false;
     }
@@ -3007,7 +3024,7 @@ export class Runner {
     if (!lint.ok) {
       record.status = 'failed';
       state.consecutiveFailures++;
-      this.halt(`phase ${phase} left the plan failing validate.sh: ${lint.summary}`, phase);
+      this.halt(`phase ${phase} left the plan failing validate.sh: ${lint.summary}`, phase, 'plan-lint');
       return false;
     }
 
@@ -3024,7 +3041,7 @@ export class Runner {
     } else if (!verification.ok) {
       record.status = 'failed';
       state.consecutiveFailures++;
-      this.halt(`phase ${phase} did not verify: ${verification.reason}`, phase);
+      this.halt(`phase ${phase} did not verify: ${verification.reason}`, phase, 'verify-failed');
       return false;
     }
 
@@ -3277,6 +3294,7 @@ export class Runner {
       // console repeated only "no handoff was written".
       + (record.said ? `. It signed off: "${condenseSaid(record.said)}"` : ''),
       phase,
+      'no-handoff',
     );
     return false;
   }
@@ -3467,7 +3485,7 @@ export class Runner {
     if (!approvals) {
       record.note = `${verification.notRun.length} verification step(s) need a person, and this console has no `
         + 'approval broker to ask with.';
-      this.halt(`phase ${phase} needs a person to verify it, and there is no way to ask`, phase);
+      this.halt(`phase ${phase} needs a person to verify it, and there is no way to ask`, phase, 'needs-human');
       return false;
     }
 
@@ -3510,6 +3528,7 @@ export class Runner {
     this.halt(
       `phase ${phase} was not verified: ${outcome.reason || `${outcome.by} marked the manual checks as failed`}`,
       phase,
+      'needs-human',
     );
     return false;
   }
@@ -3637,7 +3656,7 @@ export class Runner {
     return null;
   }
 
-  private halt(reason: string, phase?: number): void {
+  private halt(reason: string, phase?: number, kind?: string): void {
     const state = this.state!;
     // With lanes still live the run is DRAINING, not stopped: `halting` keeps
     // it in IN_FLIGHT (a dead console mid-drain must still pid-check those
@@ -3647,7 +3666,9 @@ export class Runner {
     // the halt is a fact the moment it happens, the "stopped" claim only when
     // nothing is running any more.
     state.status = this.lanes.size ? 'halting' : 'halted';
-    state.halt = { at: new Date().toISOString(), reason, phase };
+    // `kind` is the machine-readable class the auto-recovery classifier reads;
+    // the sentence stays for people, and old records simply never have one.
+    state.halt = { at: new Date().toISOString(), reason, phase, ...(kind ? { kind } : {}) };
     // Wake any lane sleeping on a retry backoff or a usage window: each
     // re-checks `state.halt` on waking and stands down instead of spawning
     // another attempt hours later on a run that has already stopped.
@@ -3660,7 +3681,7 @@ export class Runner {
     // One field the console can always read for "why did this stop", whichever
     // of the several endings it was.
     state.finishedReason = reason;
-    this.record('run.halt', { reason, phase });
+    this.record('run.halt', { reason, phase, ...(kind ? { kind } : {}) });
     this.emit('run', { state });
     log.warn('runner.halt', { slug: state.slug, runId: state.id, reason, phase });
   }

@@ -23,7 +23,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { api, type PolicyLists } from '@/lib/api';
 import { keys, usePlans, usePolicy } from '@/lib/queries';
-import { Banner, Button, Card, CardBody, CardHeader, CardTitle, toast } from '@/components/ui';
+import {
+  AlertDialog, AlertDialogContent, Banner, Button, Card, CardBody, CardHeader, CardTitle, toast,
+} from '@/components/ui';
 
 /** The rule forms, and what each one builds. */
 const FORMS = [
@@ -113,7 +115,8 @@ const LIST_COPY: Record<keyof PolicyLists, { title: string; detail: string }> = 
   deny: {
     title: 'Denied — the wall.',
     detail: 'Evaluated inside the CLI, with no network involved. Verified to hold with this console '
-      + 'stopped. Nothing can approve past it; you run these yourself, deliberately.',
+      + 'stopped. Nothing can approve past it at run time — and removing a rule here is the one edit '
+      + 'that widens what every future run may do, so it asks you to confirm.',
   },
   ask: {
     title: 'Asked — the workflow.',
@@ -143,6 +146,10 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
   const [value, setValue] = useState('');
   const [list, setList] = useState<keyof PolicyLists>('ask');
   const [showTraps, setShowTraps] = useState(false);
+  // A shipped deny rule about to be struck — held here while the one confirm
+  // this page ever raises is open. Ask/allow strikes and your own rules stay
+  // one-tap; the wall is the single edit wide enough to earn a second look.
+  const [confirmStrike, setConfirmStrike] = useState<string | null>(null);
 
   const { data: policy } = usePolicy(slug || undefined);
   const { data: plans } = usePlans();
@@ -157,7 +164,7 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
       add?: Partial<PolicyLists>;
       remove?: Partial<PolicyLists>;
       reset?: (keyof PolicyLists)[];
-      restore?: { ask?: string[]; allow?: string[] };
+      restore?: { deny?: string[]; ask?: string[]; allow?: string[] };
     }) => api.editPolicy({ scope, slug: slug || null, ...patch }),
     onSuccess: (next, patch) => {
       client.setQueryData(keys.policy(slug || ''), next);
@@ -185,10 +192,10 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
   const mine = (name: keyof PolicyLists): string[] =>
     (planScope ? policy.plan?.extra?.[name] ?? [] : policy.extra[name] ?? []);
 
-  // Shipped ask/allow defaults this scope has struck by name. They vanish from
-  // the effective list, so they render below the chips with a way back.
+  // Shipped defaults this scope has struck by name — all three lists alike.
+  // They vanish from the effective list, so they render below the chips with a
+  // way back (↩, or the whole part via Restore defaults).
   const struck = (name: keyof PolicyLists): string[] => {
-    if (name === 'deny') return [];
     const extras = planScope ? policy.plan?.extra : policy.extra;
     return extras?.removed?.[name] ?? [];
   };
@@ -261,9 +268,7 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
                   size="sm"
                   variant="ghost"
                   disabled={busy}
-                  title={name === 'deny'
-                    ? `Removes the ${mine(name).length} rule(s) you added at this scope. The shipped deny list was never editable.`
-                    : `Removes your rules and brings back any shipped defaults you struck, at ${planScope ? `the ${slug} scope` : 'the global scope'}.`}
+                  title={`Removes your rules and brings back any shipped defaults you struck, at ${planScope ? `the ${slug} scope` : 'the global scope'}.`}
                   onClick={() => edit.mutate({ reset: [name] })}
                 >
                   Restore defaults
@@ -274,14 +279,20 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
               rules={policy.effective[name]}
               own={mine(name)}
               defaults={policy.defaults[name]}
-              // The shipped deny list is the wall: everything else on this
-              // page is a preference, and a wall that can be unpicked in a
-              // browser is a preference too. Yours stay removable everywhere.
-              defaultsRemovable={name !== 'deny'}
+              isDeny={name === 'deny'}
               removable={allowWrites && targetKnown}
               busy={busy}
               scopeLabel={planScope ? `the ${slug} scope` : 'the global scope'}
-              onRemove={(r) => edit.mutate({ remove: { [name]: [r] } })}
+              // One gesture everywhere — except that striking a SHIPPED deny
+              // rule is the single edit wide enough to confirm first. Your own
+              // deny rules, and every ask/allow removal, stay one tap.
+              onRemove={(r) => {
+                if (name === 'deny' && policy.defaults.deny.includes(r) && !mine('deny').includes(r)) {
+                  setConfirmStrike(r);
+                  return;
+                }
+                edit.mutate({ remove: { [name]: [r] } });
+              }}
             />
             {struck(name).length > 0 && (
               <div className="mt-1.5 flex flex-wrap items-center gap-1">
@@ -294,7 +305,7 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
                     className="inline-flex items-center gap-1 rounded-sm border border-rule border-dashed px-1.5 py-0.5 font-mono text-2xs text-ink-faint line-through"
                   >
                     {r}
-                    {allowWrites && name !== 'deny' && (
+                    {allowWrites && (
                       <button
                         type="button"
                         aria-label={`Restore ${r}`}
@@ -312,6 +323,38 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
             )}
           </section>
         ))}
+
+        {/* The one confirm this page raises: a shipped deny strike is the
+            single edit that widens what every future run may do — on every
+            profile, with this console dead — so it is named before it lands. */}
+        <AlertDialog
+          open={confirmStrike != null}
+          onOpenChange={(open) => { if (!open) setConfirmStrike(null); }}
+        >
+          <AlertDialogContent
+            title="Remove a shipped deny rule?"
+            confirmLabel="Remove it"
+            cancelLabel="Keep the wall"
+            destructive
+            onConfirm={() => {
+              const struck = confirmStrike;
+              setConfirmStrike(null);
+              if (struck) edit.mutate({ remove: { deny: [struck] } });
+            }}
+          >
+            <p className="mt-2 text-sm text-ink-muted">
+              <code className="rounded bg-surface-raised px-1 font-mono">{confirmStrike}</code> is
+              part of the shipped deny list — the layer enforced inside the CLI, which holds even
+              with this console stopped. Removed at{' '}
+              {planScope ? <>the <code className="font-mono">{slug}</code> scope</> : 'the global scope'},
+              every future run — on every profile — may then do it without asking.
+            </p>
+            <p className="mt-2 text-2xs text-ink-faint">
+              Reversible from this screen: the struck rule stays listed with ↩, and Restore defaults
+              brings the whole wall back. The edit is written with your name on it and journaled.
+            </p>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {policy.inert?.length ? (
           <Banner severity="warn">
@@ -426,10 +469,10 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
               ) : (
                 <span>
                   Adding to <code>deny</code> or <code>ask</code> makes a run more careful. Every
-                  rule is removable with the × on its chip — including shipped <code>ask</code> and{' '}
-                  <code>allow</code> defaults, which <em>Restore defaults</em> brings back. The one
-                  exception is the shipped <code>deny</code> list: it is the wall, and only rules
-                  you added there can come out.
+                  rule is removable with the × on its chip — shipped defaults are struck by name and{' '}
+                  <em>Restore defaults</em> brings them back. Removing a shipped <code>deny</code>{' '}
+                  rule is the widest edit this page can make (the wall moves for every future run,
+                  with this console dead included), so that one asks you to confirm first.
                 </span>
               )}
             </Banner>
@@ -490,7 +533,7 @@ function RuleChips({
   rules,
   own,
   defaults,
-  defaultsRemovable,
+  isDeny,
   removable,
   busy,
   scopeLabel,
@@ -500,8 +543,8 @@ function RuleChips({
   own: string[];
   /** The shipped list, so a chip can say which kind it is. */
   defaults: string[];
-  /** False for `deny`: the shipped wall has no ×, and the title says why. */
-  defaultsRemovable: boolean;
+  /** True on the deny list — a shipped chip's title says the × will confirm. */
+  isDeny: boolean;
   removable: boolean;
   busy: boolean;
   scopeLabel: string;
@@ -513,15 +556,15 @@ function RuleChips({
       {rules.map((r) => {
         const isOwn = own.includes(r);
         const isDefault = defaults.includes(r);
-        // Yours are always removable; shipped ask/allow defaults are struck by
-        // name (reversible below and via Restore defaults); shipped deny rules
-        // are the one thing this page will not unpick.
-        const canRemove = removable && (isOwn || (isDefault && defaultsRemovable));
+        // Yours are always removable; shipped defaults are struck by name
+        // (reversible below and via Restore defaults) — deny included, behind
+        // the one confirm on this page.
+        const canRemove = removable && (isOwn || isDefault);
         const title = isOwn
           ? `yours, at ${scopeLabel}`
-          : defaultsRemovable
-            ? 'shipped default — × removes it here; Restore defaults brings it back'
-            : 'shipped deny rule — the wall. Not removable from a browser; your own additions are.';
+          : isDeny
+            ? 'shipped deny rule — the wall at run time. × asks to confirm, then removes it for every future run; Restore defaults brings it back.'
+            : 'shipped default — × removes it here; Restore defaults brings it back';
         return (
           <span
             key={r}

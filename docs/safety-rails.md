@@ -41,3 +41,10 @@ card, and `gh pr create` stays a card even under the `trusted` profile, so publi
 still takes one human tap. Force-pushes, `--force-with-lease` and `--delete` stay denied outright.
 Residual risk, stated plainly: with the console process dead its hook cannot ask, and that run's
 CLI-side deny list no longer contains bare `git push` — the destructive shapes still do.
+
+The carve-out narrows a wall that stands; it never rebuilds one that does not. Since shipped deny
+rules became strikeable from Settings (by name, behind a confirm), an operator who struck
+`Bash(git push:*)` has made pushing their standing policy — and a PR-run's carve-out will not
+quietly re-add the force-push denials on top of a wall they removed. The two asks (`git push`,
+`gh pr create`) stay pinned either way: one human tap to publish is about the run's shape, not the
+wall.

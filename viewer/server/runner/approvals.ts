@@ -647,7 +647,15 @@ export function carvedPolicy(
   if (!openPrCarveOut) return profilePolicy(policy, profile);
   const carved: AutopilotPolicy = {
     ...policy,
-    deny: [...policy.deny.filter((rule) => rule !== PUSH_DENY), ...PUSH_DENY_CARVED],
+    // Conditional on the wall actually standing: a carve-out narrows a rule
+    // the policy holds, it never resurrects one the operator struck. With the
+    // push wall struck, swapping in the force-push denials would quietly
+    // re-add per run what a named, journaled edit removed for good.
+    deny: policy.deny.includes(PUSH_DENY)
+      ? [...policy.deny.filter((rule) => rule !== PUSH_DENY), ...PUSH_DENY_CARVED]
+      : policy.deny,
+    // The "one human tap to publish" asks are about the RUN shape, not the
+    // wall — pinned whether or not the wall stands.
     ask: [...new Set([...policy.ask, ...OPEN_PR_ASK])],
   };
   return profilePolicy(carved, profile, { alwaysAsk: OPEN_PR_ASK });
@@ -719,12 +727,16 @@ const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v) => 
  * still applies it (a copied-then-edited list would freeze the defaults at
  * whatever version the first edit saw).
  *
- * Deliberately no `deny` key, and the shape is where that is enforced: the
- * shipped deny list is the wall, and a wall a browser can unpick is a
- * preference. Operator-ADDED deny rules remain removable like anything else —
- * only the shipped ones are load-bearing.
+ * `deny` is on this shape since 2026-08-06, a deliberate reversal: the shipped
+ * deny list used to be unstrikeable from a browser ("the wall"), and what that
+ * produced in practice was a parked plan behind a push the operator wanted
+ * made, with no remedy on the screen that showed the problem. A deny strike is
+ * still the widest edit this file can express, so it stays named, attributed,
+ * scoped, journaled, and reversible — and the UI confirms it before writing.
+ * What did NOT change: strikes are by name, so upgrades still land every
+ * default they do not name, and profiles still never move deny.
  */
-export type PolicyRemovals = { ask: string[]; allow: string[] };
+export type PolicyRemovals = { deny: string[]; ask: string[]; allow: string[] };
 
 export type PolicyFileExtras = AutopilotPolicy & { removed: PolicyRemovals };
 
@@ -737,7 +749,11 @@ export function policyExtras(file = POLICY_FILE): PolicyFileExtras {
     deny: strings(extra.deny),
     ask: strings(extra.ask),
     allow: strings(extra.allow),
-    removed: { ask: strings(extra.removed?.ask), allow: strings(extra.removed?.allow) },
+    removed: {
+      deny: strings(extra.removed?.deny),
+      ask: strings(extra.removed?.ask),
+      allow: strings(extra.removed?.allow),
+    },
   };
 }
 
@@ -775,12 +791,15 @@ function mergePolicy(extras: PolicyFileExtras[]): AutopilotPolicy {
   const written = flat((e) => e.allow);
   // Struck shipped defaults, at any contributing scope: a global strike hides
   // the default everywhere, a plan strike only where that plan's file was
-  // merged in. Only ask/allow — the shape of `PolicyRemovals` is what keeps a
-  // struck deny from ever being expressible.
+  // merged in. All three lists filter the same way — a struck deny is the
+  // widest of them, and everything downstream (profiles, the carve-out, the
+  // settings handed to children) consumes this merge, so the strike holds
+  // everywhere at once or nowhere at all.
+  const struckDeny = new Set(flat((e) => e.removed.deny));
   const struckAsk = new Set(flat((e) => e.removed.ask));
   const struckAllow = new Set(flat((e) => e.removed.allow));
   return {
-    deny: [...new Set([...DEFAULT_DENY, ...flat((e) => e.deny)])],
+    deny: [...new Set([...DEFAULT_DENY.filter((r) => !struckDeny.has(r)), ...flat((e) => e.deny)])],
     ask: [...new Set([...DEFAULT_ASK.filter((r) => !struckAsk.has(r)), ...flat((e) => e.ask)])],
     allow: [...new Set([...DEFAULT_ALLOW.filter((r) => !struckAllow.has(r)), ...written])],
     // Only what a person actually wrote outranks the ask list — never the
@@ -812,8 +831,12 @@ const validRules = (list: string[]) => list
  * So widening is allowed, and every widening is: named (the exact rule string
  * is shown before it is written), attributed (`by`), scoped (this plan by
  * default, everywhere only if asked), journaled, and reversible from the same
- * screen. What it still cannot do is touch `deny` — that list is the wall, and
- * removing from it here would make the wall a preference.
+ * screen. Since 2026-08-06 that includes the shipped deny list — see
+ * `PolicyRemovals` for the reversal and its terms. A struck deny rule is the
+ * widest edit expressible here, because it also leaves the CLI-side settings
+ * every child runs under: the layer that holds with the console dead moves
+ * with it. That is the point, and the risk, in one sentence — which is why the
+ * browser confirms a shipped-deny strike before sending it.
  */
 export function editPolicy(
   edit: {
@@ -821,9 +844,8 @@ export function editPolicy(
     remove?: { deny?: string[]; ask?: string[]; allow?: string[] };
     /**
      * Return these parts to stock: the operator's own rules come out AND their
-     * strikes against shipped defaults are forgiven, in one named act. For
-     * `deny` that can only mean dropping added rules — shipped deny rules were
-     * never strikable, so there is nothing else to restore.
+     * strikes against shipped defaults are forgiven, in one named act — for
+     * all three lists alike.
      */
     reset?: ('deny' | 'ask' | 'allow')[];
     /**
@@ -831,7 +853,7 @@ export function editPolicy(
      * WITHOUT becoming file rules — an add would render them as the
      * operator's own, and a restored default is nobody's edit.
      */
-    restore?: { ask?: string[]; allow?: string[] };
+    restore?: { deny?: string[]; ask?: string[]; allow?: string[] };
     by?: string;
   },
   file = POLICY_FILE,
@@ -844,22 +866,28 @@ export function editPolicy(
   };
 
   /**
-   * A removal against `ask`/`allow` means one of two things, decided here so
-   * the × on a chip is one gesture: a rule the FILE holds is dropped from it;
-   * a rule that is a SHIPPED default is struck by name instead — recorded in
-   * `removed`, filtered out at merge time, resurrected by `reset`. A removal
-   * naming a shipped DENY rule matches neither branch and does nothing, which
-   * is the wall holding.
+   * A removal means one of two things, decided here so the × on a chip is one
+   * gesture: a rule the FILE holds is dropped from it; a rule that is a
+   * SHIPPED default is struck by name instead — recorded in `removed`,
+   * filtered out at merge time, resurrected by `restore` or `reset`. The same
+   * two branches for all three lists; deny joined them in the 2026-08-06
+   * reversal (see `PolicyRemovals`).
    */
+  const removedDeny = strings(edit.remove?.deny).map((r) => r.trim());
   const removedAsk = strings(edit.remove?.ask).map((r) => r.trim());
   const removedAllow = strings(edit.remove?.allow).map((r) => r.trim());
   const strikes = {
+    deny: removedDeny.filter((r) => DEFAULT_DENY.includes(r) && !current.deny.includes(r)),
     ask: removedAsk.filter((r) => DEFAULT_ASK.includes(r) && !current.ask.includes(r)),
     allow: removedAllow.filter((r) => DEFAULT_ALLOW.includes(r) && !current.allow.includes(r)),
   };
   // Two ways back from a strike, both forgiving it: `restore` names the
   // default and nothing else changes; an `add` of the same rule also
   // un-strikes, because a strike sitting beside an add would win silently.
+  const unstruckDeny = new Set([
+    ...validRules(strings(edit.add?.deny)),
+    ...strings(edit.restore?.deny).map((r) => r.trim()),
+  ]);
   const unstruckAsk = new Set([
     ...validRules(strings(edit.add?.ask)),
     ...strings(edit.restore?.ask).map((r) => r.trim()),
@@ -870,6 +898,9 @@ export function editPolicy(
   ]);
 
   const removed: PolicyRemovals = {
+    deny: resets.has('deny')
+      ? []
+      : [...new Set([...current.removed.deny, ...strikes.deny])].filter((r) => !unstruckDeny.has(r)),
     ask: resets.has('ask')
       ? []
       : [...new Set([...current.removed.ask, ...strikes.ask])].filter((r) => !unstruckAsk.has(r)),
@@ -894,7 +925,7 @@ export function editPolicy(
     allow: part('allow'),
     // Written only when it says something — most policy files never strike a
     // default, and an empty key would read as a feature they used.
-    ...(removed.ask.length || removed.allow.length ? { removed } : {}),
+    ...(removed.deny.length || removed.ask.length || removed.allow.length ? { removed } : {}),
   };
 
   mkdirSync(join(file, '..'), { recursive: true });
@@ -912,7 +943,7 @@ export function editPolicy(
       ask: strings(edit.remove?.ask).length,
       allow: strings(edit.remove?.allow).length,
     },
-    struckDefaults: { ask: strikes.ask.length, allow: strikes.allow.length },
+    struckDefaults: { deny: strikes.deny.length, ask: strikes.ask.length, allow: strikes.allow.length },
     ...(resets.size ? { reset: [...resets] } : {}),
     now: { deny: next.deny.length, ask: next.ask.length, allow: next.allow.length },
   });

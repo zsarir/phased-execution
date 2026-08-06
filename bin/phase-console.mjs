@@ -10,6 +10,8 @@
 //   phase-console start | stop | restart | status | logs [-f]  [instance]
 //                                        drive the background agent (start falls
 //                                        back to a foreground run if none is installed)
+//   phase-console remove [instance]      forget a STOPPED console's registry row
+//                                        (its state directories stay put)
 //   phase-console install-skill          copy the skill where Claude Code reads it
 //
 // [instance] is an id, a name, or a project's directory name — or `--instance
@@ -168,7 +170,7 @@ const FLAG_VERBS = {
 const WORD_VERBS = {
   start: 'start', stop: 'stop', restart: 'restart',
   status: 'status', log: 'log', logs: 'log', update: 'update',
-  list: 'list', open: 'open',
+  list: 'list', open: 'open', remove: 'remove',
 };
 
 // Resolved from the package root rather than imported by a static path: this
@@ -335,6 +337,36 @@ async function cmdList() {
   process.stdout.write(`${line(Object.fromEntries(columns.map((k) => [k, k.toUpperCase()])))}\n`);
   for (const row of rows) process.stdout.write(`${line(row)}\n`);
   if (entries.some((entry) => entry.default)) process.stdout.write('\n* the default instance — it keeps the pre-1.3.0 port, paths and unit name.\n');
+  if (rows.some((row) => row.status === 'stopped')) {
+    process.stdout.write('a stopped console can be forgotten: phase-console remove <name>\n');
+  }
+  return 0;
+}
+
+/**
+ * Forget a stopped console: its registry row (and the port it had spoken for)
+ * frees up; its state directories stay put. Deliberately a named act rather
+ * than a prune on `list` — "stopped" is a legitimate registry state for a
+ * project you will start again tomorrow, and a registry that forgets projects
+ * by itself forgets one someone wanted.
+ */
+async function cmdRemove(instance) {
+  if (instance.kind !== 'registered') {
+    process.stderr.write('phase-console: nothing registered by that name — see: phase-console list\n');
+    return 1;
+  }
+  const port = instance.port ?? instances.preferredPort(instance.root, { isDefault: instance.default });
+  const live = await probeConsole(port);
+  if (live && (live.instance?.id === instance.id || live.root?.path === instance.root)) {
+    process.stderr.write(
+      `phase-console: ${instance.name} is running on ${port} — stop it first: phase-console stop ${instance.name}\n`,
+    );
+    return 1;
+  }
+  instances.removeInstance(instance.id);
+  process.stdout.write(
+    `forgot ${instance.name} (${instance.root}) — its state directories are untouched.\n`,
+  );
   return 0;
 }
 
@@ -452,6 +484,7 @@ if (verb) {
  */
 async function runVerb(verb, instance, rest) {
   if (verb === 'open') process.exit(await cmdOpen(instance));
+  if (verb === 'remove') process.exit(await cmdRemove(instance));
 
   if (verb === 'update' && !existsSync(join(root, '.git'))) {
     // A packaged install has no sources and no lockfile — there is nothing for

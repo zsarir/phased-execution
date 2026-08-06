@@ -308,6 +308,14 @@ export interface SessionInfo {
   exited?: { code: number; signal?: number; closedByOperator?: boolean };
   /** When it ended, so the UI can age it and the sweeper can retire it. */
   exitedAt?: number;
+  /**
+   * Set while the process group sits under SIGSTOP — who asked and when, so a
+   * list can say "frozen · 4m" instead of drawing a spinner over a stopped
+   * process. The per-agent twin of the lane's `ChildRef.frozen`.
+   */
+  frozen?: { at: number; by: string };
+  /** A graceful stop is in flight: SIGTERM sent, SIGKILL armed on a grace. */
+  stopping?: { at: number; by: string };
 }
 
 interface Session extends SessionInfo {
@@ -322,7 +330,9 @@ interface Session extends SessionInfo {
 
 /** What just happened to a session. The service turns these into SSE + notifications. */
 export type SessionEventType =
-  | 'created' | 'attached' | 'detached' | 'exited' | 'killed' | 'dismissed';
+  | 'created' | 'attached' | 'detached' | 'exited' | 'killed' | 'dismissed'
+  /** A control changed the record without ending it — frozen, thawed, stopping. */
+  | 'changed';
 
 export type SessionEvent = {
   type: SessionEventType;
@@ -359,6 +369,14 @@ export interface TerminalOptions {
   cwd?: () => string | undefined;
   /** Tests inject a fake; production takes the lazily-imported real one. */
   spawn?: PtySpawn;
+  /**
+   * How a signal reaches a session's process — injectable for the same reason
+   * `spawn` is: a test must never signal a real pid. The default signals the
+   * process GROUP (`kill(-pid)`) and falls back to the pid alone; a pty child
+   * is a session leader, so the group is the claude CLI *and* everything it
+   * spawned — which is what "freeze this agent" has to mean.
+   */
+  signal?: (pid: number, signal: NodeJS.Signals) => void;
   /**
    * Every lifecycle moment, for the one subscriber that turns them into an SSE
    * event and — where they are worth waking someone for — a notification. A
@@ -679,6 +697,9 @@ export class Terminals {
   kill(id: string): boolean {
     const session = this.sessions.get(id);
     if (!session) return false;
+    // A SIGSTOPped process cannot act on the hangup `pty.kill()` sends —
+    // continue it first, or the close leaves a stopped orphan behind.
+    if (session.frozen) { this.signal(session, 'SIGCONT'); delete session.frozen; }
     session.exited ??= { code: 0, closedByOperator: true };
     session.exited.closedByOperator = true;
     session.exitedAt ??= Date.now();
@@ -708,6 +729,73 @@ export class Terminals {
     this.sessions.delete(id);
     log.info('terminal.dismissed', { id });
     this.say('dismissed', session);
+    return { ok: true };
+  }
+
+  /* ---------------- per-session controls ---------------- */
+
+  private signal(session: Session, signal: NodeJS.Signals): void {
+    (this.options.signal ?? groupSignal)(session.pid, signal);
+  }
+
+  /**
+   * Stop a session's process group where it stands — SIGSTOP, the runner's
+   * lane-freeze verb at session size. The record says who and since when, and
+   * repeating the verb holds truthfully instead of erroring: the state asked
+   * for is the state there is.
+   */
+  freeze(id: string, by = 'console'): { ok: boolean; reason?: string } {
+    const session = this.sessions.get(id);
+    if (!session) return { ok: false, reason: 'no such session' };
+    if (session.exited) return { ok: false, reason: 'that session has already ended' };
+    if (session.frozen) return { ok: true };
+    this.signal(session, 'SIGSTOP');
+    session.frozen = { at: Date.now(), by };
+    log.info('terminal.frozen', { id, by });
+    this.say('changed', session);
+    return { ok: true };
+  }
+
+  /** SIGCONT — the session picks up exactly where it stopped. */
+  thaw(id: string): { ok: boolean; reason?: string } {
+    const session = this.sessions.get(id);
+    if (!session) return { ok: false, reason: 'no such session' };
+    if (session.exited) return { ok: false, reason: 'that session has already ended' };
+    if (!session.frozen) return { ok: true };
+    this.signal(session, 'SIGCONT');
+    delete session.frozen;
+    log.info('terminal.thawed', { id });
+    this.say('changed', session);
+    return { ok: true };
+  }
+
+  /**
+   * End a session politely: SIGCONT first (a stopped process cannot act on
+   * anything), SIGTERM, and SIGKILL only after a grace it ignored — the same
+   * ladder the runner climbs for a lane.
+   *
+   * Unlike `kill()`, the record STAYS and the exit flows through `onExit`: a
+   * recovery or QA session stopped this way still gets its outcome read
+   * against the board, instead of vanishing mid-verdict with its `--resume`
+   * id. The service skips the "session failed" announcement for a stop the
+   * operator asked for — the exit is the outcome they requested.
+   */
+  stop(id: string, by = 'console', graceMs = 15_000): { ok: boolean; reason?: string } {
+    const session = this.sessions.get(id);
+    if (!session) return { ok: false, reason: 'no such session' };
+    if (session.exited) return { ok: false, reason: 'that session has already ended' };
+    if (session.stopping) return { ok: true };
+    if (session.frozen) { this.signal(session, 'SIGCONT'); delete session.frozen; }
+    this.signal(session, 'SIGTERM');
+    session.stopping = { at: Date.now(), by };
+    log.info('terminal.stopping', { id, by });
+    this.say('changed', session);
+    const escalate = setTimeout(() => {
+      if (this.sessions.get(id) !== session || session.exited) return;
+      log.warn('terminal.stop-escalated', { id, graceMs });
+      this.signal(session, 'SIGKILL');
+    }, graceMs);
+    escalate.unref?.();
     return { ok: true };
   }
 
@@ -902,7 +990,23 @@ function describe(session: Session): SessionInfo {
     ...(session.meta ? { meta: session.meta } : {}),
     ...(session.exited ? { exited: session.exited } : {}),
     ...(session.exitedAt ? { exitedAt: session.exitedAt } : {}),
+    ...(session.frozen ? { frozen: session.frozen } : {}),
+    ...(session.stopping ? { stopping: session.stopping } : {}),
   };
+}
+
+/**
+ * The default `TerminalOptions.signal`: the whole process group, else the pid.
+ *
+ * `-pid` reaches the claude CLI *and* the tool subprocesses it spawned — a
+ * freeze that stopped the CLI but left a test suite running underneath would
+ * be a lie with a spinner on it. ESRCH on the group (an unusual pty backend,
+ * a process that changed groups) falls back to the pid alone rather than
+ * failing the verb.
+ */
+function groupSignal(pid: number, signal: NodeJS.Signals): void {
+  try { process.kill(-pid, signal); return; } catch { /* no group of that id */ }
+  try { process.kill(pid, signal); } catch { /* already gone */ }
 }
 
 /**

@@ -148,14 +148,28 @@ const patchAccounts: Effect['patch'] = (client, data) => {
 
 /** The session list travels on the event; writing it beats asking for it back. */
 const patchSessions: Effect['patch'] = (client, data) => {
-  if (!Array.isArray(data.sessions)) return;
-  client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) => (prev
-    ? {
-      ...prev,
-      sessions: data.sessions as TerminalState['sessions'],
-      ...(typeof data.live === 'number' ? { live: data.live as number } : {}),
+  if (Array.isArray(data.sessions)) {
+    client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) => (prev
+      ? {
+        ...prev,
+        sessions: data.sessions as TerminalState['sessions'],
+        ...(typeof data.live === 'number' ? { live: data.live as number } : {}),
+      }
+      : prev));
+  }
+  // A recovery verdict moves the run record server-side (the write-back), and
+  // a NOT-fixed verdict moves nothing that would emit `run:state` — so the run
+  // and plan queries are re-read off the same event either way. This payload
+  // had no consumer at all for a while: the run was fixed on disk and every
+  // open tab kept the halt banner until a manual reload.
+  if (data.type === 'recovery-outcome') {
+    void client.invalidateQueries({ queryKey: keys.runs() });
+    const slug = (data.recovery as { slug?: string } | undefined)?.slug;
+    if (slug) {
+      void client.invalidateQueries({ queryKey: keys.run(slug) });
+      void client.invalidateQueries({ queryKey: keys.plan(slug) });
     }
-    : prev));
+  }
 };
 
 export const EVENT_EFFECTS: Record<SseEvent, Effect> = {

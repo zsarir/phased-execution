@@ -40,9 +40,14 @@ export function portablePath(path: string, home: string | undefined): string {
   return /^[\w./~-]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`;
 }
 
+/** The console's default session ceiling — a non-default value is worth pinning. */
+const DEFAULT_MAX_SESSIONS = 3;
+
 /** The full-options start line for one console. Exported for the test. */
 export function composeStartCommand(state: {
   scriptsDir?: string; root?: { path?: string }; port?: number; home?: string;
+  remoteHosts?: string[]; remoteUsers?: string[];
+  concurrency?: { max?: number }; defaultSkills?: string[];
 }): string {
   const skillRoot = state.scriptsDir?.replace(/\/scripts\/?$/, '');
   const launcher = skillRoot ? `${portablePath(`${skillRoot}/start`, state.home)}` : 'phase-console start';
@@ -51,6 +56,15 @@ export function composeStartCommand(state: {
     ...(state.root?.path ? [portablePath(state.root.path, state.home)] : []),
     ...(state.port ? [`--port ${state.port}`] : []),
     ...CAPABILITIES.map(([, flag]) => flag),
+    // Everything else this console was started with — remote access, the
+    // session ceiling, default skills. A pasted line that silently dropped
+    // `--remote` disabled someone's phone access; "the exact line" means all
+    // of it. Defaults stay unspoken so a plain console composes the plain line.
+    ...(state.remoteHosts ?? []).flatMap((host) => ['--remote', host]),
+    ...(state.remoteUsers ?? []).flatMap((user) => ['--remote-user', user]),
+    ...(typeof state.concurrency?.max === 'number' && state.concurrency.max !== DEFAULT_MAX_SESSIONS
+      ? [`--max-sessions ${state.concurrency.max}`] : []),
+    ...(state.defaultSkills?.length ? [`--default-skills ${state.defaultSkills.join(',')}`] : []),
   ].join(' ');
 }
 
@@ -72,9 +86,10 @@ export function StartCommandCard() {
       </CardHeader>
       <CardBody className="flex flex-col gap-3">
         <p className="text-sm text-ink-muted">
-          The exact line for this console — its source directory, its port, and all five switches
-          (writes, runs, terminal, agent, accounts). Paths are <code>$HOME</code>-relative, so the
-          line is portable and screenshots carry no username.
+          The exact line for this console — its source directory, its port, all five switches
+          (writes, runs, terminal, agent, accounts), and every setting it was started with
+          (remote access, session ceiling, default skills). Paths are <code>$HOME</code>-relative,
+          so the line is portable and screenshots carry no username.
         </p>
 
         <div>
@@ -113,6 +128,9 @@ export function StartCommandCard() {
         <p className="text-2xs text-ink-faint">
           Supervised by launchd? The flags live in the agent's plist — the Desktop launcher card
           below writes a launcher with the full set, and re-running it re-installs the agent.
+          Deliberately not composed: <code>--host</code> (the console binds localhost, always),{' '}
+          <code>--instance</code>, <code>--scripts</code> and <code>--log-file</code> — install-shaped
+          flags the guide's reference table covers.
         </p>
       </CardBody>
     </Card>

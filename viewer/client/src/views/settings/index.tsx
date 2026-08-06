@@ -89,6 +89,11 @@ export default function SettingsView() {
                   : state.staticRoot === 'not-built'
                     ? <span>nothing — <code>client/dist</code> is missing; run <code>npm run build</code></span>
                     : 'unknown — this server predates the static-root report'],
+                // THIS TAB against the server's build — the diagnostic for
+                // "I deployed and still see the old app": the service worker
+                // keeps a cached shell until an update applies, and this row is
+                // where that mismatch stops being invisible.
+                ['Interface', interfaceRow(state.distRev)],
                 ['Supervisor', state.supervisor?.detail ?? 'unknown'],
               ]}
             />
@@ -254,6 +259,27 @@ export default function SettingsView() {
         </Banner>
       )}
     </Page>
+  );
+}
+
+/**
+ * THIS TAB's build against the server's — the words for the Interface row.
+ *
+ * `__BUILD_REV__` is baked by Vite from the same function that stamps
+ * `dist/.build-rev`, so equal strings mean "the page you are reading is the
+ * page this server serves". Either side unknowable degrades to saying so.
+ */
+function interfaceRow(distRev: string | null | undefined): React.ReactNode {
+  const mine = typeof __BUILD_REV__ === 'string' ? __BUILD_REV__ : 'unknown';
+  if (!distRev || distRev === 'unknown' || mine === 'unknown') {
+    return 'unknown (an unstamped build, or a server that predates the report)';
+  }
+  if (mine === distRev) return `current with the server's build (${mine.slice(0, 12)})`;
+  return (
+    <span className="text-action">
+      this tab was built from <code>{mine.slice(0, 12)}</code>; the server now serves{' '}
+      <code>{distRev.slice(0, 12)}</code> — use &ldquo;Get the latest interface&rdquo; below
+    </span>
   );
 }
 

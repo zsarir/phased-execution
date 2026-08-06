@@ -25,7 +25,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { SKILL_DIR, VIEWER_DIR } from './config.ts';
+import { DEFAULT_MAX_SESSIONS, SKILL_DIR, VIEWER_DIR } from './config.ts';
 
 /** The five capability switches, the full set the launcher turns on. */
 export const FULL_FLAGS = [
@@ -53,6 +53,16 @@ export type LauncherOptions = {
   /** The shipped template — injectable so tests patch a fixture, not the repo. */
   source?: string;
   skillDir?: string;
+  /**
+   * The console's own settings, baked into the artifact so a double-click
+   * starts the console THIS console is — not a five-switch approximation of
+   * it. Remote access dropped from a launcher was the silent-loss shape rev 7
+   * exists to end.
+   */
+  remoteHosts?: string[];
+  remoteUsers?: string[];
+  maxSessions?: number;
+  defaultSkills?: string[];
 };
 
 /** `$HOME`-relative when possible: the file stays honest if the user renames nothing but their disk. */
@@ -96,12 +106,30 @@ export function launcherPlan(opts: {
 }
 
 /** The shipped template with THIS machine's knobs baked in. Exported for tests. */
-export function renderCommandFile(source: string, opts: { root: string; port: number; home: string }): string {
+export function renderCommandFile(source: string, opts: {
+  root: string; port: number; home: string;
+  remoteHosts?: string[]; remoteUsers?: string[]; maxSessions?: number; defaultSkills?: string[];
+}): string {
   if (!/^LAUNCHER_REV=\d+$/m.test(source)) {
     throw new Error('the launcher template has no LAUNCHER_REV — refusing to write a copy that cannot detect staleness');
   }
+  // The rev-7 knobs must exist before they are patched — a template old enough
+  // to lack them would silently drop this console's remote access from the
+  // written copy, which is the exact loss the knobs exist to end.
+  for (const knob of ['REMOTE=', 'REMOTE_USERS=', 'MAX_SESSIONS=', 'DEFAULT_SKILLS=']) {
+    if (!new RegExp(`^${knob}`, 'm').test(source)) {
+      throw new Error(`the launcher template is missing its ${knob.slice(0, -1)} knob — update the template first`);
+    }
+  }
   let patched = source.replace(/^ROOT=.*$/m, `ROOT="${homeRelative(opts.root, opts.home)}"`);
   patched = patched.replace(/^PORT=.*$/m, `PORT=${opts.port}`);
+  patched = patched.replace(/^REMOTE=.*$/m, `REMOTE="${(opts.remoteHosts ?? []).join(' ')}"`);
+  patched = patched.replace(/^REMOTE_USERS=.*$/m, `REMOTE_USERS="${(opts.remoteUsers ?? []).join(' ')}"`);
+  // Pin only what the operator pinned: at the default ceiling the knob stays
+  // empty, so the console's own default keeps ruling — including a future one.
+  patched = patched.replace(/^MAX_SESSIONS=.*$/m,
+    `MAX_SESSIONS="${opts.maxSessions != null && opts.maxSessions !== DEFAULT_MAX_SESSIONS ? opts.maxSessions : ''}"`);
+  patched = patched.replace(/^DEFAULT_SKILLS=.*$/m, `DEFAULT_SKILLS="${(opts.defaultSkills ?? []).join(',')}"`);
   for (const line of ['WRITES="--allow-writes"', 'RUNS="--allow-run"', 'TERM_FLAG="--allow-terminal"',
     'AGENT="--allow-agent"', 'ACCOUNTS="--allow-accounts"']) {
     if (!patched.includes(line)) {
@@ -112,20 +140,34 @@ export function renderCommandFile(source: string, opts: { root: string; port: nu
 }
 
 /** The XDG entry. Exec expands no env vars, so every path is absolute. */
-export function renderDesktopEntry(opts: { skillDir: string; root: string; port: number }): string {
+export function renderDesktopEntry(opts: {
+  skillDir: string; root: string; port: number;
+  remoteHosts?: string[]; remoteUsers?: string[]; maxSessions?: number; defaultSkills?: string[];
+  instanceName?: string; isDefault?: boolean;
+}): string {
   const command = [
     `"${opts.skillDir}/start"`,
     `"${opts.root}"`,
     `--port ${opts.port}`,
     ...FULL_FLAGS,
+    ...(opts.remoteHosts ?? []).flatMap((host) => ['--remote', host]),
+    ...(opts.remoteUsers ?? []).flatMap((user) => ['--remote-user', user]),
+    ...(opts.maxSessions != null && opts.maxSessions !== DEFAULT_MAX_SESSIONS
+      ? ['--max-sessions', String(opts.maxSessions)] : []),
+    ...(opts.defaultSkills?.length ? ['--default-skills', opts.defaultSkills.join(',')] : []),
   ].join(' ');
   // Exec quoting per the spec: the whole argument double-quoted, embedded
   // double quotes and backslashes escaped.
   const exec = `bash -lc ${quoteExecArg(command)}`;
+  // Named like the filename (`launcherPlan`): two projects must not put two
+  // identically-labelled icons on one desktop.
+  const name = opts.isDefault === false && opts.instanceName
+    ? `Phase Console — ${opts.instanceName}`
+    : 'Phase Console';
   return [
     '[Desktop Entry]',
     'Type=Application',
-    'Name=Phase Console',
+    `Name=${name}`,
     'Comment=Local console for phased-execution plans — starts with every capability',
     `Exec=${exec}`,
     'Terminal=true',
@@ -148,12 +190,23 @@ export function installDesktopLauncher(opts: LauncherOptions): { ok: true; path:
   if (!plan.supported || !plan.path) throw new Error(plan.note);
 
   const skillDir = opts.skillDir ?? SKILL_DIR;
+  const extras = {
+    ...(opts.remoteHosts?.length ? { remoteHosts: opts.remoteHosts } : {}),
+    ...(opts.remoteUsers?.length ? { remoteUsers: opts.remoteUsers } : {}),
+    ...(opts.maxSessions != null ? { maxSessions: opts.maxSessions } : {}),
+    ...(opts.defaultSkills?.length ? { defaultSkills: opts.defaultSkills } : {}),
+  };
   mkdirSync(join(plan.path, '..'), { recursive: true });
   if (plan.kind === 'command') {
     const source = opts.source ?? readFileSync(join(VIEWER_DIR, 'deploy', 'desktop-launcher.command'), 'utf8');
-    writeFileSync(plan.path, renderCommandFile(source, { root: opts.root, port: opts.port, home }), 'utf8');
+    writeFileSync(plan.path, renderCommandFile(source, {
+      root: opts.root, port: opts.port, home, ...extras,
+    }), 'utf8');
   } else {
-    writeFileSync(plan.path, renderDesktopEntry({ skillDir, root: opts.root, port: opts.port }), 'utf8');
+    writeFileSync(plan.path, renderDesktopEntry({
+      skillDir, root: opts.root, port: opts.port, ...extras,
+      instanceName: opts.instanceName, isDefault: opts.isDefault,
+    }), 'utf8');
   }
   // Executable either way: a `.command` needs it to run, and GNOME will not
   // even OFFER Allow Launching on a .desktop file without the bit.

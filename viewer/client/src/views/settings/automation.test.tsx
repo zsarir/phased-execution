@@ -36,11 +36,12 @@ beforeEach(() => {
 describe('the automation defaults card', () => {
   it('a config from before the keys existed reads as the documented defaults', async () => {
     await mount({});
-    // Skills and QA open Off; the guard opens On; the PR row is hidden under
-    // the default branch mode, so exactly three toggles render.
+    // Skills and QA open Off; the guard and the two recovery-automation knobs
+    // open On; the PR row is hidden under the default branch mode, so exactly
+    // five toggles render.
     const off = await screen.findAllByRole('button', { name: 'Off' });
     expect(off.length).toBe(2);
-    expect(screen.getAllByRole('button', { name: 'On' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'On' }).length).toBe(3);
     expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('default-branch');
   });
 

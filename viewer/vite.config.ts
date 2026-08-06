@@ -6,6 +6,10 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+// The same computation `stamp-build.mjs` writes into `dist/.build-rev` — the
+// Settings Interface row compares the tab's baked rev against that stamp, and
+// the comparison is only honest while both come from one function.
+import { buildRev } from './scripts/build-rev.mjs';
 
 // The Vite project lives in `client/`; its build output goes to `client/dist`,
 // the only client the server serves (see `server/index.ts` webRoot() — until a
@@ -29,6 +33,10 @@ const rewriteOrigin = (proxy: { on: (e: string, cb: (r: { setHeader: (k: string,
 
 export default defineConfig({
   root: here('client'),
+  // Baked at build time; `declare const __BUILD_REV__` lives beside the client
+  // sources. Defined for dev and vitest too, so the guard in the Settings row
+  // never has to special-case the environment.
+  define: { __BUILD_REV__: JSON.stringify(buildRev()) },
   // Never widen the bind — the whole security model assumes loopback; remote
   // access is tailscale in front of 127.0.0.1, never `--host 0.0.0.0`.
   server: {

@@ -43,7 +43,7 @@ npm run check:dist            # the build gate — run it after every build
 ```bash
 ./start [<repo-with-docs-plans>] [--allow-writes] [--port N] [--no-open]   # run the console
 ./start --agent-status | --agent-log -f | --agent-restart                  # the launchd agent
-phase-console list | open | start | stop | restart | status | logs [<sel>] # one console per project
+phase-console list | open | start | stop | restart | status | logs | remove [<sel>] # one console per project
 ```
 
 **One install, one console per project.** Identity, the registry and ports live in
@@ -149,12 +149,15 @@ rather than refusing.
   trustworthy because nothing but the proxy can reach the port.
 - **Permission `deny` is identical across all three run profiles.** Profiles move only the ask list.
   The PreToolUse hook fails open and carries workflow, never safety.
-- **A shipped default is struck by name; the shipped `deny` list is never struck at all.** Removing
-  an `ask`/`allow` default records it under `removed.ask`/`removed.allow` in the policy file rather
-  than copying the list out and editing it — a copied list would freeze the defaults at whatever
-  version the first edit saw, and an upgrade's new rules must still apply. Restoring is deleting that
-  name. `PolicyRemovals` has **no `deny` key**, and that shape is the enforcement: no browser can
-  unpick the wall. Operator-*added* deny rules stay removable like anything else.
+- **A shipped default is struck by name — `deny` included, since 2026-08-06.** Removing a default
+  records it under `removed.<list>` in the policy file rather than copying the list out and editing
+  it — a copied list would freeze the defaults at whatever version the first edit saw, and an
+  upgrade's new rules must still apply. Restoring is deleting that name. The deny half is a
+  deliberate reversal of the old "no browser can unpick the wall" shape, on the operator's explicit
+  ask; its terms are: the browser **confirms** a shipped-deny strike before writing it (the one
+  confirm on the policy page — it widens what every future run may do, the CLI-side settings
+  included), the per-run push carve-out **never resurrects** a struck wall, and profiles still never
+  move deny. `approvals.test.ts` pins all three.
 
 ### Flags gate capability, one act each
 

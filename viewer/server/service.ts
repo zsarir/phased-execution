@@ -13,7 +13,7 @@ import { execFile } from 'node:child_process';
 
 import { instanceId } from '../shared/instances.mjs';
 import {
-  INSTANCE, agentEnabled, checkRoot, rememberRoot, loadPrefs, savePrefs, serverIsStale, staticRoot,
+  INSTANCE, agentEnabled, checkRoot, distRev, rememberRoot, loadPrefs, savePrefs, serverIsStale, staticRoot,
   type Flags, type Prefs, type RootCheck,
 } from './config.ts';
 import { Store, handoffFor, lockFor, qaFor, readLock, type PlanRecord } from './store.ts';
@@ -55,7 +55,7 @@ import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from
 import { Journal } from './runner/journal.ts';
 import {
   childrenOf, latestRun, listRuns, loadRun, phaseRecord, pidAlive, resolveRunsAgainst, saveRun,
-  slugsNeedingBoard, IN_FLIGHT, PHASE_IN_FLIGHT, type RunState, type VerifySummary,
+  slugsNeedingBoard, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
 import { checkAuth, checkAuthFor, forgetAuth, openLoginTerminal, openCommandTerminal, shellQuote, type AuthStatus } from './runner/auth.ts';
@@ -66,7 +66,7 @@ import {
   RECOVERY_TITLES, recoveryKey,
   type RecoveryClass, type RecoveryFacts, type RecoveryRequest,
 } from './recovery.ts';
-import { phasedExecutionSkillId } from './agent.ts';
+import { buildAgentLaunch, phasedExecutionSkillId } from './agent.ts';
 import {
   isVerdict, qaKey, type QaFacts, type QaRequest,
 } from './qa-session.ts';
@@ -494,6 +494,43 @@ const ETA_POOL_MS = 5_000;
 export function seedSkills(chosen: string[] | undefined, defaults: string[]): string[] | undefined {
   if (chosen !== undefined) return chosen;
   return defaults.length ? [...defaults] : undefined;
+}
+
+/**
+ * Which recovery class a halt can be healed by WITHOUT a person — or null.
+ *
+ * Deliberately narrower than the client's `classifyRun`: the client offers a
+ * button and a person decides; this decides by itself, so anything ambiguous,
+ * human-shaped or resource-shaped answers null. The named `kind` written at
+ * the halt site is the contract; the sentences below only cover records
+ * written before kinds existed, and only the unmistakable ones — the client's
+ * generic "assess and carry on" fallback is exactly what an unattended loop
+ * must not press.
+ */
+export function autoRecoveryClass(
+  halt: { reason: string; kind?: string } | null,
+  status: string,
+): RecoveryClass | null {
+  // An interrupted run is the crash this console is booting back from — the
+  // one case where the status alone is the whole diagnosis.
+  if (status === 'interrupted') return 'interrupted-resume';
+  if (status !== 'halted' || !halt) return null;
+
+  switch (halt.kind) {
+    case 'verify-failed': return 'halted-verification';
+    // A phase that left validate.sh red is the same repair posture: diagnose,
+    // fix minimally, re-verify. The plan-wide `plan-repair` class stays a
+    // person's (it has no phase to anchor the session on).
+    case 'plan-lint': return 'halted-verification';
+    case 'no-handoff': return 'halted-missing-handoff';
+    case 'phase-crashed': return 'interrupted-resume';
+    case undefined: break;
+    default: return null; // a named kind that is not on this list is not healable
+  }
+
+  if (/did not verify|failing validate\.sh/i.test(halt.reason)) return 'halted-verification';
+  if (/no handoff was written|not marked complete/i.test(halt.reason)) return 'halted-missing-handoff';
+  return null;
 }
 
 export class Service {
@@ -1091,6 +1128,11 @@ export class Service {
     // never by assuming the review reached a conclusion because it stopped.
     if (qa) { void this.announceQaOutcome(session, qa, failed); return; }
 
+    // A stop the operator asked for is not news — the exit IS the outcome they
+    // requested. The recovery/QA branches above deliberately still ran: a
+    // stopped verdict session must still be read against the board.
+    if (session.stopping) return;
+
     const what = session.kind === 'claude' ? 'Agent session' : 'Terminal';
     this.announce('session', {
       title: failed ? `${what} failed` : `${what} finished`,
@@ -1133,6 +1175,17 @@ export class Service {
       };
     }
 
+    // The verdict becomes the record before anyone is told about it: a fixed
+    // board flips the phase to done, clears the halt and parks the run; a miss
+    // annotates the attempt. For a while the verdict went only into the
+    // notification below, and the run it was about stayed `halted` forever.
+    let synced: RunState | null = null;
+    try {
+      synced = this.syncRecoveredRun(link, outcome);
+    } catch (error) {
+      log.warn('recovery.sync-failed', { slug: link.slug, phase: link.phase, error });
+    }
+
     this.announce('session', {
       title: outcome.fixed ? `Recovered · ${outcome.headline}` : `Still needs you · ${outcome.headline}`,
       body: `${outcome.detail}${failed ? ` (the session itself exited ${describeExit(session)})` : ''}`,
@@ -1150,10 +1203,29 @@ export class Service {
     this.emit('sessions', {
       type: 'recovery-outcome',
       session,
-      recovery: { ...link, ...outcome },
+      recovery: { ...link, ...outcome, synced: Boolean(synced) },
       sessions: this.terminals.state().sessions,
       live: this.terminals.live(),
     });
+
+    // A fixed run carries on by itself — the same resume `retryPhase` and the
+    // limit clock make, under the automation pref that governs everything else
+    // unattended. `parked` is the only post-sync state worth continuing; a
+    // not-fixed outcome left the halt standing on purpose.
+    if (outcome.fixed && synced?.status === 'parked' && link.slug
+      && this.prefs.autoContinueRecovery !== false
+      && this.flags.allowRun && !this.liveRunner(link.slug)) {
+      try {
+        log.info('run.recovery-continue', { slug: link.slug, runId: synced.id });
+        await this.startRun(link.slug, {
+          resumeRunId: synced.id,
+          ...(synced.onlyPhases?.length ? { onlyPhases: synced.onlyPhases } : {}),
+          skills: synced.skills ?? [],
+        });
+      } catch (error) {
+        log.warn('run.recovery-continue-failed', { slug: link.slug, runId: synced.id, error });
+      }
+    }
   }
 
   /**
@@ -1319,12 +1391,49 @@ export class Service {
       // the run's own policy was "pause and ask me", which means what it says.
       if (state?.status === 'paused' && state.waitUntil && (state.onLimit ?? 'wait') !== 'pause') {
         this.armLimitResume(record.slug, state);
+        continue;
+      }
+      // The third readoptable shape: a run that halted — or was interrupted by
+      // the very crash this boot is recovering from — with auto-recovery on.
+      // The attempts counter was bumped at every launch and persisted, so the
+      // relaunch is bounded by whatever the budget still allows; everything
+      // else is re-checked by `maybeAutoRecover` when the timer fires.
+      if (state && (state.status === 'halted' || state.status === 'interrupted') && state.autoRecover) {
+        this.scheduleAutoRecover(record.slug);
       }
     }
   }
 
   /** One armed clock per plan: the newest reset time wins, restarts survive. */
   private limitResumeTimers = new Map<string, NodeJS.Timeout>();
+
+  /** One pending auto-recovery per plan — debounce, not queue. */
+  private autoRecoverTimers = new Map<string, NodeJS.Timeout>();
+
+  /**
+   * A halt schedules one auto-recovery attempt, a minute out, per plan.
+   *
+   * The delay is the point, not an implementation detail: the halt event fires
+   * while the run is still draining its lanes, the operator may be watching
+   * and about to act themselves, and a console that spawns an agent the same
+   * second something breaks is a console nobody can get ahead of. When the
+   * timer fires `maybeAutoRecover` re-reads everything — the run may have been
+   * continued, stopped or fixed by hand in the meantime, and every one of
+   * those wins.
+   */
+  private scheduleAutoRecover(slug: string, delayMs = 60_000): void {
+    if (this.autoRecoverTimers.has(slug)) return;
+    const timer = setTimeout(() => {
+      this.autoRecoverTimers.delete(slug);
+      void this.maybeAutoRecover(slug)
+        .then((out) => {
+          if (!out.launched && out.reason) log.info('run.auto-recover-skipped', { slug, reason: out.reason });
+        })
+        .catch((error) => log.warn('run.auto-recover-failed', { slug, error }));
+    }, delayMs);
+    timer.unref?.();
+    this.autoRecoverTimers.set(slug, timer);
+  }
 
   private armLimitResume(slug: string, state: RunState): void {
     const at = Date.parse(state.waitUntil ?? '');
@@ -1366,6 +1475,8 @@ export class Service {
     if (this.accountsEmitTimer) clearTimeout(this.accountsEmitTimer);
     for (const timer of this.limitResumeTimers.values()) clearTimeout(timer);
     this.limitResumeTimers.clear();
+    for (const timer of this.autoRecoverTimers.values()) clearTimeout(timer);
+    this.autoRecoverTimers.clear();
     this.watcher.stop();
     // Nothing is admitted after this point, and every pending admission is
     // rejected rather than left holding a promise nobody will settle.
@@ -1635,6 +1746,10 @@ export class Service {
 
     const state = (data as { state?: RunState } | undefined)?.state;
     if (!state) return;
+    // A halt is also the auto-recovery trigger — scheduled and debounced here,
+    // decided entirely by `maybeAutoRecover` when the timer fires: the run may
+    // have been continued, fixed by hand, or opted out by then.
+    if (state.status === 'halted' && state.halt) this.scheduleAutoRecover(state.slug);
     // Dedupe on the run *and* its status. Keying on the run alone — which this
     // did — meant a run announced once as parked could later halt, or finish,
     // in silence.
@@ -2288,8 +2403,8 @@ export class Service {
     remove?: { deny?: string[]; ask?: string[]; allow?: string[] };
     /** Return these parts to stock at the chosen scope — see `approvals.editPolicy`. */
     reset?: ('deny' | 'ask' | 'allow')[];
-    /** Forgive individual strikes against shipped ask/allow defaults. */
-    restore?: { ask?: string[]; allow?: string[] };
+    /** Forgive individual strikes against shipped defaults — deny included. */
+    restore?: { deny?: string[]; ask?: string[]; allow?: string[] };
     by?: string;
   }) {
     const scope: PolicyScope = edit.scope === 'plan' ? 'plan' : 'global';
@@ -2416,6 +2531,10 @@ export class Service {
       // under a long-lived process; Settings reports it rather than leaving the
       // answer in a startup log written hours ago.
       staticRoot: staticRoot(),
+      // Which commit `dist` was built from — the Settings Interface row
+      // compares this against the tab's own baked rev to say whether the page
+      // someone is looking at is the page this server serves.
+      distRev: distRev(),
       // Whether a clean exit comes back. The Restart button is only honest if
       // it knows this before it is pressed — under `./run` there is nothing to
       // restart it, and a button that ends the console is not a Restart button.
@@ -2575,8 +2694,15 @@ export class Service {
       ? [...new Set([...this.flags.defaultSkills, ...(options.skills ?? [])])]
       : options.skills;
 
+    // Auto-recovery seeds like QA above: the preference speaks only for a
+    // fresh run — a resume keeps the run's own sticky choice — and an explicit
+    // false beats it, so unticking the box means what it says.
+    const autoRecover = options.autoRecover
+      ?? (options.resumeRunId ? undefined : this.prefs.autoRecoverByDefault !== false);
+
     const state = await this.runnerFor(slug).start({
       ...options,
+      autoRecover,
       skills,
       slug,
       root: this.root.path,
@@ -3478,6 +3604,192 @@ export class Service {
     };
   }
 
+  /**
+   * Move the run record to where the board says it now is — the write-back
+   * half of a recovery session's exit.
+   *
+   * `recoveryOutcome` computes the verdict; this makes it true on the run. For
+   * a while the verdict went only into a notification, so the phase stayed
+   * `failed`, the run stayed `halted`, and the button that had just worked was
+   * offered again. Three rules keep the write safe:
+   *
+   *  - **Never under a live loop.** A busy runner owns its state, and the
+   *    resumed loop re-reads the board anyway.
+   *  - **The pooled object first.** `runFor` prefers an idle Runner's
+   *    in-memory state over disk, so when the pool still holds this run, THAT
+   *    object is the one rewritten — a disk-only edit would be shadowed until
+   *    the next restart.
+   *  - **Annotation on a miss.** A not-fixed outcome only records the attempt;
+   *    the halt keeps standing and keeps its words.
+   *
+   * On success the run lands on `parked` with `Runner.recover`'s own wording —
+   * one vocabulary for both recovery paths, and the state auto-continue and
+   * the Continue button both already consume.
+   */
+  syncRecoveredRun(
+    link: { kind: string; slug?: string; phase?: number; runId?: string },
+    outcome: { fixed: boolean; headline?: string; detail?: string },
+    by = 'an AI recovery session',
+  ): RunState | null {
+    const slug = link.slug;
+    if (!slug || !this.root?.ok) return null;
+
+    const pooled = this.runners.get(slug);
+    if (pooled?.busy()) return null;
+    const held = pooled?.current();
+    const target = held && held.slug === slug && (!link.runId || held.id === link.runId)
+      ? held
+      : link.runId
+        ? loadRun(this.root.path, slug, link.runId, this.liveRunId())
+        : latestRun(this.root.path, slug, this.liveRunId());
+    if (!target) return null;
+    if (!RESOLVABLE.includes(target.status) && target.status !== 'parked') return null;
+
+    const now = new Date().toISOString();
+    const phase = link.phase;
+
+    if (link.kind === 'plan-repair' && phase == null) {
+      if (!outcome.fixed) return null;
+      // A repair may only clear a halt that was ABOUT the plan's paperwork —
+      // by kind, or by the words on a record written before kinds existed.
+      const halt = target.halt;
+      const lintHalt = halt != null
+        && (halt.kind === 'plan-lint' || (!halt.kind && /validate\.sh|plan error/i.test(halt.reason)));
+      if (!lintHalt) return null;
+      return this.writeStoredRun(target, (state) => {
+        state.halt = null;
+        state.resolved = null;
+        state.reopenedAt = null;
+        state.status = 'parked';
+        state.finishedReason = `the plan validates again — closed by ${by}. `
+          + 'Continue to carry on through the rest of the plan.';
+        const slot = ((state.recoveries ??= {}).plan ??= { attempts: 0, lastAt: now });
+        slot.lastAt = now;
+        slot.fixed = true;
+      });
+    }
+
+    if (phase == null) return null;
+
+    return this.writeStoredRun(target, (state) => {
+      const slot = ((state.recoveries ??= {})[String(phase)] ??= { attempts: 0, lastAt: now });
+      slot.lastAt = now;
+      if (!outcome.fixed) {
+        // The failed attempt is bookkeeping the auto-recovery budget reads;
+        // the halt keeps standing so the operator still sees why it stopped.
+        if (state.halt?.reason) slot.lastReason = state.halt.reason;
+        delete slot.fixed;
+        return;
+      }
+      const record = phaseRecord(state, phase);
+      record.status = 'done';
+      record.endedAt ??= now;
+      record.note = `closed by ${by}`;
+      slot.fixed = true;
+      delete slot.lastReason;
+      state.halt = null;
+      state.consecutiveFailures = 0;
+      // Same rule as `start` on resume: the resolution was about the stop this
+      // recovery just ended, and left in place it silences the next one's card.
+      state.resolved = null;
+      state.reopenedAt = null;
+      state.status = 'parked';
+      state.finishedReason = `phase ${phase} was closed by ${by}. `
+        + 'Continue to carry on through the rest of the plan.';
+    });
+  }
+
+  /**
+   * Launch the recovery agent for a halted run, if — and only if — every guard
+   * passes. The unattended half of the Fix-with-AI button.
+   *
+   * The guards run in the order a person would apply them: is the run even
+   * asking to be healed, is the halt a kind an agent clears, is the console
+   * allowed to spawn agents, is there budget left, and did the *identical*
+   * failure already burn an attempt (a loop that fails the same way twice is a
+   * person's to read, not a third session's). The attempt counter is bumped
+   * and persisted BEFORE the mint, so a console that dies mid-recovery
+   * relaunches at most what the budget still allows on the next boot.
+   */
+  async maybeAutoRecover(slug: string): Promise<{ launched: boolean; reason?: string }> {
+    const no = (reason: string) => ({ launched: false as const, reason });
+    if (!this.root?.ok) return no('no source directory is open');
+    if (!agentEnabled(this.flags)) return no('auto-recovery needs --allow-agent');
+    if (this.terminals.availability() === 'no') return no('agent sessions are unavailable (node-pty)');
+    if (this.liveRunner(slug)) return no('the run is live again');
+
+    const state = await this.runFor(slug);
+    if (!state) return no('no run of that plan');
+    if (!state.autoRecover) return no('the run opted out of auto-recovery');
+
+    const cls = autoRecoveryClass(state.halt, state.status);
+    if (!cls) return no('the halt is not auto-recoverable');
+
+    const phase = state.halt?.phase ?? state.activePhase ?? childrenOf(state)[0]?.phase;
+    if (phase == null) return no('no phase to anchor a recovery on');
+
+    const key = String(phase);
+    const slot = state.recoveries?.[key];
+    const cap = state.autoRecover.attempts;
+    if ((slot?.attempts ?? 0) >= cap) {
+      return no(`phase ${phase}'s recovery budget is spent (${cap} launch${cap === 1 ? '' : 'es'})`);
+    }
+    const total = Object.values(state.recoveries ?? {}).reduce((sum, s) => sum + (s.attempts ?? 0), 0);
+    if (total >= 5) return no('the run recovery budget is spent (5 launches)');
+    if (slot?.lastReason && state.halt?.reason === slot.lastReason && (slot.attempts ?? 0) >= 1) {
+      return no('the same failure twice — a person should look before another session does');
+    }
+
+    const request: RecoveryRequest = { class: cls, slug, phase, runId: state.id };
+    const resolved = await this.resolveRecovery(request);
+    if (!resolved.ok) return no(resolved.error);
+
+    // Spawn as the run's own account: the run's quota, the run's identity.
+    const env = state.accountId ? await this.accounts.envFor(state.accountId) : null;
+    const account = state.accountId
+      ? {
+        id: state.accountId,
+        env: env
+          ? Object.fromEntries(Object.entries(env)
+            .filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+          : null,
+      }
+      : undefined;
+
+    const built = buildAgentLaunch(
+      { kind: 'claude', intent: 'recovery', model: state.model },
+      {
+        skills: () => this.skills(),
+        scriptsDir: this.flags.scriptsDir,
+        rootOpen: Boolean(this.store),
+        recovery: resolved.facts,
+        ...(account ? { account } : {}),
+      },
+    );
+    if (!built.ok) return no(built.error);
+
+    // Bumped before the session exists — see the doc comment.
+    const now = new Date().toISOString();
+    const bumped = ((state.recoveries ??= {})[key] ??= { attempts: 0, lastAt: now });
+    bumped.attempts += 1;
+    bumped.lastAt = now;
+    saveRun(state);
+    this.emit('run:state', { state });
+
+    const minted = await this.terminals.mint(undefined, undefined, built.launch);
+    if (!minted.ok) return no(minted.error);
+
+    this.runners.get(slug)?.note('run.auto-recovery', { phase, class: cls, attempt: bumped.attempts }, phase);
+    log.info('run.auto-recovery', { slug, runId: state.id, phase, class: cls, attempt: bumped.attempts });
+    this.announce('session', {
+      title: `Auto-recovery started · ${slug} P${phase}`,
+      body: `${RECOVERY_TITLES[cls]} — attempt ${bumped.attempts} of ${cap}. `
+        + 'The run resumes by itself when the board reads fixed.',
+      tag: tagFor('session', state.id, `auto-recover-${phase}-${bumped.attempts}`),
+    }, { slug, runId: state.id, phase });
+    return { launched: true };
+  }
+
   /* ---------------------------------------------------------------- *
    * QA sessions
    * ---------------------------------------------------------------- */
@@ -3925,6 +4237,13 @@ export class Service {
       port: this.flags.port,
       instanceName: INSTANCE.name,
       isDefault: INSTANCE.default,
+      // The console's own settings, so the artifact starts the console this
+      // console IS — remote access and session ceiling included, not just the
+      // five switches.
+      remoteHosts: this.flags.remoteHosts,
+      remoteUsers: this.flags.remoteUsers,
+      maxSessions: this.flags.maxSessions,
+      defaultSkills: this.flags.defaultSkills,
     });
   }
 
@@ -4158,6 +4477,8 @@ export class Service {
     if (patch.gitMode === 'default-branch' || patch.gitMode === 'new-branch') picked.gitMode = patch.gitMode;
     if (typeof patch.openPrOnComplete === 'boolean') picked.openPrOnComplete = patch.openPrOnComplete;
     if (typeof patch.repoGuard === 'boolean') picked.repoGuard = patch.repoGuard;
+    if (typeof patch.autoRecoverByDefault === 'boolean') picked.autoRecoverByDefault = patch.autoRecoverByDefault;
+    if (typeof patch.autoContinueRecovery === 'boolean') picked.autoContinueRecovery = patch.autoContinueRecovery;
     // `notify` is a map inside a patch, so a shallow spread alone would let a
     // client sending one toggle reset every other category to its default.
     // Merged off the *current* map (captured before the spread overwrites it),

@@ -32,6 +32,7 @@ import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // Through `./pane`, deliberately — see the re-export note there: a second
 // importable module in this shared chunk renames it and precaches xterm.
 import { EndedBanner, SessionGone, SessionVitals, TerminalPane } from './pane';
+import { SessionControls } from '../agent/session-controls';
 
 export default function TerminalView({ route }: { route: Route }) {
   const client = useQueryClient();
@@ -219,6 +220,8 @@ export default function TerminalView({ route }: { route: Route }) {
 
         {open && (
           <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* Freeze / Continue / Stop — the lane verbs, for THIS shell. */}
+            <SessionControls session={open} />
             {/* Plan · phase · elapsed (· ETA when the session names a phase) —
                 a shell attached to nothing still gets its clock. */}
             <SessionVitals session={open} />

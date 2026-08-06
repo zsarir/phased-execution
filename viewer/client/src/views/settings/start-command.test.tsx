@@ -51,6 +51,22 @@ describe('composeStartCommand', () => {
       'phase-console start --allow-writes --allow-run --allow-terminal --allow-agent --allow-accounts',
     );
   });
+
+  it('carries every setting the console was started with — remote, ceiling, skills', () => {
+    const command = composeStartCommand({
+      ...STATE,
+      remoteHosts: ['console.tail1234.ts.net'],
+      remoteUsers: ['op@github'],
+      concurrency: { max: 5 },
+      defaultSkills: ['qa', 'design-review'],
+    });
+    expect(command).toContain('--remote console.tail1234.ts.net');
+    expect(command).toContain('--remote-user op@github');
+    expect(command).toContain('--max-sessions 5');
+    expect(command).toContain('--default-skills qa,design-review');
+    // The default ceiling stays unspoken — a plain console composes the plain line.
+    expect(composeStartCommand({ ...STATE, concurrency: { max: 3 } })).not.toContain('--max-sessions');
+  });
 });
 
 describe('portablePath', () => {

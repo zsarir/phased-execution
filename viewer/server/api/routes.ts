@@ -569,6 +569,22 @@ export async function handleApi(
       // open yet.
       if (req.method === 'GET') { json(res, 200, service.terminals.state()); return true; }
 
+      // Freeze / continue / stop one session — the runner's lane verbs at
+      // session size, so a recovery agent mid-flight can be held or ended
+      // politely instead of only killed. Same gate as DELETE: any session
+      // capability admits the controls for sessions that exist.
+      if (req.method === 'POST' && rest.length === 2 && ['freeze', 'thaw', 'stop'].includes(rest[1])) {
+        const refusal = guardAnySession(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const by = typeof body.by === 'string' ? body.by.slice(0, 80) : 'console';
+        const outcome = rest[1] === 'freeze' ? service.terminals.freeze(rest[0], by)
+          : rest[1] === 'thaw' ? service.terminals.thaw(rest[0])
+          : service.terminals.stop(rest[0], by);
+        json(res, outcome.ok ? 200 : 409, { ...outcome, state: service.terminals.state() });
+        return true;
+      }
+
       if (req.method === 'POST') {
         // The body decides which gate applies, so it is read first; the
         // guards still run before anything is created or looked up.
@@ -794,7 +810,11 @@ export async function handleApi(
         return true;
       }
       if (req.method === 'POST') {
-        const refusal = guardCsrf(req);
+        // A write gate, not only CSRF: this puts a 0755 executable on the
+        // Desktop that starts a console with every capability on. A console
+        // running read-only should refuse to mint that from a browser exactly
+        // as it refuses every other write.
+        const refusal = guardWrite(req, service);
         if (refusal) { json(res, 403, { error: refusal }); return true; }
         try {
           json(res, 200, service.createDesktopLauncher());
@@ -808,17 +828,13 @@ export async function handleApi(
       }
     }
 
-    if (!service.store) { json(res, 409, { error: 'No source directory is open.' }); return true; }
-
-    /* ---------------- portfolio ---------------- */
-    if (head === 'plans' && rest.length === 0) { json(res, 200, await service.summaries()); return true; }
-    if (head === 'stats') { json(res, 200, await service.portfolio()); return true; }
-    if (head === 'search') {
-      json(res, 200, service.searchAll(url.searchParams.get('q') ?? ''));
-      return true;
-    }
-    if (head === 'skills' && req.method === 'GET') { json(res, 200, service.skills()); return true; }
-
+    /* ---------------- the permission policy ----------------
+     * Above the source-directory wall, beside launcher/tailscale/accounts and
+     * for the same reason: the GLOBAL policy is an instance fact that exists
+     * with no root open, and the Settings card that renders it used to vanish
+     * silently — the whole strike-and-restore surface gone with no banner —
+     * on any console that had not opened a root. Plan-scoped reads degrade
+     * honestly (the plan list is empty until a root opens). */
     if (head === 'policy') {
       if (req.method === 'GET') {
         json(res, 200, service.policy(url.searchParams.get('slug')));
@@ -850,14 +866,16 @@ export async function handleApi(
             return true;
           }
           const restorePart = (body.restore ?? {}) as Record<string, unknown>;
-          const restore = { ask: rules(restorePart.ask), allow: rules(restorePart.allow) };
+          const restore = {
+            deny: rules(restorePart.deny), ask: rules(restorePart.ask), allow: rules(restorePart.allow),
+          };
           json(res, 200, service.editPolicy({
             scope,
             slug,
             add: lists(body.add),
             remove: lists(body.remove),
             ...(resets.length ? { reset: resets } : {}),
-            ...(restore.ask.length || restore.allow.length ? { restore } : {}),
+            ...(restore.deny.length || restore.ask.length || restore.allow.length ? { restore } : {}),
             by: typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
           }));
           return true;
@@ -877,6 +895,17 @@ export async function handleApi(
         return true;
       }
     }
+
+    if (!service.store) { json(res, 409, { error: 'No source directory is open.' }); return true; }
+
+    /* ---------------- portfolio ---------------- */
+    if (head === 'plans' && rest.length === 0) { json(res, 200, await service.summaries()); return true; }
+    if (head === 'stats') { json(res, 200, await service.portfolio()); return true; }
+    if (head === 'search') {
+      json(res, 200, service.searchAll(url.searchParams.get('q') ?? ''));
+      return true;
+    }
+    if (head === 'skills' && req.method === 'GET') { json(res, 200, service.skills()); return true; }
 
     /* ---------------- one plan ---------------- */
     if (head === 'plans' && rest.length >= 1) {
@@ -1113,6 +1142,9 @@ export async function handleApi(
               // `auto` resolves in the service against the cached meters.
               accountId: accountChoice(body.accountId, service),
               onLimit: isOnLimitPolicy(body.onLimit) ? body.onLimit : undefined,
+              // A boolean or nothing: absent lets the stored preference (fresh
+              // run) or the run's own sticky choice (resume) decide.
+              autoRecover: typeof body.autoRecover === 'boolean' ? body.autoRecover : undefined,
             });
             json(res, 200, { run: state });
             return true;

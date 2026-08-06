@@ -127,14 +127,25 @@ export function runNotes({
   const notes: RunNote[] = [];
 
   if (run?.halt) {
+    const streak = run.consecutiveFailures ?? 0;
     notes.push({
       id: 'halt',
       severity: 'error',
-      title: 'Halted.',
+      title: run.halt.kind === 'needs-human' ? 'Halted — needs you.' : 'Halted.',
       body: (
         <>
           {run.halt.reason}
           {run.halt.phase != null && <span className="text-ink-faint"> (phase {run.halt.phase})</span>}
+          {run.halt.kind === 'needs-human' && (
+            <span className="mt-1 block text-2xs text-ink-faint">
+              This is a step no session can take for you — do it, then Continue.
+            </span>
+          )}
+          {streak >= 2 && (
+            <span className="mt-1 block text-2xs text-ink-faint">
+              {streak} consecutive failures — the counter resets on a success, a Retry, or Continue.
+            </span>
+          )}
         </>
       ),
       // The halt is the one note whose remedy may be a whole session. Rendered
@@ -151,12 +162,15 @@ export function runNotes({
 
   // Why the loop stopped, for every ending that is not a halt. A run that stops
   // after one phase because it was scoped to one phase is the most-reported
-  // "it doesn't advance", and it used to be invisible.
+  // "it doesn't advance", and it used to be invisible. A parked run gets its
+  // own title: parked means every remaining move is a person's, and "stopped"
+  // read as finished-ish to exactly the operator who needed to act.
   if (!live && !run?.halt && run?.finishedReason) {
+    const parked = run.status === 'parked';
     notes.push({
       id: 'ended',
-      severity: run.status === 'finished' ? 'ok' : 'info',
-      title: run.status === 'finished' ? 'Run finished.' : 'Run stopped.',
+      severity: run.status === 'finished' ? 'ok' : parked ? 'warn' : 'info',
+      title: run.status === 'finished' ? 'Run finished.' : parked ? 'Parked — needs you.' : 'Run stopped.',
       body: run.finishedReason,
     });
   }

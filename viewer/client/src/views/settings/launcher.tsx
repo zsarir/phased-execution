@@ -55,10 +55,12 @@ export function LauncherCard({ supervised }: { supervised?: boolean }) {
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="action"
-                disabled={creating || !plan.rootOpen}
-                title={plan.rootOpen
-                  ? `Writes ${shownPath ?? 'the launcher'} with this console's source directory and port, and every capability switch on.`
-                  : 'Open a source directory first — the launcher bakes it in as its ROOT.'}
+                disabled={creating || !plan.rootOpen || state?.allowWrites !== true}
+                title={state?.allowWrites !== true
+                  ? 'Restart with --allow-writes — writing an executable to the Desktop is a write.'
+                  : plan.rootOpen
+                    ? `Writes ${shownPath ?? 'the launcher'} with this console's source directory, port, every capability switch, and its remote/session/skills settings.`
+                    : 'Open a source directory first — the launcher bakes it in as its ROOT.'}
                 onClick={create}
               >
                 {creating ? 'Writing…' : 'Create the Desktop launcher — full options'}
@@ -67,8 +69,10 @@ export function LauncherCard({ supervised }: { supervised?: boolean }) {
             </div>
             <p className="m-0 text-2xs text-ink-faint">
               {plan.platform === 'darwin'
-                ? 'macOS: a double-clickable .command with ROOT, PORT and all five --allow switches set.'
-                : 'Linux: an XDG .desktop entry that runs the start command in a terminal.'}{' '}
+                ? <>macOS: a double-clickable .command with ROOT, PORT,{' '}
+                  {(plan.fullFlags ?? []).map((flag) => <code key={flag} className="mr-1">{flag}</code>)}
+                  and this console&rsquo;s remote/session/skills settings baked in.</>
+                : 'Linux: an XDG .desktop entry that runs the start command — full flag set — in a terminal.'}{' '}
               {created ? created.note : plan.note}
             </p>
             {created ? (

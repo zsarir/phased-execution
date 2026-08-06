@@ -65,6 +65,19 @@ RUNS="--allow-run"
 TERM_FLAG="--allow-terminal"
 AGENT="--allow-agent"
 ACCOUNTS="--allow-accounts"
+# Remote access (the Tailscale Serve proxy): space-separated proxy hostnames,
+# and the tailnet logins allowed through them. Both or neither — the console
+# refuses --remote without --remote-user. Managed here since rev 7; empty
+# means local-only, which is the default and the safe answer.
+REMOTE=""
+REMOTE_USERS=""
+# How many sessions may run at once across every plan. Empty = the console's
+# own default (3); set a number only to pin a different ceiling.
+MAX_SESSIONS=""
+# Skills every run may attach by default (comma-separated). Exported as
+# PHASE_CONSOLE_DEFAULT_SKILLS rather than passed as argv, because the flag
+# ADDS to the env list — both at once would double every entry.
+DEFAULT_SKILLS=""
 # 4123 is the FIRST console on a machine. Every other project derives its own
 # port from its path (4124–4223), so a launcher for a second project should
 # blank this out and let it — pinning 4123 in two copies of this file is two
@@ -87,9 +100,25 @@ SUPERVISED="yes"
 # 6: the ACCOUNTS knob (--allow-accounts — multiple Claude accounts, per-run
 #    account choice, switch-at-the-usage-limit). A rev-5 copy neither passes
 #    the flag nor notices when the running console lacks it.
-LAUNCHER_REV=6
+# 7: the REMOTE / REMOTE_USERS / MAX_SESSIONS / DEFAULT_SKILLS knobs become
+#    managed here — every start surface (Settings' start command, this file,
+#    the launchd install) now carries the full option set. A rev-6 copy still
+#    carries such flags forward from an existing plist ("keeping …"), but
+#    cannot set or clear them from its own knobs.
+LAUNCHER_REV=7
 
 set -uo pipefail
+
+# ---- compose the managed extras ---------------------------------------------
+# One array, used by every start path below — the supervised install and both
+# foreground exec lines — so a knob can never apply to one path and not the
+# other. `${EXTRA[@]+…}` everywhere it is used: bash 3.2 under `set -u` treats
+# an empty array expansion as unset.
+EXTRA=()
+for h in $REMOTE;       do EXTRA+=(--remote "$h"); done
+for u in $REMOTE_USERS; do EXTRA+=(--remote-user "$u"); done
+[ -n "$MAX_SESSIONS" ] && EXTRA+=(--max-sessions "$MAX_SESSIONS")
+[ -n "$DEFAULT_SKILLS" ] && export PHASE_CONSOLE_DEFAULT_SKILLS="$DEFAULT_SKILLS"
 
 # Resolved against ROOT once the viewer is located — one install now runs one
 # console per project, and this launcher speaks for exactly one of them. The
@@ -243,7 +272,10 @@ collect_carried() {
   while [ "$i" -lt "${#args[@]}" ]; do
     flag="${args[$i]}"
     case "$flag" in
-      --root|--port) i=$((i + 2)); continue ;;
+      # Managed by this file's knobs since rev 7 — never ALSO carried, or a
+      # knob-managed flag would appear twice in the installed argv.
+      --root|--port|--remote|--remote-user|--max-sessions|--default-skills)
+        i=$((i + 2)); continue ;;
       --no-open|--allow-writes|--allow-run|--allow-terminal|--allow-agent|--allow-accounts)
         i=$((i + 1)); continue ;;
       --*)
@@ -277,7 +309,14 @@ collect_carried_env() {
     value="$(printf '%s' "$value" | sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g')"
     case "$key" in
       PATH|HOME|PHASE_CONSOLE_NO_OPEN) : ;;   # agent.sh always rewrites these
-      PHASE_CONSOLE_NOTIFY|PHASE_CONSOLE_DEFAULT_SKILLS)
+      PHASE_CONSOLE_DEFAULT_SKILLS)
+        # Carried only while the knob above is empty — a knob that says
+        # something IS the setting, and the plist's old value must not win.
+        if [ -z "$DEFAULT_SKILLS" ]; then
+          export "$key=$value"
+          carried_env+=("$key=$value")
+        fi ;;
+      PHASE_CONSOLE_NOTIFY)
         export "$key=$value"
         carried_env+=("$key=$value") ;;
       *) uncarried_env+=("$key") ;;
@@ -295,6 +334,9 @@ banner() {
   echo "  terminal ${TERM_FLAG:-off} ${TERM_FLAG:+— the Terminal page opens a real shell as you}"
   echo "  agent    ${AGENT:-off} ${AGENT:+— the Agent page runs interactive claude sessions}"
   echo "  accounts ${ACCOUNTS:-off} ${ACCOUNTS:+— register several Claude accounts; runs may switch at a usage limit}"
+  [ -n "$REMOTE" ] && echo "  remote   $REMOTE — logins: ${REMOTE_USERS:-none (the console will refuse to start)}"
+  [ -n "$MAX_SESSIONS" ] && echo "  sessions at most $MAX_SESSIONS at once"
+  [ -n "$DEFAULT_SKILLS" ] && echo "  skills   $DEFAULT_SKILLS (offered to every run)"
   echo
 }
 
@@ -339,6 +381,15 @@ if [ "$SUPERVISED" = yes ]; then
     plist_wants "$TERM_FLAG" "--allow-terminal"
     plist_wants "$AGENT"     "--allow-agent"
     plist_wants "$ACCOUNTS"  "--allow-accounts"
+    # The managed extras, grep-honest like the switches. Each composed value
+    # must be in the plist; a knob gone empty must notice a leftover flag. The
+    # check cannot say WHICH --remote drifted — good enough to reinstall, which
+    # rewrites the whole argv anyway.
+    for extra_arg in ${EXTRA[@]+"${EXTRA[@]}"}; do
+      if ! plist_has "$extra_arg"; then reason="$reason extras(update)"; break; fi
+    done
+    [ -z "$REMOTE" ]       && plist_has "--remote"       && reason="$reason --remote(turn off)"
+    [ -z "$MAX_SESSIONS" ] && plist_has "--max-sessions" && reason="$reason --max-sessions(turn off)"
     [ -n "$reason" ] && needs_install=1
   fi
 
@@ -408,6 +459,7 @@ if [ "$SUPERVISED" = yes ]; then
     echo
     if ! bash "$VIEWER/deploy/agent.sh" install \
            --root "$ROOT" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT $ACCOUNTS \
+           ${EXTRA[@]+"${EXTRA[@]}"} \
            ${carried[@]+"${carried[@]}"}; then
       echo
       echo "The agent did not install, so nothing was changed."
@@ -570,7 +622,7 @@ echo
 
 # ---- run in the foreground so this window owns the server ------------------
 if [ -n "$ROOT" ]; then
-  exec node "$VIEWER/server/index.ts" --root "$ROOT" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT $ACCOUNTS
+  exec node "$VIEWER/server/index.ts" --root "$ROOT" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT $ACCOUNTS ${EXTRA[@]+"${EXTRA[@]}"}
 else
-  exec node "$VIEWER/server/index.ts" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT $ACCOUNTS
+  exec node "$VIEWER/server/index.ts" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT $ACCOUNTS ${EXTRA[@]+"${EXTRA[@]}"}
 fi

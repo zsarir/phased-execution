@@ -3,12 +3,12 @@ import { Power, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { usePhone } from '@/lib/media';
 import { useOnline, useServiceWorker } from '@/lib/pwa';
-import { useSseStatus } from '@/lib/sse';
+import { onSse, useSseStatus } from '@/lib/sse';
 import { useConsoleStopped } from '@/lib/shutdown';
 import {
   shellCounts, useApprovals, useConsoleState, useLiveData, usePlans, useSessions,
 } from '@/lib/queries';
-import { Banner, Spinner, Toaster, TooltipProvider } from '@/components/ui';
+import { Banner, Spinner, Toaster, TooltipProvider, toast } from '@/components/ui';
 import { CHROMELESS_HEADS, navigate, resolveView, useRoute } from '@/router';
 import { Disconnected } from '@/shell/disconnected';
 import { Rail } from '@/shell/rail';
@@ -18,6 +18,35 @@ import { MoreSheet, TabBar, TopBar } from '@/shell/phone';
 const SHORTCUTS: Record<string, string> = {
   '/': 'search', r: 'ready', p: 'plans', d: 'dashboard', s: 'stats', g: 'guide', n: 'notifications',
 };
+
+/**
+ * A recovery session's verdict, toasted as it lands.
+ *
+ * The `recovery-outcome` payload had no client consumer at all for a while —
+ * the run was fixed on disk and every open tab kept its halt banner. The query
+ * invalidation lives in `patchSessions`; this is only the sentence.
+ */
+function useRecoveryOutcomeToasts(): void {
+  useEffect(() => onSse('sessions', (data) => {
+    const record = data as {
+      type?: string;
+      recovery?: { fixed?: boolean; headline?: string; detail?: string; synced?: boolean };
+    };
+    if (record.type !== 'recovery-outcome' || !record.recovery) return;
+    const { fixed, headline, detail, synced } = record.recovery;
+    if (fixed) {
+      toast(
+        `${headline ?? 'Recovery finished'}${synced ? ' — the run record moved with it' : ''}`,
+        'ok',
+      );
+    } else {
+      toast(
+        headline ? `${headline} — ${detail ?? 'inspect the session'}` : 'Recovery ended without moving the board',
+        'warn',
+      );
+    }
+  }), []);
+}
 
 export function App() {
   const route = useRoute();
@@ -32,6 +61,10 @@ export function App() {
   useLiveData();
   // Registers the worker and offers an update when one is waiting. Also once.
   useServiceWorker();
+  // The recovery verdict, said where the person is looking. The notification
+  // leg announces it too; this is the in-page echo of the same event the run
+  // queries re-read themselves off (`patchSessions`).
+  useRecoveryOutcomeToasts();
 
   const { data: state, error: stateError, isFetching: stateFetching, refetch: refetchState } = useConsoleState();
   const rootOk = Boolean(state?.root?.ok);

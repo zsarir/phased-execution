@@ -105,6 +105,29 @@ export function AutomationCard() {
 
         <div className={row}>
           <span className="min-w-0">
+            <span className="text-sm text-ink">Auto-recover halted runs</span>
+            <span className="mt-0.5 block text-2xs text-ink-muted">
+              A halt an agent can clear (failed verification, missing handoff, a crashed phase)
+              launches the fix agent by itself — at most 2 tries per phase, 5 per run, never the
+              same failure twice, and never for the halts only you can clear.
+            </span>
+          </span>
+          {onOff(prefs.autoRecoverByDefault, 'autoRecoverByDefault')}
+        </div>
+
+        <div className={row}>
+          <span className="min-w-0">
+            <span className="text-sm text-ink">Continue runs a recovery fixed</span>
+            <span className="mt-0.5 block text-2xs text-ink-muted">
+              When a recovery session ends and the board reads fixed, the run resumes by itself —
+              manual Fix-with-AI sessions included.
+            </span>
+          </span>
+          {onOff(prefs.autoContinueRecovery, 'autoContinueRecovery')}
+        </div>
+
+        <div className={row}>
+          <span className="min-w-0">
             <span className="text-sm text-ink">Repository guard</span>
             <span className="mt-0.5 block text-2xs text-ink-muted">
               Queue runs whose repositories overlap. Off: overlapping runs may start at once, and

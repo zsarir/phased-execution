@@ -667,10 +667,12 @@ test('a rule can be removed again, and only the ones you added', async () => {
   editPolicy({ remove: { ask: ['Bash(make release:*)'] }, by: 'tester' }, file);
   assert.deepEqual(policyExtras(file).ask, ['Bash(task ship:*)'], 'and it survives the reload');
 
-  // A shipped default has no line to delete, so removing it is a no-op rather
-  // than a hole in the wall.
+  // A shipped default has no file line to delete, so the same gesture records
+  // a STRIKE — the wall is edited by name now, exactly like ask and allow.
   editPolicy({ remove: { deny: ['Bash(git push:*)'] }, by: 'tester' }, file);
-  assert.ok(load(file).deny.includes('Bash(git push:*)'));
+  assert.ok(!load(file).deny.includes('Bash(git push:*)'), 'the struck rule left the wall');
+  assert.deepEqual(policyExtras(file).removed.deny, ['Bash(git push:*)'],
+    'recorded by name, so every default it does not name keeps applying');
 });
 
 test('the rule a card offers is the one that stopped the call', async () => {
@@ -963,31 +965,108 @@ test('reset returns one part to stock: your rules out, strikes forgiven, the oth
   assert.ok(after.ask.includes(ASK[0]), 'the struck default is back');
   assert.ok(!after.ask.includes('Bash(task migrate:*)'), 'the added rule is gone');
   assert.ok(after.allow.includes('Bash(task deploy:*)'), 'the OTHER part kept its rule');
-  assert.deepEqual(policyExtras(globalFile).removed, { ask: [], allow: [] });
+  assert.deepEqual(policyExtras(globalFile).removed, { deny: [], ask: [], allow: [] });
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('the shipped deny wall cannot be struck — a removal naming it does nothing', async () => {
-  const { editPolicy, loadPolicyFor, policyExtras, DEFAULT_DENY: DENY } =
+test('a shipped deny rule strikes like any other default — applied, recorded, reversible', async () => {
+  // The deliberate reversal (2026-08-06): the wall used to be unstrikeable
+  // from a browser, and what that produced in practice was a parked plan
+  // behind a push the operator wanted made. A strike is still named,
+  // attributed, journaled and reversible — and the CLI-side settings are the
+  // teeth, so the strike must reach them or it is only a UI opinion.
+  const { editPolicy, loadPolicyFor, policyExtras, buildSettings: build, DEFAULT_DENY: DENY } =
     await import('../server/runner/approvals.ts');
   const dir = mkdtempSync(join(tmpdir(), 'pc-wall-'));
   const globalFile = join(dir, 'autopilot.json');
+  const rule = 'Bash(git push:*)';
 
-  // Straight at the wall: git push, sudo — the exact rules the doctrine names.
-  editPolicy({ remove: { deny: [...DENY] }, by: 'tester' }, globalFile);
+  editPolicy({ remove: { deny: [rule] }, by: 'tester' }, globalFile);
   const after = loadPolicyFor(null, globalFile, dir);
-  for (const rule of DENY) assert.ok(after.deny.includes(rule), rule);
-  // And nothing on disk records an attempt as if it worked.
+  assert.ok(!after.deny.includes(rule), 'the struck rule left the wall');
+  for (const kept of DENY) {
+    if (kept === rule) continue;
+    assert.ok(after.deny.includes(kept), `${kept} was not named, so it still applies`);
+  }
   const file = policyExtras(globalFile);
-  assert.deepEqual(file.deny, []);
-  assert.deepEqual(file.removed, { ask: [], allow: [] });
+  assert.deepEqual(file.deny, [], 'a strike is not an operator rule');
+  assert.deepEqual(file.removed.deny, [rule]);
 
-  // An operator-ADDED deny rule stays removable — the wall is the shipped
-  // list, not the list concept.
+  // The teeth: the settings handed to every child no longer carry the rule.
+  const settings = build({
+    runId: 'r1', token: 't', origin: 'http://127.0.0.1:4123', policy: after, profile: 'trusted',
+  });
+  const deny = (settings.permissions as { deny: string[] }).deny;
+  assert.ok(!deny.includes(rule), 'the CLI-side wall moved with the strike');
+  assert.ok(deny.includes('Bash(sudo:*)'), 'and only where the strike named');
+  assert.equal(classifyTool('Bash', { command: 'git push origin main' }, after), 'allow',
+    'the shipped allow list already covers git, so an unwalled push classifies by the remaining lists');
+
+  // Restore forgives the strike without making the default look like yours.
+  editPolicy({ restore: { deny: [rule] }, by: 'tester' }, globalFile);
+  const restored = loadPolicyFor(null, globalFile, dir);
+  assert.ok(restored.deny.includes(rule), 'the wall is whole again');
+  assert.deepEqual(policyExtras(globalFile).deny, [], 'and the restored rule is nobody\'s edit');
+
+  // Reset forgives every strike and drops added rules, like the other lists.
+  editPolicy({ remove: { deny: [rule] }, add: { deny: ['Bash(task nuke:*)'] }, by: 'tester' }, globalFile);
+  editPolicy({ reset: ['deny'], by: 'tester' }, globalFile);
+  const stock = loadPolicyFor(null, globalFile, dir);
+  assert.ok(stock.deny.includes(rule), 'reset brought the wall back');
+  assert.ok(!stock.deny.includes('Bash(task nuke:*)'), 'and dropped the added rule');
+
+  // An operator-ADDED deny rule stays one-step removable, as it always was.
   editPolicy({ add: { deny: ['Bash(task nuke:*)'] }, by: 'tester' }, globalFile);
   assert.ok(loadPolicyFor(null, globalFile, dir).deny.includes('Bash(task nuke:*)'));
   editPolicy({ remove: { deny: ['Bash(task nuke:*)'] }, by: 'tester' }, globalFile);
   assert.ok(!loadPolicyFor(null, globalFile, dir).deny.includes('Bash(task nuke:*)'));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('a deny strike is scoped exactly like an ask strike', async () => {
+  const { editPolicy, loadPolicyFor, planPolicyPath } = await import('../server/runner/approvals.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-wall-scope-'));
+  const globalFile = join(dir, 'autopilot.json');
+  const rule = 'Bash(git push:*)';
+
+  editPolicy({ remove: { deny: [rule] }, by: 'tester' }, planPolicyPath('alpha', dir));
+  assert.ok(!loadPolicyFor('alpha', globalFile, dir).deny.includes(rule), 'struck for this plan');
+  assert.ok(loadPolicyFor('beta', globalFile, dir).deny.includes(rule), 'walled elsewhere');
+  assert.ok(loadPolicyFor(null, globalFile, dir).deny.includes(rule), 'and globally');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('the carve-out never resurrects a struck wall', async () => {
+  const { carvedPolicy, editPolicy, loadPolicyFor, PUSH_DENY, PUSH_DENY_CARVED, OPEN_PR_ASK } =
+    await import('../server/runner/approvals.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-wall-carve-'));
+  const globalFile = join(dir, 'autopilot.json');
+
+  editPolicy({ remove: { deny: [PUSH_DENY] }, by: 'tester' }, globalFile);
+  const carved = carvedPolicy(loadPolicyFor(null, globalFile, dir), 'trusted', true);
+  // The operator's standing policy holds no push wall; a per-run narrowing of
+  // a wall that is not there must not quietly re-add the force-push denials.
+  for (const shape of PUSH_DENY_CARVED) {
+    assert.ok(!carved.deny.includes(shape), `${shape} must not come back from a carve-out`);
+  }
+  // The "one human tap to publish" asks are about the run shape, not the wall
+  // — they stay pinned either way.
+  for (const ask of OPEN_PR_ASK) assert.ok(carved.ask.includes(ask), ask);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('profiles still move only the ask list, whatever the operator struck', async () => {
+  const { editPolicy, loadPolicyFor, profilePolicy, PERMISSION_PROFILES } =
+    await import('../server/runner/approvals.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-wall-profiles-'));
+  const globalFile = join(dir, 'autopilot.json');
+
+  editPolicy({ remove: { deny: ['Bash(git push:*)'] }, by: 'tester' }, globalFile);
+  const struck = loadPolicyFor(null, globalFile, dir);
+  for (const profile of PERMISSION_PROFILES) {
+    assert.deepEqual(profilePolicy(struck, profile).deny, struck.deny,
+      `${profile}: deny is identical across all three profiles — the edited wall included`);
+  }
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -1001,7 +1080,7 @@ test('an upgrade that ships a new default still applies it to a file with strike
   // which is what keeps every default it does not name, including ones that
   // ship after this file was written.
   const raw = JSON.parse(readFileSync(globalFile, 'utf8')) as Record<string, unknown>;
-  assert.deepEqual(raw.removed, { ask: [ASK[0]], allow: [] });
+  assert.deepEqual(raw.removed, { deny: [], ask: [ASK[0]], allow: [] });
   assert.deepEqual(raw.ask, []);
   assert.deepEqual(policyExtras(globalFile).removed.ask, [ASK[0]]);
   rmSync(dir, { recursive: true, force: true });

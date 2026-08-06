@@ -63,6 +63,9 @@ const realLocation = window.location;
 
 beforeEach(() => {
   resetServiceWorkerForTests();
+  // The auto-apply one-shot persists in sessionStorage; a marker left by one
+  // case must not decide the next.
+  sessionStorage.clear();
   // Vitest runs in dev mode; the module skips registration there because no
   // worker is built for the dev server.
   vi.stubEnv('DEV', false);
@@ -179,13 +182,38 @@ describe('the update prompt', () => {
     expect(screen.getByTestId('count').textContent).toBe('0');
   });
 
-  it('offers one already waiting when the page loads', async () => {
-    registration.waiting = fakeWorker();
+  it('auto-applies one already waiting at page load — the stale shell just rendered, replacing it is free', async () => {
+    const waiting = fakeWorker();
+    registration.waiting = waiting;
     render(<Harness />);
-    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('1'));
+    await waitFor(() => expect(waiting.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' }));
+    // Taken, not offered — no toast to miss this time.
+    expect(screen.getByTestId('count').textContent).toBe('0');
+    act(() => { container.emit('controllerchange'); });
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it('applies the update only when the button is pressed', async () => {
+  it('falls back to the toast when an auto-apply already fired this minute — the loop guard', async () => {
+    sessionStorage.setItem('pc-sw-auto-applied', JSON.stringify({ at: Date.now() }));
+    const waiting = fakeWorker();
+    registration.waiting = waiting;
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('1'));
+    expect(waiting.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('never auto-applies over a live pty surface — scrollback does not survive a reload', async () => {
+    window.location.hash = '#/terminal/abc123';
+    const waiting = fakeWorker();
+    registration.waiting = waiting;
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('1'));
+    expect(waiting.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('the offered path still applies only when the button is pressed', async () => {
+    // Suppress the auto-apply so the toast flow is what runs.
+    sessionStorage.setItem('pc-sw-auto-applied', JSON.stringify({ at: Date.now() }));
     const waiting = fakeWorker();
     registration.waiting = waiting;
     render(<Harness />);
@@ -273,16 +301,20 @@ describe('applyUpdateNow — the deterministic path the toast is not', () => {
 });
 
 describe('returning to the tab re-checks for an update', () => {
-  it('offers a worker that finished waiting while the tab was hidden', async () => {
+  it('auto-applies a worker that finished waiting while the tab was hidden', async () => {
     render(<Harness />);
     await waitFor(() => expect(container.register).toHaveBeenCalled());
     expect(screen.getByTestId('count').textContent).toBe('0');
 
-    // The deploy happened while the operator was elsewhere.
-    registration.waiting = fakeWorker();
+    // The deploy happened while the operator was elsewhere; coming back is
+    // the other boundary where nothing on screen is mid-flight.
+    const waiting = fakeWorker();
+    registration.waiting = waiting;
     act(() => { document.dispatchEvent(new Event('visibilitychange')); });
 
-    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('1'));
+    await waitFor(() => expect(waiting.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' }));
     expect(registration.update.mock.calls.length).toBeGreaterThan(1);
+    act(() => { container.emit('controllerchange'); });
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });

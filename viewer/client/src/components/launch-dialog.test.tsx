@@ -31,8 +31,10 @@ const RUN = {
   phaseBudgetUsd: 5, runBudgetUsd: 40, phases: {},
 } as unknown as RunState;
 
-async function mount(request: unknown, prefs: Record<string, unknown> = {}) {
-  state.mockResolvedValue({ prefs, defaultSkills: ['graph-tool'] });
+async function mount(
+  request: unknown, prefs: Record<string, unknown> = {}, extra: Record<string, unknown> = {},
+) {
+  state.mockResolvedValue({ prefs, defaultSkills: ['graph-tool'], ...extra });
   const client = new QueryClient(queryClientConfig);
   const { LaunchDialog } = await import('./launch-dialog');
   return render(
@@ -78,9 +80,25 @@ describe('the field matrix', () => {
     await mount({ kind: 'phase', slug: 'alpha', phase: 3, run: null, qaMode: 'off', allowWrites: false });
     const boxes = await screen.findAllByText(/Turn the QA gate on/);
     expect(boxes.length).toBe(1);
-    const box = screen.getByRole('checkbox');
+    const box = screen.getByRole('checkbox', { name: /Turn the QA gate on/ });
     expect(box).toBeDisabled();
     expect(box.getAttribute('title')).toMatch(/--allow-writes/);
+  });
+
+  it('the auto-recovery box needs --allow-agent, and follows the preference when it has it', async () => {
+    // Without the flag: rendered, disabled, and the title names the flag.
+    await mount({ kind: 'phase', slug: 'alpha', phase: 3, run: null });
+    await screen.findByText('Branch');
+    const off = screen.getByRole('checkbox', { name: /Auto-recover halts/ });
+    expect(off).toBeDisabled();
+    expect(off.getAttribute('title')).toMatch(/--allow-agent/);
+
+    // With it: enabled and opening on the preference default (on).
+    await mount({ kind: 'phase', slug: 'alpha', phase: 3, run: null }, {}, { allowAgent: true });
+    const boxes = await screen.findAllByRole('checkbox', { name: /Auto-recover halts/ });
+    const on = boxes[boxes.length - 1]!;
+    expect(on).not.toBeDisabled();
+    expect((on as HTMLInputElement).checked).toBe(true);
   });
 
   it('opens on the Automation preferences, as the footer promises', async () => {
@@ -93,7 +111,7 @@ describe('the field matrix', () => {
     expect((screen.getAllByRole('combobox').find(
       (el) => (el as HTMLSelectElement).value === 'new-branch',
     ))).toBeTruthy();
-    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole('checkbox', { name: /Open a PR/ }) as HTMLInputElement).checked).toBe(false);
   });
 });
 
@@ -102,7 +120,7 @@ describe('the submits', () => {
     await mount({ kind: 'phase', slug: 'alpha', phase: 3, run: RUN, qaMode: 'off', allowWrites: true });
     await screen.findByText('Branch');
     fireEvent.click(screen.getByRole('button', { name: 'Off' }));       // attach defaults on
-    fireEvent.click(screen.getByRole('checkbox'));                      // QA gate on
+    fireEvent.click(screen.getByRole('checkbox', { name: /Turn the QA gate on/ })); // QA gate on
     fireEvent.click(screen.getByRole('button', { name: 'Run phase 3' }));
     await waitFor(() => expect(runStart).toHaveBeenCalledWith('alpha', {
       model: 'sonnet',
@@ -118,6 +136,9 @@ describe('the submits', () => {
       attachDefaultSkills: true,
       gitMode: 'default-branch',
       qa: true,
+      // Always sent as shown: this console has no --allow-agent, so the box is
+      // off and the run is written without the option — never silently.
+      autoRecover: false,
       resumeRunId: 'run-1',
       onlyPhases: [3],
     }));

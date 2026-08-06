@@ -28,6 +28,7 @@ import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 import { EndedBanner, SessionGone, SessionVitals, TerminalPane } from '../terminal/pane';
 import { Launcher, type LaunchBody } from './launcher';
 import { MODE_TITLE, modeName } from './modes';
+import { SessionControls, sessionStateNote } from './session-controls';
 import { NewPlanWizardButton } from './wizard';
 
 export default function AgentView({ route }: { route: Route }) {
@@ -182,7 +183,9 @@ export default function AgentView({ route }: { route: Route }) {
                 )}
               >
                 {session.label}
-                {session.exited && <span className="ml-1.5 text-2xs text-ink-faint">ended</span>}
+                {sessionStateNote(session) && (
+                  <span className="ml-1.5 text-2xs text-ink-faint">{sessionStateNote(session)}</span>
+                )}
               </button>
               <button
                 type="button"
@@ -213,6 +216,8 @@ export default function AgentView({ route }: { route: Route }) {
 
         {open && (
           <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* Freeze / Continue / Stop — the lane verbs, for THIS session. */}
+            <SessionControls session={open} />
             {/* Plan · phase · elapsed · ETA — the four facts that say what this
                 session IS, before the mode chip says how it was launched. */}
             <SessionVitals session={open} />

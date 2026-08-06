@@ -78,8 +78,12 @@ test('sanitiseAutomation is the single coercion table', () => {
   assert.deepEqual(sanitiseAutomation({}), {
     attachDefaultSkills: false, qaByDefault: false, gitMode: 'default-branch',
     openPrOnComplete: true, repoGuard: true,
+    autoRecoverByDefault: true, autoContinueRecovery: true,
   });
   assert.equal(sanitiseAutomation({ gitMode: 'new-branch' }).gitMode, 'new-branch');
+  // The recovery automation defaults are ON, and a typo cannot turn them off.
+  assert.equal(sanitiseAutomation({ autoRecoverByDefault: 'no' } as never).autoRecoverByDefault, true);
+  assert.equal(sanitiseAutomation({ autoContinueRecovery: false }).autoContinueRecovery, false);
 });
 
 /* ------------------------------------------------------------------ *

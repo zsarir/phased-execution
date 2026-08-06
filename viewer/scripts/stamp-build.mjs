@@ -11,11 +11,12 @@
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
-const VIEWER = dirname(dirname(fileURLToPath(import.meta.url)));
+// One computation for the stamp AND the client's baked `__BUILD_REV__` —
+// see build-rev.mjs; the Interface row compares the two, so they must agree.
+import { VIEWER_DIR as VIEWER, buildRev } from './build-rev.mjs';
+
 const DIST = join(VIEWER, 'client', 'dist');
 
 if (!existsSync(join(DIST, 'index.html'))) {
@@ -23,10 +24,7 @@ if (!existsSync(join(DIST, 'index.html'))) {
   process.exit(1);
 }
 
-let rev = 'unknown';
-try {
-  rev = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: VIEWER, encoding: 'utf8' }).trim();
-} catch { /* not a repository, or no git — `unknown` says so */ }
+const rev = buildRev();
 
 writeFileSync(join(DIST, '.build-rev'), `${rev}\n`, 'utf8');
 process.stdout.write(`stamped client/dist/.build-rev = ${rev.slice(0, 12)}\n`);

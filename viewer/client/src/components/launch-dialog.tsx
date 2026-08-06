@@ -205,6 +205,13 @@ export function LaunchDialog({ request, onClose, onDone }: {
   const gitMode = gitChoice ?? run?.gitMode ?? prefs.gitMode;
   const [prChoice, setPrChoice] = useState<boolean | null>(null);
   const openPr = prChoice ?? run?.openPr ?? prefs.openPrOnComplete;
+  // Auto-recovery: a resumed run answers with its own sticky choice, a fresh
+  // one with the preference — and the box needs --allow-agent to mean anything,
+  // because the healer is an agent session.
+  const canAutoRecover = state?.allowAgent === true;
+  const [recoverChoice, setRecoverChoice] = useState<boolean | null>(null);
+  const autoRecover = (recoverChoice
+    ?? (run ? Boolean(run.autoRecover) : prefs.autoRecoverByDefault)) && canAutoRecover;
 
   // The QA variant's activation checkbox — the old QaDialog's, verbatim.
   const canActivate = qaTarget?.qaMode === 'off' && (request.kind !== 'qa' || request.allowWrites !== false);
@@ -267,6 +274,9 @@ export function LaunchDialog({ request, onClose, onDone }: {
         gitMode,
         ...(gitMode === 'new-branch' ? { openPr } : {}),
         ...(qaOn && canQaToggle ? { qa: true } : {}),
+        // Always sent, and always exactly what the dialog shows: an explicit
+        // false on a resume returns the run to the off state, never silently.
+        autoRecover,
         ...(resumable ? { resumeRunId: resumable.id } : {}),
         ...(request.kind === 'phase' ? { onlyPhases: [request.phase] } : {}),
       });
@@ -504,6 +514,32 @@ export function LaunchDialog({ request, onClose, onDone }: {
                   </span>
                 </label>
               )}
+              <label className="flex flex-wrap items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1 accent-[var(--action)]"
+                  checked={autoRecover}
+                  disabled={!canAutoRecover}
+                  title={canAutoRecover ? undefined : 'Auto-recovery needs --allow-agent — the healer is an agent session.'}
+                  onChange={(event) => setRecoverChoice(event.target.checked)}
+                />
+                <span className="min-w-0 flex-1">
+                  Auto-recover halts
+                  <span className="block text-2xs text-ink-faint">
+                    {canAutoRecover
+                      ? <>
+                          A halt an agent can clear (failed verification, missing handoff, a crash)
+                          launches the fix agent by itself — at most 2 tries per phase, never the
+                          same failure twice — and the run resumes when the board reads fixed.
+                        </>
+                      : <>
+                          Restart the console with{' '}
+                          <code className="font-mono">--allow-agent</code> to let halted phases heal
+                          themselves; without it every halt waits for you.
+                        </>}
+                  </span>
+                </span>
+              </label>
             </>
           )}
 

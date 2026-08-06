@@ -75,6 +75,7 @@ for a in \
   "viewer/vite.config.ts" \
   "viewer/tsconfig.json" \
   "viewer/scripts/stamp-build.mjs" \
+  "viewer/scripts/build-rev.mjs" \
   "viewer/scripts/check-dist.mjs" \
   "docs/" \
   "tests/" \

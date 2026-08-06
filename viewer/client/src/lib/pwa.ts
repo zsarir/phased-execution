@@ -12,13 +12,18 @@
  * two: the worker is how the app loads, and push is a thing the worker can
  * additionally do.
  *
- * **An update is offered, never taken.** The old worker called `skipWaiting()`
- * from its own install handler, which swapped the JavaScript under whatever was
- * on screen. Here the new worker waits, a toast says so, and only a click
- * activates it. That also removes the loop the naive fix creates: reload on
- * `controllerchange` fires on the *first* install too, so an app that reloads
- * whenever the controller changes reloads itself the first time it is ever
- * opened, installs, changes controller, and goes round again.
+ * **An update is taken at the boundaries where nothing can be lost, offered
+ * everywhere else.** The old worker called `skipWaiting()` from its own
+ * install handler, which swapped the JavaScript under whatever was on screen;
+ * then updates were offered-only, and a dismissed (or never-seen) toast left
+ * tabs on a stale shell indefinitely — an operator shipped new options and
+ * their own browser kept rendering the app from before them. Now a waiting
+ * worker is auto-applied at page load and on return-to-tab — the two moments
+ * nothing on screen is mid-flight — guarded by a sessionStorage one-shot (a
+ * worker that cannot take over falls back to the toast instead of looping)
+ * and suppressed over live pty surfaces and focused inputs. Mid-session
+ * updates keep the toast, and `controllerchange` still reloads only a change
+ * we asked for: the first-install reload loop stays dead.
  */
 
 import { useEffect, useSyncExternalStore } from 'react';
@@ -144,6 +149,36 @@ export function useServiceWorker(): void {
       window.location.reload();
     };
 
+    // Auto-apply, at the two boundaries where nothing on screen can be lost:
+    // this page load (the stale shell was JUST served from cache — replacing
+    // it now is free) and return-to-tab. Three guards, in order of what they
+    // protect: never over a live pty surface or a focused input (scrollback
+    // and half-typed text do not survive a reload); never twice in a minute
+    // (a worker that cannot take over must fall back to the toast, not loop);
+    // and `controllerchange` above still reloads only a change we asked for.
+    const AUTO_KEY = 'pc-sw-auto-applied';
+    const autoApplySafe = () => {
+      if (/^#\/(terminal|agent)/.test(window.location.hash)) return false;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement
+        && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+        return false;
+      }
+      return true;
+    };
+    const autoApply = (worker: ServiceWorker): boolean => {
+      if (!autoApplySafe()) return false;
+      let last: { at?: number } = {};
+      try { last = JSON.parse(sessionStorage.getItem(AUTO_KEY) ?? '{}') as typeof last; }
+      catch { /* an unreadable marker is no marker */ }
+      if (typeof last.at === 'number' && Date.now() - last.at < 60_000) return false;
+      try { sessionStorage.setItem(AUTO_KEY, JSON.stringify({ at: Date.now() })); }
+      catch { /* private mode — the toast path still works */ }
+      applying = true;
+      worker.postMessage({ type: 'SKIP_WAITING' });
+      return true;
+    };
+
     let registration: ServiceWorkerRegistration | null = null;
     let onUpdateFound: (() => void) | null = null;
 
@@ -155,8 +190,12 @@ export function useServiceWorker(): void {
 
       // `controller` is what distinguishes an update from a first install: on a
       // first install there is nothing to interrupt, so the worker simply takes
-      // over and nobody is told.
-      if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
+      // over and nobody is told. A boot-time waiting worker is the reported
+      // failure exactly — the cached shell just rendered — so it is applied,
+      // not offered, unless a guard says otherwise.
+      if (reg.waiting && navigator.serviceWorker.controller && !autoApply(reg.waiting)) {
+        offer(reg.waiting);
+      }
 
       onUpdateFound = () => {
         const installing = reg.installing;
@@ -178,11 +217,15 @@ export function useServiceWorker(): void {
 
     // …and one per return to the tab. A console left open across a deploy
     // never re-checked, so the person who deployed was the person the toast
-    // most reliably missed.
+    // most reliably missed. Coming back is also the other safe boundary —
+    // nothing was mid-read — so a waiting worker applies here too.
     const onVisible = () => {
       if (document.visibilityState !== 'visible' || !registration || cancelled) return;
       void registration.update().catch(() => { /* offline */ });
-      if (registration.waiting && navigator.serviceWorker.controller) offer(registration.waiting);
+      if (registration.waiting && navigator.serviceWorker.controller
+        && !autoApply(registration.waiting)) {
+        offer(registration.waiting);
+      }
     };
     document.addEventListener('visibilitychange', onVisible);
 
