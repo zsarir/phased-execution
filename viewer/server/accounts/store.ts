@@ -71,13 +71,36 @@ export function profileConfigDir(id: string): string {
   return join(ACCOUNTS_DIR, id, 'config');
 }
 
-type RegistryFile = { version: 1; accounts: AccountMeta[] };
+type RegistryFile = {
+  version: 1;
+  accounts: AccountMeta[];
+  /**
+   * What the operator renamed the machine login to. A top-level field rather
+   * than a stored meta row: the default is synthesized on every `list()`, and
+   * a stored row for it would double-list, double-poll, and force relaxing
+   * `add()`'s built-in guard. Old readers ignore the extra key.
+   */
+  defaultName?: string;
+};
 
 export class AccountStore {
   private accounts: AccountMeta[] = [];
+  private machineName: string | undefined;
 
   constructor() {
-    this.accounts = readRegistry();
+    const { accounts, defaultName } = readRegistry();
+    this.accounts = accounts;
+    this.machineName = defaultName;
+  }
+
+  /** The operator's name for the machine login, when they gave it one. */
+  get defaultName(): string | undefined {
+    return this.machineName;
+  }
+
+  setDefaultName(name: string | undefined): void {
+    this.machineName = name?.trim() ? name.trim() : undefined;
+    this.persist();
   }
 
   /** Stored accounts only — the synthesized default is the facade's business. */
@@ -150,7 +173,11 @@ export class AccountStore {
   }
 
   private persist(): void {
-    const body: RegistryFile = { version: 1, accounts: this.accounts };
+    const body: RegistryFile = {
+      version: 1,
+      accounts: this.accounts,
+      ...(this.machineName ? { defaultName: this.machineName } : {}),
+    };
     mkdirSync(ACCOUNTS_DIR, { recursive: true, mode: 0o700 });
     const tmp = `${REGISTRY_FILE}.tmp`;
     writeFileSync(tmp, `${JSON.stringify(body, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -159,16 +186,21 @@ export class AccountStore {
 }
 
 /** An unreadable registry degrades to empty — same posture as the instance registry. */
-function readRegistry(): AccountMeta[] {
+function readRegistry(): { accounts: AccountMeta[]; defaultName: string | undefined } {
   try {
     const parsed = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8')) as RegistryFile;
     if (parsed?.version === 1 && Array.isArray(parsed.accounts)) {
-      return parsed.accounts.filter((a) => a && typeof a.id === 'string' && ACCOUNT_ID_RE.test(a.id));
+      return {
+        accounts: parsed.accounts.filter((a) => a && typeof a.id === 'string' && ACCOUNT_ID_RE.test(a.id)),
+        defaultName: typeof parsed.defaultName === 'string' && parsed.defaultName.trim()
+          ? parsed.defaultName.trim()
+          : undefined,
+      };
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       log.warn('accounts.registry.unreadable', { error: (error as Error).message });
     }
   }
-  return [];
+  return { accounts: [], defaultName: undefined };
 }

@@ -283,3 +283,33 @@ test('a session that could not authenticate is not a success, whatever it report
 test('a genuine success is still a success', () => {
   assert.equal(classify(stop({ subtype: 'success', text: 'Wrote three files and ran the tests.' })).kind, 'ok');
 });
+
+/* ---------------- which bucket a limit message is about ---------------- */
+
+test('limitBucket names the window in the registry vocabulary', async () => {
+  const { limitBucket } = await import('../server/runner/errors.ts');
+  assert.equal(limitBucket("You've hit your session limit · resets 3:45pm"), 'five_hour');
+  assert.equal(limitBucket("You've hit your weekly limit · resets Mon 12:00am"), 'seven_day');
+  assert.equal(limitBucket("You've hit your Opus limit · resets 3:45pm"), 'seven_day_opus');
+  assert.equal(limitBucket("you've hit your Fable 5 limit — resets 9pm"), 'seven_day_fable');
+  // The epoch form names no window; `five_hour` is the conservative reading
+  // and the one the runner has always taken — pinned so a refactor cannot
+  // silently move learned walls to the weekly bucket.
+  assert.equal(limitBucket('Claude AI usage limit reached|1749924000'), 'five_hour');
+});
+
+test('a model limit is a switch-model that names its bucket and reset; capacity names neither', () => {
+  const now = at('2026-01-01T13:00:00');
+  const quota = classify(stop({
+    text: "You've hit your Opus limit · resets 3:45pm", model: 'opus',
+  }), now);
+  assert.equal(quota.kind, 'switch-model');
+  assert.equal(quota.kind === 'switch-model' ? quota.bucket : '', 'seven_day_opus');
+  assert.ok(quota.kind === 'switch-model' && quota.at instanceof Date, 'the reset rides along');
+
+  // 529 is the API being busy, not this account's quota — there is no wall to
+  // remember, so nothing must be filed against the account.
+  const capacity = classify(stop({ text: 'API Error: 529 overloaded_error' }), now);
+  assert.equal(capacity.kind, 'switch-model');
+  assert.equal(capacity.kind === 'switch-model' ? capacity.bucket : 'set', undefined);
+});

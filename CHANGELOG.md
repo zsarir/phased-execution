@@ -6,6 +6,70 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [Unreleased]
+
+The autopilot's controls grow down to the single session, and its promise grows up to the whole
+plan. The run page now shows the **second queue** — a Waiting tab naming every dependency-waiting
+phase and exactly what it waits on, so a plan's later phases never look abandoned while the early
+ones run — and every session tab carries its own Freeze/Continue and Stop, scoped to that lane
+alone. Accounts stop being a guessing game: the picker lists every login, an expired one announces
+itself and is refused at preflight, and the meters read the worst window across all accounts,
+per-model buckets included.
+
+### Added
+
+- **Per-session Freeze and Stop**, on the autopilot's session tabs, the Runs page's lanes, and the
+  session console's toolbar. Freeze SIGSTOPs one lane and the run keeps driving (`frozen` now means
+  *everything* is frozen); Stop ends one session (SIGCONT → SIGTERM → SIGKILL backstop), records
+  its phase `interrupted` with the session id kept for Retry, and the loop carries straight on. A
+  queued phase's Stop dequeues it before anything spawns. `POST /api/run/:slug/stop|freeze|thaw`
+  now honour the `{phase}` body they always accepted.
+- **The Waiting tab** — dependency-waiting and stuck phases beside the session tabs, each with its
+  unmet dependencies (QA-held ones included), gate notes and ETA, and the run header states the
+  promise outright: *runs to plan completion*, with the failure budget beside it once any of it is
+  spent.
+- **Run lifecycle from the fleet.** Live rows on the Runs page carry Freeze/Continue and Stop —
+  a live run is no longer a row you can only link away from.
+- **Account rename and hardened removal.** `PATCH /api/accounts/:id` renames the display name
+  (ids are journal keys and never change), the machine login included; removal now also clears the
+  profile's hashed keychain item on macOS and refuses while a live run pays as that account.
+- **Expired-login alerts.** Every account's credential is watched with its meters; a login that
+  goes from good to expired/signed-out (after the CLI's own refresh is tried) announces *Sign in
+  again* through the `limits` category, badges the account, and the run page's sign-in card names
+  the right account with the right command.
+- **Per-model walls, filed properly.** A "You've hit your Opus/Fable limit" now records under its
+  own bucket (`seven_day_opus`, …), so `auto` and mid-run switching skip that account only for
+  runs of that model. The compact meters read the **worst window across every account**.
+- **`usage-climbing`** — the 80/95% early warning is its own notification category, off by
+  default; the wall itself and sign-in alerts stay under *Usage limits*.
+
+### Fixed
+
+- The run-page account picker showed "auto" plus everyone-but-the-current, which on a two-account
+  machine read as "the console only knows one account". It now lists every account with the
+  current one marked, and Switch arms only on a change.
+- A resumed run inherited its spent failure streak, so one more failed phase halted it instantly
+  however long ago the failures were. Start/Continue now resets the streak (journalled as
+  `run.failure-streak-reset`).
+- Run-level **Freeze now** froze only the mirror lane of a multi-lane run while calling the whole
+  run frozen; it now freezes every running session, and per-lane freezes persist on the checkpoint
+  so crash recovery names each stopped pid.
+- A phase skipped (or now stopped) while queued still spawned a session when its admission was
+  granted; a settled record is abandoned on arrival.
+- The run-start auth preflight always probed the machine login, so a run pinned to an expired
+  profile passed preflight and burned a session per phase discovering it; it now probes the run's
+  own account, and the auth-failure remediation no longer says "run /login in this workspace" when
+  the expired login is a profile's.
+- The on-limit `pause` policy test flipped at 3:45pm local time (a real reset text parsed against
+  the wall clock); the runner clock is now pinned in that test.
+
+### Changed
+
+- An old client against a new server keeps working: the `{phase}`-less stop/freeze/thaw verbs are
+  unchanged. A **new** client's per-session verbs against a pre-update server degrade to the
+  mismatch guard (409 when the phase is not the one running) — restart the console after updating,
+  as the stale-server banner already says.
+
 ## [1.5.0] - 2026-08-06
 
 One console, many Claude accounts. Each instance now keeps its own account registry — the machine

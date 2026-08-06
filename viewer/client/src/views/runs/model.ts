@@ -38,6 +38,8 @@ export interface RunRow {
   status: string;
   outcome: OutcomeId;
   live: boolean;
+  /** Something is frozen — the whole run, or one lane of it. */
+  frozen: boolean;
 
   activePhase: number | null;
   /** Every phase this run touched, in phase order. */
@@ -139,6 +141,7 @@ export function toRows(runs: readonly RunState[]): RunRow[] {
       status: run.status,
       outcome: outcomeOf(run.status),
       live: isLive(run.status),
+      frozen: run.status === 'frozen' || Boolean(run.freeze),
 
       activePhase: run.activePhase ?? null,
       phases,

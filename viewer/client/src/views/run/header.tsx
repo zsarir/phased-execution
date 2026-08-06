@@ -16,6 +16,7 @@
 import { Bot, Clock, Gauge, Timer } from 'lucide-react';
 import { Chip, Tile } from '@/components/ui';
 import { elapsed, etaLabel, etaPoint, etaTitle, money, relativeTime } from '@/lib/format';
+import { useAccounts } from '@/lib/queries';
 import { useNow } from '@/lib/clock';
 import { cn } from '@/lib/cn';
 import { RUN_STATUS_TONE, runStatusTitle } from '@/lib/status-vocab';
@@ -67,6 +68,14 @@ export function RunHeader({
 }) {
   const ticking = live && run.status !== 'frozen';
   const now = useNow(ticking);
+  // The chip shows who is PAYING, so it reads as a name, not a registry id.
+  const { data: accountsState } = useAccounts();
+  const accountLabel = run.accountId
+    ? (() => {
+      const view = accountsState?.accounts.find((candidate) => candidate.id === run.accountId);
+      return view ? view.name ?? view.email ?? view.id : run.accountId;
+    })()
+    : null;
 
   const runMs = ticking
     ? now - Date.parse(run.createdAt)
@@ -90,9 +99,9 @@ export function RunHeader({
     <header className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone={RUN_TONE[run.status]} title={runStatusTitle(run.status)}>{run.status}</Chip>
-        {run.accountId ? (
+        {accountLabel ? (
           <Chip title="Which Claude account this run's sessions spend. Absent means the machine login.">
-            {run.accountId}
+            {accountLabel}
           </Chip>
         ) : null}
         {lanes.length > 1 ? (
@@ -167,6 +176,23 @@ export function RunHeader({
             history from showing a number that reads like a measurement. */}
         {eta && (
           <span title={etaTitle(eta)}>{etaLabel(eta.lowMs, eta.highMs, eta.basis)} left</span>
+        )}
+        {/* The promise people came to this page doubting: the queue only shows
+            what can run NOW, and phases waiting on dependencies looked like
+            phases the run would never reach. Scoped and halt-on-everything
+            runs make no such promise, so they say nothing. */}
+        {live && run.autonomy === 'keep-going' && !run.onlyPhases?.length && (
+          <span title="Every time a phase finishes the board is re-read, and newly unlocked phases start themselves. The run ends when the whole graph is done — or when something needs a person.">
+            runs to plan completion
+          </span>
+        )}
+        {live && run.maxConsecutiveFailures > 0 && run.consecutiveFailures > 0 && (
+          <span
+            className="text-blocked"
+            title={`${run.consecutiveFailures} phase(s) have failed in a row; at ${run.maxConsecutiveFailures} the run halts. A phase finishing cleanly — or you pressing Continue — resets it.`}
+          >
+            failures {run.consecutiveFailures}/{run.maxConsecutiveFailures}
+          </span>
         )}
       </div>
     </header>

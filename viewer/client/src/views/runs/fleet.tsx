@@ -27,6 +27,7 @@
 import { useState } from 'react';
 import { ChevronRight, Radio } from 'lucide-react';
 import {
+  AlertDialog, AlertDialogContent, AlertDialogTrigger,
   Button, Chip, TBody, TD, TH, THead, TR, Table, TableWrap, Tile,
 } from '@/components/ui';
 import { LoadMeter, RunStrip } from '@/components/charts';
@@ -150,6 +151,7 @@ function RunDetail({
   onWatch,
   watching,
   onResolve,
+  onLifecycle,
   allowRun,
   busy,
 }: {
@@ -158,9 +160,12 @@ function RunDetail({
   onWatch: (row: RunRow) => void;
   watching: boolean;
   onResolve?: (row: RunRow, resolve: boolean) => void;
+  /** Freeze / continue / stop the whole run, from the page that owns the api. */
+  onLifecycle?: (row: RunRow, verb: 'freeze' | 'thaw' | 'stop') => void;
   allowRun: boolean;
   busy: boolean;
 }) {
+  const [confirmStop, setConfirmStop] = useState(false);
   const settings = [
     `${row.model}${row.effort ? ` · ${row.effort}` : ''}`,
     row.autonomy,
@@ -176,6 +181,58 @@ function RunDetail({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <span className="font-mono text-2xs text-ink-faint">{settings.join(' · ')}</span>
           <div className="ml-auto flex shrink-0 gap-1.5">
+            {/* Lifecycle, on the fleet at last: a live run used to be a row you
+                could only link away from. Freeze/Continue and Stop act on the
+                WHOLE run — the per-session versions live in its console tabs. */}
+            {onLifecycle && row.live && (
+              <Button
+                size="sm"
+                disabled={!allowRun || busy}
+                title={allowRun
+                  ? row.frozen
+                    ? 'Continues the frozen session(s) mid-token'
+                    : 'Stops every running session where it stands, losing nothing'
+                  : 'Runs are disabled. Restart the console with --allow-run.'}
+                onClick={() => onLifecycle(row, row.frozen ? 'thaw' : 'freeze')}
+              >
+                {row.frozen ? 'Continue' : 'Freeze'}
+              </Button>
+            )}
+            {onLifecycle && row.live && (
+              <AlertDialog open={confirmStop} onOpenChange={setConfirmStop}>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    disabled={!allowRun || busy}
+                    title={allowRun
+                      ? undefined
+                      : 'Runs are disabled. Restart the console with --allow-run.'}
+                  >
+                    Stop
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent
+                  title={`Stop the ${row.slug} run now?`}
+                  confirmLabel="Stop now"
+                  cancelLabel="Keep running"
+                  destructive
+                  onConfirm={() => {
+                    setConfirmStop(false);
+                    onLifecycle(row, 'stop');
+                  }}
+                >
+                  <p className="mt-2 text-sm text-ink-muted">
+                    Every session of this run gets SIGTERM, so their own end-of-session hooks still
+                    run. Anything already written to the repository stays written.
+                  </p>
+                  <p className="mt-2 text-2xs text-ink-faint">
+                    Phases cut off are recorded as <strong>interrupted</strong> rather than failed —
+                    continuing later asks about them instead of silently re-running them.
+                  </p>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
             {/* Only a stopped run has a card to dismiss; a finished or running
                 one was never asking for anything. */}
             {onResolve && (row.status === 'halted' || row.status === 'interrupted') && (
@@ -236,6 +293,7 @@ function FleetRows({
   onWatch,
   watchingId,
   onResolve,
+  onLifecycle,
   allowRun,
   busyId,
   reposBySlug,
@@ -246,6 +304,7 @@ function FleetRows({
   onWatch: (row: RunRow) => void;
   watchingId?: string;
   onResolve?: (row: RunRow, resolve: boolean) => void;
+  onLifecycle?: (row: RunRow, verb: 'freeze' | 'thaw' | 'stop') => void;
   allowRun: boolean;
   busyId?: string;
   reposBySlug?: Record<string, string[]>;
@@ -359,6 +418,7 @@ function FleetRows({
               onWatch={onWatch}
               watching={watchingId === row.id}
               onResolve={onResolve}
+              onLifecycle={onLifecycle}
               allowRun={allowRun}
               busy={busyId === row.id}
             />
@@ -375,6 +435,7 @@ export function Fleet({
   onWatch,
   watchingId,
   onResolve,
+  onLifecycle,
   allowRun = false,
   busyId,
   reposBySlug,
@@ -384,6 +445,7 @@ export function Fleet({
   onWatch: (row: RunRow) => void;
   watchingId?: string;
   onResolve?: (row: RunRow, resolve: boolean) => void;
+  onLifecycle?: (row: RunRow, verb: 'freeze' | 'thaw' | 'stop') => void;
   allowRun?: boolean;
   busyId?: string;
   /** Plan slug → the repos its phases touch, for the group header + row hint. */
@@ -455,6 +517,7 @@ export function Fleet({
                 onWatch={onWatch}
                 watchingId={watchingId}
                 onResolve={onResolve}
+                onLifecycle={onLifecycle}
                 allowRun={allowRun}
                 busyId={busyId}
                 reposBySlug={reposBySlug}

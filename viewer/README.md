@@ -129,6 +129,14 @@ the process exits and takes its context with it. A phase advances only when thre
 agree: the plan's own verification commands pass, `validate.sh` still passes, and the board re-read
 **from disk** says done. Nothing asks the session whether it succeeded.
 
+**The run drives to plan completion.** The board is re-read after every phase, so work a finishing
+phase unlocks starts itself — the queue only ever shows what can run *now*, and the **Waiting** tab
+beside the session tabs shows the rest: each dependency-waiting phase with exactly what it waits on,
+so phases 10 and 11 of an 11-phase plan never look abandoned while 7 and 9 run. The run ends when
+the whole graph is done, or parks naming precisely what still needs a person. Pressing Start or
+Continue also restores the consecutive-failure budget — an operator back in the loop is the same
+signal a phase succeeding is.
+
 **What a phase runs as** is resolved from three places, in this order: what you chose for this run,
 then the plan's own `**Model:**` / `**Effort:**` bullets for that phase, then the run's defaults —
 per field, so choosing a model does not discard an effort the plan asked for. The journal records
@@ -168,12 +176,23 @@ there is less evidence, and it is absent entirely until a phase has actually fin
 what it is for; pretending to know is not.
 
 **Stopping a phase.** Two pauses, deliberately named apart. *Pause after this phase* waits for the
-work in flight to finish and be verified. *Freeze now* stops the session where it stands (`SIGSTOP`)
-— instant, reversible, and it loses nothing, because the process is still there holding its session.
-A freeze left longer than fifteen minutes converts itself into a checkpoint instead: the child is
-asked to stop, its session id is written into the run, and Continue picks it up with `--resume`. A
-stopped process holds its memory and a prompt cache that expires anyway, so an overnight freeze is
-not the cheap option it looks like.
+work in flight to finish and be verified. *Freeze now* stops **every** running session where it
+stands (`SIGSTOP`) — instant, reversible, and it loses nothing, because each process is still there
+holding its session. A freeze left longer than fifteen minutes converts itself into a checkpoint
+instead: the child is asked to stop, its session id is written into the run, and Continue picks it
+up with `--resume`. A stopped process holds its memory and a prompt cache that expires anyway, so an
+overnight freeze is not the cheap option it looks like.
+
+**Stopping one session.** With several phases in flight, the run-level verbs are a bigger hammer
+than one misbehaving session calls for — so every session tab (and each lane on the Runs page)
+carries its own **Freeze/Continue** and **Stop**. A per-session Freeze is the same `SIGSTOP`, scoped
+to that lane; the run keeps its other sessions working and only reads `frozen` when nothing is left
+running. A per-session Stop ends that session (SIGCONT first, then SIGTERM, then the 15-second
+SIGKILL backstop), records the phase **interrupted** with its session id kept — Retry can resume it
+— and hands the loop straight back to scheduling: the rest of the run carries on, and phases that
+depended on the stopped one wait honestly. A queued phase's Stop simply takes it out of the
+admission line before anything spawns. None of it touches the failure budget: an operator's stop is
+neither a failure nor an endorsement.
 
 **Being told.** Four paths, in increasing order of how far they reach — and one of them keeps a copy.
 
@@ -366,15 +385,30 @@ never answers.
 ## Claude accounts and usage limits
 
 The chrome carries usage meters on every page — the 5-hour session window, the weekly allowance,
-and every per-model window the usage endpoint reports, per account, with reset countdowns. The
-numbers are the same ones `/usage` shows (polled gently, cached, served stale with their age
-attached when the endpoint is unreachable), and they work with no flag at all.
+and every per-model window the usage endpoint reports (Opus, Fable, … — rendered by key, so a
+window that ships tomorrow appears tomorrow), per account, with reset countdowns. The compact bars
+read the **worst window across every account**, naming the account supplying the number — a second
+account walking into its wall must never hide behind a green machine-login meter — and the dialog
+behind them holds the per-account truth. The numbers are the same ones `/usage` shows (polled
+gently, cached, served stale with their age attached when the endpoint is unreachable), and they
+work with no flag at all.
 
 `--allow-accounts` turns on **registration**: each console instance keeps its own account registry.
 Sign a second Claude account in (a managed `CLAUDE_CONFIG_DIR` profile — the console opens a
 terminal on `claude auth login`, then reads back the email), or paste a long-lived token from
 `claude setup-token` and name it. Secrets go to the keychain (or a 0600 file), never into
 `accounts.json`, never to the browser, and the console never writes the CLI's own credentials.
+Accounts can be **renamed** (the display name only — the id underneath is a journal key and never
+changes) and **removed**: removal takes this console's registration, the profile directory and, on
+macOS, the CLI's hashed keychain item that existed only for that directory — never the machine
+login's own entry — and refuses while a live run is paying as that account.
+
+**Expired logins announce themselves.** Every account's credential is watched with its meters; a
+login that goes from good to expired or signed out (after the CLI's own refresh has been tried)
+raises a *Sign in again* notification, badges the account in Settings and the meters, and the run
+page's sign-in card names the right account with the right command — a run pinned to a profile is
+preflighted **as that profile**, so an expired one refuses before spending a session rather than
+burning one per phase discovering it.
 
 Every launch surface — the run form, the phase launcher, the recovery and QA dialogs, the agent
 launcher — then offers an **Account** choice (including `auto`, most 5-hour headroom) and, for
@@ -387,11 +421,15 @@ runs, an **on-limit policy**:
 | `pause` | Checkpoint and stop for you, with the reset time on the banner. |
 
 A model-specific limit (Opus, Fable, …) keeps its own path: the run switches **model**, not
-account, because those windows are per-model. Mid-run, **Switch account** on the run card acts
-immediately — a live session is checkpointed (its session id kept) and re-attempted under the other
-login; the scheduler throttles only the limited account, so runs paying with a different one keep
-flowing. Everything is journalled (`run.account-switch`, `phase.transcript-port`), and the `limits`
-notification category announces warnings at 80/95% and every wall that is actually hit.
+account, because those windows are per-model — and the wall is filed under its own bucket
+(`seven_day_opus`, `seven_day_fable`, …), so `auto` skips that account only for runs of that model
+and still sends a Sonnet phase there. Mid-run, **Switch account** on the run card acts immediately
+— the picker lists **every** account, the current one marked — a live session is checkpointed (its
+session id kept) and re-attempted under the other login; the scheduler throttles only the limited
+account, so runs paying with a different one keep flowing. Everything is journalled
+(`run.account-switch`, `phase.transcript-port`); the `limits` notification category announces every
+wall that is actually hit and every login that needs signing in again, and the 80/95% early warning
+is its own off-by-default category, *Usage climbing*.
 
 ## From a phone
 

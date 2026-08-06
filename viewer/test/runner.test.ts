@@ -28,7 +28,7 @@ const { Runner } = await import('../server/runner/runner.ts');
 const { extractCommands, verifyPhase } = await import('../server/runner/verify.ts');
 const { buildArgv, sanitize, lineReader, userMessage } = await import('../server/runner/spawn.ts');
 const { nextModel, fallbackChain } = await import('../server/runner/errors.ts');
-const { listRuns, loadRun, newRun, saveRun } = await import('../server/runner/state.ts');
+const { listRuns, loadRun, newRun, saveRun, journalFile } = await import('../server/runner/state.ts');
 const { Journal } = await import('../server/runner/journal.ts');
 import type { SpawnFn, SpawnOutcome, SpawnRequest } from '../server/runner/spawn.ts';
 
@@ -1012,6 +1012,10 @@ test('policy `pause`: a plan limit checkpoints the phase and stops for a person'
   };
   const { instance } = runner(r, limited, '`true`', undefined, {
     pickAccount: () => 'spare',   // available, and deliberately not taken
+    // Pinned before 3:45pm: against the real clock this test flipped at
+    // 3:45pm local, when "resets 3:45pm" starts meaning TOMORROW — more than
+    // 12h away, which classify() parks for a person instead of pausing.
+    now: () => new Date('2026-01-01T13:00:00'),
   });
   await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onLimit: 'pause' });
   await instance.wait();
@@ -2518,4 +2522,138 @@ test('a stuck phase is named as blocked-by-its-handoff, never "waiting on a gate
   assert.match(state.halt?.reason ?? '', /phase 1's handoff is marked blocked/);
   assert.match(state.halt?.reason ?? '', /Repair with AI/);
   r.cleanup();
+});
+
+/* ---------------- per-lane stop, the streak, and the account preflight ---------------- */
+
+test('continuing a run resets the failure streak, and says so in the journal', async () => {
+  const r = repo();
+  const held = heldSession(r);
+  const { instance } = runner(r, held.spawn);
+  const stored = newRun({ slug: 'demo', root: r.root });
+  stored.status = 'halted';
+  stored.consecutiveFailures = 2;
+  stored.halt = { at: new Date().toISOString(), reason: 'two failed in a row' };
+  saveRun(stored);
+
+  await instance.start({ slug: 'demo', root: r.root, resumeRunId: stored.id, autonomy: 'keep-going' });
+  await held.inSession;
+  // Asserted while a phase is STILL in flight: a success would reset the
+  // streak anyway, and this test is about the press of Continue, not the win.
+  assert.equal(instance.current()!.consecutiveFailures, 0,
+    'the operator pressing Continue restores the failure budget');
+  held.release();
+  await instance.wait();
+
+  const journal = readFileSync(journalFile(r.root, 'demo', stored.id), 'utf8');
+  assert.match(journal, /run\.failure-streak-reset/);
+  assert.match(journal, /"was":2/, 'the audit trail keeps what the counter loses');
+  r.cleanup();
+});
+
+test('a frozen lane can be stopped: woken first, credited, session id kept, streak untouched', async () => {
+  const r = repo();
+  let pid = 0;
+  const held = realChildSession(r, (p) => { pid = p; }, false);
+  const { instance } = runner(r, held.spawn);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+
+  assert.equal(instance.freeze('test', 1), true);
+  assert.equal(procState(pid), 'T');
+
+  assert.deepEqual(instance.stopPhase(1, 'tester'), { ok: true });
+  // SIGCONT before SIGTERM — a stopped process never sees a bare SIGTERM. The
+  // sleeper dying of it is the observable proof the wake-up happened.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.notEqual(procState(pid), 'T', 'never left stopped behind a stop');
+
+  held.release();
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.phases['1'].status, 'interrupted');
+  assert.match(state.phases['1'].note ?? '', /stopped by tester/);
+  assert.equal(state.phases['1'].resumeSessionId, 'session-to-resume-0001',
+    'Retry can resume rather than restart');
+  assert.equal(state.consecutiveFailures, 0, 'an operator stop is neither a failure nor a win');
+  assert.equal(state.freeze, null);
+  r.cleanup();
+});
+
+test('a per-phase stop carries phase and by through the service, and a refusal answers 409', async () => {
+  const { status, calls } = await call('/api/run/demo/stop', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' }, body: { phase: 9, by: 'tester' },
+  });
+  assert.equal(status, 200);
+  assert.deepEqual(calls, [{ method: 'stopRun', args: ['demo', 9, 'tester'] }]);
+
+  const refused = await callWith(
+    { stopRun: async () => { throw new Error('phase 9 is not one of the ones running — phases 1, 2 are'); } },
+    '/api/run/demo/stop', { phase: 9 },
+  );
+  assert.equal(refused.status, 409);
+  assert.match(String((refused.payload as { error: string }).error), /phase 9/);
+});
+
+test('a per-model limit files its wall against the account, and the run continues on the next model', async () => {
+  const r = repo();
+  const marked: { window: string; accountId?: string }[] = [];
+  let spawns = 0;
+  const limited: SpawnFn = async (request) => {
+    spawns++;
+    if (spawns === 1) {
+      return ok({
+        signal: { subtype: 'error_during_execution', code: 1, text: "You've hit your Opus limit · resets 3:45pm" },
+      });
+    }
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  };
+  const { instance } = runner(r, limited, '`true`', undefined, {
+    // Pinned before 3:45pm for the same reason the pause-policy test pins it.
+    now: () => new Date('2026-01-01T13:00:00'),
+    onAccountLimited: (accountId, window) => { marked.push({ ...(accountId ? { accountId } : {}), window }); },
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', model: 'opus' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'finished');
+  assert.deepEqual(marked, [{ window: 'seven_day_opus' }],
+    'a model wall files under its per-model bucket, never the shared weekly');
+  assert.equal(state.phases['1'].model, 'sonnet', 'and the phase moved down the ladder');
+  r.cleanup();
+});
+
+test('the preflight probes the RUN’s account, and a refusal parks before any spawn', async () => {
+  const r = repo();
+  const probed: (string | undefined)[] = [];
+  const seen: number[] = [];
+  const { instance } = runner(r, workingSession(r, seen), '`true`', undefined, {
+    accountEnv: async () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'tok' }),
+    checkAuth: async (accountId) => { probed.push(accountId); return { loggedIn: true, checkedAt: '' }; },
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', accountId: 'work' });
+  await instance.wait();
+  assert.deepEqual(probed, ['work'], 'the probe asks about the account that will pay');
+  assert.ok(seen.length > 0, 'a healthy probe lets the run proceed');
+  r.cleanup();
+
+  const r2 = repo();
+  const seen2: number[] = [];
+  const second = runner(r2, workingSession(r2, seen2), '`true`', undefined, {
+    checkAuth: async () => ({
+      loggedIn: false, checkedAt: '',
+      detail: 'the run is set to pay as work and that login is expired',
+    }),
+  });
+  const parked = await second.instance.start({
+    slug: 'demo', root: r2.root, autonomy: 'keep-going', accountId: 'work',
+  });
+  assert.equal(parked.status, 'parked');
+  assert.match(parked.halt?.reason ?? '', /pay as work/,
+    'the refusal names the account, not the workspace');
+  assert.equal(seen2.length, 0, 'nothing spawned behind the refusal');
+  r2.cleanup();
 });

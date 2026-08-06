@@ -28,6 +28,13 @@ export { DEFAULT_ACCOUNT_ID, ACCOUNT_ID_RE, profileConfigDir } from './store.ts'
 export type { AccountMeta, AccountKind } from './store.ts';
 export type { AccountUsage, UsageBucket } from './usage.ts';
 
+/**
+ * Where an account's login stands. `unknown` is the honest word for a
+ * setup-token — it exposes no expiry and no refresh, so the console can only
+ * find out by spending it.
+ */
+export type AuthState = 'ok' | 'expiring' | 'expired' | 'signed-out' | 'unknown';
+
 /** What leaves the server. No secrets, no filesystem paths. */
 export type AccountView = {
   id: string;
@@ -40,6 +47,8 @@ export type AccountView = {
   plan?: string;
   /** Profiles only: has anyone actually completed `claude auth login` in it? */
   signedIn?: boolean;
+  /** Where this account's login stands, from the CLI's own credential. */
+  authState?: AuthState;
   usage?: AccountUsage;
   limitedUntil?: Record<string, string>;
 };
@@ -50,6 +59,12 @@ export type AccountsOptions = {
   onChange?: () => void;
   /** Threshold crossings, for the announcer (W6). Percent, per bucket. */
   onThreshold?: (view: AccountView, bucket: string, level: 'warn' | 'alert', utilization: number, resetsAt: string) => void;
+  /**
+   * An account's login went from known-good to expired/signed-out. Fired once
+   * per transition, never on first observation — a profile mid-login must not
+   * raise "sign in again" before anyone has signed in at all.
+   */
+  onAuthChange?: (view: AccountView, state: AuthState) => void;
   usageBase?: string;
   fetchFn?: typeof fetch;
   now?: () => number;
@@ -61,7 +76,23 @@ export const ALERT_PCT = 95;
 /** How long an identity read (exec-backed on macOS) is trusted before re-asking. */
 const IDENTITY_TTL_MS = 60_000;
 
-type Identity = { email?: string; org?: string; plan?: string; signedIn: boolean; at: number };
+/** Expiry closer than this reads as `expiring` — the CLI refresh window. */
+const AUTH_EXPIRING_MS = 30 * 60_000;
+
+type Identity = {
+  email?: string; org?: string; plan?: string; signedIn: boolean; at: number;
+  /** The oauth blob's own expiry, when one was readable. */
+  expiresAt?: number;
+};
+
+/** Where a login-backed credential stands right now. */
+function authStateOf(signedIn: boolean, expiresAt: number | undefined, now: number): AuthState {
+  if (!signedIn) return 'signed-out';
+  if (!expiresAt) return 'ok';
+  if (expiresAt <= now) return 'expired';
+  if (expiresAt <= now + AUTH_EXPIRING_MS) return 'expiring';
+  return 'ok';
+}
 
 export class Accounts {
   private readonly store = new AccountStore();
@@ -73,6 +104,8 @@ export class Accounts {
   private defaultLimits: Record<string, string> = {};
   /** Last announced threshold level per account:bucket, for hysteresis. */
   private announced = new Map<string, 'warn' | 'alert'>();
+  /** Last observed auth state per account — the transition detector. */
+  private auth = new Map<string, AuthState>();
   private isActive: (accountId: string) => boolean = () => false;
   private readonly opts: AccountsOptions;
 
@@ -113,7 +146,10 @@ export class Accounts {
 
   meta(id: string): AccountMeta | undefined {
     if (id === DEFAULT_ACCOUNT_ID) {
-      return { id: DEFAULT_ACCOUNT_ID, kind: 'default', createdAt: '' };
+      return {
+        id: DEFAULT_ACCOUNT_ID, kind: 'default', createdAt: '',
+        ...(this.store.defaultName ? { name: this.store.defaultName } : {}),
+      };
     }
     return this.store.get(id);
   }
@@ -129,6 +165,13 @@ export class Accounts {
     const identity = await this.identity(meta);
     const usage = this.poller.snapshot(meta.id);
     const limited = this.limitedUntil(meta.id);
+    // Display the LAST OBSERVED state, never a recomputation: the identity
+    // cache can be up to a minute staler than the poller's read, and a view
+    // that recomputed from it un-noted a fresh `expired` — which made the
+    // transition announce again on the next poll.
+    const state = meta.kind === 'token'
+      ? 'unknown'
+      : this.auth.get(meta.id) ?? authStateOf(identity.signedIn, identity.expiresAt, Date.now());
     return {
       id: meta.id,
       kind: meta.kind,
@@ -138,6 +181,7 @@ export class Accounts {
       ...(identity.org ? { org: identity.org } : {}),
       ...(identity.plan ? { plan: identity.plan } : meta.plan ? { plan: meta.plan } : {}),
       ...(meta.kind === 'profile' ? { signedIn: identity.signedIn } : {}),
+      authState: state,
       ...(usage ? { usage } : {}),
       ...(Object.keys(limited).length ? { limitedUntil: limited } : {}),
     };
@@ -162,9 +206,37 @@ export class Accounts {
       ...(oauth?.subscriptionType ? { plan: oauth.subscriptionType } : {}),
       signedIn: Boolean(oauth),
       at: Date.now(),
+      ...(oauth?.expiresAt ? { expiresAt: oauth.expiresAt } : {}),
     };
     this.identities.set(meta.id, identity);
+    // A FRESH credential read is an auth observation; a cache hit is not.
+    this.noteAuth(meta.id, authStateOf(identity.signedIn, identity.expiresAt, Date.now()));
     return identity;
+  }
+
+  /**
+   * Record an observed auth state; announce only the transition INTO a broken
+   * state FROM a known-good one. First observation never fires (a fresh
+   * profile mid-login must not raise "sign in again"), and the poller's own
+   * refresh attempt runs before its reads land here, so a login the CLI can
+   * still refresh never presents as broken at all.
+   */
+  private noteAuth(id: string, state: AuthState): void {
+    const before = this.auth.get(id);
+    if (before === state) return;
+    this.auth.set(id, state);
+    this.changed();
+    const broken = state === 'expired' || state === 'signed-out';
+    const wasGood = before === 'ok' || before === 'expiring';
+    if (broken && wasGood && this.opts.onAuthChange) {
+      const meta = this.meta(id);
+      if (meta) void this.view(meta).then((view) => this.opts.onAuthChange?.(view, state));
+    }
+  }
+
+  /** Last observed login state, for callers that only need the word. */
+  authStateFor(accountId: string | undefined): AuthState | undefined {
+    return this.auth.get(accountId ?? DEFAULT_ACCOUNT_ID);
   }
 
   /* ---------------- registration ---------------- */
@@ -239,10 +311,12 @@ export class Accounts {
 
   /**
    * Forget an account. The profile directory (and with it, on Linux, its
-   * credentials file) is removed; on macOS the CLI's keychain item for that
-   * directory is left behind — deleting entries from the CLI's own store is
-   * the one write this console never performs, and an orphaned item is
-   * unreachable once the directory's hash never comes up again.
+   * credentials file) is removed, and on macOS so is the CLI's HASHED keychain
+   * item for that directory — it exists only because this console minted the
+   * dir, and with the dir gone its hash can never come up again. The plain
+   * `Claude Code-credentials` item (the machine login) is never touched:
+   * deleting from the CLI's shared store is the one write this console never
+   * performs.
    */
   async remove(id: string): Promise<boolean> {
     if (id === DEFAULT_ACCOUNT_ID) throw new Error('the machine login cannot be removed here');
@@ -250,7 +324,9 @@ export class Accounts {
     if (!meta) return false;
     this.poller.untrack(id);
     this.identities.delete(id);
+    this.auth.delete(id);
     if (meta.kind === 'token') await this.creds.deleteToken(id);
+    if (meta.kind === 'profile') await this.creds.deleteProfileCredential(profileConfigDir(id));
     try {
       rmSync(profileConfigDir(id), { recursive: true, force: true });
       rmSync(profileConfigDir(id).replace(/\/config$/, ''), { recursive: true, force: true });
@@ -258,6 +334,27 @@ export class Accounts {
     this.changed();
     log.info('accounts.removed', { account: id, kind: meta.kind });
     return true;
+  }
+
+  /**
+   * Give an account a new display name. The NAME only, never the id: ids are
+   * journal keys, throttle keys, path segments and the keychain-service hash
+   * input — renaming one would orphan credentials and break every reference.
+   * The machine login stores its name as the registry's `defaultName`, because
+   * its row is synthesized and a stored row would double-list.
+   */
+  async rename(id: string, name: string): Promise<AccountView | undefined> {
+    const trimmed = name.trim().slice(0, 64);
+    if (id === DEFAULT_ACCOUNT_ID) {
+      this.store.setDefaultName(trimmed || undefined);
+    } else {
+      if (!this.store.get(id)) return undefined;
+      this.store.update(id, { name: trimmed || undefined });
+    }
+    this.changed();
+    log.info('accounts.renamed', { account: id, named: Boolean(trimmed) });
+    const meta = this.meta(id);
+    return meta ? this.view(meta) : undefined;
   }
 
   /* ---------------- what the runner needs ---------------- */
@@ -316,18 +413,31 @@ export class Accounts {
    * an absent accountId IS the default account); an explicit `null` means
    * "exclude no one" — the launch-time `auto` pick.
    */
-  pickAccount(excluding: string | null | undefined): string | null {
+  pickAccount(excluding: string | null | undefined, forModel?: string): string | null {
     const exclude = excluding === null ? null : excluding ?? DEFAULT_ACCOUNT_ID;
+    // A per-model window disqualifies only for the model that would spend it
+    // (`seven_day_opus` ↔ an opus run) and never feeds the score: an account
+    // exhausted on Opus is the RIGHT place for a Sonnet phase, and worst-case
+    // scoring would defeat the per-model design of the windows.
+    const family = forModel ? /(opus|sonnet|haiku|fable)/.exec(forModel.toLowerCase())?.[1] : undefined;
     const candidates: { id: string; score: number }[] = [];
     const ids = [DEFAULT_ACCOUNT_ID, ...this.store.stored().map((m) => m.id)];
     for (const id of ids) {
       if (id === exclude) continue;
       const limited = this.limitedUntil(id);
+      // Exact shared keys only — a learned `seven_day_opus` must never
+      // blanket-disqualify an account for every model.
       if (limited.five_hour || limited.seven_day) continue;
       const buckets = this.poller.snapshot(id)?.buckets ?? {};
       const shared = [buckets.five_hour?.utilization, buckets.seven_day?.utilization]
         .filter((v): v is number => typeof v === 'number');
       if (shared.some((v) => v >= 99)) continue;
+      if (family) {
+        const key = `seven_day_${family}`;
+        if (limited[key]) continue;
+        const measured = buckets[key]?.utilization;
+        if (typeof measured === 'number' && measured >= 99) continue;
+      }
       candidates.push({ id, score: shared.length ? Math.max(...shared) : 50 });
     }
     candidates.sort((a, b) => a.score - b.score);
@@ -337,7 +447,7 @@ export class Accounts {
   /** A display name for journals and banners. */
   labelFor(accountId: string | undefined): string {
     const id = accountId ?? DEFAULT_ACCOUNT_ID;
-    if (id === DEFAULT_ACCOUNT_ID) return 'the machine login';
+    if (id === DEFAULT_ACCOUNT_ID) return this.store.defaultName ?? 'the machine login';
     const meta = this.store.get(id);
     return meta?.name ?? meta?.email ?? id;
   }
@@ -362,6 +472,10 @@ export class Accounts {
         oauth = await this.creds.readClaudeOauth(configDir);
       } catch { /* the stale token may still be honoured; try it */ }
     }
+    // The authoritative auth-state writer: it rides every poller tick and sits
+    // AFTER the refresh attempt, so only a login the CLI itself could not
+    // rescue ever reads as expired here.
+    this.noteAuth(accountId, authStateOf(Boolean(oauth), oauth?.expiresAt, Date.now()));
     if (!oauth) {
       return meta.kind === 'profile'
         ? { error: 'not signed in yet — finish `claude auth login` for this profile' }

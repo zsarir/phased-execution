@@ -34,7 +34,7 @@
  * hidden DOM is the cheaper half of that trade.
  */
 
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Card, CardBody, CardHeader, CardTitle, Chip } from '@/components/ui';
 import { useTranscript } from '@/lib/queries';
 import { elapsed } from '@/lib/format';
@@ -128,6 +128,7 @@ export function SessionPanes({
   subtitle,
   askPhase,
   runLevel = false,
+  control,
 }: {
   slug: string;
   runId: string;
@@ -155,6 +156,8 @@ export function SessionPanes({
    * set this: reading history whole is what a replay is for.
    */
   runLevel?: boolean;
+  /** Per-session controls (freeze/stop), rendered in the console's toolbar. */
+  control?: ReactNode;
 }) {
   const { lines, activity, record, clear, hydrate } = useLiveLines();
 
@@ -179,6 +182,7 @@ export function SessionPanes({
         lines={lines}
         onClear={clear}
         title={title ?? (phase != null ? `Phase ${phase} console` : 'Session console')}
+        {...(control ? { actions: control } : {})}
         {...(subtitle ? { subtitle } : {})}
         footer={(
           <AskBox
@@ -214,10 +218,13 @@ export function QueuedPane({
   phase,
   entry,
   scope,
+  control,
 }: {
   phase: number;
   entry?: QueueEntry | undefined;
   scope?: readonly string[] | undefined;
+  /** A stop control that dequeues this phase, when the parent offers one. */
+  control?: ReactNode;
 }) {
   // The clock ticks for the same reason the run header's does: a wait that shows
   // a frozen "2m" is indistinguishable from a page that has died, and this is
@@ -237,6 +244,7 @@ export function QueuedPane({
               {elapsed(Math.max(0, now - entry.since))}
             </span>
           )}
+          {control}
         </div>
       </CardHeader>
       <CardBody className="flex flex-col gap-3">

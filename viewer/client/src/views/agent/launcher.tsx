@@ -103,7 +103,7 @@ export function Launcher({ root, disabled, skillsEnabled, onLaunch }: {
               {MODES.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
             </select>
           </label>
-          {accounts.length > 1 ? (
+          {accounts.length > 0 ? (
             <label className="flex flex-col gap-1 text-sm">
               <span className="text-2xs uppercase tracking-wide text-ink-faint">Account</span>
               <select className={field} value={accountId} onChange={(event) => setAccountId(event.target.value)}>

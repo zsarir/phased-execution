@@ -69,7 +69,8 @@ function interruptedOnAuth(root: string, over: Partial<RunState> = {}): RunState
     activePhase: 14,
     halt: {
       at: '2026-08-02T12:54:14.645Z',
-      reason: 'authentication failed — run /login in this workspace, then start the run again',
+      reason: 'authentication failed — the session\'s Claude login is expired or signed out; '
+        + 'sign that account in again, then continue the run',
       phase: 14,
     },
     ...over,

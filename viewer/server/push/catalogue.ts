@@ -18,7 +18,7 @@
 
 export type CategoryId =
   | 'approval' | 'needs-you' | 'halted' | 'parked' | 'phase' | 'finished' | 'ready' | 'changed'
-  | 'session' | 'health' | 'limits';
+  | 'session' | 'health' | 'limits' | 'usage-climbing';
 
 export type Category = {
   id: CategoryId;
@@ -114,10 +114,19 @@ export const CATEGORIES: readonly Category[] = [
   {
     id: 'limits',
     label: 'Usage limits',
-    detail: 'A Claude account this console runs work as is approaching or has hit a usage window '
-      + '— the 5-hour session, the weekly allowance, or a per-model one — with when it resets. '
-      + 'What a run did about it (waited, switched account, paused) is announced with it.',
+    detail: 'A Claude account this console runs work as hit a usage window — the 5-hour session, '
+      + 'the weekly allowance, or a per-model one — with when it resets, plus what the run did '
+      + 'about it (waited, switched account, paused) and an account that needs signing in again.',
     byDefault: true,
+    urgent: false,
+  },
+  {
+    id: 'usage-climbing',
+    label: 'Usage climbing',
+    detail: 'Early warning while a window fills — 80% is "plan your afternoon", 95% is "the next '
+      + 'long phase will not finish". Off by default: the meters show the same numbers all the '
+      + 'time, and the wall itself still announces under Usage limits.',
+    byDefault: false,
     urgent: false,
   },
 ];
@@ -239,6 +248,7 @@ export function routeFor(category: CategoryId, context: RouteContext = {}): stri
     // The meters and the account list live on Settings; a limit that stopped a
     // specific run still carries its slug and lands on the run instead.
     case 'limits':
+    case 'usage-climbing':
       return slug ? `/#/plan/${slug}/run` : '/#/settings';
     default: {
       // Exhaustiveness: a new category added to CATEGORIES without a route here

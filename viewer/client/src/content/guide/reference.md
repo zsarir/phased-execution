@@ -140,7 +140,7 @@ available, so closing is a cheap, reversible call.
 | `pausing` | A pause is armed: whatever is running finishes, and nothing new boards. | Wait for the boundary, or Cancel pause to keep going. |
 | `paused` | Stopped between phases at your request; nothing is running. | Press Continue when ready — it picks up exactly where it left off. |
 | `waiting` | Sleeping until the account's usage window reopens, then resumes itself. | Nothing. |
-| `frozen` | The session is stopped where it stands (mid-token), warm and losing nothing. | Continue the frozen session to resume instantly, or Stop it. |
+| `frozen` | Every session is stopped where it stands (mid-token), warm and losing nothing. A freeze on ONE session of several is recorded on that session's tab instead, and the run stays `running`. | Continue the frozen session to resume instantly, or Stop it. |
 | `parked` | Every remaining phase needs a person first — a gate, an approval, a decision. | Read "Why this is stopped": each blocker is named with its remedy. |
 | `queued` | In line behind another plan holding the same repos; starts itself when the scope frees. | Nothing — the holder is named on the queued chip. |
 | `halting` | A halt was recorded; live sessions are finishing before the run fully stops. | Read the halt card. The run reads halted once the last session settles. |
@@ -163,7 +163,7 @@ disk.
 | `awaiting-verification` | The machine checks passed; steps only a person can confirm remain. | Answer the verification card — it lists exactly what needs your eyes. |
 | `done` | Finished and independently verified in this run. | Nothing. |
 | `failed` | The attempt failed — a red verification, or a session that produced nothing. | Why? shows the evidence; Fix with AI repairs it, or Retry restarts the run here. |
-| `interrupted` | The session or console died mid-phase; the working tree is wherever it stopped. | Resume with AI — uncommitted work is preserved, never redone blindly. |
+| `interrupted` | The session or console died mid-phase — or the operator stopped this one session from its tab; the working tree is wherever it stopped. | Resume with AI or Retry — the session id is kept, and uncommitted work is preserved, never redone blindly. |
 | `skipped` | Taken off this run's list by the operator. | Retry it later if it should still happen. |
 | `parked` | Needs a person before the loop will touch it again — the note says exactly why. | Read the note (gate, foreign lock, decision), act on it, then Retry. |
 | `queued` | Waiting for repos another phase or plan is holding; starts itself when they free. | Nothing — the queued chip names what it waits on. |

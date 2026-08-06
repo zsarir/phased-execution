@@ -54,6 +54,7 @@ import {
 import { ApprovalQueue, type Decide } from '../run/approvals';
 import { LiveConsole } from '../run/console';
 import { isLive } from '../run/defaults';
+import { LaneControls, laneFrozen } from '../run/lane-controls';
 import {
   QueuedPane, SessionPanes, crossLaneId, lanesAcross, queueEntryFor, type Lane,
 } from '../run/session-panes';
@@ -188,6 +189,40 @@ export default function RunsView() {
     })();
   }, [client]);
 
+  /**
+   * Freeze / continue / stop a run from its fleet row — whole-run verbs. The
+   * per-session versions live in the run's console tabs, where a session has a
+   * face; a table row only honestly refers to the run entire.
+   */
+  const onLifecycle = useCallback((row: RunRow, verb: 'freeze' | 'thaw' | 'stop') => {
+    setResolvingId(row.id);
+    void (async () => {
+      try {
+        if (verb === 'freeze') {
+          const { run: after } = await api.runFreeze(row.slug);
+          const held = after?.status === 'frozen' || Boolean(after?.freeze);
+          toast(held
+            ? `${row.slug} frozen — its sessions are stopped where they stood`
+            : `Nothing to freeze on ${row.slug}.`, held ? 'ok' : 'warn');
+        } else if (verb === 'thaw') {
+          const { run: after } = await api.runThaw(row.slug);
+          const still = after?.status === 'frozen' || Boolean(after?.freeze);
+          toast(still
+            ? `${row.slug} could not be continued — open the autopilot and look at the status`
+            : `${row.slug} continued — the sessions pick up mid-token`, still ? 'warn' : 'ok');
+        } else {
+          await api.runStop(row.slug);
+          toast(`${row.slug} stopping — sessions get SIGTERM and the run winds down`, 'ok');
+        }
+      } catch (err) {
+        toast((err as Error).message, 'error');
+      } finally {
+        setResolvingId(undefined);
+        void client.invalidateQueries({ queryKey: keys.runs() });
+      }
+    })();
+  }, [client]);
+
   /* ---------------- the fleet ---------------- */
 
   const all = useMemo(() => toRows(runs ?? []), [runs]);
@@ -292,6 +327,7 @@ export default function RunsView() {
                 : lanes.length ? (
                   <LaneTabs
                     lanes={lanes}
+                    runs={runs}
                     picked={tab}
                     onPick={setTab}
                     preferredRunId={picked && isLive(picked.status) ? picked.id : undefined}
@@ -345,6 +381,7 @@ export default function RunsView() {
                   // away is a claim about something you cannot see.
                   watchingId={consoleOpen ? watching?.id : undefined}
                   onResolve={onResolve}
+                  onLifecycle={onLifecycle}
                   allowRun={allowRun}
                   busyId={resolvingId}
                 />
@@ -389,6 +426,7 @@ export default function RunsView() {
  */
 function LaneTabs({
   lanes,
+  runs,
   picked,
   onPick,
   preferredRunId,
@@ -397,6 +435,8 @@ function LaneTabs({
   entries,
 }: {
   lanes: readonly Lane[];
+  /** The runs behind the lanes — where each lane's freeze is recorded. */
+  runs: readonly RunState[] | undefined;
   picked: string | undefined;
   onPick: (id: string) => void;
   /** The run the fleet's Watch button asked for, until a tab is chosen by hand. */
@@ -406,6 +446,7 @@ function LaneTabs({
   entries?: QueueEntry[] | undefined;
 }) {
   const ids = lanes.map(crossLaneId);
+  const runOf = (lane: Lane) => (runs ?? []).find((run) => run.id === lane.runId);
   const preferred = preferredRunId
     ? ids[lanes.findIndex((lane) => lane.runId === preferredRunId)]
     : undefined;
@@ -434,6 +475,16 @@ function LaneTabs({
             <QueuedPane
               phase={lane.phase}
               entry={queueEntryFor(entries, lane.slug, lane.phase)}
+              control={(
+                <LaneControls
+                  slug={lane.slug}
+                  phase={lane.phase}
+                  live
+                  allowRun={allowRun}
+                  frozen={null}
+                  queued
+                />
+              )}
             />
           ) : (
             <SessionPanes
@@ -445,6 +496,15 @@ function LaneTabs({
               enabled={enabled}
               title={`${lane.slug} · phase ${lane.phase}`}
               subtitle={lane.status}
+              control={(
+                <LaneControls
+                  slug={lane.slug}
+                  phase={lane.phase}
+                  live={lane.status === 'running'}
+                  allowRun={allowRun}
+                  frozen={laneFrozen(runOf(lane), lane.phase)}
+                />
+              )}
             />
           )}
         </TabsContent>

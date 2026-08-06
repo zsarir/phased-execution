@@ -74,19 +74,34 @@ The same question works from any terminal with `btw "…"`.
 
 ## Pause, freeze, stop 🟡
 
-Three different things, and the difference matters when a phase is halfway through something.
+Three different things, and the difference matters when a phase is halfway through something. The
+run-level verbs act on **every** session at once:
 
 | Verb | What happens | Getting going again |
 |---|---|---|
 | **Pause after this phase** | Arms a pause and names the phase that has to finish first. Nothing is cut off. | Cancel it until it arrives, or press Continue after. |
-| **Freeze now** | Stops the session where it stands, mid-token, warm and losing nothing. | Continue the frozen session and it resumes instantly. |
-| **Stop now** | Interrupts. Records the phase as `interrupted`, not `failed`, because a phase cut off partway may have half-finished something. | Retry the phase, or read what it left behind first. |
+| **Freeze now** | Stops every running session where it stands, mid-token, warm and losing nothing. | Continue the frozen session and each one resumes instantly. |
+| **Stop now** | Interrupts everything. Records cut-off phases as `interrupted`, not `failed`, because a phase cut off partway may have half-finished something. | Retry the phase, or read what it left behind first. |
+
+Each session tab also carries the same verbs **scoped to that one session** — and so does each lane
+on the Runs page and the session console's own toolbar:
+
+| Verb | What happens |
+|---|---|
+| **Freeze** (one tab) | `SIGSTOP` for that session alone. The others keep working; the run only reads `frozen` when nothing is left running. |
+| **Stop** (one tab) | Ends that session (woken first, then SIGTERM, then the SIGKILL backstop), records its phase `interrupted` with the session id kept — Retry can resume it — and the run carries on scheduling. On a queued phase it takes it out of the admission line before anything spawns. |
+
+Neither touches the consecutive-failure budget: an operator's stop is neither a failure nor an
+endorsement.
 
 ## When the plan runs out 🟢
 
 The run reaches the end of its graph and finishes itself: the last handoff is written, the plan is
 annotated, and — if **Open a PR** was on — the work branch is pushed and a pull request opened after
-one approval tap.
+one approval tap. On the way there, the board is re-read after every phase, so newly unlocked work
+starts itself; the **Waiting** tab lists the phases whose turn has not come, with exactly what each
+waits on. Pressing Start or Continue restores the consecutive-failure budget — a resumed run never
+inherits a spent one.
 
 Nothing is deleted. A finished run keeps its journal, its transcripts and its per-phase costs, which
 is what makes the **Analysis** tab able to say where the time went.

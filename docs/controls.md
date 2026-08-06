@@ -45,8 +45,25 @@ registered (`--allow-accounts`): **Account** — which Claude login the run's se
 including `auto` (most 5-hour headroom) — and **On usage limit** — `switch` (checkpoint and
 continue at once under the account with headroom; the dialogs' default), `wait` (sleep to the
 reset and resume by itself, restart-safe), or `pause` (checkpoint and stop for a person). A
-model-specific limit keeps switching models, not accounts. `Switch account` on a live run acts
-immediately; the scheduler throttles only the limited account.
+model-specific limit keeps switching models, not accounts — and files its wall under the model's
+own bucket, so `auto` skips that account only for runs of that model. `Switch account` on a live
+run acts immediately and lists every account with the current one marked; the scheduler throttles
+only the limited account. Accounts rename (display name only) and remove from Settings; an expired
+login raises a *Sign in again* alert and a run pinned to it is refused at preflight instead of
+burning sessions.
+
+## Stopping things, at three sizes
+
+Three surfaces carry the same verbs, scoped differently. The **run controls** act on the whole run:
+*Pause after this phase* (boundary), *Freeze now* (SIGSTOP every session, reversible), *Stop now*
+(SIGTERM everything; phases record `interrupted`, never `failed`). Each **session tab** — on the
+autopilot page, the Runs page's lanes, and the session console's own toolbar — carries **Freeze/
+Continue** and **Stop** for that one session: the rest of the run keeps scheduling, a stopped
+phase keeps its session id for Retry, and a queued phase's Stop takes it out of the admission line
+before anything spawns. The **fleet rows** on the Runs page carry the run-level Freeze/Continue and
+Stop, so a live run is never a row you can only link away from. None of these touch the
+consecutive-failure budget, and pressing Start/Continue resets it — a resumed run never inherits a
+spent one.
 
 **Run-level beats plan prose for console-minted sessions.** When a run uses the work branch and the
 plan's own `**Branch:**` line names a different branch, the session is told to use the run's branch

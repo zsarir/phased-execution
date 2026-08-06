@@ -81,3 +81,24 @@ describe('usage alerts', () => {
     expect(screen.getByText(/meters above keep updating/i)).toBeTruthy();
   });
 });
+
+describe('the compact meters read the worst account', () => {
+  it('shows every account honestly in the overview, auth state included', async () => {
+    renderOverview([
+      {
+        id: 'default', kind: 'default', builtIn: true, email: 'main@example.com', authState: 'ok',
+        usage: { buckets: { five_hour: { utilization: 12, resetsAt: '2026-08-06T20:00:00Z' } }, fetchedAt: '2026-08-06T15:00:00Z' },
+      },
+      {
+        id: 'info', kind: 'profile', builtIn: false, name: 'info', email: 'info@example.com',
+        signedIn: true, authState: 'expired',
+        usage: { buckets: { seven_day_fable: { utilization: 82, resetsAt: '2026-08-12T00:00:00Z' } }, fetchedAt: '2026-08-06T15:00:00Z' },
+      },
+    ]);
+    // A broken login is a badge beside the account, where the meters are.
+    expect(await screen.findByText('login expired')).toBeTruthy();
+    // A per-model bucket renders by its key — Fable's window the day it ships.
+    expect(screen.getByText('Weekly (Fable)')).toBeTruthy();
+    expect(screen.getByText('info')).toBeTruthy();
+  });
+});

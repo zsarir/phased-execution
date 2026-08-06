@@ -762,6 +762,25 @@ export async function handleApi(
         }
         return true;
       }
+      // Rename — the display name only, and the same registration-class gate
+      // as add/remove: what an account is CALLED is part of how work gets
+      // attributed, not a cosmetic read.
+      if (req.method === 'PATCH' && rest.length === 1) {
+        const refusal = guardAccounts(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const id = rest[0] ?? '';
+        if (!ACCOUNT_ID_RE.test(id)) { json(res, 400, { error: 'Not an account id.' }); return true; }
+        const body = await readBody(req);
+        const name = typeof body.name === 'string' ? body.name.trim().slice(0, 64) : '';
+        try {
+          const view = await service.renameAccount(id, name);
+          if (!view) { json(res, 404, { error: 'No such account.' }); return true; }
+          json(res, 200, { account: view });
+        } catch (error) {
+          json(res, 400, { error: (error as Error).message });
+        }
+        return true;
+      }
     }
 
     /* ---------------- the desktop launcher ----------------
@@ -1155,11 +1174,17 @@ export async function handleApi(
           }
           case 'stop': {
             // The one control that cannot be taken back, so a phase named in
-            // the body is checked before anything is signalled — see
-            // `Service.stopRun`. Same 409-with-a-reason shape the recovery
-            // verbs use for a refusal.
+            // the body is ruled on before anything is signalled — see
+            // `Service.stopRun`: named, it stops that lane only and the run
+            // carries on. Same 409-with-a-reason shape the recovery verbs use.
             try {
-              json(res, 200, { run: await service.stopRun(slug, targetPhase(body)) });
+              json(res, 200, {
+                run: await service.stopRun(
+                  slug,
+                  targetPhase(body),
+                  typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
+                ),
+              });
             } catch (error) {
               json(res, 409, { error: (error as Error)?.message ?? 'the run could not be stopped' });
             }

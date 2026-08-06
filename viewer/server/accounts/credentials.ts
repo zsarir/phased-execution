@@ -118,6 +118,25 @@ export class Credentials {
     try { unlinkSync(tokenFile(accountId)); } catch { /* same */ }
   }
 
+  /**
+   * Drop the CLI's HASHED keychain item for a console-minted profile dir.
+   *
+   * The "never write the CLI's own store" rule protects shared logins — the
+   * plain `Claude Code-credentials` item. The hashed item exists only because
+   * this console created the profile directory, and once that directory is
+   * gone its hash can never come up again: the item is unreachable dead
+   * weight, not a shared credential. Best effort, darwin only.
+   */
+  async deleteProfileCredential(configDir: string): Promise<void> {
+    if (this.platform !== 'darwin') return;
+    const service = claudeKeychainService(configDir);
+    // Belt and braces: refuse the plain service name however this was called.
+    if (service === claudeKeychainService(null)) return;
+    try {
+      await this.exec('security', ['delete-generic-password', '-s', service]);
+    } catch { /* never stored, or already gone — same outcome */ }
+  }
+
   /* ---------------- the environment a child runs under ---------------- */
 
   /**

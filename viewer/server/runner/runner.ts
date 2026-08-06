@@ -33,7 +33,7 @@ import { log } from '../log.ts';
 import { onShutdown, offShutdown } from '../lifecycle.ts';
 import { run as engineRun, readMemoryBlock, readGateStatus, readLint, readText, type Board } from '../engine.ts';
 import { skillDirective } from '../skills.ts';
-import { classify, fallbackChain, nextModel, type Disposition } from './errors.ts';
+import { classify, fallbackChain, limitBucket, nextModel, type Disposition } from './errors.ts';
 import { markFor, spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
 import { extractCommands, hardenedPath, verifyPhase } from './verify.ts';
 import { failureContext } from './failure-context.ts';
@@ -48,7 +48,7 @@ import {
 import { formatScope } from '../../shared/scope.js';
 import { Journal } from './journal.ts';
 import { Transcript } from './transcript.ts';
-import { checkAuth } from './auth.ts';
+import { checkAuth, type AuthStatus } from './auth.ts';
 import {
   buildSettings, writeSettingsFile, loadPolicyFor,
   type Approvals, type PermissionProfile,
@@ -136,9 +136,14 @@ export type RunnerDeps = {
    * Null when no other account has headroom. Sync on purpose — consulted
    * mid-phase with nothing worth awaiting.
    */
-  pickAccount?: (excluding: string | undefined) => string | null;
+  pickAccount?: (excluding: string | undefined, forModel?: string) => string | null;
   /** A limit landed: remember it on the account and tell the operator. */
   onAccountLimited?: (accountId: string | undefined, window: string, resetsAt: Date | null, detail: string) => void;
+  /**
+   * Probe the RUN's account before spending a session on it. Absent, the
+   * legacy probe runs — which only ever answers for the machine login.
+   */
+  checkAuth?: (accountId: string | undefined) => Promise<AuthStatus>;
   /** Copy a session transcript between two accounts' config dirs. See `accounts/transcripts.ts`. */
   portTranscript?: (sessionId: string, fromAccount: string | undefined, toAccount: string | undefined) => boolean;
   onEvent?: RunnerEvent;
@@ -348,6 +353,12 @@ type Lane = {
   frozen: { at: string; by: string; escalateAt: string } | null;
   /** Armed while this lane is frozen; fires its escalation to a checkpoint. */
   freezeTimer: NodeJS.Timeout | null;
+  /**
+   * The operator ended THIS lane only. Consumed by `attempt()` the way
+   * `checkpointed` is, but the record settles `interrupted` and the loop
+   * carries on — a per-lane stop is aimed at one session, not at the run.
+   */
+  stopped: { at: string; by: string } | null;
   /** Set when this lane's freeze was escalated, so exit 143 is not read as a crash. */
   checkpointed: boolean;
   /**
@@ -453,6 +464,9 @@ export class Runner {
         phase: lane.phase,
         sessionId: state.phases[String(lane.phase)]?.sessionId ?? '',
         startedAt: state.phases[String(lane.phase)]?.startedAt ?? new Date().toISOString(),
+        // On the lane's own entry, not only the single `freeze` slot — several
+        // lanes can be frozen at once, and reconcile + the client read per pid.
+        ...(lane.frozen ? { frozen: lane.frozen } : {}),
       };
     }
     if (Object.keys(children).length) state.children = children;
@@ -578,6 +592,7 @@ export class Runner {
       ? loadRun(options.root, options.slug, options.resumeRunId, null)
       : null;
     if (options.resumeRunId && !state) throw new Error(`No run ${options.resumeRunId} for ${options.slug}.`);
+    let resumedStreak = 0;
 
     this.state = state ?? newRun({
       slug: options.slug,
@@ -619,6 +634,12 @@ export class Runner {
       this.state.reopenedAt = null;
       const blocked = this.adopt(this.state);
       if (blocked) { this.persist(); return this.state; }
+      // An operator pressing Start/Continue is a person back in the loop — the
+      // same signal `park()` treats as clearing the slate. Carried across the
+      // resume, a spent failure budget meant the continued run halted on its
+      // first stumble, however long ago the failures it inherited were.
+      resumedStreak = this.state.consecutiveFailures;
+      this.state.consecutiveFailures = 0;
       if (options.model) this.state.model = options.model;
       if (options.effort) this.state.effort = options.effort;
       if (options.autonomy) this.state.autonomy = options.autonomy;
@@ -672,7 +693,12 @@ export class Runner {
     // saves considerably more than that: without it an expired login is
     // discovered once per phase, each time as a session that reports success,
     // spends nothing and does nothing.
-    const auth = await checkAuth(this.state.root, true);
+    // The probe runs as the RUN's account: a run pinned to a profile used to
+    // pass preflight on the machine login's health and burn a session per
+    // phase finding out the profile had expired.
+    const auth = this.deps.checkAuth
+      ? await this.deps.checkAuth(this.state.accountId)
+      : await checkAuth(this.state.root, true);
     const refusal = preflight(this.state.root) ?? (auth.loggedIn ? null : authRefusal(auth.detail));
     if (refusal) {
       this.state.status = 'parked';
@@ -696,6 +722,9 @@ export class Runner {
       ...(this.state.onLimit ? { onLimit: this.state.onLimit } : {}),
       ...(this.state.onlyPhases?.length ? { onlyPhases: this.state.onlyPhases } : {}),
     });
+    // The journal only exists from a few lines up; `was` keeps the audit
+    // trail the counter itself loses.
+    if (resumedStreak) this.record('run.failure-streak-reset', { was: resumedStreak });
     this.persist();
 
     const runId = this.state.id;
@@ -818,7 +847,7 @@ export class Runner {
     // `children` so a console restart reconciles it like any other.
     const lane: Lane = {
       phase: options.phase, pid: null, handle: null, grant,
-      frozen: null, freezeTimer: null, checkpointed: false, checkpointNote: null,
+      frozen: null, freezeTimer: null, stopped: null, checkpointed: false, checkpointNote: null,
     };
     this.lanes.set(options.phase, lane);
 
@@ -973,10 +1002,12 @@ export class Runner {
    * and the caller falls back to waiting exactly as if no second account
    * existed.
    */
-  private trySwitchAccount(phase: number, record: PhaseRecord, reason: string): boolean {
+  private trySwitchAccount(phase: number, record: PhaseRecord, reason: string, model?: string): boolean {
     const state = this.state!;
     const from = state.accountId;
-    const next = this.deps.pickAccount?.(from);
+    // Named so per-model walls disqualify only where they bind: an account
+    // exhausted on Opus still takes this phase when it runs on Sonnet.
+    const next = this.deps.pickAccount?.(from, model ?? record.model ?? state.model);
     if (!next || next === (from ?? 'default')) return false;
     let ported = false;
     if (record.sessionId) {
@@ -1270,34 +1301,42 @@ export class Runner {
   freeze(by = 'console', phase?: number | null): boolean {
     const state = this.state;
     if (!state || !this.driving) return false;
-    // The lane named, or the mirror when nothing was named. A run with three
-    // lanes has three answers to "freeze it", and picking the wrong one stops
-    // a session the operator never looked at.
-    const lane = this.laneFor(phase);
-    if (!lane) return false;
-    if (lane.frozen) return true;
-    const pid = lane.pid;
-    if (!pid || !pidAlive(pid)) return false;
-
-    try { process.kill(pid, 'SIGSTOP'); } catch (error) {
-      log.warn('runner.freeze', { pid, error });
-      return false;
+    // The lane named — or, with nothing named, EVERY lane holding a live
+    // session. "Freeze" from the run's own controls means "stop the run where
+    // it stands", and freezing only the mirror lane of three left two sessions
+    // editing under a run the console then called frozen.
+    const targets = phase != null
+      ? [this.lanes.get(phase)].filter((lane): lane is Lane => Boolean(lane))
+      : [...this.lanes.values()];
+    const eligible = targets.filter((lane) => !lane.frozen && lane.pid != null && pidAlive(lane.pid));
+    if (!eligible.length) {
+      // Everything asked for is already frozen: truthful success. Nothing with
+      // a live pid at all: refusal, so the button can say so.
+      return targets.some((lane) => lane.frozen);
     }
 
-    const at = new Date().toISOString();
-    const escalateAt = new Date(this.now().getTime() + FREEZE_ESCALATE_MS).toISOString();
-    lane.frozen = { at, by, escalateAt };
-    state.status = 'frozen';
-    // The single-lane mirror, same contract as `state.child`: it describes the
-    // lane that was frozen most recently, and `lane.frozen` is the complete
-    // record every control actually acts on.
-    state.freeze = { at, phase: lane.phase, pid, by, escalateAt };
-    this.record('run.frozen', { pid, phase: lane.phase, by, escalateAt }, lane.phase);
+    let frozenCount = 0;
+    for (const lane of eligible) {
+      const pid = lane.pid!;
+      try { process.kill(pid, 'SIGSTOP'); } catch (error) {
+        log.warn('runner.freeze', { pid, error });
+        continue;
+      }
+      const at = new Date().toISOString();
+      const escalateAt = new Date(this.now().getTime() + FREEZE_ESCALATE_MS).toISOString();
+      lane.frozen = { at, by, escalateAt };
+      lane.freezeTimer = setTimeout(() => this.escalateFreeze(lane), FREEZE_ESCALATE_MS);
+      lane.freezeTimer.unref?.();
+      frozenCount++;
+      this.record('run.frozen', { pid, phase: lane.phase, by, escalateAt }, lane.phase);
+    }
+    if (!frozenCount) return false;
+
+    this.syncFrozenStatus();
+    this.syncMirror();
+    this.syncFreezeMirror();
     this.persist();
     this.emit('run', { state });
-
-    lane.freezeTimer = setTimeout(() => this.escalateFreeze(lane), FREEZE_ESCALATE_MS);
-    lane.freezeTimer.unref?.();
     return true;
   }
 
@@ -1305,43 +1344,45 @@ export class Runner {
   thaw(phase?: number | null): boolean {
     const state = this.state;
     if (!state) return false;
-    const lane = phase != null ? this.lanes.get(phase) : this.frozenLane();
-    if (!lane?.frozen) return false;
-    const pid = lane.pid;
-    this.clearFreezeTimer(lane);
+    // The lane named, or every frozen lane — thaw-all is the undo of
+    // freeze-all, and thawing only the first of two frozen lanes left the
+    // other stopped behind a run that had gone back to `running`.
+    const targets = phase != null
+      ? [this.lanes.get(phase)].filter((lane): lane is Lane => Boolean(lane?.frozen))
+      : [...this.lanes.values()].filter((lane) => lane.frozen);
+    if (!targets.length) return false;
 
-    if (pid && pidAlive(pid)) {
-      try { process.kill(pid, 'SIGCONT'); } catch (error) {
-        log.warn('runner.thaw', { pid, error });
-        return false;
+    let thawed = 0;
+    for (const lane of targets) {
+      const pid = lane.pid;
+      this.clearFreezeTimer(lane);
+      if (pid && pidAlive(pid)) {
+        try { process.kill(pid, 'SIGCONT'); } catch (error) {
+          log.warn('runner.thaw', { pid, error });
+          continue;
+        }
       }
+      // Frozen time is not work time. Left in, an hour on the kitchen table
+      // would show up as an hour the phase spent thinking, and every
+      // throughput figure built on it would be wrong.
+      const frozenMs = Math.max(0, this.now().getTime() - Date.parse(lane.frozen!.at));
+      if (frozenMs) {
+        const record = phaseRecord(state, lane.phase);
+        record.frozenMs = (record.frozenMs ?? 0) + frozenMs;
+      }
+      lane.frozen = null;
+      thawed++;
+      this.record('run.thawed', { pid, frozenMs }, lane.phase);
     }
+    if (!thawed) return false;
 
-    // Frozen time is not work time. Left in, an hour on the kitchen table would
-    // show up as an hour the phase spent thinking, and every throughput figure
-    // built on it would be wrong.
-    const frozenMs = Math.max(0, this.now().getTime() - Date.parse(lane.frozen.at));
-    if (frozenMs) {
-      const record = phaseRecord(state, lane.phase);
-      record.frozenMs = (record.frozenMs ?? 0) + frozenMs;
-    }
-    lane.frozen = null;
     // Same rule as the wait-until disposition: a pause armed while the session
     // was frozen is still a pause, and thawing is not taking it back — that is
     // what `resumePause` is for. Only back to `running` once NOTHING is frozen:
     // with lanes, thawing one of two still leaves a session stopped.
-    const stillFrozen = this.frozenLane();
-    state.status = stillFrozen ? 'frozen' : this.resumedStatus();
-    state.freeze = stillFrozen
-      ? {
-        at: stillFrozen.frozen!.at,
-        phase: stillFrozen.phase,
-        pid: stillFrozen.pid ?? 0,
-        by: stillFrozen.frozen!.by,
-        escalateAt: stillFrozen.frozen!.escalateAt,
-      }
-      : null;
-    this.record('run.thawed', { pid, frozenMs }, lane.phase);
+    this.syncFrozenStatus();
+    this.syncMirror();
+    this.syncFreezeMirror();
     this.persist();
     this.emit('run', { state });
     return true;
@@ -1351,6 +1392,48 @@ export class Runner {
   private frozenLane(): Lane | undefined {
     for (const lane of this.lanes.values()) if (lane.frozen) return lane;
     return undefined;
+  }
+
+  /**
+   * `frozen` is the run's word only while NOTHING is left running: with lanes,
+   * a freeze can cover one session of three, and the run is still running.
+   * `state.pause` survives underneath — `resumedStatus()` restores `pausing`
+   * when the last freeze lifts.
+   */
+  private syncFrozenStatus(): void {
+    const state = this.state;
+    if (!state) return;
+    const live = [...this.lanes.values()].filter((lane) => lane.pid != null);
+    const allFrozen = live.length > 0 && live.every((lane) => lane.frozen);
+    if (allFrozen) state.status = 'frozen';
+    else if (state.status === 'frozen') state.status = this.resumedStatus();
+  }
+
+  /**
+   * Recompute the single-slot `state.freeze` from the lane table.
+   *
+   * Lowest frozen phase, the same stability rule as `mirrorLane()`: the slot
+   * is what pre-lanes readers watch, and it must not flip between lanes on
+   * every write. Null when nothing is frozen — a stale block would make a live
+   * run look held.
+   */
+  private syncFreezeMirror(): void {
+    const state = this.state;
+    if (!state) return;
+    let chosen: Lane | undefined;
+    for (const lane of this.lanes.values()) {
+      if (!lane.frozen) continue;
+      if (!chosen || lane.phase < chosen.phase) chosen = lane;
+    }
+    state.freeze = chosen
+      ? {
+        at: chosen.frozen!.at,
+        phase: chosen.phase,
+        pid: chosen.pid ?? 0,
+        by: chosen.frozen!.by,
+        escalateAt: chosen.frozen!.escalateAt,
+      }
+      : null;
   }
 
   /**
@@ -1392,13 +1475,15 @@ export class Runner {
     }
     lane.pid = null;
     this.syncMirror();
-    state.freeze = null;
+    this.syncFreezeMirror();
     // Only when this was the last thing running. With another lane still live,
     // writing `paused` here would tell the console the run had stopped while a
     // session carried on editing under it.
     if (!this.lanes.size || [...this.lanes.values()].every((other) => other.pid == null)) {
       state.status = 'paused';
       state.halt = null;
+    } else {
+      this.syncFrozenStatus();
     }
     this.record('run.freeze-escalated', {
       pid, phase, sessionId: sessionId ?? null, afterMs: FREEZE_ESCALATE_MS,
@@ -1469,7 +1554,9 @@ export class Runner {
     record.note = sessionId
       ? `checkpointed (${why}) — the next attempt resumes session ${sessionId}`
       : `checkpointed (${why}); the session had no id yet, so the next attempt starts from its boot prompt`;
-    state.freeze = null;
+    // Recomputed, not nulled: another lane may still be frozen, and its mirror
+    // must survive this lane's checkpoint.
+    this.syncFreezeMirror();
     this.record('phase.checkpointed', { sessionId: sessionId ?? null, why }, lane.phase);
   }
 
@@ -1526,6 +1613,9 @@ export class Runner {
         try { process.kill(lane.pid, 'SIGCONT'); } catch { /* already gone */ }
       }
     }
+    // The persisted `children[].frozen` flags must clear with the lanes they
+    // describe, or the checkpoint says two contradictory things about one pid.
+    this.syncMirror();
     this.state.freeze = null;
     this.state.status = 'stopping';
     this.record('run.stop-requested', {
@@ -1548,6 +1638,98 @@ export class Runner {
       }, SIGTERM_GRACE_MS).unref();
     }
     await this.driving;
+  }
+
+  /**
+   * Stop ONE lane's session and let the rest of the run carry on.
+   *
+   * `stop()` is the whole-run verb: it aborts every spawn and drains the loop.
+   * Watching one phase go wrong in a three-lane run, that is a bigger hammer
+   * than the situation calls for — this ends a single session (SIGCONT first
+   * for the same reason `stop()` sends it, then SIGTERM, then the same
+   * grace-then-SIGKILL backstop), records the phase `interrupted`, and hands
+   * the loop back to its scheduling. It is neither a failure (the streak is
+   * untouched) nor an endorsement; dependents of the stopped phase never
+   * become ready, so the run parks at its end naming them honestly.
+   */
+  stopPhase(phase: number, by = 'console'): { ok: true } | { ok: false; reason: string } {
+    const state = this.state;
+    if (!state || !this.driving) return { ok: false, reason: 'nothing is driving this run' };
+    const record = state.phases[String(phase)];
+    const lane = this.lanes.get(phase);
+    if (!lane) {
+      // No lane yet: a record can still be settled out of the admission queue.
+      // The arrival guard in `runPhaseAdmitted` abandons a settled phase, so
+      // the eventually-granted admission releases without spawning.
+      if (record?.status === 'queued') {
+        record.status = 'interrupted';
+        record.note = `stopped by ${by} before it started — the rest of the run carries on`;
+        record.endedAt = new Date().toISOString();
+        this.record('phase.stopped', { by, before: 'admission' }, phase);
+        this.persist();
+        this.emit('phase', { phase, status: record.status });
+        return { ok: true };
+      }
+      return { ok: false, reason: this.phaseMismatch(phase) ?? `phase ${phase} is not running` };
+    }
+    if (record?.status === 'verifying' || record?.status === 'awaiting-verification') {
+      return {
+        ok: false,
+        reason: `phase ${phase} is being verified — its session already ended, so there is nothing to stop`,
+      };
+    }
+
+    this.clearFreezeTimer(lane);
+    if (lane.frozen) {
+      // Credit the held time before the record settles, exactly as a thaw would.
+      const frozenMs = Math.max(0, this.now().getTime() - Date.parse(lane.frozen.at));
+      if (frozenMs && record) record.frozenMs = (record.frozenMs ?? 0) + frozenMs;
+      lane.frozen = null;
+    }
+    lane.stopped = { at: new Date().toISOString(), by };
+    const pid = lane.pid;
+    if (pid && pidAlive(pid)) {
+      // A stopped process cannot act on SIGTERM — wake it first, the same
+      // order as the freeze escalation.
+      try { process.kill(pid, 'SIGCONT'); } catch { /* already gone */ }
+      try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+      setTimeout(() => {
+        if (pidAlive(pid)) {
+          log.warn('runner.sigkill', { pid, note: 'child ignored SIGTERM after a phase stop' });
+          try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+        }
+      }, SIGTERM_GRACE_MS).unref();
+    }
+    this.syncMirror();
+    this.syncFreezeMirror();
+    this.syncFrozenStatus();
+    this.record('phase.stop-requested', { pid: pid ?? null, by }, phase);
+    this.persist();
+    this.emit('run', { state });
+    return { ok: true };
+  }
+
+  /**
+   * A per-lane stop, consumed: settle the record and hand the loop back.
+   *
+   * `interrupted` rather than `failed`, and the failure streak untouched — a
+   * stop is the operator's decision, not a diagnosis. The session id is kept
+   * so Retry can offer to resume rather than restart.
+   */
+  private settleStoppedLane(
+    lane: Lane, phase: number, before?: string,
+  ): { carryOn: boolean; completed: boolean } {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+    const by = lane.stopped?.by ?? 'console';
+    lane.stopped = null;
+    record.status = 'interrupted';
+    record.note = `stopped by ${by} — the rest of the run carries on`;
+    record.endedAt = new Date().toISOString();
+    record.resumeSessionId ??= record.sessionId;
+    this.record('phase.stopped', { by, ...(before ? { before } : {}) }, phase);
+    this.emit('phase', { phase, status: record.status });
+    return { carryOn: true, completed: false };
   }
 
   /**
@@ -2071,7 +2253,7 @@ export class Runner {
     // before its child has a pid — and so the `finally` below has exactly one
     // place to undo all of it.
     const lane: Lane = {
-      phase, pid: null, handle: null, grant, frozen: null, freezeTimer: null, checkpointed: false, checkpointNote: null,
+      phase, pid: null, handle: null, grant, frozen: null, freezeTimer: null, stopped: null, checkpointed: false, checkpointNote: null,
     };
     this.lanes.set(phase, lane);
 
@@ -2110,6 +2292,17 @@ export class Runner {
           : blockedOnArrival === 'halted'
             ? 'the run halted while this phase waited for its scope'
             : 'the run was stopped while this phase waited for its scope',
+      }, phase);
+      return true;
+    }
+
+    // Settled while it waited — a per-phase stop or a skip landed during the
+    // queue. The guard above only asks about run-level blocks, so a phase
+    // skipped or stopped in the queue still spawned a session for work nobody
+    // wanted. The record keeps the status the settling verb gave it.
+    if (SETTLED.includes(record.status)) {
+      this.record('phase.not-started', {
+        reason: `this phase was settled (${record.status}) while it waited for its scope`,
       }, phase);
       return true;
     }
@@ -2449,6 +2642,10 @@ export class Runner {
     let maxTurns: number | null = null;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      // A per-lane stop can land between attempts — during a retry backoff, a
+      // usage-window sleep, or before the first spawn. Consume it here or the
+      // next iteration starts a session for a phase the operator already ended.
+      if (lane.stopped) return this.settleStoppedLane(lane, phase, 'spawn');
       record.attempts++;
       const outcome = await spawn({
         prompt,
@@ -2559,6 +2756,12 @@ export class Runner {
         return { carryOn: false, completed: false };
       }
 
+      // A per-lane stop ended this child on purpose. Settle it and hand the
+      // loop back — the whole point of the verb is that the rest of the run
+      // does not stop with it. Before the run-level check below: that one
+      // pauses the whole run, which is exactly what this stop is not.
+      if (lane.stopped) return this.settleStoppedLane(lane, phase);
+
       // An operator stop is not a failure to diagnose — we caused it.
       if (this.stopRequested || this.abort?.signal.aborted) {
         record.status = 'interrupted';
@@ -2592,12 +2795,12 @@ export class Runner {
           // marks land whatever the policy does next: the scheduler holds back
           // this account's other admissions, and the registry remembers the
           // wall so meters, pre-flight and `pickAccount` all agree.
-          const window = /weekly limit/i.test(outcome.signal.text ?? '') ? 'seven_day' : 'five_hour';
+          const window = limitBucket(outcome.signal.text ?? '');
           this.deps.onAccountLimited?.(state.accountId, window, disposition.at, disposition.reason);
           this.deps.scheduler?.throttle(disposition.at.getTime(), state.accountId ?? 'default');
 
           const policy = state.onLimit ?? 'wait';
-          if (policy === 'switch' && this.trySwitchAccount(phase, record, disposition.reason)) {
+          if (policy === 'switch' && this.trySwitchAccount(phase, record, disposition.reason, currentModel)) {
             // Continue NOW, on the account that can pay — same session when
             // its transcript came along, a fresh boot prompt when it did not.
             resume = record.sessionId && this.transcriptFollows(record) ? record.sessionId : undefined;
@@ -2645,6 +2848,13 @@ export class Runner {
         }
 
         case 'switch-model': {
+          // A QUOTA hit (as opposed to a 529 capacity blip) names its bucket —
+          // file the per-model wall against the account, so the meters agree
+          // with what just happened and `pickAccount` steers a same-model run
+          // elsewhere. No scheduler throttle: every other model is still fine.
+          if (disposition.bucket && disposition.at) {
+            this.deps.onAccountLimited?.(state.accountId, disposition.bucket, disposition.at, disposition.reason);
+          }
           const next = nextModel(currentModel);
           if (!next) {
             this.halt(`every model is exhausted or at capacity (${disposition.reason})`, phase);
@@ -2673,26 +2883,35 @@ export class Runner {
           // held by a console that has another account. The discriminant makes
           // that decidable without string-matching the reason.
           if (disposition.cause === 'usage-window') {
-            const window = /weekly limit/i.test(outcome.signal.text ?? '') ? 'seven_day' : 'five_hour';
+            const window = limitBucket(outcome.signal.text ?? '');
             this.deps.onAccountLimited?.(state.accountId, window, disposition.at ?? null, disposition.reason);
             if (disposition.at) {
               this.deps.scheduler?.throttle(disposition.at.getTime(), state.accountId ?? 'default');
             }
             if ((state.onLimit ?? 'wait') === 'switch'
-              && this.trySwitchAccount(phase, record, disposition.reason)) {
+              && this.trySwitchAccount(phase, record, disposition.reason, currentModel)) {
               resume = record.sessionId && this.transcriptFollows(record) ? record.sessionId : undefined;
               this.persist();
               continue;
             }
           }
-          record.status = 'parked';
-          record.note = disposition.reason;
-          this.record('phase.needs-human', { reason: disposition.reason }, phase);
-          // Anything a person must fix is usually global — an expired login does
-          // not get better on the next phase. Stop rather than burn through the
-          // rest of the plan failing identically.
-          this.halt(disposition.reason, phase);
-          return { carryOn: false, completed: false };
+          {
+            // A credential complaint names WHOSE credential: the classifier is
+            // deliberately account-blind, and "sign that account in again" is
+            // only actionable when the reason says which one.
+            const reason = state.accountId
+              && /authentication failed|organization policy|billing/i.test(disposition.reason)
+              ? `${disposition.reason} (account: ${state.accountId})`
+              : disposition.reason;
+            record.status = 'parked';
+            record.note = reason;
+            this.record('phase.needs-human', { reason }, phase);
+            // Anything a person must fix is usually global — an expired login does
+            // not get better on the next phase. Stop rather than burn through the
+            // rest of the plan failing identically.
+            this.halt(reason, phase);
+            return { carryOn: false, completed: false };
+          }
 
         case 'phase-failed':
           record.note = disposition.reason;

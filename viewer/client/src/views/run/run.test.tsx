@@ -13,6 +13,7 @@
  *    table was rebuilt for is offering to re-run a phase the board calls done.
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { NO_ACTIVITY, activity, fold, toLine } from './console-model';
@@ -22,7 +23,14 @@ import { displayState } from './phase-table';
 import { seedSkills } from './controls';
 import { RunHeader, RunTiles, phaseProgress } from './header';
 import { phaseActions } from '@shared/phase-model.js';
+import { queryClientConfig } from '@/lib/queries';
 import type { RunState } from '@/lib/api';
+
+/** RunHeader reads the accounts cache for the paying-account chip. */
+function mount(node: React.ReactElement) {
+  const client = new QueryClient(queryClientConfig);
+  return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
+}
 
 describe('DEFAULTS', () => {
   it('opens a fresh run on opus / max / keep-going / trusted', () => {
@@ -251,7 +259,7 @@ describe('the run header emphasis', () => {
   } as unknown as RunState;
 
   it('gives the phase clock the weight, and the icons no voice', () => {
-    const { container } = render(<RunHeader run={RUN} live={false} eta={null} />);
+    const { container } = mount(<RunHeader run={RUN} live={false} eta={null} />);
 
     // The clock is still exactly the time — an icon that announced itself
     // would land inside this accessible text.
@@ -275,5 +283,31 @@ describe('the run header emphasis', () => {
     for (const svg of container.querySelectorAll('svg')) {
       expect(svg).toHaveAttribute('aria-hidden');
     }
+  });
+});
+
+describe('the completion promise', () => {
+  const LIVE = {
+    id: 'r1', slug: 'demo', status: 'running', model: 'opus',
+    autonomy: 'keep-going', spentUsd: 0,
+    maxConsecutiveFailures: 2, consecutiveFailures: 0,
+    createdAt: '2026-08-04T10:00:00Z', updatedAt: '2026-08-04T10:20:00Z',
+    activePhase: 2, child: null, phases: {},
+  } as unknown as RunState;
+
+  it('a keep-going unscoped run says it drives to plan completion, with the budget when spent', () => {
+    mount(<RunHeader
+      run={{ ...LIVE, consecutiveFailures: 1 } as RunState}
+      live
+      eta={null}
+    />);
+    expect(screen.getByText('runs to plan completion')).toBeTruthy();
+    expect(screen.getByText('failures 1/2')).toBeTruthy();
+  });
+
+  it('a scoped run makes no completion promise, and a clean streak shows no failure figure', () => {
+    mount(<RunHeader run={{ ...LIVE, onlyPhases: [4] } as RunState} live eta={null} />);
+    expect(screen.queryByText('runs to plan completion')).toBeNull();
+    expect(screen.queryByText(/^failures /)).toBeNull();
   });
 });

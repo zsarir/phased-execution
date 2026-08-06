@@ -62,22 +62,63 @@ function worstWeekly(account: AccountView | undefined): { key: string; bucket: U
   return worst;
 }
 
-/** The account the compact meters describe: the machine login, by design. */
-function headline(accounts: AccountView[] | undefined): AccountView | undefined {
-  return accounts?.find((a) => a.id === 'default') ?? accounts?.[0];
+/**
+ * The account whose five-hour window is closest to its wall. The compact bar
+ * is an early-warning instrument: it showed only the machine login, so a
+ * second account could walk into its wall with every meter in the chrome
+ * green. Worst-of-all is the honest headline; the per-account truth is one
+ * click away in the dialog.
+ */
+function worstFive(
+  accounts: AccountView[] | undefined,
+): { account: AccountView; bucket: UsageBucket } | null {
+  let worst: { account: AccountView; bucket: UsageBucket } | null = null;
+  for (const account of accounts ?? []) {
+    const bucket = account.usage?.buckets.five_hour;
+    if (!bucket) continue;
+    if (!worst || bucket.utilization > worst.bucket.utilization) worst = { account, bucket };
+  }
+  return worst;
+}
+
+/** The worst weekly bucket across EVERY account — all-models and per-model compete. */
+function worstWeeklyAcross(
+  accounts: AccountView[] | undefined,
+): { account: AccountView; key: string; bucket: UsageBucket } | null {
+  let worst: { account: AccountView; key: string; bucket: UsageBucket } | null = null;
+  for (const account of accounts ?? []) {
+    const weekly = worstWeekly(account);
+    if (weekly && (!worst || weekly.bucket.utilization > worst.bucket.utilization)) {
+      worst = { account, ...weekly };
+    }
+  }
+  return worst;
 }
 
 function accountName(account: AccountView): string {
-  if (account.builtIn) return account.email ?? 'This machine’s login';
+  if (account.builtIn) return account.name ?? account.email ?? 'This machine’s login';
   return account.name ?? account.email ?? account.id;
 }
 
 export function LimitsWidget({ variant }: { variant: 'rail' | 'phone' | 'sheet' }) {
   const [open, setOpen] = useState(false);
   const { data } = useAccounts();
-  const account = headline(data?.accounts);
-  const five = account?.usage?.buckets.five_hour;
-  const weekly = worstWeekly(account);
+  const accounts = data?.accounts;
+  const several = (accounts?.length ?? 0) > 1;
+  const five = worstFive(accounts);
+  const weekly = worstWeeklyAcross(accounts);
+  // Stale is about the number on screen: the account SUPPLYING a meter could
+  // not be read, so the bar may be older than it looks.
+  const stale = Boolean(
+    five?.account.usage?.error || five?.account.usage?.unsupported
+    || weekly?.account.usage?.error || weekly?.account.usage?.unsupported
+    || (!five && accounts?.some((a) => a.usage?.error || a.usage?.unsupported)),
+  );
+
+  const fiveTitle = five && several ? `5-hour — ${accountName(five.account)}` : '5-hour window';
+  const weeklyTitle = weekly && several
+    ? `${bucketLabel(weekly.key)} — ${accountName(weekly.account)}`
+    : weekly ? bucketLabel(weekly.key) : undefined;
 
   const trigger = variant === 'phone'
     ? (
@@ -86,9 +127,10 @@ export function LimitsWidget({ variant }: { variant: 'rail' | 'phone' | 'sheet' 
         onClick={() => setOpen(true)}
         className="flex min-h-(--tap-min) items-center gap-1 px-2 text-xs text-ink-muted"
         aria-label="Claude usage limits"
+        title={fiveTitle}
       >
         <Gauge size={16} aria-hidden />
-        {five ? <span>{Math.round(five.utilization)}%</span> : null}
+        {five ? <span>{Math.round(five.bucket.utilization)}%</span> : null}
       </button>
     )
     : variant === 'sheet'
@@ -100,7 +142,7 @@ export function LimitsWidget({ variant }: { variant: 'rail' | 'phone' | 'sheet' 
         >
           <span className="flex items-center gap-2"><Gauge size={16} aria-hidden /> Usage limits</span>
           <span className="text-xs text-ink-muted">
-            {five ? `5h ${Math.round(five.utilization)}%` : 'no data'}
+            {five ? `5h ${Math.round(five.bucket.utilization)}%` : 'no data'}
           </span>
         </button>
       )
@@ -110,24 +152,25 @@ export function LimitsWidget({ variant }: { variant: 'rail' | 'phone' | 'sheet' 
           onClick={() => setOpen(true)}
           className="flex min-w-0 flex-col gap-1 rounded-md px-2 py-1.5 text-left hover:bg-surface-raised"
           aria-label="Claude usage limits"
-          title="Claude usage limits"
+          title={several
+            ? 'Claude usage limits — the worst window across every account'
+            : 'Claude usage limits'}
         >
           <span className="flex items-center gap-1 text-2xs uppercase tracking-wide text-ink-faint">
             <Gauge size={12} aria-hidden /> Usage
-            {account?.usage?.error || account?.usage?.unsupported
-              ? <span className="text-ink-faint">·&nbsp;stale</span> : null}
+            {stale ? <span className="text-ink-faint">·&nbsp;stale</span> : null}
           </span>
           {five
             ? (
-              <span className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5" title={`${fiveTitle} at ${Math.round(five.bucket.utilization)}%`}>
                 <span className="w-4 text-2xs text-ink-faint">5h</span>
-                <Meter pct={five.utilization} />
+                <Meter pct={five.bucket.utilization} />
               </span>
             )
             : <span className="text-2xs text-ink-faint">no data yet</span>}
           {weekly
             ? (
-              <span className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5" title={`${weeklyTitle} at ${Math.round(weekly.bucket.utilization)}%`}>
                 <span className="w-4 text-2xs text-ink-faint">wk</span>
                 <Meter pct={weekly.bucket.utilization} />
               </span>
@@ -174,6 +217,9 @@ export function LimitsOverview({ accounts }: { accounts: AccountView[] | undefin
               {account.plan ? <Chip>{account.plan}</Chip> : null}
               {account.kind === 'token' ? <Chip>token</Chip> : null}
               {account.kind === 'profile' && account.signedIn === false ? <Chip>not signed in</Chip> : null}
+              {account.authState === 'expired' ? <Chip tone="bad">login expired</Chip> : null}
+              {account.authState === 'signed-out' && account.signedIn !== false
+                ? <Chip tone="bad">signed out</Chip> : null}
               {fetched !== undefined
                 ? <span className="text-2xs text-ink-faint">as of {relativeTime(fetched)}</span>
                 : null}
@@ -263,9 +309,11 @@ function UsageAlerts() {
       </div>
       <p className="text-2xs text-ink-faint">
         {on
-          ? 'The console announces a window filling up, a run that parked waiting for one to '
+          ? 'The console announces a window that was hit, a run that parked waiting for one to '
             + 'reopen, and an account that could not sign in. Turning this off silences all of '
-            + 'them everywhere — inbox, push and any notify command. The meters above keep updating.'
+            + 'them everywhere — inbox, push and any notify command. The meters above keep '
+            + 'updating, and the early "usage climbing" warning has its own switch under '
+            + 'Notifications (off unless you turn it on).'
           : 'Silenced everywhere — inbox, push and any notify command. Runs still wait, switch '
             + 'account or pause as you asked; they just do it without telling you. The meters '
             + 'above keep updating.'}

@@ -12,7 +12,7 @@ A category that is off leaves no trace anywhere. Worth stating, because the obvi
 silencing only the buzz — leaves the badge climbing and the inbox filling, which is how people end up
 ignoring the inbox entirely.
 
-## The eleven categories
+## The twelve categories
 
 | Category | Tells you | Default |
 |---|---|---|
@@ -24,12 +24,15 @@ ignoring the inbox entirely.
 | **Plan finished** | A run reached the end of its plan. | On |
 | **A session ended** | An agent session or terminal finished while you were not watching, or exited with an error. | On |
 | **Console problems** | The console degraded, its file watch went deaf, or it restarted after a crash. | On |
-| **Usage limits** | A Claude account is approaching or has hit a usage window, with when it resets and what the run did about it. | On |
+| **Usage limits** | A Claude account hit a usage window, with when it resets and what the run did about it — and an account that needs signing in again. | On |
+| **Usage climbing** | Early warning while a window fills: 80% and 95% crossings. The meters show the same numbers all the time. | **Off** |
 | **Work became ready** | A phase became startable — including because of work you finished yourself, elsewhere. | **Off** |
 | **Plans changed on disk** | Any plan or handoff was written. An agent editing a handoff mid-phase fires this. | **Off** |
 
-The last two are off by default because they are firehoses rather than signals. A channel that always
-buzzes is a channel you turn off, and the notification it was hiding goes with it.
+The last three are off by default because they are early warnings or firehoses rather than signals.
+A channel that always buzzes is a channel you turn off, and the notification it was hiding goes with
+it. The wall itself — and everything a run does about one — still announces under **Usage limits**,
+so muting the climb never mutes the crash.
 
 **Urgent** is reserved for *nothing proceeds without you*. Those three may interrupt a focus mode and
 buzz a wrist.
@@ -46,10 +49,11 @@ switch, and either one silences every leg:
   category lives too.
 
 The meters keep updating either way; only the announcements stop. Be aware of what goes quiet with
-them: as well as *this window is filling up*, the category carries **a run that parked waiting for a
-window to reopen**, **an account that could not sign in**, and **a run refused before it started**
-because the account was already at its limit. If a run seems to have gone silent after you mute
-these, that is where to look.
+them: the **Usage limits** category carries **a run that parked waiting for a window to reopen**,
+**an account that could not sign in — including a login that expired and needs signing in again**,
+and **a run refused before it started** because the account was already at its limit. If a run seems
+to have gone silent after you mute these, that is where to look. The *window is filling up* early
+warning is its own category — **Usage climbing**, off unless you turn it on.
 
 ## Devices only ever narrow
 

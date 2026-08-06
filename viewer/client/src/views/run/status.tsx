@@ -54,7 +54,7 @@ import type { ReactNode } from 'react';
 import { Bot } from 'lucide-react';
 import { Banner, Button, Card, CardBody, CardHeader, CardTitle, StatusStack, toast, type StatusNote }
   from '@/components/ui';
-import { api, type AuthStatus, type ConsoleState, type RunState } from '@/lib/api';
+import { api, type AccountView, type AuthStatus, type ConsoleState, type RunState } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import { RECOVERY_BLURBS, RECOVERY_LABELS, type RecoveryClass } from '@/lib/recovery';
 import { LaunchDialog } from '@/components/launch-dialog';
@@ -439,26 +439,48 @@ export function AuthCard({
   auth,
   allowRun,
   onRecheck,
+  account,
 }: {
   auth: AuthStatus | undefined;
   allowRun: boolean;
   onRecheck: () => void;
+  /**
+   * The RUN's account, when it is not the machine login. The sign-in flow and
+   * the command are that account's own — composed by the server, which knows
+   * the profile's config dir; this component never builds a path.
+   */
+  account?: AccountView | undefined;
 }) {
   const [opened, setOpened] = useState(false);
   const [busy, setBusy] = useState(false);
-  const command = 'claude auth login';
+  const [command, setCommand] = useState<string | null>(null);
+  const label = account
+    ? account.name ?? account.email ?? account.id
+    : null;
 
   const signIn = async () => {
     setBusy(true);
     try {
-      const result = await api.authLogin();
-      setOpened(true);
-      toast(
-        result.opened
-          ? 'A terminal is open on the sign-in — finish there, then choose Check again.'
-          : result.detail ?? 'Run the command below in a terminal.',
-        result.opened ? 'ok' : 'warn',
-      );
+      if (account && account.kind === 'profile') {
+        const result = await api.accountLogin({ accountId: account.id });
+        setOpened(true);
+        setCommand(result.command);
+        toast(
+          result.mode === 'command'
+            ? result.detail ?? 'Run the command below in a terminal.'
+            : 'A sign-in is open — finish there, then choose Check again.',
+          result.mode === 'command' ? 'warn' : 'ok',
+        );
+      } else {
+        const result = await api.authLogin();
+        setOpened(true);
+        toast(
+          result.opened
+            ? 'A terminal is open on the sign-in — finish there, then choose Check again.'
+            : result.detail ?? 'Run the command below in a terminal.',
+          result.opened ? 'ok' : 'warn',
+        );
+      }
     } catch (error) {
       toast((error as Error).message, 'error');
     } finally {
@@ -466,25 +488,35 @@ export function AuthCard({
     }
   };
 
+  const tokenAccount = account?.kind === 'token';
   return (
     <Card>
       <CardHeader className="flex flex-wrap items-baseline justify-between gap-2">
-        <CardTitle>Claude Code is signed out</CardTitle>
+        <CardTitle>{label ? `${label} is signed out` : 'Claude Code is signed out'}</CardTitle>
         {auth?.checkedAt && (
           <span className="text-2xs text-ink-faint">checked {relativeTime(Date.parse(auth.checkedAt))}</span>
         )}
       </CardHeader>
       <CardBody>
         <p className="max-w-prose text-sm text-ink-muted">
+          {label
+            ? `This run pays as ${label}, and that login is expired or signed out. `
+            : ''}
           Sessions still start, spend a turn and report success — they simply cannot do anything. That
           is why a run can look like it worked and changed nothing.
           {auth?.detail && <span className="text-2xs"> ({auth.detail})</span>}
         </p>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button disabled={!allowRun || busy} onClick={() => void signIn()}>
-            {busy ? 'Opening a terminal…' : 'Open a terminal and sign in'}
-          </Button>
+          {tokenAccount ? (
+            <Button asChild>
+              <a href="#/settings">Paste a fresh setup-token in Settings</a>
+            </Button>
+          ) : (
+            <Button disabled={!allowRun || busy} onClick={() => void signIn()}>
+              {busy ? 'Opening a sign-in…' : label ? `Sign ${label} in again` : 'Open a terminal and sign in'}
+            </Button>
+          )}
           <Button variant="default" onClick={onRecheck}>
             Check again
           </Button>
@@ -492,17 +524,22 @@ export function AuthCard({
 
         {opened && (
           <p className="mt-2 text-2xs text-ink-faint">
-            Finish signing in over there, then choose <strong>Check again</strong> and start the run.
+            Finish signing in over there, then choose <strong>Check again</strong> and continue the run.
           </p>
         )}
-        <p className="mt-3 text-2xs text-ink-faint">Or run it yourself:</p>
-        <pre className="mt-1 overflow-x-auto rounded border border-rule bg-ground px-2 py-1.5 font-mono text-2xs">
-          {command}
-        </pre>
-        {!allowRun && (
+        {!tokenAccount && (!account || command) && (
+          <>
+            <p className="mt-3 text-2xs text-ink-faint">Or run it yourself:</p>
+            <pre className="mt-1 overflow-x-auto rounded border border-rule bg-ground px-2 py-1.5 font-mono text-2xs">
+              {command ?? 'claude auth login'}
+            </pre>
+          </>
+        )}
+        {!allowRun && !tokenAccount && (
           <p className="mt-2 text-2xs text-ink-faint">
-            Opening a terminal needs <code className="font-mono">--allow-run</code>; the command above
-            works regardless.
+            Opening a sign-in needs <code className="font-mono">--allow-run</code>
+            {account ? <> (and account changes <code className="font-mono">--allow-accounts</code>)</> : null};
+            the command {account && !command ? 'is available from Settings' : 'above works regardless'}.
           </p>
         )}
       </CardBody>

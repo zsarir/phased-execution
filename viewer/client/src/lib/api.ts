@@ -309,6 +309,8 @@ export interface AccountView {
   plan?: string;
   /** Profiles only: whether `claude auth login` has completed in it. */
   signedIn?: boolean;
+  /** Where the login stands. `unknown` is a setup-token's honest answer. */
+  authState?: 'ok' | 'expiring' | 'expired' | 'signed-out' | 'unknown';
   usage?: AccountUsage;
   /** Windows learned exhausted the hard way — bucket → ISO reset time. */
   limitedUntil?: Record<string, string>;
@@ -843,6 +845,12 @@ export interface ChildRef {
   phase: number;
   sessionId: string;
   startedAt: string;
+  /**
+   * Set while THIS lane sits under SIGSTOP. The run-level `freeze` slot can
+   * only name one lane; with several frozen at once this is the per-lane truth
+   * the controls read.
+   */
+  frozen?: { at: string; by: string; escalateAt: string };
 }
 
 export interface RunState {
@@ -1564,6 +1572,11 @@ export const api = {
   accounts: () => request<AccountsState>('/api/accounts'),
   accountAdd: (name: string, token: string) => post<{ account: AccountView }>('/api/accounts', { name, token }),
   accountDelete: (id: string) => request<{ removed: boolean }>(`/api/accounts/${q(id)}`, { method: 'DELETE' }),
+  /** Display-name only — the id (journal key, path segment) never changes. */
+  accountRename: (id: string, name: string) => request<{ account: AccountView }>(
+    `/api/accounts/${q(id)}`,
+    { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) },
+  ),
   accountLogin: (body: { accountId?: string; name?: string } = {}) =>
     post<AccountLoginStart>('/api/accounts/login', body),
   /** Acts NOW: a live session is checkpointed and re-attempted under the account. */

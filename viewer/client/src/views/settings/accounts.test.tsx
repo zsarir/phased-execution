@@ -6,7 +6,7 @@
  * names the flag, because a card that hides when disabled looks like a bug.
  */
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -70,5 +70,56 @@ describe('the accounts card', () => {
     mount();
     expect(await screen.findByRole('button', { name: 'Sign in…' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Paste a token…' })).toBeTruthy();
+  });
+});
+
+describe('rename, remove, and a broken login', () => {
+  const TWO: AccountsState = {
+    allowAccounts: true,
+    accounts: [
+      { id: 'default', kind: 'default', builtIn: true, email: 'me@example.com' },
+      {
+        id: 'info', kind: 'profile', builtIn: false, name: 'info', email: 'info@example.com',
+        signedIn: true, authState: 'expired',
+      },
+    ],
+  };
+
+  it('renames through the PATCH verb — the display name, never the id', async () => {
+    accountsMock.mockResolvedValue(TWO);
+    const rename = vi.fn(async () => ({ account: TWO.accounts[1] }));
+    const { api } = await import('@/lib/api');
+    (api as unknown as Record<string, unknown>).accountRename = rename;
+    mount();
+
+    const renames = await screen.findAllByRole('button', { name: 'Rename' });
+    fireEvent.click(renames[1]);
+    const input = await screen.findByPlaceholderText('info');
+    fireEvent.change(input, { target: { value: 'work account' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(rename).toHaveBeenCalledWith('info', 'work account'));
+  });
+
+  it('confirms a removal in a dialog before any DELETE leaves the page', async () => {
+    accountsMock.mockResolvedValue(TWO);
+    const del = vi.fn(async () => ({ removed: true }));
+    const { api } = await import('@/lib/api');
+    (api as unknown as Record<string, unknown>).accountDelete = del;
+    mount();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    expect(del).not.toHaveBeenCalled();
+    // The dialog states the cost before the choice: what goes, what stays.
+    expect(await screen.findByText(/What stays: the Anthropic account itself/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove account' }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith('info'));
+  });
+
+  it('badges an expired login and offers the sign-in where the badge is', async () => {
+    accountsMock.mockResolvedValue(TWO);
+    mount();
+    // Twice, deliberately: once beside the meters, once on the account row.
+    expect((await screen.findAllByText('login expired')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole('button', { name: 'Sign in again' })).toBeTruthy();
   });
 });

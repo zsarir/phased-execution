@@ -23,8 +23,14 @@ export type Disposition =
   | { kind: 'retry'; afterMs: number; reason: string }
   /** A plan window is exhausted. Sleep until it reopens, then retry. */
   | { kind: 'wait-until'; at: Date; reason: string }
-  /** Only this model is exhausted or at capacity — the run continues on another. */
-  | { kind: 'switch-model'; reason: string }
+  /**
+   * Only this model is exhausted or at capacity — the run continues on
+   * another. A QUOTA hit also names its window (`bucket`, in the registry's
+   * key vocabulary, e.g. `seven_day_opus`) and the reset time when one parsed,
+   * so the wall can be filed against the account; a capacity blip (529) names
+   * neither — there is nothing to remember.
+   */
+  | { kind: 'switch-model'; reason: string; bucket?: string; at?: Date }
   /** The work is unfinished but intact: resume that session with a bigger cap. */
   | { kind: 'resume'; raise: 'budget' | 'turns'; reason: string }
   /**
@@ -134,6 +140,21 @@ export function parseResetTime(text: string, now = new Date()): Date | null {
   }
 
   return null;
+}
+
+/**
+ * Which usage bucket a limit message is about, in the registry's own key
+ * vocabulary: `seven_day_<model>` for a per-model wall (matching the usage
+ * endpoint's bucket names, so a learned wall and a measured one file under the
+ * same key), `five_hour` / `seven_day` for the shared windows. The epoch form
+ * names no window at all and files as `five_hour` — the conservative reading,
+ * and the one the runner has always taken.
+ */
+export function limitBucket(text: string): string {
+  const model = /you'?ve hit your (opus|sonnet|haiku|fable)/i.exec(text);
+  if (model) return `seven_day_${model[1].toLowerCase()}`;
+  if (/weekly limit/i.test(text)) return 'seven_day';
+  return 'five_hour';
 }
 
 /**
@@ -278,7 +299,12 @@ export function classify(signal: StopSignal, now = new Date()): Disposition {
   const brokenCredentials = RE.orgPolicy.test(text) || cats.includes('oauth_org_not_allowed')
     ? 'organization policy blocks this credential'
     : RE.auth.test(text) || cats.includes('authentication_failed')
-      ? 'authentication failed — run /login in this workspace, then start the run again'
+      // Deliberately account-agnostic: this classifier cannot see which login
+      // the session ran as, and "run /login in this workspace" was flatly
+      // wrong advice for a profile or token account. The runner appends the
+      // account id; the service composes the exact command.
+      ? 'authentication failed — the session\'s Claude login is expired or signed out; '
+        + 'sign that account in again, then continue the run'
       : RE.billing.test(text) || cats.includes('billing_error')
         ? 'billing or credit balance needs attention'
         : null;
@@ -305,7 +331,13 @@ export function classify(signal: StopSignal, now = new Date()): Disposition {
   // "You've hit your Opus limit" also contains the word "limit", and reading it
   // as a plan limit would idle the run for hours when another model is free.
   if (RE.modelLimit.test(text)) {
-    return { kind: 'switch-model', reason: `${signal.model ?? 'this model'} is rate-limited; the window is per-model` };
+    const at = parseResetTime(text, now);
+    return {
+      kind: 'switch-model',
+      reason: `${signal.model ?? 'this model'} is rate-limited; the window is per-model`,
+      bucket: limitBucket(text),
+      ...(at ? { at } : {}),
+    };
   }
 
   // Plan window exhausted — shared across models, so only time fixes it.

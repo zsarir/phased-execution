@@ -382,3 +382,47 @@ describe('the runs page', () => {
     expect(screen.queryByText('No runs yet')).toBeNull();
   });
 });
+
+describe('lifecycle from the fleet', () => {
+  it('a live row offers Freeze, and Stop only behind a dialog that names the cost', async () => {
+    const { Fleet } = await import('./fleet');
+    const onLifecycle = vi.fn();
+    const rows = toRows([run({ id: 'live1', status: 'running', activePhase: 2 })]);
+    const client = new QueryClient(queryClientConfig);
+    render(
+      <QueryClientProvider client={client}>
+        <Fleet
+          rows={rows}
+          grouped={false}
+          onWatch={() => {}}
+          onLifecycle={onLifecycle}
+          allowRun
+        />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Show the phases of run live1/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Freeze' }));
+    expect(onLifecycle).toHaveBeenCalledWith(expect.objectContaining({ id: 'live1' }), 'freeze');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(await screen.findByText(/interrupted/)).toBeTruthy();
+    expect(onLifecycle).not.toHaveBeenCalledWith(expect.anything(), 'stop');
+    fireEvent.click(screen.getByRole('button', { name: 'Stop now' }));
+    await waitFor(() => expect(onLifecycle).toHaveBeenCalledWith(expect.objectContaining({ id: 'live1' }), 'stop'));
+  });
+
+  it('a finished row offers no lifecycle at all — there is nothing to act on', async () => {
+    const { Fleet } = await import('./fleet');
+    const rows = toRows([run({ id: 'done1', status: 'finished' })]);
+    const client = new QueryClient(queryClientConfig);
+    render(
+      <QueryClientProvider client={client}>
+        <Fleet rows={rows} grouped={false} onWatch={() => {}} onLifecycle={() => {}} allowRun />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Show the phases of run done1/ }));
+    expect(screen.queryByRole('button', { name: 'Freeze' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+  });
+});

@@ -18,6 +18,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync } from 'node:fs';
+import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -570,5 +571,220 @@ test('a queued second lane does not repaint a run that is still driving its firs
   assert.equal(sampled.run, 'running', "queued is the lane's word, not a driving run's");
   assert.equal(sampled.p2, 'queued', 'the waiting lane itself says so');
   assert.equal(instance.current()!.status, 'finished');
+  r.cleanup();
+});
+
+/* ---------------- per-lane freeze and stop, across lanes ---------------- */
+
+/** What `ps` says about a process: `T` is stopped, `S`/`R` are running. */
+function procState(pid: number): string {
+  try {
+    return execFileSync('ps', ['-o', 'state=', '-p', String(pid)], { encoding: 'utf8' }).trim().slice(0, 1);
+  } catch { return ''; }
+}
+
+/**
+ * Every lane gets a REAL sleeper child, so freeze/stop assertions are the
+ * kernel's answer rather than ours. A lane's spawn resolves when the test
+ * releases everyone — or when its child dies, which is exactly what a
+ * SIGTERM'd session does.
+ */
+function sleeperLanes(r: Repo) {
+  const pids = new Map<number, number>();
+  const watchers: (() => void)[] = [];
+  let released: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { released = resolve; });
+
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    const child = spawnProcess(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+    pids.set(phase, child.pid!);
+    request.onPid?.(child.pid!);
+    request.onEvent?.({ kind: 'init', sessionId: `sess-${phase}`, model: 'stub', tools: 0 });
+    for (const notify of watchers) notify();
+    const exited = new Promise<'died'>((resolve) => { child.on('exit', () => resolve('died')); });
+    const wayOut = await Promise.race([gate.then(() => 'released' as const), exited]);
+    try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    if (wayOut === 'released') appendFileSync(join(r.state, 'done'), `${phase}\n`);
+    return ok({ sessionId: `sess-${phase}` });
+  };
+
+  const lanesUp = (want: number) => (pids.size >= want
+    ? Promise.resolve()
+    : new Promise<void>((resolve) => {
+      watchers.push(() => { if (pids.size >= want) resolve(); });
+    }));
+
+  return { spawn, pids, lanesUp, release: () => released() };
+}
+
+test('freeze with no phase freezes EVERY lane, and thaw with none frees them all', async () => {
+  const r = repo();
+  const held = sleeperLanes(r);
+  const { instance, scheduler } = runnerOn(r, held.spawn, (phase) => [`repo-${phase}`]);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.lanesUp(3);
+
+  assert.equal(instance.freeze('test'), true);
+  const frozen = instance.current()!;
+  assert.equal(frozen.status, 'frozen', 'nothing is left running, so the run itself is frozen');
+  for (const [phase, pid] of held.pids) {
+    assert.equal(procState(pid), 'T', `phase ${phase}'s session is stopped`);
+    assert.ok(frozen.children?.[String(phase)]?.frozen, `the checkpoint records phase ${phase}'s freeze`);
+  }
+  assert.ok(frozen.freeze, 'the single-slot mirror is set for pre-lanes readers');
+
+  assert.equal(instance.thaw(), true);
+  const thawed = instance.current()!;
+  assert.equal(thawed.status, 'running');
+  assert.equal(thawed.freeze, null);
+  for (const [phase, pid] of held.pids) {
+    assert.notEqual(procState(pid), 'T', `phase ${phase} is scheduled again`);
+    assert.equal(thawed.children?.[String(phase)]?.frozen, undefined);
+  }
+
+  held.release();
+  await instance.wait();
+  scheduler.close();
+  r.cleanup();
+});
+
+test('freezing one lane of three leaves the run running, with the mirror on the frozen one', async () => {
+  const r = repo();
+  const held = sleeperLanes(r);
+  const { instance, scheduler } = runnerOn(r, held.spawn, (phase) => [`repo-${phase}`]);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.lanesUp(3);
+
+  assert.equal(instance.freeze('test', 2), true);
+  const state = instance.current()!;
+  assert.equal(state.status, 'running', 'two sessions are still editing — the run has not stopped');
+  assert.ok(state.children?.['2']?.frozen);
+  assert.equal(state.freeze?.phase, 2, 'the single-slot mirror names the frozen lane');
+  assert.equal(procState(held.pids.get(2)!), 'T');
+  assert.notEqual(procState(held.pids.get(1)!), 'T');
+  assert.notEqual(procState(held.pids.get(3)!), 'T');
+
+  assert.equal(instance.thaw(2), true);
+  assert.equal(instance.current()!.status, 'running');
+  assert.equal(instance.current()!.freeze, null);
+
+  held.release();
+  await instance.wait();
+  scheduler.close();
+  r.cleanup();
+});
+
+test('stopping one lane records interrupted, spares the streak, and the rest carries on', async () => {
+  const r = repo();
+  const held = sleeperLanes(r);
+  const { instance, scheduler } = runnerOn(r, held.spawn, (phase) => [`repo-${phase}`]);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.lanesUp(3);
+
+  assert.deepEqual(instance.stopPhase(2, 'tester'), { ok: true });
+  // The child got SIGCONT+SIGTERM; its death resolves the spawn, and the
+  // consumption settles the record without touching the failure budget.
+  await sleep(400);
+  const mid = instance.current()!;
+  assert.equal(mid.phases['2'].status, 'interrupted');
+  assert.match(mid.phases['2'].note ?? '', /stopped by tester/);
+  assert.match(mid.phases['2'].note ?? '', /carries on/);
+  assert.equal(mid.consecutiveFailures, 0, 'an operator stop is not a failure');
+  assert.equal(mid.status, 'running', 'the run did not stop with the lane');
+
+  held.release();
+  await instance.wait();
+  const after = instance.current()!;
+  assert.deepEqual(r.doneList().sort(), [1, 3], 'the other lanes finished their phases');
+  assert.equal(after.phases['2'].status, 'interrupted');
+  // Phase 2 never wrote a handoff, so the board still offers it; a settled
+  // record is not a candidate, and the run parks naming what is left.
+  assert.equal(after.status, 'parked');
+  scheduler.close();
+  r.cleanup();
+});
+
+test('a queued phase can be taken out of the line, and never spawns on arrival', async () => {
+  const r = repo();
+  const held = sleeperLanes(r);
+  // One scope between three phases: one runs, the others queue behind it.
+  const { instance, scheduler } = runnerOn(r, held.spawn, () => ['one-repo']);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.lanesUp(1);
+  await sleep(200);
+
+  const queued = Object.values(instance.current()!.phases)
+    .filter((p) => p.status === 'queued')
+    .map((p) => p.phase)
+    .sort();
+  assert.ok(queued.length >= 1, `something queues behind the scope (saw ${JSON.stringify(queued)})`);
+  const target = queued[0];
+
+  assert.deepEqual(instance.stopPhase(target, 'tester'), { ok: true });
+  assert.equal(instance.current()!.phases[String(target)].status, 'interrupted');
+
+  held.release();
+  await instance.wait();
+  assert.ok(!held.pids.has(target), 'the dequeued phase never spawned a session');
+  assert.equal(instance.current()!.phases[String(target)].status, 'interrupted');
+  scheduler.close();
+  r.cleanup();
+});
+
+test('a phase skipped while queued does not spawn when its admission arrives', async () => {
+  const r = repo();
+  const held = sleeperLanes(r);
+  const { instance, scheduler } = runnerOn(r, held.spawn, () => ['one-repo']);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.lanesUp(1);
+  await sleep(200);
+
+  const queued = Object.values(instance.current()!.phases)
+    .filter((p) => p.status === 'queued')
+    .map((p) => p.phase)
+    .sort();
+  assert.ok(queued.length >= 1);
+  const target = queued[0];
+  instance.skip(target);
+  assert.equal(instance.current()!.phases[String(target)].status, 'skipped');
+
+  held.release();
+  await instance.wait();
+  assert.ok(!held.pids.has(target),
+    'a settled record is abandoned on arrival — the latent spawn was the bug');
+  assert.equal(instance.current()!.phases[String(target)].status, 'skipped');
+  scheduler.close();
+  r.cleanup();
+});
+
+test('two frozen lanes escalate independently — one checkpoints, the others stay frozen', async () => {
+  const r = repo();
+  const held = sleeperLanes(r);
+  const { instance, scheduler } = runnerOn(r, held.spawn, (phase) => [`repo-${phase}`]);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.lanesUp(3);
+
+  assert.equal(instance.freeze('test'), true);
+  const internals = instance as unknown as {
+    lanes: Map<number, unknown>;
+    escalateFreeze(lane?: unknown): void;
+  };
+  // The timer names its lane in production; driven directly here, because a
+  // test that waits fifteen real minutes is a test nobody runs.
+  internals.escalateFreeze(internals.lanes.get(1));
+
+  const state = instance.current()!;
+  assert.equal(state.phases['1'].status, 'pending');
+  assert.equal(state.phases['1'].resumeSessionId, 'sess-1', 'Continue resumes the checkpointed session');
+  assert.notEqual(state.status, 'paused', 'other sessions are live — the run must not read as stopped');
+  assert.ok(state.children?.['2']?.frozen, 'the other freezes survive the escalation');
+  assert.equal(state.freeze?.phase, 2, 'the mirror moved to the next frozen lane');
+  assert.equal(procState(held.pids.get(2)!), 'T');
+
+  assert.equal(instance.thaw(), true, 'thaw-all frees what is still frozen');
+  held.release();
+  await instance.wait();
+  scheduler.close();
   r.cleanup();
 });

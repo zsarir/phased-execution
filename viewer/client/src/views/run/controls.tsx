@@ -31,7 +31,7 @@ import {
   AlertDialog, AlertDialogContent, AlertDialogTrigger,
   Button, Card, CardBody, CardHeader, CardTitle, toast,
 } from '@/components/ui';
-import { api, type PhaseOptions, type PhaseView, type RunSettings, type RunState, type SkillInfo }
+import { api, type AccountView, type PhaseOptions, type PhaseView, type RunSettings, type RunState, type SkillInfo }
   from '@/lib/api';
 import { keys, useAccounts } from '@/lib/queries';
 import { cn } from '@/lib/cn';
@@ -185,7 +185,10 @@ export function Controls({
   // freeze aimed at "the current phase" is aimed at a run that already stopped
   // admitting — the server refuses both, so the buttons say so up front.
   const halting = run?.status === 'halting';
-  const frozen = run?.status === 'frozen';
+  // `frozen` status now means EVERY session is frozen; a single frozen lane of
+  // several leaves the run `running` with the freeze recorded on the run —
+  // either way this card must offer the Continue.
+  const frozen = run?.status === 'frozen' || Boolean(run?.freeze);
   /** A freeze that ran past its threshold left a session to resume, not a fresh start. */
   const checkpointed = Object.values(run?.phases ?? {}).some((p) => p.resumeSessionId);
 
@@ -422,25 +425,30 @@ export function Controls({
                 <Button variant="action" disabled={disabled}
                   onClick={() => void onAct('thaw', async () => {
                     const { run: after } = await api.runThaw(slug);
+                    const still = after?.status === 'frozen' || Boolean(after?.freeze);
                     toast(
-                      after?.status === 'frozen'
+                      still
                         ? 'The session could not be continued — reload and look at the status'
                         : 'Continued — the session picks up mid-token',
-                      after?.status === 'frozen' ? 'warn' : 'ok',
+                      still ? 'warn' : 'ok',
                     );
                   })}>
                   {busy === 'thaw' ? 'Continuing…' : 'Continue the frozen session'}
                 </Button>
               ) : (
                 <Button disabled={disabled || stopping || halting || run?.activePhase == null}
-                  title="Stops the session where it stands, losing nothing. The opposite of waiting for the phase to finish."
+                  title="Stops EVERY running session where it stands, losing nothing. One session's tab has the freeze scoped to it alone."
                   onClick={() => void onAct('freeze', async () => {
                     const { run: after } = await api.runFreeze(slug);
+                    const held = after?.status === 'frozen' || Boolean(after?.freeze);
+                    const count = Object.values(after?.children ?? {}).filter((child) => child.frozen).length;
                     toast(
-                      after?.status === 'frozen'
-                        ? `Frozen — phase ${after.freeze?.phase ?? ''} is stopped where it stood`.trim()
+                      held
+                        ? count > 1
+                          ? `Frozen — ${count} sessions are stopped where they stood`
+                          : `Frozen — phase ${after?.freeze?.phase ?? ''} is stopped where it stood`.trim()
                         : 'Nothing to freeze: no session is running on this run.',
-                      after?.status === 'frozen' ? 'ok' : 'warn',
+                      held ? 'ok' : 'warn',
                     );
                   })}>
                   {busy === 'freeze' ? 'Freezing…' : 'Freeze now'}
@@ -475,13 +483,33 @@ export function Controls({
   );
 }
 
+/** How an account reads in a picker: name, email, plan, and its 5-hour meter. */
+function accountOptionLabel(account: AccountView, current: string): string {
+  const name = account.builtIn
+    ? account.name ?? 'machine login'
+    : account.name ?? account.email ?? account.id;
+  const email = !account.builtIn || account.name ? account.email : undefined;
+  const five = account.usage?.buckets.five_hour?.utilization;
+  return [
+    name,
+    email && email !== name ? `(${email})` : null,
+    account.plan ? `· ${account.plan}` : null,
+    typeof five === 'number' ? `· 5h ${Math.round(five)}%` : null,
+    account.id === current ? '· current' : null,
+  ].filter(Boolean).join(' ');
+}
+
 /**
- * Move the run to another account NOW. Its own verb, not a settings field:
- * settings say what the NEXT phase uses; this checkpoints a live session
- * (SIGTERM, session id kept) and re-attempts under the other login without
- * waiting for anything. Rendered only when there is somewhere to move to.
+ * Which account this run spends, and the verb to move it NOW. Not a settings
+ * field: settings say what the NEXT phase uses; this checkpoints a live
+ * session (SIGTERM, session id kept) and re-attempts under the other login
+ * without waiting for anything.
+ *
+ * EVERY account is listed, the current one marked — the old options-minus-
+ * current select read as "the console only knows one account" on a machine
+ * with two, which is precisely the question this row exists to answer.
  */
-function SwitchAccountRow({ slug, run, disabled }: {
+export function SwitchAccountRow({ slug, run, disabled }: {
   slug: string;
   run: RunState | null | undefined;
   disabled: boolean;
@@ -490,40 +518,64 @@ function SwitchAccountRow({ slug, run, disabled }: {
   const { data: accountsState } = useAccounts();
   const accounts = accountsState?.accounts ?? [];
   const current = run?.accountId ?? 'default';
-  const [choice, setChoice] = useState('auto');
+  const [choice, setChoice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  if (!run || accounts.length < 2) return null;
+  if (!run || (accounts.length < 2 && !accountsState?.allowAccounts)) return null;
 
-  const others = accounts.filter((a) => a.id !== current);
+  const currentView = accounts.find((account) => account.id === current);
+  const currentLabel = currentView
+    ? accountOptionLabel(currentView, '').replace(/ · current$/, '')
+    : current === 'default' ? 'machine login' : current;
+
+  if (accounts.length < 2) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 border-t border-rule pt-3">
+        <span className="text-2xs uppercase tracking-wide text-ink-faint">
+          Account: <span className="normal-case text-ink-muted">{currentLabel}</span>
+        </span>
+        <a href="#/settings" className="text-2xs text-ink-faint underline hover:text-action">
+          Add another account in Settings to switch mid-run
+        </a>
+      </div>
+    );
+  }
+
+  // Truthful by construction: the select shows where the run IS until a choice
+  // is made, and survives the run switching underneath it.
+  const value = choice ?? current;
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-rule pt-3">
       <span className="text-2xs uppercase tracking-wide text-ink-faint">
-        Account: <span className="normal-case text-ink-muted">{current === 'default' ? 'machine login' : current}</span>
+        Account: <span className="normal-case text-ink-muted">{currentLabel}</span>
       </span>
       <select
-        className="h-8 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
-        value={choice}
+        className="h-8 max-w-72 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
+        value={value}
         disabled={disabled || busy}
         onChange={(event) => setChoice(event.target.value)}
+        aria-label="Account for this run"
       >
         <option value="auto">auto — most headroom</option>
-        {others.map((account) => (
+        {accounts.map((account) => (
           <option key={account.id} value={account.id}>
-            {account.builtIn ? 'machine login' : account.name ?? account.email ?? account.id}
+            {accountOptionLabel(account, current)}
           </option>
         ))}
       </select>
       <Button
         size="sm"
-        disabled={disabled || busy}
-        title="A live session is checkpointed (its session id kept) and re-attempted under the chosen account right away."
+        disabled={disabled || busy || value === current}
+        title={value === current
+          ? 'The run is already on this account — pick another, or auto.'
+          : 'A live session is checkpointed (its session id kept) and re-attempted under the chosen account right away.'}
         onClick={() => {
           setBusy(true);
-          api.runSwitchAccount(slug, choice)
+          api.runSwitchAccount(slug, value)
             .then((outcome) => {
               toast(outcome.ok
                 ? 'Switched — the next session runs under the other account.'
                 : outcome.reason ?? 'Could not switch.', outcome.ok ? 'ok' : 'warn');
+              if (outcome.ok) setChoice(null);
               void client.invalidateQueries({ queryKey: keys.runs() });
               void client.invalidateQueries({ queryKey: keys.run(slug) });
             })

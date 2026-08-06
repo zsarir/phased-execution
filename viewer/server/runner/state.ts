@@ -94,7 +94,7 @@ export const SETTLED: readonly PhaseStatus[] = ['done', 'skipped', 'failed', 'pa
 export const IN_FLIGHT: readonly RunStatus[] = ['running', 'pausing', 'stopping', 'waiting', 'frozen', 'halting'];
 
 /** The same, per phase. A phase in one of these had a live loop behind it. */
-const PHASE_IN_FLIGHT: readonly PhaseStatus[] = ['running', 'verifying', 'awaiting-verification'];
+export const PHASE_IN_FLIGHT: readonly PhaseStatus[] = ['running', 'verifying', 'awaiting-verification'];
 
 export type VerifyRun = {
   command: string;
@@ -213,8 +213,24 @@ export type RunResolution = {
  */
 export const RESOLVABLE: readonly RunStatus[] = ['halted', 'interrupted'];
 
+/** A freeze on one lane: when, who, and when it stops being cheap. */
+export type FreezeRef = { at: string; by: string; escalateAt: string };
+
 /** One live session, as the checkpoint records it. */
-export type ChildRef = { pid: number; phase: number; sessionId: string; startedAt: string };
+export type ChildRef = {
+  pid: number;
+  phase: number;
+  sessionId: string;
+  startedAt: string;
+  /**
+   * Set while this lane's process sits under SIGSTOP. Recorded on the lane and
+   * not only in the run-level `freeze` slot because several lanes can be frozen
+   * at once, and a reader deciding per pid — reconcile telling a stopped orphan
+   * from a running one, a client drawing one lane's controls — needs the fact
+   * where the pid is. The single slot can only name one.
+   */
+  frozen?: FreezeRef;
+};
 
 /**
  * Every lane a run has open, however the checkpoint spells it.
@@ -626,24 +642,36 @@ export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
   const alive = childrenOf(state).filter((child) => pidAlive(child.pid));
   if (alive.length) {
     const first = alive[0];
-    const frozen = alive.some((child) => state.freeze?.pid === child.pid);
+    // Per-lane first, single-slot second: a checkpoint written before lanes
+    // carried `frozen` only recorded the mirror lane's freeze.
+    const frozen = alive.filter((child) => child.frozen || state.freeze?.pid === child.pid);
+    const running = alive.filter((child) => !frozen.includes(child));
+    // A frozen orphan is the one case where "let it finish" is wrong advice:
+    // nothing is scheduling it, so it will sit stopped forever waiting for a
+    // console that is not coming back.
+    const frozenAdvice = frozen.length === 1
+      ? `phase ${frozen[0].phase} was frozen by the operator (pid ${frozen[0].pid}) and the `
+        + 'console that stopped it is gone, so nothing will start it again. Continue it with '
+        + `\`kill -CONT ${frozen[0].pid}\`, or stop it with \`kill ${frozen[0].pid}\` and run the phase again.`
+      : `${frozen.length} phases were frozen by the operator and the console that stopped them `
+        + 'is gone, so nothing will start them again. Continue each with `kill -CONT <pid>` '
+        + `(${frozen.map((child) => `pid ${child.pid} — phase ${child.phase}`).join('; ')}), `
+        + 'or stop them and run the phases again.';
     state.status = 'parked';
     state.halt ??= {
       at,
-      // A frozen orphan is the one case where "let it finish" is wrong advice:
-      // nothing is scheduling it, so it will sit stopped forever waiting for a
-      // console that is not coming back.
-      reason: frozen
-        ? `phase ${first.phase} was frozen by the operator (pid ${first.pid}) and the `
-          + 'console that stopped it is gone, so nothing will start it again. Continue it with '
-          + `\`kill -CONT ${first.pid}\`, or stop it with \`kill ${first.pid}\` and run the phase again.`
+      reason: frozen.length
+        ? frozenAdvice + (running.length
+          ? ` Meanwhile ${running.length === 1 ? 'a session is' : `${running.length} sessions are`}`
+            + ` still running (${running.map((child) => `pid ${child.pid}, phase ${child.phase}`).join('; ')}).`
+          : '')
         : alive.length === 1
           ? `a session from an earlier console is still running (pid ${first.pid}, `
             + `phase ${first.phase}). Let it finish or stop it, then continue this run.`
           : `${alive.length} sessions from an earlier console are still running (`
             + `${alive.map((child) => `pid ${child.pid}, phase ${child.phase}`).join('; ')}). `
             + 'Let them finish or stop them, then continue this run.',
-      phase: first.phase,
+      phase: frozen.length ? frozen[0].phase : first.phase,
     };
     return true;
   }

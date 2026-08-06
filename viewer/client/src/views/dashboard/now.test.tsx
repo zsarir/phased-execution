@@ -33,7 +33,7 @@ const halted = (over: Partial<RunState> = {}): RunState => ({
 
 const authInterrupted = (over: Partial<RunState> = {}): RunState => ({
   id: 'r2', slug: 'beta', status: 'interrupted',
-  halt: { at: '', reason: 'authentication failed — run /login in this workspace, then start the run again', phase: 14 },
+  halt: { at: '', reason: 'authentication failed — the session\'s Claude login is expired or signed out; sign that account in again, then continue the run', phase: 14 },
   ...over,
 } as unknown as RunState);
 

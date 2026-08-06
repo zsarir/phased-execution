@@ -207,12 +207,15 @@ export function LiveConsole({
   title = 'Session console',
   subtitle,
   footer,
+  actions,
 }: {
   lines: readonly ConsoleLine[];
   onClear?: () => void;
   title?: string;
   subtitle?: string;
   footer?: React.ReactNode;
+  /** Session controls (freeze/stop) rendered in the toolbar, before Detail. */
+  actions?: React.ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [follow, setFollow] = useState(true);
@@ -240,6 +243,7 @@ export function LiveConsole({
           {subtitle && <span className="truncate font-mono text-2xs text-ink-faint">{subtitle}</span>}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          {actions}
           <span className="font-mono text-2xs text-ink-faint tabular-nums">
             {shown.length}
             {lines.length === MAX_LINES ? '+' : ''} lines

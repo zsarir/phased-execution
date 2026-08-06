@@ -42,26 +42,48 @@ const PROBE_TIMEOUT_MS = 20_000;
 /** The answer barely changes; re-probing on every poll would spawn a process per second. */
 const CACHE_MS = 10_000;
 
-let cached: { at: number; status: AuthStatus } | null = null;
+/**
+ * Memo per CACHE KEY, not one global: the probe now runs under an account's
+ * own env, and one shared slot let the machine login's "signed in" answer for
+ * an expired profile — the exact per-phase burn this file exists to prevent,
+ * reached through its own cache.
+ */
+const memo = new Map<string, { at: number; status: AuthStatus }>();
 
 /** Drop the memo — after a login attempt the previous answer is worse than none. */
 export function forgetAuth(): void {
-  cached = null;
+  memo.clear();
 }
 
 export async function checkAuth(cwd: string, force = false): Promise<AuthStatus> {
+  return checkAuthFor(cwd, null, 'default', force);
+}
+
+/**
+ * The same probe under a specific account's env (`CLAUDE_CONFIG_DIR` or a
+ * token), keyed so answers never cross accounts. `env` is MERGED over the
+ * process env — `null` means the machine login, exactly as `envFor` answers.
+ */
+export async function checkAuthFor(
+  cwd: string, env: NodeJS.ProcessEnv | null, cacheKey: string, force = false,
+): Promise<AuthStatus> {
+  const cached = memo.get(cacheKey);
   if (!force && cached && Date.now() - cached.at < CACHE_MS) return cached.status;
-  const status = await probe(cwd);
-  cached = { at: Date.now(), status };
+  const status = await probe(cwd, env);
+  memo.set(cacheKey, { at: Date.now(), status });
   return status;
 }
 
-function probe(cwd: string): Promise<AuthStatus> {
+function probe(cwd: string, env: NodeJS.ProcessEnv | null = null): Promise<AuthStatus> {
   return new Promise<AuthStatus>((resolve) => {
     const checkedAt = new Date().toISOString();
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn('claude', ['auth', 'status'], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn('claude', ['auth', 'status'], {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        ...(env ? { env: { ...process.env, ...env } } : {}),
+      });
     } catch (error) {
       resolve({ loggedIn: false, checkedAt, detail: `could not run \`claude auth status\`: ${(error as Error).message}` });
       return;

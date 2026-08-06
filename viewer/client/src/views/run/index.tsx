@@ -39,7 +39,8 @@ import {
 } from '@/components/ui';
 import { api, automationPrefs, type PhaseEta, type PlanDetail, type QueueEntry, type RunState } from '@/lib/api';
 import {
-  useApprovals, useAuth, useConsoleState, useQueue, useRun, useRunScopes, useSessions, useSkills,
+  useAccounts, useApprovals, useAuth, useConsoleState, useQueue, useRun, useRunScopes, useSessions,
+  useSkills,
 } from '@/lib/queries';
 import { keys } from '@/lib/queries';
 import { useNow } from '@/lib/clock';
@@ -54,6 +55,8 @@ import { RunHeader, RunTiles } from './header';
 import { PhaseTable } from './phase-table';
 import { NextSteps } from './next-steps';
 import { QueuedPane, SessionPanes, laneId, lanesOf, queueEntryFor, resolveTab, type Lane } from './session-panes';
+import { LaneControls, laneFrozen } from './lane-controls';
+import { WaitingPane, waitingOf } from './waiting-pane';
 import { AuthCard, RunStatusStack, StaleServerNote, looksLikeAuthFailure } from './status';
 import { RunHistory } from './history';
 
@@ -96,7 +99,13 @@ export function RunView({ detail }: { detail: PlanDetail }) {
   /* ---- recovery: what an AI session could put right, and whether one is on it ---- */
   const { data: terminals } = useSessions(state);
   const allowAgent = Boolean(state?.allowAgent);
-  const authFailure = Boolean(looksLikeAuthFailure(run, auth));
+  // The run's OWN account decides whether this is an auth halt: the machine
+  // login's probe says nothing about the profile a pinned run pays with.
+  const { data: accountsState } = useAccounts();
+  const runAccount = run?.accountId
+    ? accountsState?.accounts.find((candidate) => candidate.id === run.accountId)
+    : undefined;
+  const authFailure = Boolean(looksLikeAuthFailure(run, auth, runAccount));
   const haltPhase = run?.halt?.phase ?? run?.activePhase ?? undefined;
   const haltClass = classifyRun(run, { authFailure });
   const haltRecovery = liveRecovery(terminals?.sessions, { slug, phase: haltPhase });
@@ -167,11 +176,20 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           this page that is waiting on a person. */}
       <ApprovalQueue approvals={approvals} allowRun={allowRun} onDecide={decide} />
 
-      {looksLikeAuthFailure(run, auth) && (
+      {authFailure && (
         <AuthCard
           auth={auth}
           allowRun={allowRun}
+          account={runAccount}
           onRecheck={() => {
+            if (run?.accountId) {
+              // Re-read THAT account, not the machine login — this is the
+              // "I signed in over there, look again" button.
+              void api.accountRefresh(run.accountId)
+                .then(() => client.invalidateQueries({ queryKey: keys.accounts() }))
+                .catch(() => client.invalidateQueries({ queryKey: keys.accounts() }));
+              return;
+            }
             void client.invalidateQueries({ queryKey: keys.auth() });
             void api.auth(true).then((fresh) => client.setQueryData(keys.auth(), fresh));
           }}
@@ -278,6 +296,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           entries={admission?.entries}
           scopes={scopes?.scopes}
           phaseEta={detailRun?.phaseEta ?? []}
+          detail={detail}
         />
       ) : (
         <LiveConsole lines={[]} subtitle="idle" />
@@ -315,6 +334,7 @@ function SessionTabs({
   entries,
   scopes,
   phaseEta,
+  detail,
 }: {
   slug: string;
   run: RunState;
@@ -324,14 +344,20 @@ function SessionTabs({
   entries?: QueueEntry[] | undefined;
   scopes?: { phase: number; scope: string[]; conflicts: string[] }[] | undefined;
   phaseEta?: PhaseEta[] | undefined;
+  detail: PlanDetail;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   const lanes = lanesOf(run);
   // One clock for every lane subtitle — ticking only while something runs.
   const now = useNow(live && lanes.some((lane) => !lane.queued));
 
+  // The second queue: dependency-waiting phases, one aggregate tab. Only while
+  // the run is live — a finished run's leftovers belong to the phase table —
+  // and never a phase that already has a lane tab (the two snapshots can skew).
+  const waiting = live ? waitingOf(detail, new Set(lanes.map((lane) => lane.phase))) : [];
+
   // Explicit pick while it exists → the sole live lane → Run. See resolveTab.
-  const value = resolveTab(picked, lanes);
+  const value = picked === 'waiting' && waiting.length ? 'waiting' : resolveTab(picked, lanes);
 
   return (
     <Tabs value={value} onValueChange={setPicked}>
@@ -350,6 +376,14 @@ function SessionTabs({
             {lane.queued && <span className="ml-1.5 text-2xs text-ink-faint">queued</span>}
           </TabsTrigger>
         ))}
+        {waiting.length > 0 && (
+          <TabsTrigger value="waiting">
+            Waiting
+            <span className="ml-1.5 font-mono text-2xs text-ink-faint tabular-nums">
+              {waiting.length}
+            </span>
+          </TabsTrigger>
+        )}
       </TabsList>
 
       {/* `forceMount` on every panel, with the hiding done here.
@@ -383,6 +417,16 @@ function SessionTabs({
               phase={lane.phase}
               entry={queueEntryFor(entries, slug, lane.phase)}
               scope={scopes?.find((s) => s.phase === lane.phase)?.scope}
+              control={(
+                <LaneControls
+                  slug={slug}
+                  phase={lane.phase}
+                  live={live}
+                  allowRun={allowRun}
+                  frozen={null}
+                  queued
+                />
+              )}
             />
           ) : (
             <SessionPanes
@@ -393,10 +437,25 @@ function SessionTabs({
               allowRun={allowRun}
               enabled={enabled}
               subtitle={laneSubtitle(lane, run, now, phaseEta)}
+              control={(
+                <LaneControls
+                  slug={slug}
+                  phase={lane.phase}
+                  live={live && lane.status === 'running'}
+                  allowRun={allowRun}
+                  frozen={laneFrozen(run, lane.phase)}
+                />
+              )}
             />
           )}
         </TabsContent>
       ))}
+
+      {waiting.length > 0 && (
+        <TabsContent value="waiting">
+          <WaitingPane rows={waiting} />
+        </TabsContent>
+      )}
     </Tabs>
   );
 }

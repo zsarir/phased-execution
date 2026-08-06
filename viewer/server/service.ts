@@ -54,11 +54,11 @@ import { formatScope, scopeOfRow, scopesIntersect } from '../shared/scope.js';
 import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
 import {
-  childrenOf, latestRun, listRuns, loadRun, phaseRecord, resolveRunsAgainst, saveRun,
-  slugsNeedingBoard, IN_FLIGHT, type RunState, type VerifySummary,
+  childrenOf, latestRun, listRuns, loadRun, phaseRecord, pidAlive, resolveRunsAgainst, saveRun,
+  slugsNeedingBoard, IN_FLIGHT, PHASE_IN_FLIGHT, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
-import { checkAuth, forgetAuth, openLoginTerminal, openCommandTerminal, shellQuote, type AuthStatus } from './runner/auth.ts';
+import { checkAuth, checkAuthFor, forgetAuth, openLoginTerminal, openCommandTerminal, shellQuote, type AuthStatus } from './runner/auth.ts';
 import { Accounts, DEFAULT_ACCOUNT_ID, profileConfigDir, type AccountView } from './accounts/index.ts';
 import { portTranscript } from './accounts/transcripts.ts';
 import { FULL_FLAGS, installDesktopLauncher, launcherPlan } from './launcher.ts';
@@ -633,18 +633,34 @@ export class Service {
     this.accounts = new Accounts({
       onChange: () => this.emitAccounts(),
       // The meters warn before the wall: 80 is "plan your afternoon", 95 is
-      // "the next long phase will not finish". Announced through the same
-      // gate as everything else, so the category switch is respected.
+      // "the next long phase will not finish". Its own category, off by
+      // default — the wall itself (and everything a run does about one) stays
+      // under `limits`, so muting the climb never mutes the crash.
       onThreshold: (view, bucket, level, utilization, resetsAt) => {
         const name = view.email ?? view.name ?? view.id;
         const when = new Date(resetsAt);
         const reset = Number.isNaN(when.getTime()) ? resetsAt : when.toLocaleString();
-        this.announce('limits', {
+        this.announce('usage-climbing', {
           title: level === 'alert'
             ? `Usage window nearly spent — ${bucketLabel(bucket)}`
             : `Usage climbing — ${bucketLabel(bucket)}`,
           body: `${name}: ${Math.round(utilization)}% of the ${bucketLabel(bucket)} window used · resets ${reset}`,
-          tag: tagFor('limits', view.id, bucket, resetsAt),
+          tag: tagFor('usage-climbing', view.id, bucket, resetsAt),
+        });
+      },
+      // A login that went from known-good to broken. Rides the `limits`
+      // category (its catalogue copy claims sign-in failures), fires once per
+      // transition — the poller's own refresh has already been tried.
+      onAuthChange: (view, state) => {
+        const name = view.email ?? view.name ?? view.id;
+        this.announce('limits', {
+          title: `Sign in again — ${name}`,
+          body: state === 'expired'
+            ? `${name}'s Claude login has expired and could not be refreshed. Sessions on it will `
+              + 'fail until someone signs in again — Settings → Claude accounts has the button.'
+            : `${name} is signed out. Sign in again from Settings → Claude accounts before running `
+              + 'work as it.',
+          tag: tagFor('limits', 'auth', view.id),
         });
       },
     });
@@ -853,7 +869,28 @@ export class Service {
       // `pickAccount` is the switch policy's cached answer; the limited hook
       // remembers the wall on the account and tells the operator which one.
       accountEnv: (accountId) => this.accounts.envFor(accountId),
-      pickAccount: (excluding) => this.accounts.pickAccount(excluding),
+      pickAccount: (excluding, forModel) => this.accounts.pickAccount(excluding, forModel),
+      // The preflight probe, under the RUN's account env. Signed out, the
+      // refusal names the account and the exact command that fixes it —
+      // composed here, where the config dir is known, never in the browser.
+      checkAuth: async (accountId) => {
+        const env = await this.accounts.envFor(accountId);
+        const root = this.root?.ok ? this.root.path : process.cwd();
+        const status = await checkAuthFor(root, env, accountId ?? 'default', true);
+        if (!status.loggedIn && accountId && accountId !== DEFAULT_ACCOUNT_ID) {
+          const meta = this.accounts.meta(accountId);
+          const fix = meta?.kind === 'profile'
+            ? `sign it in with \`CLAUDE_CONFIG_DIR=${profileConfigDir(accountId)} claude auth login\`, `
+              + 'or from Settings → Claude accounts'
+            : 'paste a fresh `claude setup-token` for it in Settings → Claude accounts';
+          return {
+            ...status,
+            detail: `the run is set to pay as ${this.accounts.labelFor(accountId)} and that login is `
+              + `expired or signed out — ${fix}.${status.detail ? ` (${status.detail})` : ''}`,
+          };
+        }
+        return status;
+      },
       onAccountLimited: (accountId, window, resetsAt, detail) => {
         if (resetsAt) this.accounts.markLimited(accountId, window, resetsAt.toISOString());
         const name = this.accounts.labelFor(accountId);
@@ -2499,7 +2536,7 @@ export class Service {
     // carries a concrete id, so the journal and the header say which account
     // is paying rather than "whatever looked best at some point".
     if (options.accountId === 'auto') {
-      options = { ...options, accountId: this.accounts.pickAccount(null) ?? DEFAULT_ACCOUNT_ID };
+      options = { ...options, accountId: this.accounts.pickAccount(null, options.model) ?? DEFAULT_ACCOUNT_ID };
     }
     this.preflightAccount(options.accountId);
 
@@ -2822,16 +2859,46 @@ export class Service {
     return state;
   }
 
-  async stopRun(slug: string, phase?: number | null): Promise<RunState | null> {
+  async stopRun(slug: string, phase?: number | null, by = 'console'): Promise<RunState | null> {
     const runner = this.liveRunner(slug);
     if (runner) {
-      // A Stop aimed at a phase that is no longer the one running would end a
-      // session the operator never looked at. Refusing is the only safe answer
-      // — and a Stop is the most expensive control here to get wrong.
-      const mismatch = runner.phaseMismatch(phase);
-      if (mismatch) throw new Error(mismatch);
+      // A named phase stops that lane only, and the loop carries on. The
+      // runner rules on queued/verifying/unknown itself — it can see the
+      // lanes; its refusal keeps the 409 shape a mismatch always had.
+      if (phase != null) {
+        const result = runner.stopPhase(phase, by);
+        if (!result.ok) throw new Error(result.reason);
+        return runner.current();
+      }
       await runner.stop();
       return runner.current();
+    }
+    if (phase != null) {
+      // No loop behind it. A recorded child still alive belongs to a console
+      // that is gone — signalling a pid we do not own is not a fallback, it is
+      // a different and much worse action (the same posture as freeze). A dead
+      // or absent child settles the one record.
+      return this.editStoredRun(slug, (state) => {
+        const child = state.children?.[String(phase)]
+          ?? (state.child?.phase === phase ? state.child : undefined);
+        if (child && pidAlive(child.pid)) {
+          throw new Error(`phase ${phase}'s session (pid ${child.pid}) belongs to an earlier `
+            + `console — let it finish, or stop it yourself with \`kill ${child.pid}\`.`);
+        }
+        const record = state.phases[String(phase)];
+        if (!record || !PHASE_IN_FLIGHT.includes(record.status)) {
+          throw new Error(`phase ${phase} of ${slug} is not running`);
+        }
+        record.status = 'interrupted';
+        record.note = `stopped by ${by}`;
+        record.endedAt = new Date().toISOString();
+        record.resumeSessionId ??= record.sessionId;
+        if (state.children) {
+          delete state.children[String(phase)];
+          if (!Object.keys(state.children).length) delete state.children;
+        }
+        if (state.child?.phase === phase) state.child = null;
+      });
     }
     return this.editStoredRun(slug, (state) => {
       if (!IN_FLIGHT.includes(state.status)) return;
@@ -2983,7 +3050,7 @@ export class Service {
     { ok: boolean; reason?: string; run?: RunState | null } {
     const current = this.liveRunner(slug)?.current() ?? null;
     const resolved = accountId === 'auto'
-      ? this.accounts.pickAccount(current?.accountId ?? undefined) ?? undefined
+      ? this.accounts.pickAccount(current?.accountId ?? undefined, current?.model) ?? undefined
       : accountId;
     if (accountId === 'auto' && !resolved) {
       return { ok: false, reason: 'no other account has headroom right now' };
@@ -3230,12 +3297,19 @@ export class Service {
 
     // 2. Signing in is the fix for an auth halt; an AI session would spend a
     //    turn discovering it cannot authenticate and report success anyway.
+    //    Probed as the RUN's account — the machine login being healthy says
+    //    nothing about the profile the halted run was paying with.
     if (request.class === 'auth-interrupted') {
-      const auth = await this.authStatus(true);
+      const haltedAccount = request.runId && this.root?.ok
+        ? loadRun(this.root.path, request.slug, request.runId, this.liveRunId())?.accountId
+        : this.runStates().find((run) => run.slug === request.slug)?.accountId;
+      const auth = haltedAccount
+        ? await checkAuthFor(root, await this.accounts.envFor(haltedAccount), haltedAccount, true)
+        : await this.authStatus(true);
       if (!auth.loggedIn) {
         return refuse(409,
-          'Claude is signed out — sign in first, then continue the run. A recovery session '
-          + 'cannot authenticate for you.');
+          `${haltedAccount ? `${this.accounts.labelFor(haltedAccount)} is` : 'Claude is'} signed out `
+          + '— sign in first, then continue the run. A recovery session cannot authenticate for you.');
       }
     }
 
@@ -3747,7 +3821,23 @@ export class Service {
 
   async removeAccount(id: string): Promise<boolean> {
     this.assertAccountsAllowed();
+    // Refuse while a LIVE run pays as this account: its very next spawn would
+    // silently land on the machine login — the quiet-wrong the accounts seam
+    // exists to prevent. Stored/paused runs already degrade safely (an absent
+    // env means the machine login, by design).
+    for (const [slug, runner] of this.runners) {
+      const state = runner.busy() ? runner.current() : null;
+      if (state && (state.accountId ?? DEFAULT_ACCOUNT_ID) === id) {
+        throw new Error(`${slug} is running as this account — pause it, or switch its account first.`);
+      }
+    }
     return this.accounts.remove(id);
+  }
+
+  /** Display-name only — ids are journal keys, path segments and keychain hashes. */
+  async renameAccount(id: string, name: string): Promise<AccountView | undefined> {
+    this.assertAccountsAllowed();
+    return this.accounts.rename(id, name);
   }
 
   /**

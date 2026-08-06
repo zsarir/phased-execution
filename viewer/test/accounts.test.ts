@@ -15,7 +15,7 @@ import './state-sandbox.ts';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { AccountStore, ACCOUNTS_DIR, profileConfigDir } from '../server/accounts/store.ts';
@@ -238,5 +238,104 @@ test('facade: registry file never contains a secret even after many operations',
   const raw = readFileSync(join(ACCOUNTS_DIR, 'accounts.json'), 'utf8');
   assert.ok(!raw.includes('scrubbablevalue'), 'accounts.json holds metadata only');
   await accounts.remove(v.id);
+  accounts.stop();
+});
+
+/* ---------------- rename, the default's name, and auth state ---------------- */
+
+test('store: defaultName round-trips through disk and clears on empty', () => {
+  const store = new AccountStore();
+  store.setDefaultName('living room mac');
+  assert.equal(new AccountStore().defaultName, 'living room mac');
+  store.setDefaultName(undefined);
+  assert.equal(new AccountStore().defaultName, undefined);
+});
+
+test('facade: rename changes the display name only — stored accounts and the machine login alike', async () => {
+  const accounts = makeAccounts();
+  const v = await accounts.addToken('Old Name', 'sk-ant-oat01-renamablevalue00');
+  const renamed = await accounts.rename(v.id, 'New Name');
+  assert.equal(renamed?.name, 'New Name');
+  assert.equal(renamed?.id, v.id, 'the id never changes — it is a journal key and a path segment');
+  assert.equal(accounts.labelFor(v.id), 'New Name');
+
+  await accounts.rename('default', 'the big mac');
+  assert.equal(accounts.labelFor(undefined), 'the big mac');
+  assert.equal((await accounts.list())[0]?.name, 'the big mac');
+  await accounts.rename('default', '');
+  assert.equal(accounts.labelFor(undefined), 'the machine login', 'clearing restores the stock label');
+
+  assert.equal(await accounts.rename('nobody-here', 'x'), undefined);
+  await accounts.remove(v.id);
+  accounts.stop();
+});
+
+test('facade: an expired profile announces once, after the refresh was tried — never on first sight', async () => {
+  const transitions: string[] = [];
+  const { exec, calls } = fakeExec(() => '');
+  const accounts = new Accounts({
+    platform: 'linux',
+    exec,
+    onAuthChange: (view, state) => transitions.push(`${view.id}:${state}`),
+  });
+  const { id, dir } = accounts.beginProfile('stale');
+  writeFileSync(join(dir, '.credentials.json'), JSON.stringify({
+    claudeAiOauth: { accessToken: 'tok', expiresAt: Date.now() + 60 * 60_000, subscriptionType: 'max' },
+  }));
+  const view = (await accounts.list()).find((a) => a.id === id);
+  assert.equal(view?.authState, 'ok');
+  await sleep(20);
+  assert.deepEqual(transitions, [], 'a first observation never announces');
+
+  // The login expires. The poller path is the authoritative writer, and it
+  // sits AFTER the CLI-refresh attempt — only a login the CLI could not
+  // rescue may read as expired.
+  writeFileSync(join(dir, '.credentials.json'), JSON.stringify({
+    claudeAiOauth: { accessToken: 'tok', expiresAt: Date.now() - 60_000, subscriptionType: 'max' },
+  }));
+  const facade = accounts as unknown as { resolveToken(id: string): Promise<unknown> };
+  await facade.resolveToken(id);
+  assert.ok(
+    calls.some((c) => c.file === 'claude' && c.args[0] === 'auth' && c.args[1] === 'status'),
+    'the CLI refresh was attempted before believing the expiry',
+  );
+  await sleep(20);
+  assert.deepEqual(transitions, [`${id}:expired`], 'announced exactly once, on the transition');
+
+  await facade.resolveToken(id);
+  await sleep(20);
+  assert.deepEqual(transitions, [`${id}:expired`], 'and not again while it stays expired');
+  await accounts.remove(id);
+  accounts.stop();
+});
+
+test('facade: removing a profile deletes its HASHED keychain item, never the plain one', async () => {
+  const { exec, calls } = fakeExec(() => '');
+  const accounts = new Accounts({ platform: 'darwin', exec });
+  const { id } = accounts.beginProfile('goner');
+  const hashed = claudeKeychainService(profileConfigDir(id));
+  await accounts.remove(id);
+  const deletes = calls.filter((c) => c.file === 'security' && c.args[0] === 'delete-generic-password');
+  assert.deepEqual(deletes.map((c) => c.args[c.args.indexOf('-s') + 1]), [hashed]);
+  assert.ok(
+    deletes.every((c) => c.args[c.args.indexOf('-s') + 1] !== claudeKeychainService(null)),
+    "the CLI's shared item — the machine login — is never touched",
+  );
+  accounts.stop();
+});
+
+test('facade: a per-model wall disqualifies only that model, and never blanket-skips', async () => {
+  const accounts = makeAccounts();
+  const spare = await accounts.addToken('spare', 'sk-ant-oat01-sparevalue000000');
+  accounts.markLimited(spare.id, 'seven_day_opus', new Date(Date.now() + 3_600_000).toISOString());
+
+  assert.equal(accounts.pickAccount('default', 'opus'), null, 'exhausted on opus, for an opus run');
+  assert.equal(accounts.pickAccount('default', 'claude-opus-5'), null, 'full model ids read the same');
+  assert.equal(accounts.pickAccount('default', 'sonnet'), spare.id, 'still the right place for a sonnet run');
+  assert.equal(
+    accounts.pickAccount('default'), spare.id,
+    'and a per-model key must never trip the shared-window skip',
+  );
+  await accounts.remove(spare.id);
   accounts.stop();
 });
