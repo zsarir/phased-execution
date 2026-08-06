@@ -6,6 +6,57 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [1.5.0] - 2026-08-06
+
+One console, many Claude accounts. Each instance now keeps its own account registry — the machine
+login, profiles you sign into, pasted `claude setup-token` tokens — with live usage meters in the
+chrome (the same numbers `/usage` shows: 5-hour, weekly, per-model, with reset countdowns). Every
+launch surface picks which account a run spends, and a run that hits its usage window no longer
+just sleeps on it: by policy it checkpoints the session and continues at once under the account
+with the most headroom, carries its transcript along, and survives a console restart with the
+resume clock intact.
+
+### Added
+
+- **Usage meters in the chrome.** Desktop rail, phone header and the More sheet all carry the
+  5-hour and worst-weekly bars, with a dialog listing every account × every window the usage
+  endpoint reports — bucket keys render by name, so a window that ships tomorrow appears tomorrow.
+  Polling is deliberately gentle (single-flight, adaptive cadence, backoff on 429) and failure
+  serves the last-known numbers with their age attached rather than a blank.
+- **`--allow-accounts` — per-instance account registration.** Sign a second account in (the console
+  mints a terminal on `claude auth login` under a managed `CLAUDE_CONFIG_DIR`, then reads back the
+  email and plan) or paste a `claude setup-token` token and name it. Secrets live in the keychain
+  or a 0600 file, never in the registry, never in an API response — and the console never writes
+  the CLI's own credentials. Reading the meters needs no flag.
+- **An account per run, and an on-limit policy.** The run form, phase launcher, recovery and QA
+  dialogs and the agent launcher all offer the account (including `auto` — most 5-hour headroom)
+  and, for runs, `switch` / `wait` / `pause`. `switch` checkpoints the live session at the wall and
+  re-attempts immediately under the account that can pay, porting the transcript into that
+  account's config dir so `--resume` finds the conversation; when nothing can be ported it starts
+  from the boot prompt rather than resuming into nothing.
+- **Switch account mid-run.** Its own verb on the run card, not a settings field: a live session is
+  checkpointed (SIGCONT+SIGTERM, session id kept) and the phase re-attempted under the other login
+  right away; a lane asleep on the old account's window is woken instead of waiting it out.
+- **A `limits` notification category.** Warnings at 80% and 95% per account and window (with
+  hysteresis, once per window), every wall actually hit with its reset time and what the run did
+  about it, and a pre-flight warning when a run starts against a nearly-spent window (≥97% refuses,
+  with the reset time in the message).
+- **Restart-safe limit waits.** A run asleep on a usage window used to reconcile to `interrupted`
+  after a console restart — self-resuming turned into waiting-for-a-person. It now reconciles to
+  `paused` with its clock intact, and the service re-arms the resume at boot (unless the run's own
+  policy was `pause`, which means what it says).
+
+### Changed
+
+- **The scheduler's usage throttle is per account.** One limited login used to stall every queue;
+  now only admissions spending the limited account wait, the queue names which account was told to
+  come back when, and `throttledUntil` stays as the soonest expiry for older readers.
+- **Recovery prompts know a limit stop from a crash.** An interrupted-resume brief now says the
+  stop was quota — which account, when the window reopens — so the session continues the work
+  instead of "fixing" anything on account of the stop. The skill's own Mode 2 gained the matching
+  recovery step for hand-driven sessions (read `git status`/`git diff` first, re-claim, continue),
+  and Mode 3's stop-reasons now include an exhausted usage window.
+
 ## [1.4.0] - 2026-08-05
 
 A claim on a phase now means something. Every phase table shows who holds a phase and for how much

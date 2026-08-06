@@ -43,8 +43,12 @@ reads every handoff's `status:` and the plan graph together. `next_phase:` is on
 phase may unblock several phases or none.
 
 **Status note:** `scripts/new-handoff.sh` accepts an optional fourth arg `[status]` (default `complete`).
-Pass `in-progress` or `blocked` when scaffolding a handoff mid-phase. `pending` / `TBD` are valid in
-`INDEX.md` rows for phases not yet written (added by hand — the script only scaffolds phases that exist).
+Pass `in-progress` or `blocked` when scaffolding a handoff mid-phase. An `in-progress` handoff is also the
+durable **pause marker**: a session interrupted mid-phase (usage limit, died console, deliberate stop) that
+scaffolds one leaves the next session a bootstrap that says "continue from here, don't restart" — record
+what is done, what is uncommitted, and (for a usage-limit stop) when the window reopens. `pending` / `TBD`
+are valid in `INDEX.md` rows for phases not yet written (added by hand — the script only scaffolds phases
+that exist).
 `new-handoff.sh` auto-detects the final phase by reading `phases:` from the plan and sets `next_phase: none`.
 Pass `--force` to re-scaffold (repair) an existing handoff.
 

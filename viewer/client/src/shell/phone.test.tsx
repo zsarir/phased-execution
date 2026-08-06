@@ -14,12 +14,23 @@
  * circle instead of growing into the tab next door.
  */
 
-import { render, screen, within } from '@testing-library/react';
+import { render as renderBare, screen, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
+import type { ReactElement } from 'react';
 import { TabBar, TopBar } from '@/shell/phone';
 import type { ShellCounts } from '@/lib/queries';
 
 vi.mock('@/router', () => ({ navigate: vi.fn() }));
+
+// The header now carries the usage meters, which read the accounts query — so
+// the harness provides a client the way `app.test.tsx` does. `retry: false`
+// keeps a missing mock from stalling a test on retries.
+const render = (ui: ReactElement) => renderBare(
+  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    {ui}
+  </QueryClientProvider>,
+);
 
 const counts = (over: Partial<ShellCounts> = {}): ShellCounts => ({
   plans: 0, phases: 0, ready: 0, approvals: 0, unread: 0, agentSessions: 0, terminalSessions: 0,

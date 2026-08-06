@@ -20,6 +20,7 @@ import { useState } from 'react';
 import { applyUpdateNow } from '@/lib/pwa';
 import { Page } from '../_page';
 import { AutomationCard } from './automation';
+import { AccountsCard } from './accounts';
 import { PolicyCard } from './policy';
 import { RestartButton } from './restart';
 import { ShutdownButton } from './shutdown';
@@ -174,6 +175,8 @@ export default function SettingsView() {
         </Card>
 
         <AutomationCard />
+
+        <AccountsCard />
 
         <Card>
           <CardHeader><CardTitle>Appearance</CardTitle></CardHeader>

@@ -176,13 +176,14 @@ Each console is its own origin, so it keeps its own signing keys and its own lis
 devices: turning notifications on for one project does not subscribe you to another, and one project
 going quiet is a choice you make per project. Subscribe from each console you want to hear from.
 
-**Eight categories, per device**, because a phone and a laptop rarely want the same ones:
+**Nine categories, per device**, because a phone and a laptop rarely want the same ones:
 
 | Category | Default | Fires when |
 |---|---|---|
 | **Permission needed** | on | A session is blocked on a decision only you can make. Nothing proceeds until you answer. |
 | **Run halted** | on | A run stopped on something that must not be automated past — or was interrupted with nothing driving it. |
 | **Run parked or waiting** | on | Every remaining phase needs a person, or the run is asleep until a usage window reopens. |
+| **Usage limits** | on | An account is approaching (80/95%) or hit a usage window — the 5-hour session, the weekly allowance, a per-model one — with when it resets and what the run did about it (waited, switched account, paused). |
 | **Phase finished or failed** | on | Each phase as it lands. The pulse of a run nobody is watching. |
 | **Plan finished** | on | A run reached the end of its plan. |
 | **Work became ready** | off | A phase became startable — including because of work you finished yourself, elsewhere. |

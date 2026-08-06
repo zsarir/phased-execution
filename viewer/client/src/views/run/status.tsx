@@ -66,6 +66,9 @@ export const NOTE_ORDER = [
   'ended',
   'pause',
   'frozen',
+  // The run stopped ON a limit and is waiting for a person — worse than
+  // `waiting-window` (which resumes itself) and better than a halt.
+  'limit-paused',
   'waiting-window',
   'budget',
   'scoped',
@@ -179,7 +182,9 @@ export function runNotes({
         </>
       ),
     });
-  } else if (run?.status === 'paused') {
+  } else if (run?.status === 'paused' && !run.waitUntil) {
+    // A paused run CARRYING a reset time is the limit-paused slot below — one
+    // note per condition, and that one says why it stopped.
     notes.push({
       id: 'pause',
       severity: 'info',
@@ -211,14 +216,30 @@ export function runNotes({
     });
   }
 
-  if (run?.waitUntil) {
+  if (run?.waitUntil && run.status === 'paused') {
+    // Paused ON the limit: either the run's own policy said "pause and ask",
+    // or a console restart preserved the clock and the re-arm has not fired.
+    notes.push({
+      id: 'limit-paused',
+      severity: 'warn',
+      title: `Stopped on a usage limit${run.accountId ? ` (${run.accountId})` : ''}.`,
+      body: (
+        <>
+          The window reopens at {at(run.waitUntil)}. Continue now under another account, switch this
+          run's account below, or wait — the checkpointed session resumes either way, keeping the
+          work already done.
+        </>
+      ),
+    });
+  } else if (run?.waitUntil) {
     notes.push({
       id: 'waiting-window',
       severity: 'warn',
       body: (
         <>
-          Waiting for a usage window to reopen at {at(run.waitUntil)}. Nothing is wrong — the run
-          resumes by itself.
+          Waiting for a usage window to reopen at {at(run.waitUntil)}
+          {run.onLimit === 'switch' ? ' — no other account had headroom' : ''}. Nothing is wrong —
+          the run resumes by itself.
         </>
       ),
     });
@@ -231,12 +252,15 @@ export function runNotes({
     notes.push({
       id: 'budget',
       severity: 'warn',
-      title: `${percent}% of your ${window} window is used.`,
+      title: `${percent}% of ${run.accountId ? `${run.accountId}'s` : 'your'} ${window} window is used.`,
       body: (
         <>
           {run.limits.resetsAt ? `It resets ${at(run.limits.resetsAt * 1000)}. ` : ''}
-          A long run started now may stop partway and wait — the session reports this itself, so it is
+          A long run started now may stop partway — the session reports this itself, so it is
           the account's own figure rather than an estimate.
+          {run.onLimit === 'switch'
+            ? ' This run switches to the account with the most headroom when it hits the wall.'
+            : ''}
         </>
       ),
     });

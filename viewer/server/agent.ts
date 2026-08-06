@@ -96,6 +96,14 @@ export type AgentContext = {
    * criterion exists unless the plan holds one. Absent for every other intent.
    */
   qa?: QaFacts;
+  /**
+   * The account this session runs as, RESOLVED by the caller: the validated id
+   * plus the env `accounts.envFor` answered for it. Same shape as the recovery
+   * facts and for the same reason — the browser names an id, the service turns
+   * it into an environment, and this function only carries it onto the spec.
+   * Absent (or a null env) means the machine login.
+   */
+  account?: { id: string; env: Record<string, string> | null };
 };
 
 /**
@@ -297,11 +305,22 @@ export function buildAgentLaunch(
     // The linkage the exit check reads: a QA session's end is answered by
     // re-reading test-status.md rather than by reporting that a process ended.
     ...(qaMeta ? { intent: 'qa' as const, qa: qaMeta } : {}),
+    // Which quota this session spends — display, and the resume-later story.
+    ...(ctx.account && ctx.account.id !== 'default' ? { accountId: ctx.account.id } : {}),
   };
 
   return {
     ok: true,
-    launch: { kind: 'claude', file: 'claude', args, ...(label ? { label } : {}), meta },
+    launch: {
+      kind: 'claude',
+      file: 'claude',
+      args,
+      ...(label ? { label } : {}),
+      meta,
+      // The env, not the id: `terminal.ts` merges it verbatim and stays a
+      // lifecycle for ptys that decides neither argv nor credentials.
+      ...(ctx.account?.env ? { env: ctx.account.env } : {}),
+    },
   };
 }
 

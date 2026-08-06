@@ -26,12 +26,14 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   AlertDialog, AlertDialogContent, AlertDialogTrigger,
   Button, Card, CardBody, CardHeader, CardTitle, toast,
 } from '@/components/ui';
 import { api, type PhaseOptions, type PhaseView, type RunSettings, type RunState, type SkillInfo }
   from '@/lib/api';
+import { keys, useAccounts } from '@/lib/queries';
 import { cn } from '@/lib/cn';
 import {
   AUTONOMY_LABEL, DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS, PROFILE_LABEL,
@@ -466,8 +468,72 @@ export function Controls({
             </span>
           )}
         </div>
+
+        <SwitchAccountRow slug={slug} run={run} disabled={disabled} />
       </CardBody>
     </Card>
+  );
+}
+
+/**
+ * Move the run to another account NOW. Its own verb, not a settings field:
+ * settings say what the NEXT phase uses; this checkpoints a live session
+ * (SIGTERM, session id kept) and re-attempts under the other login without
+ * waiting for anything. Rendered only when there is somewhere to move to.
+ */
+function SwitchAccountRow({ slug, run, disabled }: {
+  slug: string;
+  run: RunState | null | undefined;
+  disabled: boolean;
+}) {
+  const client = useQueryClient();
+  const { data: accountsState } = useAccounts();
+  const accounts = accountsState?.accounts ?? [];
+  const current = run?.accountId ?? 'default';
+  const [choice, setChoice] = useState('auto');
+  const [busy, setBusy] = useState(false);
+  if (!run || accounts.length < 2) return null;
+
+  const others = accounts.filter((a) => a.id !== current);
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t border-rule pt-3">
+      <span className="text-2xs uppercase tracking-wide text-ink-faint">
+        Account: <span className="normal-case text-ink-muted">{current === 'default' ? 'machine login' : current}</span>
+      </span>
+      <select
+        className="h-8 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
+        value={choice}
+        disabled={disabled || busy}
+        onChange={(event) => setChoice(event.target.value)}
+      >
+        <option value="auto">auto — most headroom</option>
+        {others.map((account) => (
+          <option key={account.id} value={account.id}>
+            {account.builtIn ? 'machine login' : account.name ?? account.email ?? account.id}
+          </option>
+        ))}
+      </select>
+      <Button
+        size="sm"
+        disabled={disabled || busy}
+        title="A live session is checkpointed (its session id kept) and re-attempted under the chosen account right away."
+        onClick={() => {
+          setBusy(true);
+          api.runSwitchAccount(slug, choice)
+            .then((outcome) => {
+              toast(outcome.ok
+                ? 'Switched — the next session runs under the other account.'
+                : outcome.reason ?? 'Could not switch.', outcome.ok ? 'ok' : 'warn');
+              void client.invalidateQueries({ queryKey: keys.runs() });
+              void client.invalidateQueries({ queryKey: keys.run(slug) });
+            })
+            .catch((error: Error) => toast(String(error.message ?? error), 'error'))
+            .finally(() => setBusy(false));
+        }}
+      >
+        Switch account
+      </Button>
+    </div>
   );
 }
 

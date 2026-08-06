@@ -197,6 +197,23 @@ test('a refusal is not retried', () => {
   assert.equal(d.kind, 'needs-human');
 });
 
+test('a reset more than 12h away parks with the usage-window discriminant, not a bare reason', () => {
+  const now = new Date('2026-08-02T00:00:00Z');
+  const epoch = Math.floor(now.getTime() / 1000) + 20 * 3600;   // 20h out
+  const d = classify(stop({ text: `Claude AI usage limit reached|${epoch}` }), now);
+  assert.equal(d.kind, 'needs-human');
+  // The discriminant is what lets a runner holding another account override
+  // the park with a switch — string-matching the reason was the alternative.
+  if (d.kind === 'needs-human') {
+    assert.equal(d.cause, 'usage-window');
+    assert.equal(d.at?.getTime(), epoch * 1000);
+  }
+  // An ordinary park carries no discriminant, so nothing can mistake it.
+  const auth = classify(stop({ text: 'Failed to authenticate: OAuth session expired' }));
+  assert.equal(auth.kind, 'needs-human');
+  if (auth.kind === 'needs-human') assert.equal(auth.cause, undefined);
+});
+
 test('signals distinguish a supervisor kill from an OOM kill', () => {
   assert.equal(classify(stop({ code: 143, text: '' })).kind, 'needs-human');
   assert.equal(classify(stop({ code: 137, text: '' })).kind, 'retry');

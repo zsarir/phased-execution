@@ -27,8 +27,15 @@ export type Disposition =
   | { kind: 'switch-model'; reason: string }
   /** The work is unfinished but intact: resume that session with a bigger cap. */
   | { kind: 'resume'; raise: 'budget' | 'turns'; reason: string }
-  /** Nothing automatic will fix this. Park, notify, wait for a person. */
-  | { kind: 'needs-human'; reason: string }
+  /**
+   * Nothing automatic will fix this. Park, notify, wait for a person.
+   *
+   * `cause: 'usage-window'` marks the one park that IS fixable without a
+   * person — a reset too far away to sleep on — so a runner holding another
+   * account can act on the discriminant instead of string-matching the
+   * reason. `at` rides along as the reset time it named.
+   */
+  | { kind: 'needs-human'; reason: string; cause?: 'usage-window'; at?: Date }
   /** The phase itself failed. Runner decides retry-vs-halt by its own counters. */
   | { kind: 'phase-failed'; reason: string }
   /** Finished normally. */
@@ -309,6 +316,8 @@ export function classify(signal: StopSignal, now = new Date()): Disposition {
       if (waitMs > MAX_AUTO_WAIT_MS) {
         return {
           kind: 'needs-human',
+          cause: 'usage-window',
+          at,
           reason: `usage limit resets ${at.toISOString()}, which is more than 12h away — parking rather than sleeping on it`,
         };
       }

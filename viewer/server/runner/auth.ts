@@ -158,7 +158,15 @@ export function loginCommand(cwd: string): string {
 }
 
 export function openLoginTerminal(cwd: string): { opened: boolean; command: string; detail?: string } {
-  const command = loginCommand(cwd);
+  return openCommandTerminal(loginCommand(cwd));
+}
+
+/**
+ * The same Terminal.app trick for any server-composed command — the accounts
+ * flow signs a PROFILE in, which is this command with a `CLAUDE_CONFIG_DIR=`
+ * assignment in front of it.
+ */
+export function openCommandTerminal(command: string): { opened: boolean; command: string; detail?: string } {
   if (process.platform !== 'darwin') {
     return {
       opened: false,
@@ -173,7 +181,7 @@ export function openLoginTerminal(cwd: string): { opened: boolean; command: stri
       detached: true,
     });
     child.unref();
-    log.info('auth.login-terminal', { cwd });
+    log.info('auth.login-terminal', { command: command.replace(/CLAUDE_CODE_OAUTH_TOKEN=\S+/, 'CLAUDE_CODE_OAUTH_TOKEN=…') });
     return { opened: true, command };
   } catch (error) {
     return { opened: false, command, detail: (error as Error).message };

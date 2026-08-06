@@ -38,6 +38,14 @@ const STUB = `#!/usr/bin/env node
 const fs = require('node:fs');
 const argv = process.argv.slice(2);
 if (process.env.PC_STUB_ARGV) fs.writeFileSync(process.env.PC_STUB_ARGV, JSON.stringify(argv));
+// The account vars, dumped for the test that proves credentials arrive as
+// ENVIRONMENT and never as argv.
+if (process.env.PC_STUB_ENV) {
+  fs.writeFileSync(process.env.PC_STUB_ENV, JSON.stringify({
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? null,
+    CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
+  }));
+}
 
 const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 const sid = '11111111-2222-3333-4444-555555555555';
@@ -81,6 +89,13 @@ process.stdin.on('data', (chunk) => {
     const text = (message.message && message.message.content || []).map((b) => b.text).join('');
     turn += 1;
     if (process.env.PC_STUB_HEARD) fs.appendFileSync(process.env.PC_STUB_HEARD, text + '\\n');
+    // The turn that ends on a usage wall: the limit text as the result, a
+    // non-zero exit — the shape the classifier reads off a real limited session.
+    if (process.env.PC_STUB_LIMIT_EXIT) {
+      say({ type: 'result', subtype: 'error_during_execution', total_cost_usd: 0,
+            result: process.env.PC_STUB_LIMIT_EXIT, num_turns: turn, session_id: sid });
+      process.exit(1);
+    }
     if (goSilent && turn > 1) continue;
 
     if (argv.includes('--replay-user-messages')) {
@@ -198,6 +213,42 @@ test('the boot prompt reaches the session on stdin, and never as argv', async ()
   assert.ok(!b.argv().includes('BOOT phase 3'), 'the prompt is not in argv');
   assert.equal(outcome.signal.subtype, 'success');
   assert.equal(outcome.sessionId, '11111111-2222-3333-4444-555555555555');
+  b.cleanup();
+});
+
+test('account credentials arrive as ENVIRONMENT, and never appear in argv', async () => {
+  const b = bench();
+  const envFile = join(b.dir, 'env.json');
+  await spawnClaude({
+    prompt: 'BOOT phase 1',
+    cwd: b.dir,
+    env: {
+      ...b.env,
+      PC_STUB_ENV: envFile,
+      CLAUDE_CONFIG_DIR: '/tmp/pc-profile-a/config',
+      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-testtoken',
+    },
+  });
+  const seen = JSON.parse(readFileSync(envFile, 'utf8')) as Record<string, string | null>;
+  assert.equal(seen.CLAUDE_CONFIG_DIR, '/tmp/pc-profile-a/config');
+  assert.equal(seen.CLAUDE_CODE_OAUTH_TOKEN, 'sk-ant-oat01-testtoken');
+  const argv = b.argv().join(' ');
+  assert.ok(!argv.includes('testtoken'), 'a credential in argv is a credential in `ps` output');
+  assert.ok(!argv.includes('pc-profile-a'), 'the config dir is env, not a flag');
+  b.cleanup();
+});
+
+test('a limit exit carries the wall text in the result and a non-zero code', async () => {
+  const b = bench();
+  const outcome = await spawnClaude({
+    prompt: 'BOOT phase 1',
+    cwd: b.dir,
+    env: { ...b.env, PC_STUB_LIMIT_EXIT: "You've hit your session limit · resets 3:45pm" },
+  });
+  assert.equal(outcome.signal.subtype, 'error_during_execution');
+  assert.match(outcome.signal.text ?? '', /hit your session limit/);
+  assert.equal(outcome.sessionId, '11111111-2222-3333-4444-555555555555',
+    'the session id survives the wall — it is what a switch resumes');
   b.cleanup();
 });
 

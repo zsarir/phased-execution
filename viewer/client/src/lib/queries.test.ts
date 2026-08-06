@@ -24,11 +24,13 @@ describe('SSE → Query bridge', () => {
     expect(extra, `phantom events: ${extra.join(', ')}`).toEqual([]);
   });
 
-  it('carries the 17 wire names, run events included', () => {
-    expect(SSE_EVENTS).toHaveLength(17);
+  it('carries the 18 wire names, run events included', () => {
+    expect(SSE_EVENTS).toHaveLength(18);
     // Sessions are on the stream deliberately: the socket is a session's own
     // live channel, but the dashboard card and the nav badges do not hold it.
     expect(SSE_EVENTS).toContain('sessions');
+    // Accounts ride the stream so the header meters move without polling.
+    expect(SSE_EVENTS).toContain('accounts');
     // The runner prefixes its own events (`server/runner/runner.ts` emits
     // `run:` + event). Listening for `phase` instead of `run:phase` is the
     // mistake this pins down.

@@ -22,6 +22,7 @@ how people end up ignoring the inbox entirely.
 | **Plan finished** | A run reached the end of its plan. | On |
 | **A session ended** | An agent session or terminal finished while you were not watching, or exited with an error. | On |
 | **Console problems** | The console degraded, its file watch went deaf, or it restarted after a crash. | On |
+| **Usage limits** | A Claude account this console runs work as is approaching or hit a usage window — the 5-hour session, the weekly allowance, a per-model one — with when it resets and what the run did about it (waited, switched account, paused). | On |
 | **Work became ready** | A phase became startable — including because of work you finished yourself, elsewhere. | **Off** |
 | **Plans changed on disk** | Any plan or handoff was written. An agent editing a handoff mid-phase fires this. | **Off** |
 

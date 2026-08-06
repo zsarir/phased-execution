@@ -13,7 +13,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 metadata:
-  version: 4.0.2
+  version: 4.1.0
 ---
 
 # Phased Execution
@@ -138,7 +138,13 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    deficient; note the gap so it gets fixed.
 2. **Confirm readiness, then the budget.** If the board shows this phase as `waiting`, a dependency isn't
    actually done — stop and surface that rather than building on an unfinished base (earlier-numbered phases
-   may legitimately be incomplete; rely on the board, not phase numbers). Then check the plan's
+   may legitimately be incomplete; rely on the board, not phase numbers).
+   **If the board shows this phase as `in-progress` or `stuck` and the lock is yours-or-stale**, you are
+   RESUMING an interrupted session (a died console, a usage-limit stop, a manual pause) — recovery, not a
+   restart: read `git status` and `git diff` FIRST; anything uncommitted is the interrupted session's work.
+   Never `git stash`, `git checkout --` or `git reset` it away. Re-claim the lock (`--force` only when
+   `status` says the lease expired), then continue from where it stopped to the exit criteria — a usage-limit
+   stop says nothing about the work, so fix nothing on account of it. Then check the plan's
    `## Session budget` target model against the model you're *actually* running — if they differ, recompute
    the budget from `references/sizing.md` and re-batch accordingly. **Then check scope, then claim
    (concurrency guard):** `git pull`, read the phase's scope
@@ -225,7 +231,9 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
      independent sibling — just continue into it (Mode 2 in place, lock and all). You save a full
      bootstrap + closeout and keep the cache warm. (`--session-plan` shows which phases belong together.)
    - **Stop & hand off (fresh session)** — when the budget is spent, the next phase is **GATED** (never
-     batch past an external gate), it wants a **different model**, or — with QA `on` — it depends on this
+     batch past an external gate), it wants a **different model**, the **account's usage window is
+     exhausted** (session/weekly limit — note the reset time in the handoff so the next session knows when
+     work can resume, or resumes at once under another account), or — with QA `on` — it depends on this
      phase's still-unrecorded verdict. Print the script's output verbatim as the **last message of this
      session**, then **STOP**.
    - **Several phases ready:** run them in any order. Ones with **disjoint scopes** may run as separate

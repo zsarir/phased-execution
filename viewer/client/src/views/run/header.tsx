@@ -90,6 +90,11 @@ export function RunHeader({
     <header className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone={RUN_TONE[run.status]} title={runStatusTitle(run.status)}>{run.status}</Chip>
+        {run.accountId ? (
+          <Chip title="Which Claude account this run's sessions spend. Absent means the machine login.">
+            {run.accountId}
+          </Chip>
+        ) : null}
         {lanes.length > 1 ? (
           <>
             <span className="font-display text-sm">phases {lanes.join(', ')}</span>

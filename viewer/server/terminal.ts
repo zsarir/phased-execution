@@ -243,8 +243,15 @@ export type SessionMeta = {
   permissionMode?: string;
   /** The uuid handed to `--session-id` — what `claude --resume <id>` takes later. */
   claudeSessionId?: string;
-  /** `plan` marks a session booted by the New-plan wizard. */
-  intent?: 'plan' | 'recovery' | 'qa';
+  /**
+   * `plan` marks a session booted by the New-plan wizard; `login` marks one
+   * minted to sign a Claude account in (`claude auth login` under a profile's
+   * `CLAUDE_CONFIG_DIR`) — its exit is what tells the accounts registry to
+   * read back who the operator became.
+   */
+  intent?: 'plan' | 'recovery' | 'qa' | 'login';
+  /** The account this session runs as — display + the login exit hook. */
+  accountId?: string;
   /** Set on a session minted by a recovery action; absent on every other session. */
   recovery?: RecoveryLink;
   /** Set on a session minted to QA one phase; absent on every other session. */
@@ -262,6 +269,14 @@ export type LaunchSpec = {
   args: string[];
   label?: string;
   meta?: SessionMeta;
+  /**
+   * Extra environment for the child, merged over the console's own. Composed
+   * ONLY on the server (`agent.ts`, the accounts login mint) — a browser never
+   * supplies env, the same way it never supplies argv. This is how a session
+   * runs as a different Claude account: `CLAUDE_CONFIG_DIR` for a profile,
+   * `CLAUDE_CODE_OAUTH_TOKEN` for a token.
+   */
+  env?: Record<string, string>;
 };
 
 export interface SessionInfo {
@@ -333,6 +348,13 @@ export interface TerminalOptions {
   allowed: boolean;
   /** The agent gate — `--allow-agent` (via `agentEnabled()`), for `claude` sessions. */
   agentAllowed?: boolean;
+  /**
+   * The accounts gate — `--allow-accounts`. Admits exactly one shape of claude
+   * session: a login mint whose argv the accounts service composed
+   * (`claude auth login`). Signing an account in should not require also
+   * enabling free-form agent sessions.
+   */
+  loginAllowed?: boolean;
   /** Where a new session starts — the open source directory, when there is one. */
   cwd?: () => string | undefined;
   /** Tests inject a fake; production takes the lazily-imported real one. */
@@ -431,9 +453,9 @@ export class Terminals {
     { ok: true; sessionId: string; token: string; expiresAt: number; session: SessionInfo }
     | { ok: false; status: number; error: string }
   > {
-    // With both capabilities off, refuse before looking anything up — whether
+    // With every capability off, refuse before looking anything up — whether
     // a session id exists is not discoverable through a disabled feature.
-    if (!this.options.allowed && this.options.agentAllowed !== true) {
+    if (!this.anyKindAllowed()) {
       return { ok: false, status: 403, error: 'The terminal is disabled. Restart with --allow-terminal to enable it.' };
     }
 
@@ -445,13 +467,13 @@ export class Terminals {
     // A reattach is gated by what the SESSION is, not by which flag admitted
     // the caller: an agent-only console must not hand out a live shell.
     if (session) {
-      const refusal = this.kindRefusal(session.kind);
+      const refusal = this.kindRefusal(session.kind, session.meta?.intent);
       if (refusal) return refusal;
     }
 
     if (!session) {
       const kind: SessionKind = launch?.kind ?? 'shell';
-      const refusal = this.kindRefusal(kind);
+      const refusal = this.kindRefusal(kind, launch?.meta?.intent);
       if (refusal) return refusal;
       // Live processes only: an ended session listed for its exit status is not
       // occupying anything, and refusing a new shell because of it would be a
@@ -503,8 +525,11 @@ export class Terminals {
   }
 
   /** The per-kind gate, phrased once so mint's two call sites cannot drift. */
-  private kindRefusal(kind: SessionKind): { ok: false; status: number; error: string } | null {
+  private kindRefusal(kind: SessionKind, intent?: SessionMeta['intent']): { ok: false; status: number; error: string } | null {
     if (kind === 'claude') {
+      // A login mint is the accounts capability wearing a pty, not an agent
+      // session: its argv is a fixed `claude auth login` the server composed.
+      if (intent === 'login' && this.options.loginAllowed === true) return null;
       return this.options.agentAllowed === true
         ? null
         : { ok: false, status: 403, error: 'Agent sessions are disabled. Restart with --allow-agent to enable them.' };
@@ -512,6 +537,10 @@ export class Terminals {
     return this.options.allowed
       ? null
       : { ok: false, status: 403, error: 'The terminal is disabled. Restart with --allow-terminal to enable it.' };
+  }
+
+  private anyKindAllowed(): boolean {
+    return this.options.allowed || this.options.agentAllowed === true || this.options.loginAllowed === true;
   }
 
   /**
@@ -548,9 +577,9 @@ export class Terminals {
   async handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): Promise<boolean> {
     if (url.pathname !== TERMINAL_PATH) return false;
 
-    // Either capability makes the socket path exist; the per-kind decision was
+    // Any capability makes the socket path exist; the per-kind decision was
     // already made when the ticket was minted, and a ticket names its session.
-    if (!this.options.allowed && this.options.agentAllowed !== true) {
+    if (!this.anyKindAllowed()) {
       refuse(socket, 403, 'terminal disabled');
       log.warn('terminal.upgrade-refused', { reason: 'disabled' });
       return true;
@@ -705,10 +734,11 @@ export class Terminals {
       // A login shell that does not know it is on a terminal prints a
       // different prompt and disables colour, so TERM is set here rather than
       // inherited from whatever launchd handed the console. The claude TUI
-      // needs the same answer for the same reason. `CLAUDE_CONFIG_DIR` rides
-      // along in process.env — the child runs in the home this console did,
-      // which is also the home `/api/skills` enumerated.
-      env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+      // needs the same answer for the same reason. By default the child runs
+      // in the home this console did (which is also the home `/api/skills`
+      // enumerated); a server-composed `launch.env` — an account's
+      // CLAUDE_CONFIG_DIR or token — layers between the two so TERM still wins.
+      env: { ...process.env, ...launch?.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     });
 
     const id = randomBytes(6).toString('hex');

@@ -40,6 +40,14 @@ itself; the preferences are where "for all plans" is said once.
 | Open a PR at completion | on | Work-branch runs only: the plan's **last** phase is told to push `pe/<slug>` and open a PR per scoped repo. For that run — and only that run — bare `git push` moves from the deny wall to an approval card, and `gh pr create` stays a card even under the `trusted` profile; force-pushes and `--delete` stay denied outright. |
 | Repository guard | on | The scheduler queues runs whose repository scopes overlap. Off: overlapping runs may start together, and a work-branch run sharing a repo with a live one is told to work in a linked `git worktree` instead of switching the shared checkout. |
 
+Beside the preferences, every launch surface offers two per-run choices when accounts are
+registered (`--allow-accounts`): **Account** — which Claude login the run's sessions spend,
+including `auto` (most 5-hour headroom) — and **On usage limit** — `switch` (checkpoint and
+continue at once under the account with headroom; the dialogs' default), `wait` (sleep to the
+reset and resume by itself, restart-safe), or `pause` (checkpoint and stop for a person). A
+model-specific limit keeps switching models, not accounts. `Switch account` on a live run acts
+immediately; the scheduler throttles only the limited account.
+
 **Run-level beats plan prose for console-minted sessions.** When a run uses the work branch and the
 plan's own `**Branch:**` line names a different branch, the session is told to use the run's branch
 and to record the discrepancy in its handoff — the console never silently rewrites the plan.

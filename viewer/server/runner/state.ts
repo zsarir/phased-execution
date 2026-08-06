@@ -141,6 +141,12 @@ export type PhaseRecord = {
   /** What the session's own `init` message said it was running on. */
   actualModel?: string;
   sessionId?: string;
+  /**
+   * The account `sessionId`'s transcript was recorded under. What the port
+   * needs when a resume happens under a DIFFERENT account: the file lives in
+   * the config dir of the account that wrote it, not the one about to read it.
+   */
+  sessionAccountId?: string;
   startedAt?: string;
   endedAt?: string;
   note?: string;
@@ -275,6 +281,21 @@ export type RunState = {
    * twelve-phase run against a window that is nearly spent.
    */
   limits?: { status: string; window?: string; utilization?: number; resetsAt?: number; at: string };
+  /**
+   * The Claude account this run's sessions spawn as, from the instance's
+   * registry. Written as an omission when it is the machine login — a run file
+   * from before accounts existed means exactly what it meant, and an id that
+   * has since been removed degrades to the same place (`envFor` answers null).
+   */
+  accountId?: string;
+  /**
+   * What to do when a session hits the SHARED usage window (session/weekly —
+   * model-specific limits keep their own model-switch path). Absent means
+   * `wait`, which is the pre-accounts behavior: sleep to the reset. `switch`
+   * checkpoints and continues under the account with the most headroom;
+   * `pause` checkpoints and stops for a person.
+   */
+  onLimit?: 'wait' | 'switch' | 'pause';
   phaseBudgetUsd: number | null;
   runBudgetUsd: number | null;
   spentUsd: number;
@@ -431,11 +452,21 @@ export function journalFile(root: string, slug: string, id: string): string {
  * Reading and writing
  * ------------------------------------------------------------------ */
 
+/** The on-limit policies a browser may name; anything else reads as `wait`. */
+export const ON_LIMIT_POLICIES = ['wait', 'switch', 'pause'] as const;
+export type OnLimitPolicy = (typeof ON_LIMIT_POLICIES)[number];
+
+export function isOnLimitPolicy(value: unknown): value is OnLimitPolicy {
+  return typeof value === 'string' && (ON_LIMIT_POLICIES as readonly string[]).includes(value);
+}
+
 export type NewRunOptions = {
   slug: string;
   root: string;
   model?: string;
   effort?: string;
+  accountId?: string;
+  onLimit?: OnLimitPolicy;
   autonomy?: Autonomy;
   phaseBudgetUsd?: number | null;
   runBudgetUsd?: number | null;
@@ -492,6 +523,11 @@ export function newRun(opts: NewRunOptions): RunState {
     halt: null,
     pause: null,
     freeze: null,
+    // Same omission convention as `permissionProfile`: the machine login and
+    // the `wait` policy are the absent states, so old run files and old
+    // readers agree without a migration.
+    ...(opts.accountId && opts.accountId !== 'default' ? { accountId: opts.accountId } : {}),
+    ...(opts.onLimit && opts.onLimit !== 'wait' ? { onLimit: opts.onLimit } : {}),
     ...(opts.onlyPhases?.length ? { onlyPhases: [...opts.onlyPhases] } : {}),
     ...(opts.phaseOptions ? { phaseOptions: { ...opts.phaseOptions } } : {}),
     ...(opts.skills?.length ? { skills: [...opts.skills] } : {}),
@@ -609,6 +645,29 @@ export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
             + 'Let them finish or stop them, then continue this run.',
       phase: first.phase,
     };
+    return true;
+  }
+
+  // A run asleep on a usage window is the one in-flight state whose "why" IS
+  // recorded: `waitUntil` says exactly when it meant to continue. Flattening
+  // it to `interrupted` — which this function did — threw that away, and a
+  // console restart during a long window turned a self-resuming run into one
+  // waiting for a person. It reconciles to `paused` with the clock intact;
+  // whether anything re-arms the wait is the service's boot decision
+  // (`readoptIdle`), not this function's — reconcile preserves facts.
+  if (state.status === 'waiting' && state.waitUntil) {
+    state.status = 'paused';
+    state.child = null;
+    delete state.children;
+    state.pause = null;
+    state.freeze = null;
+    state.finishedReason ??= `usage limit — this run meant to resume at ${state.waitUntil}. `
+      + 'Continue now under another account, or leave it to re-arm.';
+    for (const record of Object.values(state.phases)) {
+      if (!PHASE_IN_FLIGHT.includes(record.status)) continue;
+      record.status = 'pending';
+      record.resumeSessionId ??= record.sessionId;
+    }
     return true;
   }
 

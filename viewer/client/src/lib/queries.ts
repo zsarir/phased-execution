@@ -25,8 +25,8 @@ import {
 } from '@tanstack/react-query';
 import {
   api,
-  type ConsoleState, type InboxQuery, type NotificationScope, type PlanDetail, type PlanSummary,
-  type TerminalState,
+  type AccountsState, type ConsoleState, type InboxQuery, type NotificationScope, type PlanDetail,
+  type PlanSummary, type TerminalState,
 } from './api';
 import { isClosed } from './closure';
 import { SSE_EVENTS, onSse, type SseEvent } from './sse';
@@ -83,6 +83,7 @@ export const keys = {
   transcript: (slug: string) => ['transcript', slug] as const,
   diagnosis: (slug: string, phase: number | string) => ['diagnosis', slug, String(phase)] as const,
   auth: () => ['auth'] as const,
+  accounts: () => ['accounts'] as const,
   skills: () => ['skills'] as const,
   notifications: () => ['notifications'] as const,
   search: (query: string) => ['search', query] as const,
@@ -133,6 +134,15 @@ const patchUnread: Effect['patch'] = (client, data) => {
   if (typeof data.unread !== 'number') return;
   client.setQueryData(keys.state(), (prev: ConsoleState | undefined) =>
     prev ? { ...prev, unread: data.unread as number } : prev);
+};
+
+/** The account list travels on the event; writing it beats asking for it back. */
+const patchAccounts: Effect['patch'] = (client, data) => {
+  if (!Array.isArray(data.accounts)) return;
+  client.setQueryData(keys.accounts(), (prev: AccountsState | undefined) => ({
+    accounts: data.accounts as AccountsState['accounts'],
+    allowAccounts: prev?.allowAccounts ?? false,
+  }));
 };
 
 /** The session list travels on the event; writing it beats asking for it back. */
@@ -190,6 +200,12 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
      which is also why `['scopes']` is invalidated as a bare prefix rather
      than for the slug the event happens to name. */
   'run:queue': { invalidate: [keys.runs(), keys.state(), keys.queue(), ['scopes']] },
+
+  /* ---- accounts ----
+     The redacted list rides on the event (see `patchAccounts`), so this is a
+     cache write first; the invalidation is the belt to those braces, because
+     `/api/accounts` also carries `allowAccounts`. */
+  accounts: { invalidate: [keys.accounts()], patch: patchAccounts },
 
   /* ---- the firehose ----
      These two arrive many times a second while a phase is talking. The run view
@@ -250,6 +266,11 @@ export function useConsoleState() {
 
 export function usePlans(enabled = true) {
   return useQuery({ queryKey: keys.plans(), queryFn: api.plans, enabled });
+}
+
+/** The instance's Claude accounts with their meters — live via the `accounts` event. */
+export function useAccounts(enabled = true) {
+  return useQuery({ queryKey: keys.accounts(), queryFn: api.accounts, enabled });
 }
 
 /** How long a page has to stay open before opening it counts as reading. */

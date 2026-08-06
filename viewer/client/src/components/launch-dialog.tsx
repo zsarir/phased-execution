@@ -27,8 +27,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   Banner, Button, Dialog, DialogClose, DialogContent, DialogFooter, toast,
 } from '@/components/ui';
-import { keys, useConsoleState, useSkills } from '@/lib/queries';
-import { api, automationPrefs, type PhaseLock, type RunState } from '@/lib/api';
+import { keys, useAccounts, useConsoleState, useSkills } from '@/lib/queries';
+import { api, automationPrefs, type OnLimitPolicy, type PhaseLock, type RunState } from '@/lib/api';
 import { countdown, relativeTime } from '@/lib/format';
 import { ReleaseStaleButton } from '@/components/release-lock';
 import { startQa } from '@/lib/start-qa';
@@ -175,6 +175,13 @@ export function LaunchDialog({ request, onClose, onDone }: {
   const [effort, setEffort] = useState(qaTarget ? qaTarget.effort ?? '' : run?.effort ?? (request.kind === 'recovery' ? '' : DEFAULTS.effort));
   const [profile, setProfile] = useState<PermissionProfile>(run?.permissionProfile ?? DEFAULTS.permissionProfile);
   const [qaProfile, setQaProfile] = useState<QaProfile>('guarded');
+  // Which account pays, and what to do when its window closes. `switch` is the
+  // deliberate default: with one account it degrades to `wait` on its own, and
+  // with two it is the behavior multi-account exists for.
+  const { data: accountsState } = useAccounts();
+  const accounts = accountsState?.accounts ?? [];
+  const [accountId, setAccountId] = useState(run?.accountId ?? 'default');
+  const [onLimit, setOnLimit] = useState<OnLimitPolicy>(run?.onLimit ?? 'switch');
   const [chosen, setChosen] = useState<string[]>(
     qaTarget ? qaTarget.planSkills ?? [] : run?.skills ?? [],
   );
@@ -216,6 +223,7 @@ export function LaunchDialog({ request, onClose, onDone }: {
           model,
           effort,
           permissionProfile: qaProfile,
+          ...(accountId !== 'default' && accountId !== 'auto' ? { accountId } : {}),
           ...(merged().length ? { skills: merged() } : {}),
           ...(activate && canActivate ? { activate: true } : {}),
         });
@@ -231,6 +239,7 @@ export function LaunchDialog({ request, onClose, onDone }: {
           ...(request.runId ? { runId: request.runId } : {}),
           ...(model ? { model } : {}),
           ...(effort ? { effort } : {}),
+          ...(accountId !== 'default' && accountId !== 'auto' ? { accountId } : {}),
           ...(merged().length ? { skills: merged() } : {}),
         });
         if (id) { onDone?.(id); onClose(); }
@@ -247,6 +256,8 @@ export function LaunchDialog({ request, onClose, onDone }: {
       await api.runStart(request.slug, {
         model,
         effort,
+        ...(accountId !== 'default' || run?.accountId ? { accountId } : {}),
+        ...(onLimit !== 'wait' || run?.onLimit ? { onLimit } : {}),
         autonomy: run?.autonomy ?? DEFAULTS.autonomy,
         phaseBudgetUsd: run?.phaseBudgetUsd ?? null,
         runBudgetUsd: run?.runBudgetUsd ?? null,
@@ -349,6 +360,44 @@ export function LaunchDialog({ request, onClose, onDone }: {
                 ))}
               </select>
             </label>
+          </div>
+
+          {/* Which login pays, and what happens at its usage wall. Offered even
+              with one account — `auto` and the policy still mean something the
+              moment a second one is registered. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-2xs uppercase tracking-wide text-ink-faint">Account</span>
+              <select className={field} value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+                <option value="auto">auto — most 5-hour headroom</option>
+                {accounts.map((account) => {
+                  const five = account.usage?.buckets.five_hour;
+                  const label = account.builtIn
+                    ? `machine login${account.email ? ` (${account.email})` : ''}`
+                    : account.name ?? account.email ?? account.id;
+                  return (
+                    <option key={account.id} value={account.id}>
+                      {label}{five ? ` — 5h ${Math.round(five.utilization)}%` : ''}
+                    </option>
+                  );
+                })}
+                {accounts.length === 0 ? <option value="default">machine login</option> : null}
+              </select>
+            </label>
+            {(request.kind === 'phase' || request.kind === 'continue') && (
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-2xs uppercase tracking-wide text-ink-faint">On usage limit</span>
+                <select
+                  className={field}
+                  value={onLimit}
+                  onChange={(event) => setOnLimit(event.target.value as OnLimitPolicy)}
+                >
+                  <option value="switch">switch account, else wait</option>
+                  <option value="wait">wait for the reset</option>
+                  <option value="pause">pause and ask me</option>
+                </select>
+              </label>
+            )}
           </div>
 
           {request.kind === 'qa' && (

@@ -60,6 +60,9 @@ describe('runNotes — one slot per legacy banner', () => {
     ['pause', run({ status: 'paused' }), { live: false }],
     ['frozen', run({ status: 'frozen', freeze: { at: '2026-08-03T10:00:00Z', phase: 2, pid: 1, by: 'me', escalateAt: '2026-08-03T12:00:00Z' } }), {}],
     ['waiting-window', run({ status: 'waiting', waitUntil: '2026-08-03T12:00:00Z' }), {}],
+    // Paused ON the limit: the policy said "pause and ask", or a restart
+    // preserved the clock. The reset time is what separates it from `pause`.
+    ['limit-paused', run({ status: 'paused', waitUntil: '2026-08-03T12:00:00Z', onLimit: 'pause' }), { live: false }],
     ['budget', run({ limits: { status: 'limited', window: 'five_hour', utilization: 0.82, at: 'x' } }), {}],
     ['scoped', run({ onlyPhases: [3] }), {}],
     ['profile', run({ permissionProfile: 'bypass' }), {}],

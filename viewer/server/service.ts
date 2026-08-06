@@ -57,7 +57,9 @@ import {
   slugsNeedingBoard, IN_FLIGHT, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
-import { checkAuth, forgetAuth, openLoginTerminal, type AuthStatus } from './runner/auth.ts';
+import { checkAuth, forgetAuth, openLoginTerminal, openCommandTerminal, shellQuote, type AuthStatus } from './runner/auth.ts';
+import { Accounts, DEFAULT_ACCOUNT_ID, profileConfigDir, type AccountView } from './accounts/index.ts';
+import { portTranscript } from './accounts/transcripts.ts';
 import {
   RECOVERY_TITLES, recoveryKey,
   type RecoveryClass, type RecoveryFacts, type RecoveryRequest,
@@ -555,6 +557,9 @@ export class Service {
   readonly push: Push;
   readonly notifications: Notifications;
   readonly terminals: Terminals;
+  /** This instance's Claude accounts — registry, meters, per-run environments. */
+  readonly accounts: Accounts;
+  private accountsEmitTimer: NodeJS.Timeout | null = null;
 
   constructor(flags: Flags) {
     this.flags = flags;
@@ -565,6 +570,9 @@ export class Service {
     this.terminals = new Terminals({
       allowed: flags.allowTerminal,
       agentAllowed: agentEnabled(flags),
+      // Signing an account in needs a pty for exactly one fixed command; the
+      // accounts flag is that permission without opening free-form sessions.
+      loginAllowed: flags.allowAccounts,
       cwd: () => this.root?.path,
       onSession: (event) => this.onSessionEvent(event),
     });
@@ -617,8 +625,30 @@ export class Service {
         live: snapshot.live,
         queued: snapshot.queued,
         throttledUntil: snapshot.throttledUntil,
+        throttledAccounts: snapshot.throttledAccounts,
       }),
     });
+    this.accounts = new Accounts({
+      onChange: () => this.emitAccounts(),
+      // The meters warn before the wall: 80 is "plan your afternoon", 95 is
+      // "the next long phase will not finish". Announced through the same
+      // gate as everything else, so the category switch is respected.
+      onThreshold: (view, bucket, level, utilization, resetsAt) => {
+        const name = view.email ?? view.name ?? view.id;
+        const when = new Date(resetsAt);
+        const reset = Number.isNaN(when.getTime()) ? resetsAt : when.toLocaleString();
+        this.announce('limits', {
+          title: level === 'alert'
+            ? `Usage window nearly spent — ${bucketLabel(bucket)}`
+            : `Usage climbing — ${bucketLabel(bucket)}`,
+          body: `${name}: ${Math.round(utilization)}% of the ${bucketLabel(bucket)} window used · resets ${reset}`,
+          tag: tagFor('limits', view.id, bucket, resetsAt),
+        });
+      },
+    });
+    // Meters run for the life of the process, not the life of a source dir —
+    // accounts are an instance fact, and the header shows them on every page.
+    this.accounts.startPolling();
     // A fault anywhere in the process reaches the browser as a health event,
     // so a degraded console announces itself instead of looking healthy.
     onDegraded((state) => {
@@ -707,7 +737,10 @@ export class Service {
   }
 
   /** How full the console is: the header's answer, and `/api/queue`'s summary. */
-  concurrency(): { max: number; live: number; queued: number; throttledUntil: number | null } {
+  concurrency(): {
+    max: number; live: number; queued: number; throttledUntil: number | null;
+    throttledAccounts: { accountId: string; until: number }[];
+  } {
     const snapshot = this.scheduler.snapshot();
     return {
       max: snapshot.max,
@@ -716,6 +749,7 @@ export class Service {
       live: snapshot.live,
       queued: snapshot.queued,
       throttledUntil: snapshot.throttledUntil,
+      throttledAccounts: snapshot.throttledAccounts,
     };
   }
 
@@ -813,6 +847,25 @@ export class Service {
       // prose is read only to WARN on a mismatch, the title names the PR.
       planBranch: (slug) => this.store?.get(slug)?.plan?.sessionBudget.branch,
       planTitle: (slug) => this.store?.get(slug)?.plan?.title,
+      // The account seam. `envFor` makes a child run AS the run's account;
+      // `pickAccount` is the switch policy's cached answer; the limited hook
+      // remembers the wall on the account and tells the operator which one.
+      accountEnv: (accountId) => this.accounts.envFor(accountId),
+      pickAccount: (excluding) => this.accounts.pickAccount(excluding),
+      onAccountLimited: (accountId, window, resetsAt, detail) => {
+        if (resetsAt) this.accounts.markLimited(accountId, window, resetsAt.toISOString());
+        const name = this.accounts.labelFor(accountId);
+        this.announce('limits', {
+          title: `Usage limit hit — ${name}`,
+          body: detail,
+          tag: tagFor('limits', accountId ?? 'default', window, resetsAt?.toISOString() ?? 'unknown'),
+        });
+      },
+      portTranscript: (sessionId, fromAccount, toAccount) => portTranscript(
+        sessionId,
+        this.accounts.configDirFor(fromAccount),
+        this.accounts.configDirFor(toAccount),
+      ),
       onEvent: (event, data) => this.onRunnerEvent(event, data),
     });
   }
@@ -965,6 +1018,25 @@ export class Service {
     if (type !== 'exited') return;
     const code = session.exited?.code ?? 0;
     const failed = code !== 0 || session.exited?.signal != null;
+
+    // A login session's exit is answered by reading back who the profile
+    // became — email, plan — never by announcing that a process ended. The
+    // probe also covers "they closed it without finishing": completeLogin
+    // simply finds no credentials and the card keeps saying "not signed in".
+    const loginAccount = session.meta?.intent === 'login' ? session.meta.accountId : undefined;
+    if (loginAccount) {
+      void this.accounts.completeLogin(loginAccount).then((view) => {
+        if (view?.signedIn && view.email) {
+          this.announce('limits', {
+            title: 'Account signed in',
+            body: `${view.email} is now available to runs on this console.`,
+            tag: tagFor('limits', 'login', loginAccount),
+          });
+        }
+      }).catch((error) => log.warn('accounts.login.complete-failed', { account: loginAccount, error }));
+      return;
+    }
+
     const recovery = session.meta?.recovery;
     const qa = session.meta?.qa;
     if (!event.detached && !failed && !recovery && !qa) return;
@@ -1186,24 +1258,75 @@ export class Service {
     if (!this.flags.allowRun || !this.root?.ok) return;
     for (const record of this.store?.list() ?? []) {
       const state = latestRun(this.root.path, record.slug, this.liveRunIds());
-      if (state?.status !== 'queued') continue;
-      try {
-        log.info('run.readopt-queued', { slug: record.slug, runId: state.id });
-        await this.startRun(record.slug, {
-          resumeRunId: state.id,
-          // Resume clears a scope it is not handed, and an omitted skills list
-          // would let machine defaults overwrite the run's sticky one — the
-          // same passthrough retryPhase makes, for the same reason.
-          ...(state.onlyPhases?.length ? { onlyPhases: state.onlyPhases } : {}),
-          skills: state.skills ?? [],
-        });
-      } catch (error) {
-        log.warn('run.readopt-failed', { slug: record.slug, runId: state.id, error });
+      if (state?.status === 'queued') {
+        try {
+          log.info('run.readopt-queued', { slug: record.slug, runId: state.id });
+          await this.startRun(record.slug, {
+            resumeRunId: state.id,
+            // Resume clears a scope it is not handed, and an omitted skills list
+            // would let machine defaults overwrite the run's sticky one — the
+            // same passthrough retryPhase makes, for the same reason.
+            ...(state.onlyPhases?.length ? { onlyPhases: state.onlyPhases } : {}),
+            skills: state.skills ?? [],
+          });
+        } catch (error) {
+          log.warn('run.readopt-failed', { slug: record.slug, runId: state.id, error });
+        }
+        continue;
+      }
+      // The second readoptable shape: a run reconciled off a usage-window
+      // sleep (`reconcileRun` turned waiting→paused, keeping `waitUntil`).
+      // Reconcile preserved the facts; THIS is what re-arms the clock — unless
+      // the run's own policy was "pause and ask me", which means what it says.
+      if (state?.status === 'paused' && state.waitUntil && (state.onLimit ?? 'wait') !== 'pause') {
+        this.armLimitResume(record.slug, state);
       }
     }
   }
 
+  /** One armed clock per plan: the newest reset time wins, restarts survive. */
+  private limitResumeTimers = new Map<string, NodeJS.Timeout>();
+
+  private armLimitResume(slug: string, state: RunState): void {
+    const at = Date.parse(state.waitUntil ?? '');
+    if (!Number.isFinite(at)) return;
+    const delay = at - Date.now();
+    // The runner's own ceiling, honored here too: a reset half a day out is a
+    // recovery card for a person (who may have another account), not a timer.
+    if (delay > 12 * 60 * 60 * 1000) return;
+    const existing = this.limitResumeTimers.get(slug);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => { void this.resumeLimitPaused(slug, state.id); }, Math.max(0, delay));
+    timer.unref?.();
+    this.limitResumeTimers.set(slug, timer);
+    log.info('run.rearmed-wait', { slug, runId: state.id, until: state.waitUntil });
+  }
+
+  private async resumeLimitPaused(slug: string, runId: string): Promise<void> {
+    this.limitResumeTimers.delete(slug);
+    if (!this.flags.allowRun || !this.root?.ok) return;
+    // Re-read before acting: the operator may have continued it by hand,
+    // stopped it, or started something else in the hours this timer slept.
+    const state = latestRun(this.root.path, slug, this.liveRunIds());
+    if (!state || state.id !== runId || state.status !== 'paused' || !state.waitUntil) return;
+    if (this.liveRunner(slug)) return;
+    try {
+      log.info('run.limit-resume', { slug, runId });
+      await this.startRun(slug, {
+        resumeRunId: runId,
+        ...(state.onlyPhases?.length ? { onlyPhases: state.onlyPhases } : {}),
+        skills: state.skills ?? [],
+      });
+    } catch (error) {
+      log.warn('run.limit-resume-failed', { slug, runId, error });
+    }
+  }
+
   close(): void {
+    this.accounts.stop();
+    if (this.accountsEmitTimer) clearTimeout(this.accountsEmitTimer);
+    for (const timer of this.limitResumeTimers.values()) clearTimeout(timer);
+    this.limitResumeTimers.clear();
     this.watcher.stop();
     // Nothing is admitted after this point, and every pending admission is
     // rejected rather than left holding a promise nobody will settle.
@@ -2261,6 +2384,10 @@ export class Service {
       // The agent gate, same shape — the nav-level fact; the richer answer
       // still lives on `/api/terminal` (`agentAllowed` beside `allowed`).
       allowAgent: agentEnabled(this.flags),
+      // The account-registration gate. The meters and the account LIST are not
+      // behind it — watching your own quota is display — this only decides
+      // whether the Add/Sign-in/Remove verbs exist.
+      allowAccounts: this.flags.allowAccounts,
       // Every live run. The old singular `run` — "the FIRST live run of any
       // plan" — was dropped once the pool made it a lie: with two plans
       // driving, any consumer of it read plan B's run while looking at plan A.
@@ -2353,6 +2480,14 @@ export class Service {
     // discovered inside the runner, after a run existed and the console had
     // already reported success.
     this.assertNotClaimed(slug, options.onlyPhases);
+
+    // `auto` resolves here, once, against the cached meters — the run then
+    // carries a concrete id, so the journal and the header say which account
+    // is paying rather than "whatever looked best at some point".
+    if (options.accountId === 'auto') {
+      options = { ...options, accountId: this.accounts.pickAccount(null) ?? DEFAULT_ACCOUNT_ID };
+    }
+    this.preflightAccount(options.accountId);
 
     // QA on launch, resolved BEFORE the runner starts so the run's first board
     // read already sees gating. The preference speaks only for a fresh run — a
@@ -2824,6 +2959,37 @@ export class Service {
     return this.editStoredRun(slug, (state) => { applySettings(state, translate(state)); });
   }
 
+  /**
+   * The operator's mid-run account switch. Live loop: checkpoint-and-continue
+   * inside the runner. No loop: edit the checkpoint, so the next Continue
+   * spawns under the new account. `auto` resolves against the meters here,
+   * exactly as it does at start.
+   */
+  switchAccountRun(slug: string, accountId: string | undefined, by = 'console'):
+    { ok: boolean; reason?: string; run?: RunState | null } {
+    const current = this.liveRunner(slug)?.current() ?? null;
+    const resolved = accountId === 'auto'
+      ? this.accounts.pickAccount(current?.accountId ?? undefined) ?? undefined
+      : accountId;
+    if (accountId === 'auto' && !resolved) {
+      return { ok: false, reason: 'no other account has headroom right now' };
+    }
+    const runner = this.liveRunner(slug);
+    if (runner) {
+      const outcome = runner.switchAccount(resolved, by);
+      return outcome.ok
+        ? { ok: true, run: runner.current() }
+        : { ok: false, reason: outcome.reason };
+    }
+    const edited = this.editStoredRun(slug, (state) => {
+      if (resolved && resolved !== DEFAULT_ACCOUNT_ID) state.accountId = resolved;
+      else delete state.accountId;
+    });
+    return edited
+      ? { ok: true, run: edited }
+      : { ok: false, reason: 'no run of that plan to move — start one with the account instead' };
+  }
+
   async retryPhase(slug: string, phase: number): Promise<RunState | null> {
     // Named phase, so the claim is the whole answer — and checked before the
     // live-runner branch too, since `runner.retry` queues work the boarding
@@ -3088,6 +3254,17 @@ export class Service {
       // discipline block flips its branch bullet on this.
       ...(runState?.gitMode === 'new-branch'
         ? { gitStrategy: { branch: `pe/${request.slug}` } }
+        : {}),
+      // When the interruption WAS a usage limit, say so: the session must know
+      // the stop was quota, not the work. `waitUntil` on a paused/interrupted
+      // run is that fact's fingerprint.
+      ...(runState?.waitUntil && /usage limit/i.test(runState.finishedReason ?? runState.halt?.reason ?? 'usage limit')
+        ? {
+          limit: {
+            account: this.accounts.labelFor(runState.accountId),
+            resetsAt: new Date(runState.waitUntil).toLocaleString(),
+          },
+        }
         : {}),
       board: rows.length
         ? rows.map((row) => ({
@@ -3542,6 +3719,139 @@ export class Service {
     return result;
   }
 
+  /* ---- accounts ---- */
+
+  /** Redacted views, always readable — the meters are display, not capability. */
+  listAccounts(): Promise<AccountView[]> {
+    return this.accounts.list();
+  }
+
+  async addTokenAccount(name: string, token: string): Promise<AccountView> {
+    this.assertAccountsAllowed();
+    return this.accounts.addToken(name, token);
+  }
+
+  async removeAccount(id: string): Promise<boolean> {
+    this.assertAccountsAllowed();
+    return this.accounts.remove(id);
+  }
+
+  /**
+   * Put a login in front of the operator for a profile account.
+   *
+   * Two shapes, tried in order. The embedded terminal (a pty running exactly
+   * `claude auth login` under the profile's `CLAUDE_CONFIG_DIR`) is the flow
+   * that completes itself — its exit triggers `completeLogin`. When there is
+   * no pty to be had (node-pty missing, headless), the same command is opened
+   * in Terminal.app or handed back for the operator to paste; `completeLogin`
+   * then runs on the next accounts read instead of on an exit event.
+   */
+  async beginAccountLogin(options: { accountId?: string; name?: string }): Promise<{
+    accountId: string;
+    command: string;
+    mode: 'embedded' | 'external' | 'command';
+    terminal?: { sessionId: string; token: string; expiresAt: number };
+    detail?: string;
+  }> {
+    this.assertAccountsAllowed();
+    let accountId = options.accountId;
+    if (accountId) {
+      const meta = this.accounts.meta(accountId);
+      if (!meta || meta.kind !== 'profile') throw new Error('Only profile accounts can be signed in here.');
+    } else {
+      accountId = this.accounts.beginProfile(options.name).id;
+    }
+    const dir = profileConfigDir(accountId);
+    const command = `CLAUDE_CONFIG_DIR=${shellQuote(dir)} claude auth login`;
+
+    const minted = await this.terminals.mint(undefined, undefined, {
+      kind: 'claude',
+      file: 'claude',
+      args: ['auth', 'login'],
+      label: `Sign in — ${this.accounts.labelFor(accountId)}`,
+      env: { CLAUDE_CONFIG_DIR: dir },
+      meta: { intent: 'login', accountId },
+    });
+    if (minted.ok) {
+      return {
+        accountId,
+        command,
+        mode: 'embedded',
+        terminal: { sessionId: minted.sessionId, token: minted.token, expiresAt: minted.expiresAt },
+      };
+    }
+
+    const external = openCommandTerminal(command);
+    const detail = external.detail ?? minted.error;
+    return {
+      accountId,
+      command,
+      mode: external.opened ? 'external' : 'command',
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  /** A profile the operator signed in outside the exit hook — re-read it. */
+  async refreshAccount(id: string): Promise<AccountView | undefined> {
+    const meta = this.accounts.meta(id);
+    if (!meta) return undefined;
+    if (meta.kind === 'profile') return this.accounts.completeLogin(id);
+    const views = await this.accounts.list();
+    return views.find((v) => v.id === id);
+  }
+
+  private assertAccountsAllowed(): void {
+    if (!this.flags.allowAccounts) {
+      throw new Error('Account registration is disabled. Restart with --allow-accounts to enable it.');
+    }
+  }
+
+  /**
+   * The pre-flight quota gate: refuse to start a run against a 5-hour window
+   * that is already spent (≥97% — the first long phase would only find the
+   * wall the expensive way), and warn on the way up. Cached meters only; a
+   * console that has never managed to poll starts runs exactly as before.
+   */
+  private preflightAccount(accountId: string | undefined): void {
+    const limited = this.accounts.limitedUntil(accountId);
+    const learned = limited.five_hour ?? limited.seven_day;
+    if (learned) {
+      throw new Error(
+        `${this.accounts.labelFor(accountId)} hit its usage limit — it resets ${new Date(learned).toLocaleString()}. `
+        + 'Pick another account, or wait.');
+    }
+    const five = this.accounts.usageFor(accountId)?.buckets.five_hour;
+    if (!five) return;
+    if (five.utilization >= 97) {
+      throw new Error(
+        `${this.accounts.labelFor(accountId)} has ${Math.round(100 - five.utilization)}% of its 5-hour window left `
+        + `(resets ${new Date(five.resetsAt).toLocaleString()}). Pick another account, or wait.`);
+    }
+    if (five.utilization >= 80) {
+      this.announce('limits', {
+        title: 'Starting against a busy window',
+        body: `${this.accounts.labelFor(accountId)} is at ${Math.round(five.utilization)}% of its 5-hour window `
+          + `(resets ${new Date(five.resetsAt).toLocaleString()}).`,
+        tag: tagFor('limits', 'preflight', accountId ?? 'default', five.resetsAt),
+      });
+    }
+  }
+
+  /**
+   * The accounts stream, debounced: a poller sweep touches every account in a
+   * burst, and one event carrying the whole list is what the header wants.
+   */
+  private emitAccounts(): void {
+    if (this.accountsEmitTimer) return;
+    this.accountsEmitTimer = setTimeout(() => {
+      this.accountsEmitTimer = null;
+      void this.accounts.list()
+        .then((accounts) => this.emit('accounts', { accounts }))
+        .catch((error) => log.warn('accounts.emit-failed', { error }));
+    }, 150);
+    this.accountsEmitTimer.unref?.();
+  }
+
   /** Every run across every plan, for the runs list. */
   async allRuns(): Promise<RunState[]> {
     const slugs = this.store?.list().map((r) => r.slug) ?? [];
@@ -3742,4 +4052,18 @@ export class Service {
     const budget = resolveBudget(record.plan.sessionBudget.targetModel, this.sizing);
     return remainingWork(record.plan.graph, board, sizes, this.sizing, budget);
   }
+}
+
+/**
+ * Human names for the usage endpoint's bucket keys. Unknown keys — a tier that
+ * ships after this file — degrade to a readable form of the key itself, so a
+ * new window appears in notifications the day it exists rather than after an
+ * update here.
+ */
+function bucketLabel(bucket: string): string {
+  if (bucket === 'five_hour') return '5-hour session';
+  if (bucket === 'seven_day') return 'weekly (all models)';
+  const model = /^seven_day_(.+)$/.exec(bucket)?.[1];
+  if (model) return `weekly (${model[0].toUpperCase()}${model.slice(1)})`;
+  return bucket.replace(/_/g, ' ');
 }

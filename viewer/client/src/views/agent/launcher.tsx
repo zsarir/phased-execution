@@ -10,7 +10,7 @@
 
 import { useState } from 'react';
 import { Play } from 'lucide-react';
-import { useSkills } from '@/lib/queries';
+import { useAccounts, useSkills } from '@/lib/queries';
 import { Button } from '@/components/ui';
 import { SkillPicker } from '../run/skill-picker';
 import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS } from '../run/defaults';
@@ -25,6 +25,8 @@ export interface LaunchBody {
   prompt?: string;
   skills?: string[];
   resume?: string;
+  /** Which registered account the session spends. Absent = the machine login. */
+  accountId?: string;
 }
 
 const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
@@ -41,10 +43,13 @@ export function Launcher({ root, disabled, skillsEnabled, onLaunch }: {
   const [model, setModel] = useState<string>(DEFAULTS.model);
   const [effort, setEffort] = useState<string>(DEFAULTS.effort);
   const [mode, setMode] = useState('');
+  const [accountId, setAccountId] = useState('default');
   const [prompt, setPrompt] = useState('');
   const [chosen, setChosen] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const { data: skills } = useSkills(skillsEnabled);
+  const { data: accountsState } = useAccounts();
+  const accounts = accountsState?.accounts ?? [];
 
   async function submit() {
     setBusy(true);
@@ -53,6 +58,7 @@ export function Launcher({ root, disabled, skillsEnabled, onLaunch }: {
         model,
         effort,
         permissionMode: mode,
+        ...(accountId !== 'default' ? { accountId } : {}),
         ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
         ...(chosen.length ? { skills: chosen } : {}),
       });
@@ -97,6 +103,24 @@ export function Launcher({ root, disabled, skillsEnabled, onLaunch }: {
               {MODES.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
             </select>
           </label>
+          {accounts.length > 1 ? (
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-2xs uppercase tracking-wide text-ink-faint">Account</span>
+              <select className={field} value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+                {accounts.map((account) => {
+                  const five = account.usage?.buckets.five_hour;
+                  const label = account.builtIn
+                    ? `machine login${account.email ? ` (${account.email})` : ''}`
+                    : account.name ?? account.email ?? account.id;
+                  return (
+                    <option key={account.id} value={account.id}>
+                      {label}{five ? ` — 5h ${Math.round(five.utilization)}%` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+          ) : null}
         </div>
 
         <label className="flex flex-col gap-1 text-sm">

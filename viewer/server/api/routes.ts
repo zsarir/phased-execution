@@ -21,7 +21,8 @@ import { MODEL_FALLBACK as MODELS } from '../runner/errors.ts';
 import { planWrite, runWrite, openInEditor, WriteError, type WriteRequest } from '../writes.ts';
 import { TERMINAL_PATH, type LaunchSpec } from '../terminal.ts';
 import { tailscaleStatus } from '../tailscale.ts';
-import type { PhaseOptions } from '../runner/state.ts';
+import { ACCOUNT_ID_RE, DEFAULT_ACCOUNT_ID } from '../accounts/index.ts';
+import { isOnLimitPolicy, type PhaseOptions } from '../runner/state.ts';
 
 export type ApiContext = { service: Service };
 
@@ -103,14 +104,33 @@ function guardAgent(req: IncomingMessage, service: Service): string | null {
 }
 
 /**
+ * The accounts gate — a fifth capability. Registering a Claude account stores
+ * a credential (a profile login, a pasted token) that runs can then spend
+ * quota as; holding credentials is its own decision, so it is its own flag.
+ * READING the list and the meters is deliberately not behind it.
+ */
+function guardAccounts(req: IncomingMessage, service: Service): string | null {
+  return guardMutation(req, service.flags.allowAccounts
+    ? null
+    : 'Account registration is disabled. Restart with --allow-accounts to enable it.');
+}
+
+/**
  * For verbs on an EXISTING session of either kind — reattach, close. Either
  * capability opens the door; `mint()` still gates by the session's own kind,
  * so an agent-only console can never be talked into handing out a live shell.
  */
 function guardAnySession(req: IncomingMessage, service: Service): string | null {
-  return guardMutation(req, (service.flags.allowTerminal || agentEnabled(service.flags))
-    ? null
-    : 'The terminal is disabled. Restart with --allow-terminal to enable it.');
+  // `allowAccounts` opens this door too, because a login terminal is a session
+  // an accounts-only console legitimately minted. The per-KIND decision still
+  // happens inside `mint()` — a shell or a free-form agent session is refused
+  // there regardless of which flag admitted the caller here.
+  return guardMutation(
+    req,
+    (service.flags.allowTerminal || agentEnabled(service.flags) || service.flags.allowAccounts)
+      ? null
+      : 'The terminal is disabled. Restart with --allow-terminal to enable it.',
+  );
 }
 
 /**
@@ -145,6 +165,29 @@ function guardMutation(req: IncomingMessage, disabled: string | null): string | 
  * by clearing the whole inbox.
  */
 const SCOPE_KEYS = ['slug', 'category', 'runId', 'sessionId', 'phase'] as const;
+
+/**
+ * An account choice a browser sent. Checked against the instance's own
+ * registry rather than passed through, because the value becomes a child
+ * process's environment: a known id, the literal `auto` (the service resolves
+ * it against the cached meters), or nothing — never an arbitrary string.
+ */
+function accountChoice(value: unknown, service: Service): string | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  if (value === 'auto') return 'auto';
+  if (value === DEFAULT_ACCOUNT_ID) return DEFAULT_ACCOUNT_ID;
+  return ACCOUNT_ID_RE.test(value) && service.accounts.has(value) ? value : undefined;
+}
+
+/** Env maps cross into `LaunchSpec.env`, which is `Record<string, string>`. */
+function toStringEnv(env: NodeJS.ProcessEnv | null): Record<string, string> | null {
+  if (!env) return null;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === 'string') out[key] = value;
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 function numberOrNull(value: unknown): number | null {
   const n = Number(value);
@@ -584,12 +627,21 @@ export async function handleApi(
             qa = resolved.facts;
           }
 
+          // The account, resolved HERE like the briefings above: the browser
+          // names an id, the id is checked against the registry, and only the
+          // environment the accounts module answers travels onto the spec.
+          const accountId = accountChoice(body.accountId, service);
+          const account = accountId && accountId !== 'auto'
+            ? { id: accountId, env: toStringEnv(await service.accounts.envFor(accountId)) }
+            : undefined;
+
           const built = buildAgentLaunch(body, {
             skills: () => service.skills(),
             scriptsDir: service.flags.scriptsDir,
             rootOpen: Boolean(service.store),
             ...(recovery ? { recovery } : {}),
             ...(qa ? { qa } : {}),
+            ...(account ? { account } : {}),
           });
           if (!built.ok) { json(res, built.status, { error: built.error }); return true; }
           launch = built.launch;
@@ -635,6 +687,81 @@ export async function handleApi(
     if (head === 'tailscale' && req.method === 'GET') {
       json(res, 200, await tailscaleStatus(service.flags.port));
       return true;
+    }
+
+    /* ---------------- Claude accounts ----------------
+     * Also above the source-directory guard, for the same reason as tailscale:
+     * accounts are an instance fact, the header meters render on every page,
+     * and Settings — where registration lives — is exactly where you are when
+     * no root is open yet. The list is redacted by construction (`AccountView`
+     * carries no token and no credential path); the mutating verbs are behind
+     * `--allow-accounts`. */
+    if (head === 'accounts') {
+      if (req.method === 'GET' && rest.length === 0) {
+        json(res, 200, {
+          accounts: await service.listAccounts(),
+          allowAccounts: service.flags.allowAccounts,
+        });
+        return true;
+      }
+      if (req.method === 'POST' && rest[0] === 'login') {
+        const refusal = guardAccounts(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const accountId = typeof body.accountId === 'string' && ACCOUNT_ID_RE.test(body.accountId)
+          ? body.accountId : undefined;
+        const name = typeof body.name === 'string' ? body.name.trim().slice(0, 64) : '';
+        try {
+          json(res, 200, await service.beginAccountLogin({
+            ...(accountId ? { accountId } : {}),
+            ...(name ? { name } : {}),
+          }));
+        } catch (error) {
+          json(res, 400, { error: (error as Error).message });
+        }
+        return true;
+      }
+      if (req.method === 'POST' && rest[0] === 'refresh') {
+        // A re-read, not a registration — CSRF only, so "I signed in over
+        // there, look again" works on a read-mostly console too.
+        const refusal = guardCsrf(req);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const id = typeof body.accountId === 'string' && ACCOUNT_ID_RE.test(body.accountId)
+          ? body.accountId : DEFAULT_ACCOUNT_ID;
+        const view = await service.refreshAccount(id);
+        if (!view) { json(res, 404, { error: 'No such account.' }); return true; }
+        json(res, 200, { account: view });
+        return true;
+      }
+      if (req.method === 'POST' && rest.length === 0) {
+        const refusal = guardAccounts(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const name = typeof body.name === 'string' ? body.name.trim().slice(0, 64) : '';
+        const token = typeof body.token === 'string' ? body.token.trim() : '';
+        if (!name) { json(res, 400, { error: 'Name the account — a token has no email to show.' }); return true; }
+        if (!token) { json(res, 400, { error: 'Paste the token from `claude setup-token`.' }); return true; }
+        try {
+          json(res, 200, { account: await service.addTokenAccount(name, token) });
+        } catch (error) {
+          json(res, 400, { error: (error as Error).message });
+        }
+        return true;
+      }
+      if (req.method === 'DELETE') {
+        const refusal = guardAccounts(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const id = rest[0] ?? url.searchParams.get('id') ?? '';
+        if (!ACCOUNT_ID_RE.test(id)) { json(res, 400, { error: 'Not an account id.' }); return true; }
+        try {
+          const removed = await service.removeAccount(id);
+          json(res, removed ? 200 : 404, removed ? { removed: true } : { error: 'No such account.' });
+        } catch (error) {
+          json(res, 400, { error: (error as Error).message });
+        }
+        return true;
+      }
     }
 
     if (!service.store) { json(res, 409, { error: 'No source directory is open.' }); return true; }
@@ -928,6 +1055,12 @@ export async function handleApi(
               openPr: typeof body.openPr === 'boolean' ? body.openPr : undefined,
               attachDefaultSkills: typeof body.attachDefaultSkills === 'boolean' ? body.attachDefaultSkills : undefined,
               qa: typeof body.qa === 'boolean' ? body.qa : undefined,
+              // Checked against the instance's own registry, never passed
+              // through — this value becomes a child's environment. Unknown
+              // ids (a removed account, a typo) read as "the machine login";
+              // `auto` resolves in the service against the cached meters.
+              accountId: accountChoice(body.accountId, service),
+              onLimit: isOnLimitPolicy(body.onLimit) ? body.onLimit : undefined,
             });
             json(res, 200, { run: state });
             return true;
@@ -953,6 +1086,17 @@ export async function handleApi(
           }
           case 'pause': json(res, 200, { run: service.pauseRun(slug) }); return true;
           case 'resume': json(res, 200, { run: service.resumePause(slug) }); return true;
+          // Its own verb, not a `settings` field: settings say what the NEXT
+          // phase uses; this acts now — a live session is checkpointed and the
+          // phase re-attempted under the other account without waiting.
+          case 'switch-account': {
+            const choice = accountChoice(body.accountId, service) ?? DEFAULT_ACCOUNT_ID;
+            const outcome = service.switchAccountRun(
+              slug, choice, typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console',
+            );
+            json(res, outcome.ok ? 200 : 409, outcome);
+            return true;
+          }
           // Freeze/thaw act on a live child, so unlike pause they have no
           // on-disk fallback: a null run here means this console is not the one
           // driving, which the client reports rather than papering over.
@@ -1046,6 +1190,7 @@ export async function handleApi(
               ...(typeof body.openPr === 'boolean' ? { openPr: body.openPr } : {}),
               ...(typeof body.attachDefaultSkills === 'boolean'
                 ? { attachDefaultSkills: body.attachDefaultSkills } : {}),
+              ...(isOnLimitPolicy(body.onLimit) ? { onLimit: body.onLimit } : {}),
             }, typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : 'console');
             json(res, 200, { run });
             return true;

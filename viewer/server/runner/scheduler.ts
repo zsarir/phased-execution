@@ -67,6 +67,12 @@ export type AdmitRequest = {
   phase: number | null;
   runId: string;
   scope: string[];
+  /**
+   * Which Claude account this admission would spend. Absent means the machine
+   * login. The throttle is keyed by this: one account hitting its window must
+   * not stall a run that pays with a different one.
+   */
+  accountId?: string;
   /** The run's abort signal — a Stop must not leave admissions pending. */
   signal?: AbortSignal;
 };
@@ -88,6 +94,8 @@ export type QueueEntry = {
   phase: number | null;
   runId: string;
   scope: string[];
+  /** The account the admission spends — see `AdmitRequest.accountId`. */
+  accountId?: string;
   since: number;
   waitingOn: Holder[];
   /** Later intersecting entries admitted past this one. Bounded by `MAX_BYPASS`. */
@@ -147,7 +155,13 @@ export type SchedulerSnapshot = {
   max: number;
   live: number;
   queued: number;
+  /**
+   * The SOONEST-ending throttle across every account, kept for older readers
+   * that predate per-account windows: "something is throttled" stays true.
+   */
   throttledUntil: number | null;
+  /** Every account currently told to come back later, with when. */
+  throttledAccounts: { accountId: string; until: number }[];
   grants: ScopeGrant[];
   entries: QueueEntry[];
   /** Whether cross-run scope conflicts currently block admission. */
@@ -179,7 +193,13 @@ export class Scheduler {
   private deps: SchedulerDeps;
   private grants = new Map<string, ScopeGrant>();
   private queue: Waiting[] = [];
-  private throttledUntil: number | null = null;
+  /**
+   * Per-ACCOUNT "come back at" marks, keyed by accountId (`default` for the
+   * machine login). A scalar until multi-account existed — and the scalar was
+   * right then: one account, one window. With several, a limited account must
+   * hold back only the entries that would spend it.
+   */
+  private throttled = new Map<string, number>();
   private throttleTimer: NodeJS.Timeout | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private closed = false;
@@ -219,6 +239,7 @@ export class Scheduler {
         phase: request.phase,
         runId: request.runId,
         scope,
+        ...(request.accountId ? { accountId: request.accountId } : {}),
         since: this.now(),
         waitingOn: [],
         bypassed: 0,
@@ -256,12 +277,8 @@ export class Scheduler {
    * that never starts with nothing anywhere saying why.
    */
   wouldBlock(request: AdmitRequest): Holder[] {
-    if (this.throttledUntil && this.throttledUntil > this.now()) {
-      return [{
-        kind: 'reserved', slug: 'usage window', phase: null,
-        owner: 'the account', scope: ['all'], overlaps: ['all'],
-      }];
-    }
+    const throttle = this.throttleFor(request.accountId);
+    if (throttle) return [throttle];
     if (this.grants.size >= this.maxLive()) {
       return [{
         kind: 'reserved', slug: 'session cap', phase: null,
@@ -271,10 +288,27 @@ export class Scheduler {
     const probe: Waiting = {
       id: '', slug: request.slug, phase: request.phase, runId: request.runId,
       scope: request.scope.length ? request.scope : ['all'],
+      ...(request.accountId ? { accountId: request.accountId } : {}),
       since: this.now(), waitingOn: [], bypassed: 0, reserving: false,
       resolve: () => {}, reject: () => {}, detach: () => {}, settled: false,
     };
     return this.blocking(probe, this.queue.filter((entry) => entry.reserving));
+  }
+
+  /**
+   * The holder that says "this ACCOUNT was told to come back later", or null.
+   * Phrased as a reserved pseudo-holder so the queue page renders it with the
+   * same vocabulary as every other reason to wait.
+   */
+  private throttleFor(accountId: string | undefined): Holder | null {
+    const key = accountId ?? 'default';
+    const until = this.throttled.get(key);
+    if (!until || until <= this.now()) return null;
+    return {
+      kind: 'reserved', slug: 'usage window', phase: null,
+      owner: key === 'default' ? 'the account' : `account ${key}`,
+      scope: ['all'], overlaps: ['all'],
+    };
   }
 
   /**
@@ -326,19 +360,21 @@ export class Scheduler {
   }
 
   /**
-   * Admit nothing until this moment passes.
+   * Admit nothing FOR THIS ACCOUNT until this moment passes.
    *
    * The usage window is an account-wide fact, not a per-run one: when one
    * session is told to come back at 4pm, every other session on the same
    * account would be told the same thing one turn later, each spending a turn
-   * to find out. `wait-until` calls this so the rest of the fleet waits quietly
-   * rather than discovering it the expensive way.
+   * to find out. `wait-until` calls this so the rest of that account's fleet
+   * waits quietly rather than discovering it the expensive way — while a run
+   * paying with a DIFFERENT account is exactly the run that should keep going.
    */
-  throttle(untilMs: number): void {
+  throttle(untilMs: number, accountId = 'default'): void {
     if (!Number.isFinite(untilMs) || untilMs <= this.now()) return;
-    if (this.throttledUntil && this.throttledUntil >= untilMs) return;
-    this.throttledUntil = untilMs;
-    log.info('scheduler.throttled', { until: new Date(untilMs).toISOString() });
+    const current = this.throttled.get(accountId);
+    if (current && current >= untilMs) return;
+    this.throttled.set(accountId, untilMs);
+    log.info('scheduler.throttled', { account: accountId, until: new Date(untilMs).toISOString() });
     this.armThrottleTimer();
     this.announce();
   }
@@ -348,10 +384,12 @@ export class Scheduler {
     if (this.closed) return;
     const now = this.now();
 
-    if (this.throttledUntil !== null) {
-      if (this.throttledUntil > now) { this.armThrottleTimer(); return; }
-      this.throttledUntil = null;
+    // Expired marks come off first, so a window that reopened admits on this
+    // very scan rather than on the one after.
+    for (const [accountId, until] of [...this.throttled]) {
+      if (until <= now) this.throttled.delete(accountId);
     }
+    if (this.throttled.size) this.armThrottleTimer();
 
     let changed = false;
     /** Token sets held back by aged entries ahead in the queue. */
@@ -364,6 +402,19 @@ export class Scheduler {
       // The cap is a hard stop, not a skip: nothing further down can start
       // either, and scanning on would only mislabel the rest as scope-blocked.
       if (this.grants.size >= this.maxLive()) break;
+
+      // A throttled ACCOUNT is a skip, not a stop — the old scalar returned
+      // here, which was right when there was one account and would now let a
+      // single limited login stall every other account's queue. The entry is
+      // labeled with why it waits, and deliberately never ages into
+      // `reserving`: its blockage is a clock, not scope contention, and a
+      // reserving throttled entry would hold its tokens against runs that
+      // could pay.
+      const throttle = this.throttleFor(entry.accountId);
+      if (throttle) {
+        entry.waitingOn = [throttle];
+        continue;
+      }
 
       const holders = this.blocking(entry, reserved);
       if (holders.length) {
@@ -392,12 +443,18 @@ export class Scheduler {
 
   /** Everything the queue page and `state().concurrency` read. */
   snapshot(): SchedulerSnapshot {
+    const now = this.now();
+    const throttledAccounts = [...this.throttled]
+      .filter(([, until]) => until > now)
+      .map(([accountId, until]) => ({ accountId, until }))
+      .sort((a, b) => a.until - b.until);
     return {
       max: this.maxLive(),
       guard: this.deps.guard?.() ?? true,
       live: this.grants.size,
       queued: this.queue.filter((entry) => !entry.settled).length,
-      throttledUntil: this.throttledUntil,
+      throttledUntil: throttledAccounts[0]?.until ?? null,
+      throttledAccounts,
       grants: [...this.grants.values()],
       entries: this.queue.filter((entry) => !entry.settled).map((entry) => ({
         id: entry.id,
@@ -565,12 +622,17 @@ export class Scheduler {
     try { this.deps.onChange?.(this.snapshot()); } catch { /* the UI must never break admission */ }
   }
 
+  /**
+   * Wake at the SOONEST throttle expiry. `poll()` prunes whatever has lapsed
+   * and re-arms for the next one, so several accounts with different resets
+   * each get their scan the moment their own window reopens.
+   */
   private armThrottleTimer(): void {
-    if (this.throttleTimer || this.throttledUntil === null) return;
-    const delay = Math.max(0, this.throttledUntil - this.now());
+    if (this.throttleTimer || !this.throttled.size) return;
+    const soonest = Math.min(...this.throttled.values());
+    const delay = Math.max(0, soonest - this.now());
     this.throttleTimer = setTimeout(() => {
       this.throttleTimer = null;
-      this.throttledUntil = null;
       this.poll();
     }, delay);
     this.throttleTimer.unref?.();

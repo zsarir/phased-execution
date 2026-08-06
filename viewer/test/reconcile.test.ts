@@ -260,3 +260,37 @@ test('a live-run SET keeps every one of its runs, and reclaims the rest', () => 
     assert.equal(c.status, 'interrupted');
   } finally { dir.cleanup(); }
 });
+
+test('a run asleep on a usage window reconciles to paused, with its clock intact', () => {
+  const dir = scratchRoot();
+  try {
+    const state = crashedRun(dir.root, { status: 'waiting' });
+    state.waitUntil = '2026-08-06T20:00:00.000Z';
+    state.child = null;
+    delete state.children;
+    const record = phaseRecord(state, 12);
+    record.status = 'running';
+    record.sessionId = 'sess-window';
+
+    assert.equal(reconcileRun(state, undefined), true);
+    // NOT `interrupted`: this run's "why" IS recorded — the reset time — and a
+    // console restart during a long window must not turn a self-resuming run
+    // into one waiting for a person.
+    assert.equal(state.status, 'paused');
+    assert.equal(state.waitUntil, '2026-08-06T20:00:00.000Z', 'the re-arm needs the clock');
+    assert.equal(state.halt, null, 'a usage window is not a halt');
+    assert.match(state.finishedReason ?? '', /usage limit/i);
+    assert.equal(record.status, 'pending');
+    assert.equal(record.resumeSessionId, 'sess-window', 'Continue resumes the same session');
+  } finally { dir.cleanup(); }
+});
+
+test('a waiting run with no recorded reset still reconciles the old way', () => {
+  const dir = scratchRoot();
+  try {
+    const state = crashedRun(dir.root, { status: 'waiting' });
+    state.waitUntil = null;
+    assert.equal(reconcileRun(state, undefined), true);
+    assert.equal(state.status, 'interrupted', 'without a clock there is nothing to re-arm');
+  } finally { dir.cleanup(); }
+});

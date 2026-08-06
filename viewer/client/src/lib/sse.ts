@@ -52,6 +52,10 @@ export const SSE_EVENTS = [
   // which no other event describes — a phase can sit queued for minutes while
   // nothing about any run's own state changes at all.
   'run:queue',
+  // The Claude account registry or its usage meters moved — an account was
+  // added or signed in, a poll landed, a window was learned exhausted. The
+  // full redacted list rides on the event.
+  'accounts',
 ] as const;
 
 export type SseEvent = (typeof SSE_EVENTS)[number];

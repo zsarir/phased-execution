@@ -7,6 +7,7 @@ import type { ConsoleState } from '@/lib/api';
 import type { ShellCounts } from '@/lib/queries';
 import { TAB_ITEMS, activeNavId, visibleNav } from './nav';
 import { Badge, RouteGlyph } from './brand';
+import { LimitsWidget } from '@/components/limits-widget';
 
 const THEMES: readonly [Theme, string][] = [
   ['system', 'Auto'],
@@ -45,6 +46,11 @@ export function TopBar({
       >
         {state?.root?.label ?? 'Choose a directory'}
       </button>
+
+      {/* The same meters the rail shows, at phone size: a gauge and the 5-hour
+          percent. The directory button beside it already truncates, so the row
+          has the room. */}
+      <LimitsWidget variant="phone" />
 
       {/* The count sits BESIDE the bell, not on it.
           Pinned to the corner it covered the glyph at every count — the badge
@@ -195,6 +201,8 @@ export function MoreSheet({
         </div>
 
         <div className="mt-3 flex flex-col gap-3 border-t border-rule pt-3">
+          <LimitsWidget variant="sheet" />
+
           <div className="flex items-center justify-between gap-2">
             <span className="text-2xs tracking-widest text-ink-faint uppercase">Source</span>
             <Button

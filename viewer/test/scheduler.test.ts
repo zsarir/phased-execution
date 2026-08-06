@@ -243,6 +243,76 @@ test('a throttle holds every admission until it expires', async () => {
   assert.equal(s.snapshot().throttledUntil, null);
 });
 
+test('a throttle is per ACCOUNT: the limited login queues, everyone else keeps flowing', async () => {
+  let clock = 1_000;
+  const s = scheduler({ now: () => clock });
+
+  s.throttle(clock + 60_000, 'work');
+  const held = s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'], accountId: 'work' });
+  await tick();
+  assert.ok(await pending(held), 'the account that hit the wall waits');
+
+  // A DIFFERENT account — and the unnamed machine login — sail through, on
+  // scopes that do not even collide with the throttled entry's.
+  const other = await s.admit({ slug: 'b', phase: 1, runId: 'r2', scope: ['web'], accountId: 'spare' });
+  assert.equal(other.slug, 'b');
+  const machine = await s.admit({ slug: 'c', phase: 1, runId: 'r3', scope: ['docs'] });
+  assert.equal(machine.slug, 'c');
+
+  const snap = s.snapshot();
+  assert.deepEqual(snap.throttledAccounts, [{ accountId: 'work', until: 61_000 }]);
+  assert.equal(snap.throttledUntil, 61_000, 'the legacy field still says "something is throttled"');
+
+  // The queued entry says WHY it waits, in holder vocabulary.
+  const entry = snap.entries.find((e) => e.slug === 'a');
+  assert.equal(entry?.waitingOn[0]?.owner, 'account work');
+
+  clock += 60_001;
+  s.poll();
+  assert.equal((await held).slug, 'a', 'the reset admits it on that very scan');
+  assert.equal(s.snapshot().throttledUntil, null);
+});
+
+test('the unnamed machine login and `default` are the same throttle key', async () => {
+  let clock = 1_000;
+  const s = scheduler({ now: () => clock });
+  s.throttle(clock + 30_000);   // no accountId — the machine login
+  const waiting = s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'] });
+  await tick();
+  assert.ok(await pending(waiting));
+  assert.deepEqual(s.wouldBlock({ slug: 'x', phase: 2, runId: 'r9', scope: ['web'] })[0]?.owner, 'the account');
+  assert.equal(
+    s.wouldBlock({ slug: 'x', phase: 2, runId: 'r9', scope: ['web'], accountId: 'spare' }).length,
+    0,
+    'a named account is not the machine login',
+  );
+  clock += 30_001;
+  s.poll();
+  await waiting;
+});
+
+test('two throttled accounts wake independently, soonest first', async () => {
+  let clock = 1_000;
+  const s = scheduler({ now: () => clock });
+  s.throttle(clock + 10_000, 'fast');
+  s.throttle(clock + 60_000, 'slow');
+  const fast = s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'], accountId: 'fast' });
+  const slow = s.admit({ slug: 'b', phase: 1, runId: 'r2', scope: ['web'], accountId: 'slow' });
+  await tick();
+  assert.equal(s.snapshot().throttledUntil, 11_000, 'min over the map');
+
+  clock += 10_001;
+  s.poll();
+  assert.equal((await fast).slug, 'a');
+  await tick();
+  assert.ok(await pending(slow), 'the other account is still inside its window');
+  assert.deepEqual(s.snapshot().throttledAccounts.map((t) => t.accountId), ['slow']);
+
+  clock += 50_000;
+  s.poll();
+  await slow;
+});
+
 test('stopping a run cancels the admissions it was still waiting on', async () => {
   const s = scheduler();
   const held = await s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'] });

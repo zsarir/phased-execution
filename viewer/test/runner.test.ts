@@ -169,6 +169,7 @@ function runner(
   spawn: SpawnFn,
   verification: string | undefined = '`true`',
   phaseDefaults?: (slug: string, phase: number) => { model?: string; effort?: string } | undefined,
+  extra: Partial<ConstructorParameters<typeof Runner>[0]> = {},
 ) {
   const events: { event: string; data: Record<string, unknown> }[] = [];
   const instance = new Runner({
@@ -177,6 +178,7 @@ function runner(
     verificationText: () => verification,
     phaseDefaults,
     onEvent: (event, data) => events.push({ event, data }),
+    ...extra,
   });
   return { instance, events };
 }
@@ -918,6 +920,133 @@ test('a model-only limit moves down the ladder and carries on', async () => {
 
   assert.equal(models[0], 'opus');
   assert.equal(models[1], 'sonnet', 'switched rather than slept');
+  assert.equal(instance.current()!.status, 'finished');
+  r.cleanup();
+});
+
+/* ---------------- accounts at the usage wall ---------------- */
+
+const PLAN_LIMIT_TEXT = "You've hit your session limit · resets 3:45pm";
+
+test('policy `switch`: a plan limit moves to the other account and continues WITHOUT sleeping', async () => {
+  const r = repo();
+  const spawns: { env?: NodeJS.ProcessEnv; resume?: string }[] = [];
+  const limited: SpawnFn = async (request) => {
+    spawns.push({ env: request.env, resume: request.resume });
+    if (spawns.length === 1) {
+      // A reset an hour out: the wait path would sleep on it, so the ONLY way
+      // this test finishes promptly is the switch path continuing immediately.
+      const epoch = Math.floor(Date.now() / 1000) + 3600;
+      return ok({
+        signal: { subtype: 'error_during_execution', code: 1, text: `Claude AI usage limit reached|${epoch}` },
+        sessionId: 'sess-lim',
+      });
+    }
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok({ sessionId: 'sess-lim' });
+  };
+  const marked: { accountId?: string; window: string }[] = [];
+  const { instance } = runner(r, limited, '`true`', undefined, {
+    accountEnv: async (accountId) => (accountId === 'spare' ? { CLAUDE_CODE_OAUTH_TOKEN: 'tok-spare' } : null),
+    pickAccount: () => 'spare',
+    portTranscript: () => true,
+    onAccountLimited: (accountId, window) => { marked.push({ ...(accountId ? { accountId } : {}), window }); },
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onLimit: 'switch' });
+
+  const outcome = await Promise.race([
+    instance.wait().then(() => 'finished'),
+    new Promise<string>((resolve) => setTimeout(resolve, 8_000, 'slept')),
+  ]);
+  if (outcome === 'slept') await instance.stop();
+  assert.equal(outcome, 'finished', 'the switch path must not sit out the old account’s window');
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'finished');
+  assert.equal(state.accountId, 'spare', 'the run now names the account that paid');
+  assert.equal(spawns[1].env?.CLAUDE_CODE_OAUTH_TOKEN, 'tok-spare', 'the very next spawn runs as it');
+  assert.equal(spawns[1].resume, 'sess-lim', 'the ported transcript is resumed, not restarted');
+  assert.deepEqual(marked, [{ window: 'five_hour' }], 'the wall is remembered against the account that hit it');
+  r.cleanup();
+});
+
+test('policy `switch` without a transcript port starts fresh instead of resuming into nothing', async () => {
+  const r = repo();
+  const resumes: (string | undefined)[] = [];
+  const limited: SpawnFn = async (request) => {
+    resumes.push(request.resume);
+    if (resumes.length === 1) {
+      const epoch = Math.floor(Date.now() / 1000) + 3600;
+      return ok({
+        signal: { subtype: 'error_during_execution', code: 1, text: `Claude AI usage limit reached|${epoch}` },
+        sessionId: 'sess-lost',
+      });
+    }
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  };
+  const { instance } = runner(r, limited, '`true`', undefined, {
+    pickAccount: () => 'spare',
+    portTranscript: () => false,
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onLimit: 'switch' });
+  const outcome = await Promise.race([
+    instance.wait().then(() => 'finished'),
+    new Promise<string>((resolve) => setTimeout(resolve, 8_000, 'slept')),
+  ]);
+  if (outcome === 'slept') await instance.stop();
+  assert.equal(outcome, 'finished');
+  assert.equal(resumes[1], undefined, 'no port means a fresh boot prompt, never --resume into a missing file');
+  r.cleanup();
+});
+
+test('policy `pause`: a plan limit checkpoints the phase and stops for a person', async () => {
+  const r = repo();
+  let calls = 0;
+  const limited: SpawnFn = async () => {
+    calls++;
+    return ok({
+      signal: { subtype: 'error_during_execution', code: 1, text: PLAN_LIMIT_TEXT },
+      sessionId: 'sess-paused',
+    });
+  };
+  const { instance } = runner(r, limited, '`true`', undefined, {
+    pickAccount: () => 'spare',   // available, and deliberately not taken
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onLimit: 'pause' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(calls, 1, 'nothing is retried past the wall');
+  assert.equal(state.status, 'paused');
+  assert.ok(state.waitUntil, 'the reset time stays visible for the banner and the re-arm');
+  assert.match(state.finishedReason ?? '', /usage limit/i);
+  const record = state.phases['1'];
+  assert.equal(record.status, 'pending');
+  assert.equal(record.resumeSessionId, 'sess-paused', 'Continue resumes the checkpointed session');
+  r.cleanup();
+});
+
+test('the run’s account env reaches every spawn', async () => {
+  const r = repo();
+  const envs: (NodeJS.ProcessEnv | undefined)[] = [];
+  const watching: SpawnFn = async (request) => {
+    envs.push(request.env);
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  };
+  const { instance } = runner(r, watching, '`true`', undefined, {
+    accountEnv: async (accountId) => (accountId === 'work'
+      ? { CLAUDE_CONFIG_DIR: '/tmp/work-profile' } : null),
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', accountId: 'work' });
+  await instance.wait();
+
+  assert.ok(envs.length >= 1);
+  for (const env of envs) {
+    assert.equal(env?.CLAUDE_CONFIG_DIR, '/tmp/work-profile');
+    assert.ok(env?.PE_OWNER, 'the run-specific facts still ride on top');
+  }
   assert.equal(instance.current()!.status, 'finished');
   r.cleanup();
 });

@@ -39,8 +39,8 @@ import { extractCommands, hardenedPath, verifyPhase } from './verify.ts';
 import { failureContext } from './failure-context.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
-  type Autonomy, type ChildRef, type PhaseOptions, type PhaseRecord, type RunState,
-  type PhaseStatus, type RunStatus, type VerifySummary,
+  type Autonomy, type ChildRef, type OnLimitPolicy, type PhaseOptions, type PhaseRecord,
+  type RunState, type PhaseStatus, type RunStatus, type VerifySummary,
 } from './state.ts';
 import {
   AdmissionAborted, autopilotOwner, type Scheduler, type ScopeGrant,
@@ -122,6 +122,25 @@ export type RunnerDeps = {
    * words arrive in lumps minutes apart.
    */
   stream?: { partialMessages?: boolean; subagentText?: boolean; hookEvents?: boolean };
+  /**
+   * The environment that makes a child run AS a given account — a profile's
+   * `CLAUDE_CONFIG_DIR`, a token account's `CLAUDE_CODE_OAUTH_TOKEN`, or null
+   * for the machine login. Service-provided (`accounts.envFor`); absent in
+   * harnesses that are not exercising accounts. Async because a token may live
+   * in a keychain, and resolved per spawn so a switch lands on the very next
+   * session.
+   */
+  accountEnv?: (accountId: string | undefined) => Promise<NodeJS.ProcessEnv | null>;
+  /**
+   * The account a limit-hit run should continue under, from cached meters.
+   * Null when no other account has headroom. Sync on purpose — consulted
+   * mid-phase with nothing worth awaiting.
+   */
+  pickAccount?: (excluding: string | undefined) => string | null;
+  /** A limit landed: remember it on the account and tell the operator. */
+  onAccountLimited?: (accountId: string | undefined, window: string, resetsAt: Date | null, detail: string) => void;
+  /** Copy a session transcript between two accounts' config dirs. See `accounts/transcripts.ts`. */
+  portTranscript?: (sessionId: string, fromAccount: string | undefined, toAccount: string | undefined) => boolean;
   onEvent?: RunnerEvent;
   now?: () => Date;
 };
@@ -150,6 +169,10 @@ export type StartOptions = {
   gitMode?: 'default-branch' | 'new-branch';
   /** New-branch runs only: tell the final phase to push and open a PR. */
   openPr?: boolean;
+  /** The account sessions spawn as. Absent/`default` = the machine login. */
+  accountId?: string;
+  /** What to do at the shared usage window. Absent = `wait`, the old behavior. */
+  onLimit?: OnLimitPolicy;
   /**
    * Consumed by the Service before the runner sees the run — `qa` activates the
    * plan's QA gate at start, `attachDefaultSkills` decides whether the machine's
@@ -327,6 +350,13 @@ type Lane = {
   freezeTimer: NodeJS.Timeout | null;
   /** Set when this lane's freeze was escalated, so exit 143 is not read as a crash. */
   checkpointed: boolean;
+  /**
+   * Why this lane was checkpointed, when it was NOT the freeze escalation:
+   * `carryOn: true` tells the settle guard to keep the loop driving (an
+   * account switch re-runs the phase immediately) instead of pausing the run
+   * the way an escalated freeze does. Null for the freeze path.
+   */
+  checkpointNote: { carryOn: boolean } | null;
 };
 
 export class Runner {
@@ -563,6 +593,8 @@ export class Runner {
       permissionProfile: options.permissionProfile,
       gitMode: options.gitMode,
       openPr: options.openPr,
+      accountId: options.accountId,
+      onLimit: options.onLimit,
     });
 
     if (state) {
@@ -603,6 +635,17 @@ export class Runner {
       if (options.maxParallel !== undefined) {
         if (options.maxParallel > 0) this.state.maxParallel = options.maxParallel;
         else delete this.state.maxParallel;
+      }
+      // Account and on-limit policy are sticky like skills: absent on a
+      // continue means "keep what the run already is", and naming the machine
+      // login or `wait` explicitly returns the run to the omission state.
+      if (options.accountId !== undefined) {
+        if (options.accountId && options.accountId !== 'default') this.state.accountId = options.accountId;
+        else delete this.state.accountId;
+      }
+      if (options.onLimit !== undefined) {
+        if (options.onLimit !== 'wait') this.state.onLimit = options.onLimit;
+        else delete this.state.onLimit;
       }
       // The git strategy is sticky the same way: absent means "keep what the
       // run already is" — a resume must never re-read the machine defaults and
@@ -647,6 +690,10 @@ export class Runner {
     this.record('run.start', {
       runId: this.state.id, slug: this.state.slug, model: this.state.model,
       autonomy: this.state.autonomy, resumed: Boolean(state),
+      // Named even when it is the default — argv never shows an account, so
+      // the journal is the audit trail for whose quota a run spends.
+      account: this.state.accountId ?? 'default',
+      ...(this.state.onLimit ? { onLimit: this.state.onLimit } : {}),
       ...(this.state.onlyPhases?.length ? { onlyPhases: this.state.onlyPhases } : {}),
     });
     this.persist();
@@ -771,7 +818,7 @@ export class Runner {
     // `children` so a console restart reconciles it like any other.
     const lane: Lane = {
       phase: options.phase, pid: null, handle: null, grant,
-      frozen: null, freezeTimer: null, checkpointed: false,
+      frozen: null, freezeTimer: null, checkpointed: false, checkpointNote: null,
     };
     this.lanes.set(options.phase, lane);
 
@@ -833,6 +880,9 @@ export class Runner {
       phase,
       runId: state.id,
       scope,
+      // The account the lane would spend, so a throttle on someone ELSE'S
+      // window never queues this run — and one on ours does.
+      ...(state.accountId ? { accountId: state.accountId } : {}),
       signal: this.abort?.signal,
     };
 
@@ -883,6 +933,71 @@ export class Runner {
   }
 
   /** Resume the phase's session with the operator's own words. Returns a refusal. */
+  /**
+   * The environment every child session starts from: the console's own, the
+   * run's ACCOUNT layered over it (a profile's `CLAUDE_CONFIG_DIR`, a token's
+   * `CLAUDE_CODE_OAUTH_TOKEN`, nothing for the machine login), then the
+   * run-specific facts on top so they always win.
+   *
+   * ONE composer for all three spawn sites — attempt, closeout, and the
+   * resume-with-instruction path recovery rides on. A switched run whose
+   * closeout missed the account env would resume its transcript under the
+   * wrong credentials, which is precisely the quiet kind of wrong. Resolved
+   * per spawn, so an account switch lands on the very next session; a
+   * resolution failure degrades to the machine login rather than blocking the
+   * phase, and says so in the journal.
+   */
+  private async sessionEnv(extra: Record<string, string>): Promise<NodeJS.ProcessEnv> {
+    const accountId = this.state?.accountId;
+    let account: NodeJS.ProcessEnv | null = null;
+    if (this.deps.accountEnv) {
+      try {
+        account = await this.deps.accountEnv(accountId);
+        if (accountId && !account) {
+          this.record('run.account-env-missing', { accountId });
+        }
+      } catch (error) {
+        this.record('run.account-env-failed', { accountId, error: (error as Error).message });
+      }
+    }
+    return { ...process.env, ...account, ...extra };
+  }
+
+  /**
+   * Move this run onto the account with the most headroom, mid-phase.
+   *
+   * True when a switch happened: `state.accountId` now names the account every
+   * next spawn pays with, and — when the interrupted session's transcript
+   * could be carried into that account's config dir — `sessionAccountId` says
+   * the conversation went along. False means there was nowhere better to go,
+   * and the caller falls back to waiting exactly as if no second account
+   * existed.
+   */
+  private trySwitchAccount(phase: number, record: PhaseRecord, reason: string): boolean {
+    const state = this.state!;
+    const from = state.accountId;
+    const next = this.deps.pickAccount?.(from);
+    if (!next || next === (from ?? 'default')) return false;
+    let ported = false;
+    if (record.sessionId) {
+      ported = this.deps.portTranscript?.(record.sessionId, record.sessionAccountId, next) ?? false;
+      if (ported) {
+        if (next === 'default') delete record.sessionAccountId;
+        else record.sessionAccountId = next;
+      }
+    }
+    this.record('phase.account-switch', { from: from ?? 'default', to: next, ported, reason }, phase);
+    this.emit('phase', { phase, status: 'running', accountSwitch: { from: from ?? 'default', to: next } });
+    if (next === 'default') delete state.accountId;
+    else state.accountId = next;
+    return true;
+  }
+
+  /** Is the recorded session's transcript where the CURRENT account will look? */
+  private transcriptFollows(record: PhaseRecord): boolean {
+    return (record.sessionAccountId ?? 'default') === (this.state?.accountId ?? 'default');
+  }
+
   private async resumeWithInstruction(
     phase: number, instruction: string, haltedWith?: string | null,
   ): Promise<string | null> {
@@ -938,11 +1053,10 @@ export class Runner {
         subagentText: this.deps.stream?.subagentText ?? true,
         hookEvents: this.deps.stream?.hookEvents ?? true,
         onHandle: (handle) => { this.attachHandle(phase, handle); },
-        env: {
-          ...process.env,
+        env: await this.sessionEnv({
           PE_OWNER: autopilotOwner(state.id),
           PE_SCOPE: formatScope(this.lanes.get(phase)?.grant?.scope ?? await this.scopeFor(phase)),
-        },
+        }),
         signal: this.abort?.signal,
         // The same wiring `attempt` uses, and for the same reason: `state.child`
         // is what Freeze and Stop signal, and what the console reads to know a
@@ -1297,6 +1411,66 @@ export class Runner {
     if (!lane.freezeTimer) return;
     clearTimeout(lane.freezeTimer);
     lane.freezeTimer = null;
+  }
+
+  /**
+   * Move this run onto another account NOW — the operator's verb, distinct
+   * from the on-limit policy doing it by itself.
+   *
+   * A live lane is checkpointed the way an escalated freeze checkpoints one
+   * (SIGCONT+SIGTERM, session id kept, phase back to `pending`) but with
+   * `carryOn` set, so the loop keeps driving and the very next attempt spawns
+   * under the new account — porting the transcript on its way in. A lane
+   * asleep on a usage window holds no process at all; the wake event ends its
+   * sleep so it, too, re-attempts now instead of at the old account's reset.
+   */
+  switchAccount(accountId: string | undefined, by = 'console'):
+    { ok: true; checkpointed: number } | { ok: false; reason: string } {
+    const state = this.state;
+    if (!state) return { ok: false, reason: 'this console holds no run for that plan' };
+    const target = accountId && accountId !== 'default' ? accountId : undefined;
+    if ((state.accountId ?? 'default') === (target ?? 'default')) {
+      return { ok: false, reason: `the run is already on ${target ?? 'the machine login'}` };
+    }
+    const from = state.accountId ?? 'default';
+    if (target) state.accountId = target;
+    else delete state.accountId;
+
+    let checkpointed = 0;
+    for (const lane of this.lanes.values()) {
+      if (lane.pid == null || !pidAlive(lane.pid)) continue;
+      this.checkpointLane(lane, `account switch by ${by}`);
+      checkpointed++;
+    }
+    this.haltSignal.dispatchEvent(new Event('wake'));
+    this.record('run.account-switch', { from, to: target ?? 'default', by, checkpointed });
+    this.persist();
+    this.emit('run', { state });
+    return { ok: true, checkpointed };
+  }
+
+  /** The switch's half of `escalateFreeze`: end the child, keep the session. */
+  private checkpointLane(lane: Lane, why: string): void {
+    const state = this.state!;
+    const record = phaseRecord(state, lane.phase);
+    const sessionId = record.sessionId;
+    this.clearFreezeTimer(lane);
+    lane.frozen = null;
+    lane.checkpointed = true;
+    lane.checkpointNote = { carryOn: true };
+    if (lane.pid && pidAlive(lane.pid)) {
+      // SIGCONT first, or SIGTERM is queued against a stopped process and its
+      // own SessionEnd hooks never run — same order as the freeze escalation.
+      try { process.kill(lane.pid, 'SIGCONT'); } catch { /* already gone */ }
+      try { process.kill(lane.pid, 'SIGTERM'); } catch { /* already gone */ }
+    }
+    record.status = 'pending';
+    record.resumeSessionId = sessionId;
+    record.note = sessionId
+      ? `checkpointed (${why}) — the next attempt resumes session ${sessionId}`
+      : `checkpointed (${why}); the session had no id yet, so the next attempt starts from its boot prompt`;
+    state.freeze = null;
+    this.record('phase.checkpointed', { sessionId: sessionId ?? null, why }, lane.phase);
   }
 
   /** Take back a pause that has not been reached yet. */
@@ -1897,7 +2071,7 @@ export class Runner {
     // before its child has a pid — and so the `finally` below has exactly one
     // place to undo all of it.
     const lane: Lane = {
-      phase, pid: null, handle: null, grant, frozen: null, freezeTimer: null, checkpointed: false,
+      phase, pid: null, handle: null, grant, frozen: null, freezeTimer: null, checkpointed: false, checkpointNote: null,
     };
     this.lanes.set(phase, lane);
 
@@ -2258,6 +2432,18 @@ export class Runner {
     if (resume) {
       record.resumeSessionId = undefined;
       this.record('phase.resume-checkpoint', { sessionId: resume }, phase);
+      // The checkpointed transcript lives in the config dir of the account
+      // that WROTE it. Resuming under a different one only works if the file
+      // is carried over first; when it cannot be, a fresh boot prompt (which
+      // is self-contained by design) beats a `--resume` that finds nothing.
+      if ((record.sessionAccountId ?? 'default') !== (state.accountId ?? 'default')) {
+        const ported = this.deps.portTranscript?.(resume, record.sessionAccountId, state.accountId) ?? false;
+        this.record('phase.transcript-port', {
+          sessionId: resume, from: record.sessionAccountId ?? 'default',
+          to: state.accountId ?? 'default', ported,
+        }, phase);
+        if (!ported) resume = undefined;
+      }
     }
     let budget = state.phaseBudgetUsd;
     let maxTurns: number | null = null;
@@ -2308,11 +2494,10 @@ export class Runner {
         // PE_SCOPE rides along for the same reason one level up: the session
         // claims its own lock, and a claim that names no scope writes a lock
         // every other reader has to treat as colliding with everything.
-        env: {
-          ...process.env,
+        env: await this.sessionEnv({
           PE_OWNER: owner,
           PE_SCOPE: formatScope(lane.grant?.scope ?? await this.scopeFor(phase)),
-        },
+        }),
         signal: this.abort?.signal,
         onPid: (pid) => {
           lane.pid = pid;
@@ -2354,13 +2539,18 @@ export class Runner {
         said: outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200),
       }, phase);
 
-      // A freeze that ran past its threshold ended this child on purpose. The
-      // phase record is already `pending` with a session to resume, and reading
-      // exit 143 as a crash here would overwrite both.
+      // A checkpoint ended this child on purpose. The phase record is already
+      // `pending` with a session to resume, and reading exit 143 as a crash
+      // here would overwrite both. Two kinds: the freeze escalation pauses the
+      // run for a person; an account switch carries on driving, because the
+      // whole point was to keep going on the account that can pay.
       if (lane.checkpointed) {
         lane.checkpointed = false;
         lane.frozen = null;
         state.freeze = null;
+        const note = lane.checkpointNote;
+        lane.checkpointNote = null;
+        if (note) return { carryOn: note.carryOn, completed: false };
         state.finishedReason = record.resumeSessionId
           ? `phase ${phase} was frozen past ${Math.round(FREEZE_ESCALATE_MS / 60_000)} minutes and `
             + 'checkpointed. Continue resumes the same session.'
@@ -2398,13 +2588,39 @@ export class Runner {
           continue;
 
         case 'wait-until': {
+          // The usage window belongs to the ACCOUNT, not to this run. Both
+          // marks land whatever the policy does next: the scheduler holds back
+          // this account's other admissions, and the registry remembers the
+          // wall so meters, pre-flight and `pickAccount` all agree.
+          const window = /weekly limit/i.test(outcome.signal.text ?? '') ? 'seven_day' : 'five_hour';
+          this.deps.onAccountLimited?.(state.accountId, window, disposition.at, disposition.reason);
+          this.deps.scheduler?.throttle(disposition.at.getTime(), state.accountId ?? 'default');
+
+          const policy = state.onLimit ?? 'wait';
+          if (policy === 'switch' && this.trySwitchAccount(phase, record, disposition.reason)) {
+            // Continue NOW, on the account that can pay — same session when
+            // its transcript came along, a fresh boot prompt when it did not.
+            resume = record.sessionId && this.transcriptFollows(record) ? record.sessionId : undefined;
+            this.persist();
+            continue;
+          }
+          if (policy === 'pause') {
+            // The checkpoint shape `escalateFreeze` established: phase back to
+            // pending with a session to resume, run paused, reason on the run.
+            record.status = 'pending';
+            if (record.sessionId) record.resumeSessionId = record.sessionId;
+            state.status = 'paused';
+            state.waitUntil = disposition.at.toISOString();
+            state.finishedReason = `usage limit — resets ${disposition.at.toLocaleString()}. `
+              + 'Continue now under another account, or wait for the window.';
+            this.record('run.limit-paused', { until: state.waitUntil, reason: disposition.reason }, phase);
+            this.persist();
+            this.emit('run', { state });
+            return { carryOn: false, completed: false };
+          }
+
           state.status = 'waiting';
           state.waitUntil = disposition.at.toISOString();
-          // The usage window belongs to the ACCOUNT, not to this run. Without
-          // telling the scheduler, every other lane and every other plan would
-          // discover the same closed window one session at a time, each paying
-          // a turn to be told to come back at the same moment.
-          this.deps.scheduler?.throttle(disposition.at.getTime());
           this.record('run.waiting', { until: state.waitUntil, reason: disposition.reason });
           this.persist();
           await this.sleep(Math.max(0, disposition.at.getTime() - this.now().getTime()));
@@ -2453,6 +2669,22 @@ export class Runner {
         }
 
         case 'needs-human':
+          // One park IS automatable: a usage reset too far away to sleep on,
+          // held by a console that has another account. The discriminant makes
+          // that decidable without string-matching the reason.
+          if (disposition.cause === 'usage-window') {
+            const window = /weekly limit/i.test(outcome.signal.text ?? '') ? 'seven_day' : 'five_hour';
+            this.deps.onAccountLimited?.(state.accountId, window, disposition.at ?? null, disposition.reason);
+            if (disposition.at) {
+              this.deps.scheduler?.throttle(disposition.at.getTime(), state.accountId ?? 'default');
+            }
+            if ((state.onLimit ?? 'wait') === 'switch'
+              && this.trySwitchAccount(phase, record, disposition.reason)) {
+              resume = record.sessionId && this.transcriptFollows(record) ? record.sessionId : undefined;
+              this.persist();
+              continue;
+            }
+          }
           record.status = 'parked';
           record.note = disposition.reason;
           this.record('phase.needs-human', { reason: disposition.reason }, phase);
@@ -2881,11 +3113,10 @@ export class Runner {
         subagentText: this.deps.stream?.subagentText ?? true,
         hookEvents: this.deps.stream?.hookEvents ?? true,
         onHandle: (handle) => { this.attachHandle(phase, handle); },
-        env: {
-          ...process.env,
+        env: await this.sessionEnv({
           PE_OWNER: autopilotOwner(state.id),
           PE_SCOPE: formatScope(this.lanes.get(phase)?.grant?.scope ?? await this.scopeFor(phase)),
-        },
+        }),
         signal: this.abort?.signal,
         // As in `attempt` and `resumeWithInstruction`: a closeout is a live
         // session like any other, and one the console could not freeze or stop
@@ -3120,6 +3351,10 @@ export class Runner {
       // within the first second, so take it there.
       if (event.sessionId && record.sessionId !== event.sessionId) {
         record.sessionId = event.sessionId;
+        // Which account's config dir this transcript is being written into —
+        // the fact a cross-account resume needs to find the file later.
+        if (this.state.accountId) record.sessionAccountId = this.state.accountId;
+        else delete record.sessionAccountId;
         // Rewrites `children[phase]` and the mirror together, so a checkpoint
         // taken a moment later can hand this id to `--resume` whichever of the
         // two a reader consults.
@@ -3251,6 +3486,10 @@ export class Runner {
       // Without this, a run could read `halting` for hours behind a lane that
       // holds no session at all — just a timer waiting for a usage window.
       halts.addEventListener('halt', done, { once: true });
+      // And an account switch must not wait out the OLD account's reset: the
+      // wake ends the sleep, the loop re-checks, the next spawn pays with the
+      // account that can.
+      halts.addEventListener('wake', done, { once: true });
     });
   }
 
@@ -3298,6 +3537,13 @@ export type RunSettingsPatch = {
    * (into a concrete `skills` list); never stored on the run itself.
    */
   attachDefaultSkills?: boolean;
+  /**
+   * The on-limit policy, changeable mid-run: it is read at the moment a wall
+   * is hit, so a flip lands on the very next limit without any checkpoint.
+   * (Changing the ACCOUNT mid-run is the `switch-account` verb — that one
+   * checkpoints the live session first.)
+   */
+  onLimit?: OnLimitPolicy;
 };
 
 /**
@@ -3346,6 +3592,11 @@ export function applySettings(state: RunState, patch: RunSettingsPatch): RunStat
     }
   }
   if (patch.openPr !== undefined && state.gitMode === 'new-branch') state.openPr = patch.openPr;
+  if (patch.onLimit !== undefined) {
+    // `wait` is the absent state on disk, same convention as everything above.
+    if (patch.onLimit === 'wait') delete state.onLimit;
+    else state.onLimit = patch.onLimit;
+  }
   return state;
 }
 

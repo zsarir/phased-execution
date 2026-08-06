@@ -62,6 +62,15 @@ export type Flags = {
    */
   allowAgent: boolean;
   /**
+   * A fifth decision. Accounts are stored Claude credentials — profile config
+   * dirs a person signs into and long-lived tokens they paste — that runs and
+   * sessions can then be started under. Registering one is a credential-holding
+   * act, distinct from spawning anything, so it gets its own flag. Reading the
+   * list and the usage meters is not gated: watching your own quota is display,
+   * not capability.
+   */
+  allowAccounts: boolean;
+  /**
    * Hostnames this console answers to besides localhost, reached through an
    * authenticating proxy that puts the caller's identity in a header.
    *
@@ -323,6 +332,7 @@ export function parseFlags(argv: string[], instance: Instance = INSTANCE): Flags
     allowRun: false,
     allowTerminal: false,
     allowAgent: false,
+    allowAccounts: false,
     remoteHosts: [],
     remoteUsers: splitList(process.env.PHASE_CONSOLE_REMOTE_USERS),
     scriptsDir: join(SKILL_DIR, 'scripts'),
@@ -343,6 +353,7 @@ export function parseFlags(argv: string[], instance: Instance = INSTANCE): Flags
     else if (arg === '--allow-run') flags.allowRun = true;
     else if (arg === '--allow-terminal') flags.allowTerminal = true;
     else if (arg === '--allow-agent') flags.allowAgent = true;
+    else if (arg === '--allow-accounts') flags.allowAccounts = true;
     else if (arg === '--remote') flags.remoteHosts.push(...splitList(next()));
     else if (arg === '--remote-user') flags.remoteUsers.push(...splitList(next()));
     else if (arg === '--scripts') flags.scriptsDir = resolve(expandHome(next() ?? ''));
@@ -513,6 +524,9 @@ function printHelp(): void {
                     running as you, with no policy in front of it
   --allow-agent     enable the Agent page: interactive \`claude\` sessions in the
                     browser terminal, and the "New plan with AI" wizard
+  --allow-accounts  enable Claude account registration for this instance: sign
+                    additional accounts in, paste setup-tokens, pick an account
+                    per run. Usage meters are shown regardless.
   --remote <host>   also answer to this hostname, fronted by an authenticating
                     proxy (e.g. \`tailscale serve\`). Repeatable. Turns on strict
                     Host checking, so any other Host is refused.

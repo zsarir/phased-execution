@@ -18,7 +18,7 @@
 
 export type CategoryId =
   | 'approval' | 'needs-you' | 'halted' | 'parked' | 'phase' | 'finished' | 'ready' | 'changed'
-  | 'session' | 'health';
+  | 'session' | 'health' | 'limits';
 
 export type Category = {
   id: CategoryId;
@@ -108,6 +108,15 @@ export const CATEGORIES: readonly Category[] = [
     label: 'Console problems',
     detail: 'The console degraded, its file watch went deaf, or it restarted after a crash. '
       + 'The supervisor failing quietly is the worst case, because everything else still looks fine.',
+    byDefault: true,
+    urgent: false,
+  },
+  {
+    id: 'limits',
+    label: 'Usage limits',
+    detail: 'A Claude account this console runs work as is approaching or has hit a usage window '
+      + '— the 5-hour session, the weekly allowance, or a per-model one — with when it resets. '
+      + 'What a run did about it (waited, switched account, paused) is announced with it.',
     byDefault: true,
     urgent: false,
   },
@@ -227,6 +236,10 @@ export function routeFor(category: CategoryId, context: RouteContext = {}): stri
     }
     case 'health':
       return '/#/settings';
+    // The meters and the account list live on Settings; a limit that stopped a
+    // specific run still carries its slug and lands on the run instead.
+    case 'limits':
+      return slug ? `/#/plan/${slug}/run` : '/#/settings';
     default: {
       // Exhaustiveness: a new category added to CATEGORIES without a route here
       // is a compile error, not a notification that silently opens the

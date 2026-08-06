@@ -158,6 +158,13 @@ export type RecoveryFacts = RecoveryRequest & {
    * would point it at the wrong tree.
    */
   gitStrategy?: { branch: string };
+  /**
+   * Set when the interruption WAS a usage limit: which account hit the wall,
+   * when it reopens, and — when the console already moved the run — which
+   * account it continues under. The session should know the stop was quota,
+   * not the work, and must not "fix" anything on that basis.
+   */
+  limit?: { account: string; resetsAt?: string; resumeAccount?: string };
 };
 
 /* ------------------------------------------------------------------ *
@@ -333,6 +340,15 @@ function interruptedResume(facts: RecoveryFacts): Block[] {
       `Phase ${phase} of "${slug}" was interrupted — the run or the console died while the`,
       'phase was in flight. Nothing is driving it now, and the working tree is wherever it',
       'stopped: possibly mid-edit, possibly with uncommitted work worth keeping.',
+      ...(facts.limit
+        ? [
+          '',
+          `The stop was a USAGE LIMIT on ${facts.limit.account}`
+          + `${facts.limit.resetsAt ? ` (window reopens ${facts.limit.resetsAt})` : ''}`
+          + `${facts.limit.resumeAccount ? `; this session runs as ${facts.limit.resumeAccount}` : ''}.`
+          + ' Nothing about the work itself failed — do not "fix" anything on account of the stop.',
+        ]
+        : []),
       '',
       'Assess before you act. The first rule is to lose nothing that was already done.',
     ].join('\n')),

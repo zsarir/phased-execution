@@ -42,6 +42,7 @@ work is left, and whether a plan's graph even lints.
 | **Agent** | Interactive `claude` sessions in the browser terminal — off unless started with `--allow-agent`; a launcher for model/effort/permission mode/first prompt/skills, and a **New plan with AI** wizard that authors a plan from a brief in the skill's own plan mode. |
 | **Terminal** | A real shell in the browser — off unless started with `--allow-terminal`; token-handshaked WebSocket, sessions that survive a reload, a phone key bar. |
 | **Search** | Full text across all plans and handoffs, grouped by plan. |
+| **Usage meters** | In the chrome on every page: each Claude account's 5-hour, weekly and per-model windows with reset countdowns — the same numbers `/usage` shows. Registration of additional accounts (sign-ins, `claude setup-token` tokens) sits in Settings behind `--allow-accounts`; every launch surface then offers an account per run and an on-limit policy (switch account / wait / pause). |
 
 It **updates itself**: a watch on `docs/` pushes changes over server-sent events, so a handoff written
 by an agent session appears without a reload.

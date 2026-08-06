@@ -6,6 +6,7 @@ import type { ConsoleState } from '@/lib/api';
 import type { ShellCounts } from '@/lib/queries';
 import { visibleNav, activeNavId } from './nav';
 import { Badge, RouteGlyph } from './brand';
+import { LimitsWidget } from '@/components/limits-widget';
 
 const THEMES: readonly [Theme, string][] = [
   ['system', 'Auto'],
@@ -75,6 +76,10 @@ export function Rail({
       </div>
 
       <div className="mt-auto flex flex-col gap-2">
+        {/* The usage meters live in the chrome, not on a page: "am I about to
+            hit a wall?" is a question every page has. */}
+        <LimitsWidget variant="rail" />
+
         <div className="text-2xs tracking-widest text-ink-faint uppercase">Source</div>
         <button
           type="button"

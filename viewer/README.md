@@ -358,6 +358,36 @@ The server binds to `127.0.0.1`, and every write requires an `x-phase-console` h
 same-origin `Origin`, which a browser will not send cross-origin without a CORS preflight the server
 never answers.
 
+## Claude accounts and usage limits
+
+The chrome carries usage meters on every page — the 5-hour session window, the weekly allowance,
+and every per-model window the usage endpoint reports, per account, with reset countdowns. The
+numbers are the same ones `/usage` shows (polled gently, cached, served stale with their age
+attached when the endpoint is unreachable), and they work with no flag at all.
+
+`--allow-accounts` turns on **registration**: each console instance keeps its own account registry.
+Sign a second Claude account in (a managed `CLAUDE_CONFIG_DIR` profile — the console opens a
+terminal on `claude auth login`, then reads back the email), or paste a long-lived token from
+`claude setup-token` and name it. Secrets go to the keychain (or a 0600 file), never into
+`accounts.json`, never to the browser, and the console never writes the CLI's own credentials.
+
+Every launch surface — the run form, the phase launcher, the recovery and QA dialogs, the agent
+launcher — then offers an **Account** choice (including `auto`, most 5-hour headroom) and, for
+runs, an **on-limit policy**:
+
+| Policy | At the shared usage window (session/weekly) |
+|---|---|
+| `switch` *(the dialogs' default)* | Checkpoint the session, continue immediately under the account with the most headroom — same session when its transcript can be carried into that account's config dir, a fresh boot prompt when it cannot. With one account it degrades to `wait`. |
+| `wait` *(the on-disk default)* | Sleep to the reset and resume by itself — including across a console restart, which re-arms the clock. |
+| `pause` | Checkpoint and stop for you, with the reset time on the banner. |
+
+A model-specific limit (Opus, Fable, …) keeps its own path: the run switches **model**, not
+account, because those windows are per-model. Mid-run, **Switch account** on the run card acts
+immediately — a live session is checkpointed (its session id kept) and re-attempted under the other
+login; the scheduler throttles only the limited account, so runs paying with a different one keep
+flowing. Everything is journalled (`run.account-switch`, `phase.transcript-port`), and the `limits`
+notification category announces warnings at 80/95% and every wall that is actually hit.
+
 ## From a phone
 
 The point of an unattended run is that you stop watching it, and the point of the approval queue is

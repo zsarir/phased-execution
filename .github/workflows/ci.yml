@@ -79,6 +79,12 @@ jobs:
             echo '{"loggedIn": true, "email": "ci@example.com", "authMethod": "ci", "orgName": "ci", "subscriptionType": "ci"}'
             exit 0
           fi
+          # The usage poller asks the installed CLI's version once, to shape
+          # its User-Agent. Any version-shaped answer will do in CI.
+          if [ "${1:-}" = "--version" ]; then
+            echo '2.1.0 (ci stub)'
+            exit 0
+          fi
           echo "fake claude: unsupported invocation: $*" >&2
           exit 1
           EOF

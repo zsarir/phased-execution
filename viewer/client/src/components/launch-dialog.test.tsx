@@ -107,6 +107,9 @@ describe('the submits', () => {
     await waitFor(() => expect(runStart).toHaveBeenCalledWith('alpha', {
       model: 'sonnet',
       effort: 'high',
+      // The dialog's deliberate default: switch to the account with headroom
+      // at the usage wall, degrading to `wait` when there is only one login.
+      onLimit: 'switch',
       autonomy: 'keep-going',
       phaseBudgetUsd: 5,
       runBudgetUsd: 40,

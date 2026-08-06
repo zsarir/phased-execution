@@ -27,6 +27,10 @@ for p in \
   "viewer/server/platform.ts" \
   "viewer/server/platform.js" \
   "viewer/server/fallback-sw.js" \
+  "viewer/server/accounts/index.ts" \
+  "viewer/server/accounts/index.js" \
+  "viewer/server/accounts/usage.ts" \
+  "viewer/server/accounts/transcripts.ts" \
   "viewer/shared/scope.js" \
   "viewer/shared/instances.mjs" \
   "viewer/scripts/check-stamp.mjs" \

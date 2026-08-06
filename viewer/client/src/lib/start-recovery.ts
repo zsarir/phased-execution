@@ -34,6 +34,8 @@ export type StartRecoveryRequest = {
   model?: string;
   effort?: string;
   skills?: string[];
+  /** Which account the session runs as — a registered id, validated server-side. */
+  accountId?: string;
 };
 
 /**
