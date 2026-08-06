@@ -31,8 +31,9 @@ import { navigate, type Route } from '@/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // Through `./pane`, deliberately — see the re-export note there: a second
 // importable module in this shared chunk renames it and precaches xterm.
-import { EndedBanner, SessionGone, SessionVitals, TerminalPane } from './pane';
-import { SessionControls } from '../agent/session-controls';
+// SessionControls through the pane facade too — a second importable module in
+// the shared chunk renames it and precaches xterm (see the note in pane.tsx).
+import { EndedBanner, SessionControls, SessionGone, SessionVitals, TerminalPane } from './pane';
 
 export default function TerminalView({ route }: { route: Route }) {
   const client = useQueryClient();

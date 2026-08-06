@@ -64,6 +64,9 @@ vi.mock('./pane', async () => ({
   // The real one — it renders from the session record alone here (no plan
   // linkage on a shell), and its own behaviour has its own test file.
   ...(await import('./vitals')),
+  // Also real, for the same reason — and re-exported through the pane facade
+  // in production, so the mock must carry it too.
+  ...(await import('../agent/session-controls')),
   TerminalPane: (props: { sessionId: string }) => {
     pane(props.sessionId);
     return <div data-testid="pane">{props.sessionId}</div>;

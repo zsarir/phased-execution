@@ -55,6 +55,9 @@ vi.mock('../terminal/pane', async () => ({
   ...(await import('../terminal/ended')),
   // The real one — its own behaviour has its own test file.
   ...(await import('../terminal/vitals')),
+  // Also real, and re-exported through the pane facade in production, so the
+  // mock must carry it too.
+  ...(await import('./session-controls')),
   TerminalPane: (props: { sessionId: string }) => {
     pane(props.sessionId);
     return <div data-testid="pane">{props.sessionId}</div>;

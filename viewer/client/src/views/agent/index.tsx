@@ -25,10 +25,13 @@ import { navigate, type Route } from '@/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // Through `pane`, deliberately — see the re-export note there: a second
 // importable module in this shared chunk renames it and precaches xterm.
-import { EndedBanner, SessionGone, SessionVitals, TerminalPane } from '../terminal/pane';
+// SessionControls included: it is shared with the terminal route, so a direct
+// import from BOTH views is exactly the second facade that renames the chunk.
+import {
+  EndedBanner, SessionControls, SessionGone, SessionVitals, TerminalPane, sessionStateNote,
+} from '../terminal/pane';
 import { Launcher, type LaunchBody } from './launcher';
 import { MODE_TITLE, modeName } from './modes';
-import { SessionControls, sessionStateNote } from './session-controls';
 import { NewPlanWizardButton } from './wizard';
 
 export default function AgentView({ route }: { route: Route }) {

@@ -229,3 +229,4 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
  */
 export { EndedBanner, SessionGone, exitSummary } from './ended';
 export { SessionVitals, sessionLinkage } from './vitals';
+export { SessionControls, sessionStateNote } from '../agent/session-controls';
