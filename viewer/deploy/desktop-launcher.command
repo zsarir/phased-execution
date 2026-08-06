@@ -8,7 +8,7 @@
 # double-clicked window cannot be that something — it IS the server's parent.
 # See SUPERVISED below for the older "this window is the server" behaviour.
 #
-# Six knobs, edit below. The four switches are four separate decisions on
+# Seven knobs, edit below. The five switches are five separate decisions on
 # purpose — each opens a different door, and a wider one is never implied by a
 # narrower one:
 #   ROOT   the repository to read (any directory with docs/plans; you can also
@@ -33,6 +33,13 @@
 #          wider than RUNS (no deny-list settings file, no approval hook in front
 #          of it) — so it is its own switch, not a reading of either. Without it
 #          the app answers "Agent sessions are disabled".
+#   ACCOUNTS
+#          --allow-accounts turns on Claude account REGISTRATION for this
+#          instance (Settings ▸ Claude accounts): sign additional accounts in,
+#          paste `claude setup-token` tokens, pick an account per run, and let
+#          a run that hits its usage window switch to the account with headroom.
+#          Holding credentials is its own decision, so it is its own switch.
+#          The usage meters in the chrome work without it.
 #
 #   SUPERVISED
 #          yes  install/keep a launchd agent (deploy/agent.sh) and open it. The
@@ -55,6 +62,7 @@ RUNS="--allow-run"
 # this machine reads, and overwriting it here breaks the console's own shell.
 TERM_FLAG="--allow-terminal"
 AGENT="--allow-agent"
+ACCOUNTS="--allow-accounts"
 # 4123 is the FIRST console on a machine. Every other project derives its own
 # port from its path (4124–4223), so a launcher for a second project should
 # blank this out and let it — pinning 4123 in two copies of this file is two
@@ -74,7 +82,10 @@ SUPERVISED="yes"
 #    Both landed while this number stayed at 4, so a rev-4 copy was told it was
 #    current while resolving the wrong unit — bumping here is what re-arms the
 #    warning for every copy that missed them.
-LAUNCHER_REV=5
+# 6: the ACCOUNTS knob (--allow-accounts — multiple Claude accounts, per-run
+#    account choice, switch-at-the-usage-limit). A rev-5 copy neither passes
+#    the flag nor notices when the running console lacks it.
+LAUNCHER_REV=6
 
 set -uo pipefail
 
@@ -231,7 +242,7 @@ collect_carried() {
     flag="${args[$i]}"
     case "$flag" in
       --root|--port) i=$((i + 2)); continue ;;
-      --no-open|--allow-writes|--allow-run|--allow-terminal|--allow-agent)
+      --no-open|--allow-writes|--allow-run|--allow-terminal|--allow-agent|--allow-accounts)
         i=$((i + 1)); continue ;;
       --*)
         next="${args[$((i + 1))]:-}"
@@ -281,6 +292,7 @@ banner() {
   echo "  runs     ${RUNS:-off} ${RUNS:+— this console may spawn Claude sessions that edit $ROOT}"
   echo "  terminal ${TERM_FLAG:-off} ${TERM_FLAG:+— the Terminal page opens a real shell as you}"
   echo "  agent    ${AGENT:-off} ${AGENT:+— the Agent page runs interactive claude sessions}"
+  echo "  accounts ${ACCOUNTS:-off} ${ACCOUNTS:+— register several Claude accounts; runs may switch at a usage limit}"
   echo
 }
 
@@ -324,6 +336,7 @@ if [ "$SUPERVISED" = yes ]; then
     plist_wants "$RUNS"      "--allow-run"
     plist_wants "$TERM_FLAG" "--allow-terminal"
     plist_wants "$AGENT"     "--allow-agent"
+    plist_wants "$ACCOUNTS"  "--allow-accounts"
     [ -n "$reason" ] && needs_install=1
   fi
 
@@ -392,7 +405,7 @@ if [ "$SUPERVISED" = yes ]; then
     echo "This builds the client first, so it takes a minute the first time."
     echo
     if ! bash "$VIEWER/deploy/agent.sh" install \
-           --root "$ROOT" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT \
+           --root "$ROOT" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT $ACCOUNTS \
            ${carried[@]+"${carried[@]}"}; then
       echo
       echo "The agent did not install, so nothing was changed."
@@ -480,6 +493,7 @@ if STATE=$(curl -s -m 2 "http://127.0.0.1:$PORT/api/state"); then
   # page is disabled — which reads as a broken app rather than as a flag.
   [ "$(state_field "$STATE" allowTerminal)" != "$(want "$TERM_FLAG")" ] && MISMATCH="$MISMATCH  terminal: running=$(state_field "$STATE" allowTerminal) wanted=$(want "$TERM_FLAG")\n"
   [ "$(state_field "$STATE" allowAgent)"    != "$(want "$AGENT")" ]     && MISMATCH="$MISMATCH  agent:    running=$(state_field "$STATE" allowAgent) wanted=$(want "$AGENT")\n"
+  [ "$(state_field "$STATE" allowAccounts)" != "$(want "$ACCOUNTS")" ]  && MISMATCH="$MISMATCH  accounts: running=$(state_field "$STATE" allowAccounts) wanted=$(want "$ACCOUNTS")\n"
 
   if [ -z "$MISMATCH" ]; then
     echo "Phase Console is already running on port $PORT — opening it."
@@ -554,7 +568,7 @@ echo
 
 # ---- run in the foreground so this window owns the server ------------------
 if [ -n "$ROOT" ]; then
-  exec node "$VIEWER/server/index.ts" --root "$ROOT" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT
+  exec node "$VIEWER/server/index.ts" --root "$ROOT" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT $ACCOUNTS
 else
-  exec node "$VIEWER/server/index.ts" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT
+  exec node "$VIEWER/server/index.ts" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT $ACCOUNTS
 fi
