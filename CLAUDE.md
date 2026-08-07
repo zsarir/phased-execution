@@ -136,6 +136,8 @@ rather than refusing.
   `viewer/server/analysis/graph.ts` reads the same file. Change a number only there.
 - **F1/F2/F3 — structural lint** (malformed phase cell, undefined dependency, cycle) lives in
   `phase-graph.sh --lint`; `validate.sh` delegates to it and adds handoff body/consistency checks.
+  **F14** rides the same arm as a WARNING (stderr, exit untouched): an open, not-done phase whose
+  §Verification holds nothing runnable — the thing the autopilot would otherwise park on at boarding.
 - **bash 3.2.** The scripts' target runtime is macOS system bash. `tests/helpers/test_helper.bash`
   forces `/bin/bash` for every script under test — no associative arrays, no `${var^^}`, no `mapfile`.
 - **Never implicitly build the client.** `client/dist` is gitignored; the console warns when the build

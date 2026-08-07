@@ -546,6 +546,36 @@ gate_issues() {
   return 0
 }
 
+# F14: a phase without a runnable §Verification — ADVISORY, never a gate.
+# The autopilot boards a phase only to park it when its Verification bullet
+# yields nothing executable ("nothing would prove the work"), hours after the
+# author could have heard it. Warned per open phase at lint time — validate.sh
+# and the console's lint panel inherit the lines — but exit codes never move:
+# a done phase's proof is its handoff, and history should not nag. "Runnable"
+# here is the cheap tell the extractor and this script can agree on: a
+# backtick or a fence somewhere in the bullet's reach (same line or below,
+# inside the phase block). Nested 2-space sub-bullets count — the console's
+# parser keeps them since the same run that taught it parked on that shape.
+verification_advisories() {
+  local p
+  for p in "${PHASES[@]}"; do
+    _is_done "$p" && continue
+    awk -v p="$p" '
+      /^###[[:space:]]+[Pp]hase[[:space:]]/ {
+        if (inblock) exit
+        if ($0 ~ ("^###[[:space:]]+[Pp]hase[[:space:]]+" p "([^0-9]|$)")) inblock = 1
+        next
+      }
+      /^##[[:space:]]/ { if (inblock) exit }
+      inblock && /^[[:space:]]*[-*][[:space:]]+\*\*Verification/ { seen = 1 }
+      seen && (/`/ || /^[[:space:]]*~~~/) { ok = 1; exit }
+      END { exit (ok ? 0 : 1) }
+    ' "$plan_file" || \
+      printf 'F14 phase %s: no runnable §Verification — the autopilot will park it at boarding; add the commands that prove the exit criteria\n' "$p"
+  done
+  return 0
+}
+
 # F6: model named in the plan's "## Session budget" section (empty if none).
 plan_model() {
   awk 'tolower($0) ~ /^##[[:space:]]+session budget/{f=1;next} /^##[[:space:]]/{f=0} f' "$plan_file" \
@@ -754,6 +784,12 @@ case "$mode" in
       issues="${issues}"$'\n'"phase count mismatch: frontmatter says ${declared} but the table parses ${#PHASES[@]} rows"
     fi
     issues="$(printf '%s' "$issues" | sed '/^[[:space:]]*$/d')"
+    # F14 advisories ride stderr beside the issues but never gate the exit —
+    # a closed plan is not even scanned (nothing left to board there).
+    if ! plan_is_closed; then
+      advisories="$(verification_advisories)"
+      [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
+    fi
     if [ -n "$issues" ]; then
       # A closed plan still gets its problems named — they just stop being a gate.
       # Nobody should have to repair a plan they have already walked away from.
