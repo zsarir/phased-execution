@@ -301,6 +301,15 @@ export function healthIssues(ctx: PlanContext): HealthIssue[] {
     for (const dep of row.dependsOn) {
       if (!known.has(dep)) add('error', 'undefined-dep', `Phase ${row.phase} depends on ${dep}, which is not in the table`, row.phase);
     }
+    // A nudge, never bash lint: an uncategorized gate defaults to human (the
+    // safe read), so it fails nothing — but naming the category is what lets
+    // the autopilot clear ai gates instead of parking on them.
+    const detail = plan.phases[row.phase];
+    if (detail?.gated && !detail.gateCheck) {
+      add('info', 'gate-uncategorized',
+        `Phase ${row.phase} is GATED with no Gate-check — add \`ai <check>\` (a session clears it) `
+        + 'or `manual <who>` (the Gate card clears it)', row.phase);
+    }
   }
 
   for (const phase of board.done) {

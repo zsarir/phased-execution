@@ -365,14 +365,15 @@ it matches the engine, so the two readings cannot drift apart unnoticed.
 
 ## Writes
 
-Off by default. With `--allow-writes` the console can run five scripts, each behind a dialog that
-shows the exact command first:
+Off by default. With `--allow-writes` the console can run six scripts, each behind a dialog (or, for
+gates, a press-twice confirm) that shows the exact command first:
 
 | Action | Script |
 |---|---|
 | Scaffold a plan | `new-plan.sh` |
 | Scaffold or repair a handoff | `new-handoff.sh` |
 | Record a QA result | `qa-record.sh` |
+| Approve or revoke a phase gate | `gate-approve.sh` — the phase page's **Gate card**; an approval clears a gate of any kind, and can continue a run the gate parked |
 | Claim or release a phase | `phase-lock.sh` |
 | Turn QA on for a plan | `new-handoff.sh … --qa` (it backfills finished phases as waived) |
 | Close or reopen a plan | `close-plan.sh` (a status and a one-line reason; reopening needs neither) |

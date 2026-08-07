@@ -114,11 +114,30 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
      The cell is the ONLY declaration — nothing in the phase body overrides it. (Plans already use
      `- **Scope …:**` bullets for prose, and reading those as repo names would silently mis-scope a
      phase.) If a phase's real reach differs from its cell, fix the cell.
-   - **Gated phases:** mark `*(GATED)*` in the `### Phase N` heading and add a
-     `- **Gates (must clear first):** …` line (prose, surfaced in every boot prompt). For a
-     **machine-checkable** gate, also add `- **Gate-check:** <type> <value>` — `date YYYY-MM-DD` (opens on
-     that date), `phase N` (clears when phase N is verified), or `manual <text>` (needs human sign-off).
-     `scripts/phase-graph.sh <slug> --gate-status N` evaluates it (exit 0 = clear, 1 = blocked/manual).
+   - **Gated phases — mark, describe, categorize.** Mark `*(GATED)*` in the `### Phase N` heading, add a
+     `- **Gates (must clear first):** …` line (the full conditions — it may span several lines, and for
+     human gates it MUST be numbered step-by-step operator instructions; the boot prompt and the console's
+     Gate card both render it whole), and add a category directive `- **Gate-check:** <type> <value>`.
+     The vocabulary (one source: `scripts/gates.env`) and what each type means:
+
+     | Type | Category | Cleared by |
+     |------|----------|-----------|
+     | `ai <one-line check>` | **ai** | a booted session: it verifies each condition, does the work to make failing ones true, records the clearance (`gate-approve.sh`), then implements. A person may also approve. **The default — bias here.** |
+     | `manual <who/what>` | **human** | a person doing the numbered Gates steps, then approving (console Gate card, or `gate-approve.sh`) |
+     | `date YYYY-MM-DD` | auto | the calendar (opens on that date) |
+     | `deadline YYYY-MM-DD` / `by …` | auto | staying before the date — after it, `OVERDUE` |
+     | `phase N` / `phases N,M,…` | auto | those phases of THIS plan reaching verified |
+     | `plan <slug>:<phases>` | auto | those phases of ANOTHER plan reaching done |
+     | `cmd <read-only command>` | auto | the command exiting 0 (executed only under `PHASE_EXEC_GATES=1` — the autopilot sets it; page views never do) |
+
+     A `*(GATED)*` heading with **no** Gate-check reads as **human** (the safe default) — the console
+     nudges you to categorize it. `scripts/phase-graph.sh <slug> --gate-status N` evaluates any of them
+     (exit 0 = clear, 1 = blocked/manual/ai); `--gate-kind N` answers the category
+     (`human` · `ai` · `auto` · `none`). **Approval is the one door for every kind:**
+     `scripts/gate-approve.sh <slug> <N> [--by WHO] [--note TEXT]` records a clearance row in
+     `docs/handoffs/<slug>/gate-status.md` that `--gate-status` honours before evaluating anything
+     (`--revoke` restores the gate). Commit + push that file — a clearance only exists where it can be
+     pulled.
    - **Size (optional, drives batching):** tag each phase's rough working-set in its `### Phase N` block —
      `- **Size:** S|M|L` (default `M`; `S` ≤ ~15K, `M` ~15–50K, `L` ~50–120K tokens). Then
      `scripts/phase-graph.sh <slug> --session-plan <model>` groups the remaining phases — sequential

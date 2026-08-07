@@ -1,6 +1,6 @@
 ---
 name: phased-execution
-description: "Plan and run large multi-phase software work as a sequence of right-sized Claude sessions to control token cost and protect output quality. Use when creating a phased plan for big work, starting or continuing a phase of an existing plan in a fresh session, finishing a phase and handing off, batching or splitting phases to a session budget, resuming a plan mid-DAG, or QA-verifying a phase on request — and whenever the user mentions phased execution, a phase handoff, a plan under docs/plans/, a session budget, or booting the next phase."
+description: "Plan and run large multi-phase software work as a sequence of right-sized Claude sessions to control token cost and protect output quality. Use when creating a phased plan for big work, starting or continuing a phase of an existing plan in a fresh session, finishing a phase and handing off, batching or splitting phases to a session budget, resuming a plan mid-DAG, QA-verifying a phase on request, or checking/clearing/approving a phase gate — and whenever the user mentions phased execution, a phase handoff, a plan under docs/plans/, a session budget, a gated phase, or booting the next phase."
 argument-hint: "[plan|start|finish] [slug]"
 allowed-tools:
   - Bash
@@ -13,7 +13,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 metadata:
-  version: 4.1.0
+  version: 4.2.0
 ---
 
 # Phased Execution
@@ -36,7 +36,7 @@ window in phase weight — ~200K for 1M-class models) and the engine proposes wh
 A session boundary is a *cost*, not a virtue: it's earned by a spent budget, an external gate, or a model
 switch — never by tidiness.
 
-## Three artifacts + one optional — each has ONE job (never duplicate)
+## Three artifacts + two optional — each has ONE job (never duplicate)
 
 - **Plan** → `docs/plans/<slug>.md` — the durable blueprint: every phase, the dependency graph, the
   session budget, per-phase self-contained detail, end-to-end verification. The roadmap source of truth.
@@ -52,6 +52,11 @@ switch — never by tidiness.
   `ready` only once every dependency is *verified* (handoff `complete` **and** QA result `pass`/`waived`),
   so a broken phase can't silently propagate. `scripts/phase-graph.sh <slug> --qa-mode` says which regime
   a plan is in (`off` · `on <reason>` · `waived <reason>`).
+- **Gate approvals (OPTIONAL — only once a gate is cleared/approved)** → `docs/handoffs/<slug>/gate-status.md`
+  — per-phase gate clearances written by `scripts/gate-approve.sh` (the console's Gate card, an AI session
+  that verified an `ai` gate, or a hand run). `--gate-status` honours an approved row for **every** gate
+  kind. Deliberately a separate file from `test-status.md`: recording an approval must never flip QA
+  gating on.
 
 All artifacts live in the **project repo** under `docs/` (versioned + pushed, so any account/machine
 can pull and continue); the skill itself lives wherever it was installed. The plan holds the
@@ -115,8 +120,19 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    load-bearing: the `## Phase graph` table.** Its `Depends on` column is the machine-readable dependency
    source the engine parses — every phase must list **every** phase that must finish first (comma-separated
    numbers, ranges like `1–7`, or `—` for none). Also fill `Parallel-safe with`, repos, exit criteria, and
-   the explicit **"Blocking vs simultaneous"** callout. Mark externally-gated phases `*(GATED)*` in their
-   `### Phase N` heading with a `- **Gates (must clear first):** …` line.
+   the explicit **"Blocking vs simultaneous"** callout. **Gates are categorized.** Mark externally-gated
+   phases `*(GATED)*` in their `### Phase N` heading with a `- **Gates (must clear first):** …` line AND a
+   category directive `- **Gate-check:** …`:
+   - **`ai <one-line check>` — the DEFAULT unless a person is genuinely required.** An AI session can
+     verify the conditions, do the work to make them true, and record the clearance itself — the boot
+     prompt orders it to. The whole point is to automate; don't strand a human on a gate a session could
+     clear.
+   - **`manual <who/what>` — only when a person is truly required** (a physical action, a third party,
+     credentials no session holds). Then the Gates bullet MUST be full **numbered step-by-step operator
+     instructions** — the console renders them on the phase's Gate card next to its Approve button, and
+     the boot prompt prints them for whoever is asked.
+   - **Self-evaluating checks** (`date` · `phase`/`phases` · `plan` · `deadline`/`by` · `cmd`) when a
+     machine can answer directly. Full grammar + the approval lifecycle: `references/plan-format.md`.
 3. Scaffold it: `bash ~/.claude/skills/phased-execution/scripts/new-plan.sh <slug>` then fill it in.
 4. **Sanity-check the graph + preview batches:** run `scripts/phase-graph.sh <slug>` — it should list every
    phase, show the correct roots as `ready`, and (with `Size:` tags) print `SUGGESTED BATCHES:`. Run
@@ -161,6 +177,19 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    whether to wait, stop that session, take over (`--force`), or pick a ready phase with a disjoint
    scope. Never build over a live session. The lock auto-expires (lease) and is released at phase-finish.
    See `references/conventions.md` §Locking + §Scoped concurrency.
+
+   **Gate check — GATED phases only, and BEFORE implementing.** Run
+   `scripts/phase-graph.sh <slug> --gate-status <N>` (the boot prompt states the same duty):
+   - `clear …` (including `clear (approved by …)`) → proceed.
+   - `ai: …` → **the gate is yours to clear.** Verify each condition in the plan's Gates bullet for
+     real; where one does not hold yet, DO THE WORK to make it true — clearing this gate is in scope for
+     this session. Then record it — `bash scripts/gate-approve.sh <slug> <N> --by ai-session
+     --note "<one line of evidence>"` — commit + push `docs/handoffs/<slug>/gate-status.md`, and continue
+     into the phase. Only if a condition is genuinely out of reach (missing credentials, a third party):
+     STOP, report exactly what is missing and what you verified, and hand the gate to the operator.
+   - `manual: …` / `blocked: …` / `OVERDUE: …` → **STOP.** Tell the operator what the gate needs and
+     where to clear it: Phase Console → plan → phase → **Gate card** (Approve), or
+     `scripts/gate-approve.sh <slug> <N> --by "<who>"`. Never implement past an unapproved human gate.
 3. **Reset the task list** (delete prior-phase tasks) and create THIS phase's tasks with subjects prefixed
    **`pN.taskM`** (e.g. `p2.task1 — wire endpoint`). Keep the roadmap in the plan, not the task list.
    (See `references/conventions.md` and memory `feedback_phase_task_list_reset`.)
@@ -231,7 +260,8 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
      independent sibling — just continue into it (Mode 2 in place, lock and all). You save a full
      bootstrap + closeout and keep the cache warm. (`--session-plan` shows which phases belong together.)
    - **Stop & hand off (fresh session)** — when the budget is spent, the next phase is **GATED** (never
-     batch past an external gate), it wants a **different model**, the **account's usage window is
+     batch past a gate: a 🔒GATED·ai phase's fresh session clears the gate itself, a 🔒GATED·human one
+     waits for the operator's approval first), it wants a **different model**, the **account's usage window is
      exhausted** (session/weekly limit — note the reset time in the handoff so the next session knows when
      work can resume, or resumes at once under another account), or — with QA `on` — it depends on this
      phase's still-unrecorded verdict. Print the script's output verbatim as the **last message of this
@@ -261,11 +291,14 @@ Scripts resolve the superproject root automatically when run from inside a submo
   **`--lint`** (structural validation: exit non-zero on a malformed row, an undefined
   dependency, or a cycle — naming each), **`--qa-mode`** (this plan's QA regime: `off` · `on <reason>` ·
   `waived <reason>`), **`--qa-result N`** / **`--qa-prompt N`** (recorded QA result /
-  the fresh QA-subagent brief), **`--gate-status N`** (evaluate a machine-checkable gate: date / phase / manual),
+  the fresh QA-subagent brief), **`--gate-status N`** (evaluate the gate — every type: `phase` `phases`
+  `plan` `cmd` `date` `deadline` `by` `manual` `ai`; a recorded approval clears ANY of them; exit 0 clear,
+  1 blocked/manual/ai), **`--gate-kind N`** (the gate's category: `human` · `ai` · `auto` · `none`),
   and **`--memory-block`** (the canonical done/ready/waiting block for memory). The board is model-aware
   (batches size to the plan's `## Session budget`) and shows QA markers when gating is on. Parses the
   `## Phase graph` table (deps, ranges, markdown-bold cells) + `### Phase N` `Size:`/`Gate-check:` bullets +
-  handoff statuses + `test-status.md`; warns on drift. Sizing/budget constants live in `scripts/sizing.env`.
+  handoff statuses + `test-status.md` + `gate-status.md`; warns on drift. Sizing/budget constants live in
+  `scripts/sizing.env`; the gate vocabulary + category split in `scripts/gates.env`.
 - `scripts/new-handoff.sh <slug> <N> <title> [status] [--qa]` — scaffold the phase handoff + create/update
   `INDEX.md`. Auto-fills `depends_on` + `blocks` from the graph and the `## ▶ Start next phase(s)` section
   (a boot prompt per unblocked phase). `status` defaults to `complete`; pass `in-progress`/`blocked`
@@ -293,6 +326,11 @@ Scripts resolve the superproject root automatically when run from inside a submo
   idempotent writer for `test-status.md` (the QA gate). The QA subagent calls it when QA is enabled; never
   hand-edit the table. (Recording a row also *activates* gating — it's a QA-on trigger.) See
   `references/qa-method.md`.
+- `scripts/gate-approve.sh <slug> <N> [--by WHO] [--note TEXT] [--revoke]` — record (or revoke) a gate
+  clearance in `docs/handoffs/<slug>/gate-status.md` — the approval `--gate-status` honours for **every**
+  gate kind. Written by the console's Gate card, by an AI session that verified an `ai` gate's conditions,
+  or by hand; never hand-edit the table. Deliberately a separate file from `test-status.md` (whose
+  existence flips QA gating on). Commit + push it so every clone sees the clearance.
 - Tests: `tests/run-tests.sh` runs the bats unit + integration suite (under bash 3.2). **QA is opt-in** —
   when a plan enables it (`**QA gate:** on`, `--qa`, or an existing `test-status.md`), a fresh-context QA
   subagent reviews each phase-finish (brief via `--qa-prompt`) and a `qa-full` pass runs at closeout; the
@@ -336,6 +374,12 @@ The load-bearing rules a session must not get wrong; full rationale in `referenc
   **Closing the plan** (`close-plan.sh`) is the only other exit — it retires the report without a re-QA
   because a closed plan claims nothing about progress, and reopening restores the gate untouched.
   (conventions §QA gating)
+- **Gates are categorized; approval is the one door.** An `ai` gate is the fresh session's FIRST task —
+  verify each condition, do the work to make failing ones true, record it (`gate-approve.sh`), then
+  implement; a `manual` (human) gate stops everything until a person does the numbered steps and approves
+  (console Gate card or `gate-approve.sh`); auto checks (`date`/`phase`/…) answer by themselves. An
+  approval clears ANY kind; `--revoke` restores the gate. Never implement past an unapproved human gate.
+  (plan-format §Gates; conventions §Gates)
 - **Validate before you trust the board** — `scripts/validate.sh <slug>` catches malformed rows, undefined
   deps, cycles, and inconsistent handoffs; a silently-wrong board is the worst failure.
 - **Skill vs work-state split.** The skill lives in its own install (a plugin, or a clone under

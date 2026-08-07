@@ -941,7 +941,33 @@ export async function handleApi(
       if (sub === 'qa-prompt' && arg) { text(res, 200, await service.qaPrompt(slug, Number(arg))); return true; }
       if (sub === 'memory-block') { text(res, 200, await service.memoryBlock(slug)); return true; }
       if (sub === 'board') { text(res, 200, await service.boardText(slug)); return true; }
-      if (sub === 'gate' && arg) { json(res, 200, await service.gateStatus(slug, Number(arg))); return true; }
+      if (sub === 'gate' && arg) {
+        if (req.method === 'POST') {
+          /* Approve (or revoke) a phase's gate — the clearance record every
+           * gate kind honours. Write-class: it writes gate-status.md, so it
+           * sits behind --allow-writes like the other plan writes. */
+          const refusal = guardWrite(req, service);
+          if (refusal) { json(res, 403, { error: refusal }); return true; }
+          const phase = Number(arg);
+          if (!Number.isInteger(phase) || phase < 1) {
+            json(res, 400, { error: 'the gate route needs a phase number' });
+            return true;
+          }
+          const body = await readBody(req);
+          const outcome = await service.approveGate(slug, phase, {
+            approve: body.approve !== false,
+            by: typeof body.by === 'string' ? body.by : undefined,
+            note: typeof body.note === 'string' ? body.note : undefined,
+            continueRun: body.continueRun === true,
+          });
+          // On refusal, `error` carries the detail so ApiError.message says
+          // WHY rather than "Request failed (409)".
+          json(res, outcome.ok ? 200 : 409, outcome.ok ? outcome : { ...outcome, error: outcome.detail });
+          return true;
+        }
+        json(res, 200, await service.gateStatus(slug, Number(arg)));
+        return true;
+      }
       if (sub === 'session-plan') {
         json(res, 200, await service.sessionPlan(slug, url.searchParams.get('model') ?? undefined));
         return true;

@@ -56,17 +56,25 @@ argument becomes `--root`. Use `viewer/run <verb>` or `phase-console <verb>` for
 
 ## Gate checks
 
-Add `- **Gate-check:** <type> …` to a phase to say what holds it up. A gate the machine can read
-clears itself; one it cannot waits for you.
+Add `- **Gate-check:** <type> …` to a phase to say what holds it up — and **who can clear it**. An
+`ai` gate is cleared by the booted session itself; a `manual` gate waits for a person; the rest clear
+themselves.
 
-| Syntax | Clears when |
-|---|---|
-| `phase 8` | Phase 8 of this plan is done. |
-| `phases 6,7,9` | All of them are done. |
-| `plan other-slug:6,8` | Those phases in a different plan are done. |
-| `date 2026-12-01` | On or after that date. Range-checked, so a nonsense date fails closed. |
-| `cmd <command>` | The command exits 0. **Off unless `PHASE_EXEC_GATES=1`** — running a command written in a document is worth an explicit opt-in. |
-| `manual <who>` | Never by itself. A person decides. |
+| Syntax | Category | Clears when |
+|---|---|---|
+| `ai <check>` | ai | A booted session verifies the plan's Gates conditions, does the work to make them true, and records the clearance — or you approve it. Prefer this. |
+| `manual <who>` | human | Never by itself. A person does the Gates bullet's numbered steps, then approves on the phase page's Gate card. |
+| `phase 8` | auto | Phase 8 of this plan is done. |
+| `phases 6,7,9` | auto | All of them are done. |
+| `plan other-slug:6,8` | auto | Those phases in a different plan are done. |
+| `date 2026-12-01` | auto | On or after that date. Range-checked, so a nonsense date fails closed. |
+| `deadline 2026-12-01` (or `by …`) | auto | Only before that date — after it the gate reads OVERDUE. |
+| `cmd <command>` | auto | The command exits 0. **The autopilot evaluates it (`PHASE_EXEC_GATES=1`); page views never execute it** — running a command written in a document is worth an explicit opt-in. |
+
+**Approving** — the phase page's Gate card, or `scripts/gate-approve.sh <slug> <N> --by <who>` —
+clears a gate of **any** kind: the row lands in `docs/handoffs/<slug>/gate-status.md`, and revoking
+it restores the gate. A `*(GATED)*` heading with no Gate-check at all reads as a human gate, the safe
+default.
 
 ## Where things live
 
@@ -157,7 +165,7 @@ disk.
 | Word | What it means | What to do |
 |---|---|---|
 | `pending` | This run has not started the phase yet. | Nothing — the loop reaches it when its dependencies are done. |
-| `gated` | Parked at the plan's gate — a condition the plan reserves for a person. | Confirm the condition (the note quotes it), then Retry re-checks the gate. |
+| `gated` | Held at the plan's gate — a human or automatic condition the run cannot clear itself (ai gates never park: their session is booted to clear them). | Do the gate's steps and Approve on the phase page's Gate card (it can continue the run in the same action), or Retry to re-check. |
 | `running` | A session is working this phase right now. | Watch its tab; Ask reaches the session mid-flight. |
 | `verifying` | The session finished; the console runs the plan's verification commands itself. | Nothing — green marks it done, red halts with the evidence. |
 | `awaiting-verification` | The machine checks passed; steps only a person can confirm remain. | Answer the verification card — it lists exactly what needs your eyes. |
@@ -182,7 +190,7 @@ The "Status" column, in departures spelling.
 | `in-progress` | **On track** | A session is on this phase right now. | Watch its tab. The board catches up when the handoff lands. |
 | `waiting` | **Held** | An earlier phase it depends on is not done yet. | Nothing here; finish what it waits on. |
 | `stuck` / `blocked` | **Blocked** | Its handoff is marked blocked — the Outstanding section says exactly why. | Read the excerpt on the phase page, or Repair with AI on the run page. |
-| `gated` | **Gated** | The plan reserves a decision for a person before this phase may run. | Confirm the gate condition (quoted on the phase page), then start or Retry. |
+| `gated` | **Gated** | The plan gates this phase — on a person (`manual`), a session's own check (`ai`), or an automatic condition. | The phase page's Gate card shows the steps and the Approve button; ai gates clear themselves when their session boots. |
 
 ## The claim
 

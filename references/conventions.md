@@ -208,6 +208,39 @@ run scripts from the repo root or set `DOCS_ROOT=/path/to/repo` explicitly when 
   (pre-activation) so gating doesn't retroactively block their dependents. Use `waived` only for a
   genuinely non-applicable check or a recorded plan-level waiver.
 
+## Gates (human vs ai — one approval door)
+
+A gate blocks a phase on something outside the plan's own dependency graph. Every gate is
+**categorized** by its `Gate-check` directive (`scripts/phase-graph.sh <slug> --gate-kind N` answers:
+`human` · `ai` · `auto` · `none`; the vocabulary lives in `scripts/gates.env`, one source for the
+engine and the console):
+
+- **ai** (`Gate-check: ai <check>`) — an AI session may clear it, and the boot prompt makes that the
+  session's FIRST task: verify each condition in the Gates bullet for real, do the work to make
+  failing ones true, record the clearance, then implement. **Bias gates here** — a person should only
+  be interrupted by gates that genuinely need one.
+- **human** (`Gate-check: manual <who/what>`, or a `*(GATED)*` heading with no directive at all) — a
+  person does the Gates bullet's numbered steps, then approves: the console's phase-page **Gate
+  card**, or `scripts/gate-approve.sh <slug> <N> --by "<who>" --note "<what was done>"`. Sessions and
+  the autopilot stop at an unapproved human gate, always.
+- **auto** (`date` / `deadline` / `by` / `phase` / `phases` / `plan` / `cmd`) — the engine evaluates
+  it by itself. `cmd` executes only under `PHASE_EXEC_GATES=1` — the autopilot's deliberate opt-in;
+  page views and boot prompts never execute a gate command.
+
+**The approval record** is `docs/handoffs/<slug>/gate-status.md` (its `## Gate approvals` table),
+written only by `gate-approve.sh` — an idempotent upsert, the same shape as QA's `qa-record.sh`. An
+approved row clears `--gate-status` for EVERY kind (the operator's override, same philosophy as a QA
+waiver); `--revoke` restores the gate. It is deliberately NOT `test-status.md`: that file's very
+existence switches QA gating on, and clearing a gate must never flip an unrelated regime. Commit +
+push it — a clearance only exists where it can be pulled. The `*(GATED)*` heading marker stays until
+the plan's author removes it: an approval opens the door once; the marker says the door exists
+(batching still seals around it, and the boot prompt notes the approval and proceeds).
+
+The autopilot enforces the split: an unclear **ai** gate boots the session anyway (clearing it IS the
+session's job); an unclear **human/auto** gate holds the phase as `gated` until approved — and the
+Gate card's approve can continue the parked run in the same action. Never batch past a gate of any
+kind.
+
 ## Docs layout & repo split
 - **Work-state lives in the project repo** under `docs/` (its `.gitignore` tracks only `/docs/`):
   `plans/<slug>.md` and `handoffs/<slug>/{INDEX.md, phase-NN-*.md, reports/phase-NN-qa.md, test-status.md,

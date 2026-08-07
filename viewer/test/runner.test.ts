@@ -92,6 +92,9 @@ case "$mode" in
     # Stretched on demand, like the board: the gate is the FIRST subprocess of
     # boarding, and the pause-during-boarding tests need a window to press in.
     [ -f "$S/slow-gate" ] && sleep 1
+    # Echoes whether the caller opted into cmd-gate execution — pins that the
+    # runner really passes PHASE_EXEC_GATES=1 (it claimed to for months and did not).
+    [ -f "$S/gate-echo-env" ] && { echo "manual: exec=\${PHASE_EXEC_GATES:-0}"; exit 1; }
     if [ -f "$S/gate-$arg" ]; then cat "$S/gate-$arg"; exit 1; fi
     echo "clear (no gate)"
     ;;
@@ -828,7 +831,7 @@ test('a plan left failing validate.sh halts even when the phase verified', async
   r.cleanup();
 });
 
-test('a closed gate parks that phase and stops rather than forcing it', async () => {
+test('a closed human gate holds that phase as gated and stops rather than forcing it', async () => {
   const r = repo();
   r.setGate(1, 'manual: the operator must approve the deploy');
   const { instance } = runner(r, workingSession(r));
@@ -836,10 +839,39 @@ test('a closed gate parks that phase and stops rather than forcing it', async ()
   await instance.wait();
 
   const state = instance.current()!;
-  assert.equal(state.phases['1'].status, 'parked');
+  assert.equal(state.phases['1'].status, 'gated');
   assert.equal(state.status, 'parked', 'nothing else is ready, so the run parks');
   assert.match(state.phases['1'].note!, /the operator must approve/);
   assert.equal(r.doneList().length, 0);
+  r.cleanup();
+});
+
+test('an ai-clearable gate does not park — the session is booted to clear it', async () => {
+  const r = repo();
+  r.setGate(1, 'ai: verify staging deploy and smoke tests');
+  const { instance } = runner(r, workingSession(r));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.phases['1'].status, 'done',
+    "the unclear ai gate is the session's first task, not a wall");
+  assert.equal(state.phases['1'].gate?.kind, 'ai');
+  assert.ok(r.doneList().includes(1));
+  r.cleanup();
+});
+
+test('the runner opts into cmd-gate execution (PHASE_EXEC_GATES=1)', async () => {
+  const r = repo();
+  writeFileSync(join(r.state, 'gate-echo-env'), '');
+  const { instance } = runner(r, workingSession(r));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.phases['1'].status, 'gated');
+  assert.match(state.phases['1'].note ?? '', /exec=1/,
+    'the gate evaluation must see the opt-in the engine documents');
   r.cleanup();
 });
 
@@ -2504,7 +2536,7 @@ test('a parked run names a gated phase with the gate note, and says what to do',
 
   const state = instance.current()!;
   assert.equal(state.status, 'parked');
-  assert.match(state.halt?.reason ?? '', /phase 1 is parked \(gate not clear/,
+  assert.match(state.halt?.reason ?? '', /phase 1 is gated \(gate not clear/,
     'the gate itself is quoted, not summarised into "waiting on a gate"');
   assert.match(state.halt?.reason ?? '', /Gates need your confirmation/);
   r.cleanup();

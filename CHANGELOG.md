@@ -6,7 +6,62 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
-## [1.6.0] - 2026-08-07
+## [1.7.0] - 2026-08-07
+
+Gates get categories, and a door. A `manual` gate used to be a wall with no way through — the
+autopilot parked the phase forever, and the only fix was hand-editing the plan — while gates a
+session could perfectly well clear ("is staging deployed? is the smoke suite green?") were flagged
+human anyway and stranded an operator on work that was never theirs. Every gate now says **who can
+clear it**: `ai` gates make the check the booted session's *first task* — verify each condition, do
+the work to make failing ones true, record the clearance, then implement — and `manual` gates carry
+numbered operator steps that the phase page renders next to an **Approve** button. One approval
+record clears a gate of any kind, and revoking it puts the wall back.
+
+### Added
+
+- **The `ai` gate type** (`- **Gate-check:** ai <check>`). The engine's boot prompt orders the
+  session to verify the plan's Gates conditions, fix what fails, record the clearance and continue —
+  and the autopilot boots ai-gated phases instead of parking them, because booting IS how that gate
+  clears. `--gate-kind N` answers the category (`human` · `ai` · `auto` · `none`); the vocabulary
+  lives in `scripts/gates.env`, one source for the bash engine and the console (the sizing.env
+  pattern), pinned per phase by the engine-parity suite.
+- **`scripts/gate-approve.sh <slug> <N> [--by WHO] [--note TEXT] [--revoke]`** — the clearance
+  record. An approved row in `docs/handoffs/<slug>/gate-status.md` clears `--gate-status` for
+  **every** gate kind (the operator's override, same philosophy as a QA waiver); revoking restores
+  the gate. Deliberately a separate file from `test-status.md`, whose very existence flips QA gating.
+- **The Gate card** on the console's phase page: category chip, the plan's own instructions rendered
+  whole (numbered steps for human gates), the live verdict, a press-twice **Approve** with a note
+  field, **Revoke**, and — when this plan's run is holding the phase at the gate — a *continue the
+  run* checkbox so approving and resuming are one action. `POST /api/plans/:slug/gate/:n` behind
+  `--allow-writes`, next to the existing GET.
+- **Category-aware prompts everywhere**: the boot prompt's gate block now branches — ai gates get the
+  verify→do→record→continue order, human gates get the operator steps plus where to approve, an
+  approved gate says "proceed", and auto gates print their live verdict. `next-phase-prompt.sh` and
+  the handoff's `## ▶ Start next phase(s)` markers carry the category too (`🔒 GATED·ai` /
+  `·human` / `·auto`).
+
+### Changed
+
+- **The runner holds human/auto-gated phases as `gated`, not `parked`** — the reader's next move is
+  different, and now the label says so. `gated` joins the settled set (no more re-checking a wall
+  every loop pass), Retry re-checks the gate, and the parked-run banner quotes it by its real name.
+- **`PHASE_EXEC_GATES=1` is finally true.** The engine's comment always claimed the console's runner
+  opts into `cmd` gate execution; the runner never did, so every cmd gate reported "not executed"
+  forever. The runner now sets it for its gate checks — page views still never execute plan-authored
+  commands.
+- **Multi-line gates survive whole.** `gate_conditions` was a `grep -A6 | head -1`: six lines of
+  blindness and a mid-sentence truncation for any real instruction list. It is block-scoped now, so
+  the boot prompt prints the same full steps the console renders.
+- **`readGateStatus` keeps `kind` a clean token** — `clear (cmd ok): <cmd>` no longer leaks the
+  parenthetical into `kind`; clear verdicts read `{kind: 'clear', detail: <reason>}`.
+- An uncategorized gate (a `*(GATED)*` heading with no `Gate-check`) reads as **human** — the safe
+  default — and the plan's health issues nudge, at `info`, to categorize it. Deliberately not a bash
+  lint failure: legacy plans with prose-only gates must not start failing `validate.sh` mid-run.
+
+### Fixed
+
+- Previously-untested gate types (`phases`, `plan`, `cmd`, `deadline`/`by`) and the gate lint rules
+  now have bats coverage, alongside the new approval/revoke/boot-prompt suites.
 
 The run heals itself, and the console stops keeping secrets from its own surfaces. A recovery
 session's success now *moves the run record* — phase done, halt cleared, run resumed — instead of

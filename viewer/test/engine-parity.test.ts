@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { checkRoot, safeList, SKILL_DIR } from '../server/config.ts';
 import { Store, type PlanRecord } from '../server/store.ts';
 import { run, readMemoryBlock, type PhaseState } from '../server/engine.ts';
+import { loadGateVocab, gateKindOf } from '../server/analysis/gates.ts';
 import { parseTestStatus } from '../server/parse/folder.ts';
 import { scopeOfRow, formatScope } from '../shared/scope.js';
 
@@ -138,15 +139,17 @@ test('deps, size and gated flags match the engine phase by phase', { skip: !avai
   assert.ok(sample.length > 3, 'expected a usable sample');
 
   const problems: string[] = [];
+  const vocab = loadGateVocab(SCRIPTS);
   for (const record of sample) {
     const plan = record.plan!;
     await Promise.all(plan.graph.map(async (row) => {
       const opts = { scriptsDir: SCRIPTS, root: ROOT };
-      const [deps, size, gated, repos] = await Promise.all([
+      const [deps, size, gated, repos, gateKind] = await Promise.all([
         run(opts, 'phase-graph.sh', [record.slug, '--deps', String(row.phase)]),
         run(opts, 'phase-graph.sh', [record.slug, '--size', String(row.phase)]),
         run(opts, 'phase-graph.sh', [record.slug, '--gated', String(row.phase)]),
         run(opts, 'phase-graph.sh', [record.slug, '--repos', String(row.phase)]),
+        run(opts, 'phase-graph.sh', [record.slug, '--gate-kind', String(row.phase)]),
       ]);
       const jsScope = formatScope(scopeOfRow(row.repos));
       if (repos.stdout.trim() !== jsScope) {
@@ -164,6 +167,13 @@ test('deps, size and gated flags match the engine phase by phase', { skip: !avai
       const jsGated = plan.phases[row.phase]?.gated ? 'yes' : 'no';
       if (gated.stdout.trim() !== jsGated) {
         problems.push(`${record.slug} p${row.phase}: gated JS ${jsGated} vs engine ${gated.stdout.trim()}`);
+      }
+      // The gate CATEGORY (human / ai / auto / none) decides whether the runner
+      // parks or lets the session clear the gate itself — a drift here is one
+      // side booting a session the other would have stopped.
+      const jsKind = gateKindOf(plan.phases[row.phase]?.gateCheck, plan.phases[row.phase]?.gated ?? false, vocab);
+      if (gateKind.stdout.trim() !== jsKind) {
+        problems.push(`${record.slug} p${row.phase}: gate-kind JS ${jsKind} vs engine ${gateKind.stdout.trim()}`);
       }
     }));
   }

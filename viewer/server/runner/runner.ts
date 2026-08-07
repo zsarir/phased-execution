@@ -2217,16 +2217,32 @@ export class Runner {
     // the header chip, the "in-progress" row, the ask box and run:state emits,
     // and an early write here is what made an armed pause look ignored.
 
-    /* ---- gate ---- */
-    const gate = readGateStatus(await this.engine(['--gate-status', String(phase)]));
+    /* ---- gate ----
+     * PHASE_EXEC_GATES=1 is the deliberate opt-in `cmd` gates wait for — the
+     * runner is the automation the comment in phase-graph.sh names, and it was
+     * the one caller that forgot to say so, leaving every cmd gate reporting
+     * "not executed" forever. Page views still never execute plan-authored
+     * commands: Service.gateStatus passes no env. */
+    const gate = readGateStatus(await this.engine(['--gate-status', String(phase)], { PHASE_EXEC_GATES: '1' }));
     record.gate = gate;
     if (!gate.clear) {
-      record.status = 'parked';
-      record.note = `gate not clear: ${gate.kind}${gate.detail ? ` — ${gate.detail}` : ''}`;
-      this.record('phase.gated', { gate }, phase);
-      this.emit('phase', { phase, status: record.status, gate });
-      // Other ready phases may still be runnable, so this is not a halt.
-      return true;
+      if (gate.kind === 'ai') {
+        // An ai-clearable gate is the session's FIRST task, not a wall: the
+        // engine's own boot prompt orders it to verify each condition, do the
+        // work to make failing ones true, and record the clearance before
+        // implementing. Booting is exactly how this gate gets cleared.
+        this.record('phase.gate-ai', { gate }, phase);
+      } else {
+        // human or auto: nothing this run can do — a person must approve (the
+        // phase page's Gate card), or the world must change. `gated`, not
+        // `parked`: the reader's next move is different, and so is the label.
+        record.status = 'gated';
+        record.note = `gate not clear: ${gate.kind}${gate.detail ? ` — ${gate.detail}` : ''}`;
+        this.record('phase.gated', { gate }, phase);
+        this.emit('phase', { phase, status: record.status, gate });
+        // Other ready phases may still be runnable, so this is not a halt.
+        return true;
+      }
     }
 
     // A pause, halt or stop armed while the gate subprocess ran must end the
@@ -3539,13 +3555,14 @@ export class Runner {
 
   private now(): Date { return this.deps.now?.() ?? new Date(); }
 
-  private engine(args: string[]) {
+  private engine(args: string[], env?: Record<string, string>) {
     const state = this.state!;
     // No cache key on purpose. The board is read moments after a child wrote a
     // handoff, and the watcher that invalidates the cache may not have fired
     // yet — a cached "not done" here would fail a phase that succeeded.
     return engineRun(
       { scriptsDir: this.deps.scriptsDir, root: state.root }, 'phase-graph.sh', [state.slug, ...args],
+      undefined, env ? { env } : undefined,
     );
   }
 

@@ -85,7 +85,9 @@ Each fenced boot prompt is copy-pasted verbatim into a fresh session. Per ready 
     /phased-execution
 
     Continue the "<slug>" plan — start Phase P in this fresh session.
-    [⚠️  GATED phase — confirm gates cleared first: <conditions>   ← only for gated phases]
+    [gate block — gated phases only, by category: an ai gate orders the session to verify each
+     condition, do the work, record the clearance (gate-approve.sh) and continue; a human gate says
+     STOP and points at the console's Gate card; an approved gate says proceed]
     Bootstrap from disk only:
     - docs/handoffs/<slug>/<P's dependency handoffs>
     - docs/plans/<slug>.md §Phase P + §Session budget (model, budget, branch)

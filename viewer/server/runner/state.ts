@@ -82,8 +82,12 @@ export type PhaseStatus =
  * `queued` is absent on purpose — it is the opposite of settled. A queued phase
  * is one the loop is actively waiting to start, and listing it here would make
  * `drive()` filter it out of its own candidate list the moment it was admitted.
+ *
+ * `gated` IS here: a human/auto gate the runner cannot clear would otherwise be
+ * re-admitted every loop iteration — an infinite gate-check spin. Approving the
+ * gate (the phase page's Gate card) retries the phase, which resets the record.
  */
-export const SETTLED: readonly PhaseStatus[] = ['done', 'skipped', 'failed', 'parked', 'interrupted'];
+export const SETTLED: readonly PhaseStatus[] = ['done', 'skipped', 'failed', 'parked', 'interrupted', 'gated'];
 
 /**
  * Statuses that assert work is in flight — each one a claim made by a process

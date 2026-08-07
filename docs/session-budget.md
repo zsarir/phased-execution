@@ -82,18 +82,31 @@ prompt and into the QA brief. Cold sessions cannot forget it.
 ## 8 · What blocks a phase from starting
 
 Beyond dependencies, a phase can be **gated** on something outside the code — a deploy window, an
-approval, someone else's migration. Gated phases are never batched past. Three machine-checkable
-kinds:
+approval, someone else's migration. Gated phases are never batched past, and every gate carries a
+**category** — who can clear it:
 
 ```markdown
-- **Gate-check:** date 2026-09-01     # opens on that date
-- **Gate-check:** phase 7            # clears when phase 7 is verified
-- **Gate-check:** manual sign-off from ops
+- **Gate-check:** ai staging deployed + smoke suite green   # ai — a session clears it itself (prefer)
+- **Gate-check:** manual sign-off from ops                  # human — a person approves
+- **Gate-check:** date 2026-09-01                           # auto — opens on that date
+- **Gate-check:** phase 7                                   # auto — clears when phase 7 is verified
 ```
 
+An **ai** gate makes the check the booted session's first task: verify each condition in the
+`Gates (must clear first)` bullet, do the work to make failing ones true, record the clearance, then
+implement. A **human** gate stops everything until a person does the bullet's numbered steps and
+approves — on the console's phase-page **Gate card**, or with `gate-approve.sh`. Prefer `ai` unless a
+person is genuinely required; the automation should never strand a human on a gate a session could
+clear.
+
 ```bash
-scripts/phase-graph.sh checkout-rewrite --gate-status 9    # exit 0 = clear, 1 = blocked
+scripts/phase-graph.sh checkout-rewrite --gate-status 9   # exit 0 = clear, 1 = blocked/manual/ai
+scripts/phase-graph.sh checkout-rewrite --gate-kind 9     # human | ai | auto | none
+scripts/gate-approve.sh checkout-rewrite 9 --by ops --note "window confirmed"   # clears ANY kind
 ```
+
+Approvals land in `docs/handoffs/<slug>/gate-status.md` (revocable with `--revoke`) — commit and push
+it, like the QA table.
 
 ## 9 · Where the docs live
 

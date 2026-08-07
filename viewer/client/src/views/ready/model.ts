@@ -42,6 +42,8 @@ export interface Departure {
   weight?: number;
   gated: boolean;
   gates?: string;
+  /** Who can clear the gate — human / ai / auto. Absent on older servers. */
+  gateKind?: 'human' | 'ai' | 'auto' | 'none';
   /** How many phases this one frees. The leverage signal. */
   unblocks: number;
   onCriticalPath: boolean;
@@ -120,6 +122,7 @@ export function toDepartures(
         weight: view?.analysis?.weight ?? view?.weight,
         gated: view?.gated ?? false,
         gates: view?.gates,
+        gateKind: view?.gateKind,
         // Before the detail lands, the summary knows the leverage of exactly one
         // phase — the one the engine already named as the best next move.
         unblocks: view?.analysis?.unblocks ?? (plan.nextBest?.phase === phase ? plan.nextBest.unblocks : 0),

@@ -156,7 +156,8 @@ export function FlagsCell({
 }: { slug: string; phase: PhaseView; showQa?: boolean; linked?: boolean }) {
   const chips: ReactNode[] = [];
   if (phase.gated) {
-    chips.push(<Chip key="gated" tone="gate" title={boardStateTitle('gated')}>gated</Chip>);
+    const kind = phase.gateKind && phase.gateKind !== 'none' ? `·${phase.gateKind}` : '';
+    chips.push(<Chip key="gated" tone="gate" title={boardStateTitle('gated')}>{`gated${kind}`}</Chip>);
   }
   if (phase.analysis?.onCriticalPath) {
     chips.push(<Chip key="crit" title="On the longest remaining chain">critical</Chip>);

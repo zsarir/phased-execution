@@ -146,9 +146,26 @@ else
   gated_next="$(bash "$ENGINE" "$slug" --gated "$ready" 2>/dev/null || echo no)"
   seq=no; case "$rdeps" in *" $completed "*) seq=yes ;; esac
   if [ "$gated_next" = yes ]; then
-    printf '\n▶  Next ready phase: %s  (size %s) — 🔒 GATED.\n' "$ready" "$sz"
-    printf '   ⚠️  STOP here — confirm its gates are cleared, then start it in a FRESH session\n'
-    printf '   using the prompt below (gated phases are never batched past).\n'
+    gk_next="$(bash "$ENGINE" "$slug" --gate-kind "$ready" 2>/dev/null || echo human)"
+    case "$gk_next" in
+      ai)
+        printf '\n▶  Next ready phase: %s  (size %s) — 🔒 GATED (ai-clearable).\n' "$ready" "$sz"
+        printf '   Start it in a FRESH session with the prompt below — the session itself verifies the\n'
+        printf '   gate, does the work to clear it, records the clearance, then implements.\n'
+        printf '   Gated phases are never batched past.\n'
+        ;;
+      auto)
+        printf '\n▶  Next ready phase: %s  (size %s) — 🔒 GATED (auto-checked).\n' "$ready" "$sz"
+        printf '   ⚠️  Confirm the check reads clear first:  scripts/phase-graph.sh %s --gate-status %s\n' "$slug" "$ready"
+        printf '   Then start it in a FRESH session using the prompt below (never batched past).\n'
+        ;;
+      *)
+        printf '\n▶  Next ready phase: %s  (size %s) — 🔒 GATED (human).\n' "$ready" "$sz"
+        printf '   ⚠️  STOP here — a person must do this gate'\''s steps, then approve it: Phase Console →\n'
+        printf '   plan → phase %s → Gate card, or scripts/gate-approve.sh %s %s --by "<who>".\n' "$ready" "$slug" "$ready"
+        printf '   Then start the phase in a FRESH session using the prompt below (never batched past).\n'
+        ;;
+    esac
   elif [ "$seq" = yes ]; then
     printf '\n▶  Next ready phase: %s  (size %s, sequential on Phase %s) — BATCH-FRIENDLY.\n' "$ready" "$sz" "$completed"
     printf '   If it fits the remaining session budget (references/sizing.md), just continue into it in\n'
@@ -163,7 +180,14 @@ fi
 
 for p in $ready; do
   gated="$(bash "$ENGINE" "$slug" --gated "$p")"
-  gmark=""; [ "$gated" = yes ] && gmark=" — 🔒 GATED (confirm gates first)"
+  gmark=""
+  if [ "$gated" = yes ]; then
+    case "$(bash "$ENGINE" "$slug" --gate-kind "$p" 2>/dev/null || echo human)" in
+      ai)   gmark=" — 🔒 GATED·ai (session clears the gate first)" ;;
+      auto) gmark=" — 🔒 GATED·auto (confirm --gate-status is clear)" ;;
+      *)    gmark=" — 🔒 GATED·human (operator must approve first)" ;;
+    esac
+  fi
   printf '\n── START COPY — Phase %s%s ─────────────────────────────────\n' "$p" "$gmark"
   bash "$ENGINE" "$slug" --boot-prompt "$p"
   printf '── END COPY ────────────────────────────────────────────────────\n'

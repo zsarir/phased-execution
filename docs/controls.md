@@ -17,8 +17,9 @@ plain language at plan time, or edit the file yourself afterwards.
 | Commit to a specific branch | `**Branch:** feature/checkout` | `## Session budget` |
 | Force skills into every session | ``**Skills (every session):** `design-system` `` | `## Session budget` |
 | Say a phase depends on others | the `Depends on` column | `## Phase graph` table |
-| Block a phase behind something external | `*(GATED)*` + `- **Gates (must clear first):** …` | that `### Phase N` heading |
-| Make that gate machine-checkable | `- **Gate-check:** date 2026-09-01` | that `### Phase N` block |
+| Block a phase behind something external | `*(GATED)*` + `- **Gates (must clear first):** …` (numbered steps for human gates) | that `### Phase N` heading |
+| Say who can clear that gate | `- **Gate-check:** ai <check>` (a session — prefer) \| `manual <who>` (a person) \| `date 2026-09-01` (itself) | that `### Phase N` block |
+| Clear / approve a gate (any kind) | the phase page's **Gate card**, or `gate-approve.sh <slug> <N> --by <who>` | the console · `docs/handoffs/<slug>/gate-status.md` |
 | Retire a plan nobody will finish | `status: abandoned` + a reason — set it with `close-plan.sh` | the plan's frontmatter |
 | Bring a retired plan back | `close-plan.sh <slug> --reopen` | the plan's frontmatter |
 | Put a console run on one work branch | Settings ▸ Automation ▸ Branch (or the launch form) | the console |
@@ -85,7 +86,9 @@ scripts/phase-graph.sh <slug> --deps N           # N's prerequisites
 scripts/phase-graph.sh <slug> --dependents N     # phases N blocks
 scripts/phase-graph.sh <slug> --size N           # S | M | L
 scripts/phase-graph.sh <slug> --gated N          # yes | no
-scripts/phase-graph.sh <slug> --gate-status N    # evaluate the machine gate
+scripts/phase-graph.sh <slug> --gate-kind N      # human | ai | auto | none
+scripts/phase-graph.sh <slug> --gate-status N    # evaluate the gate (approval clears any kind)
+scripts/gate-approve.sh <slug> N --by <who>      # record a clearance (--revoke restores the gate)
 scripts/phase-graph.sh <slug> --boot-prompt N    # the copy-paste prompt for phase N
 scripts/phase-graph.sh <slug> --session-plan opus   # proposed session grouping
 scripts/phase-graph.sh <slug> --qa-mode          # off | on <reason> | waived <reason>

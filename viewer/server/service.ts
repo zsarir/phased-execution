@@ -21,6 +21,7 @@ import { planWrite, runWrite } from './writes.ts';
 import {
   run, invalidate, readMemoryBlock, readQaMode, readSessionPlan, readLint, readGateStatus,
   readText, readBoardText, type Board, type QaMode, type SessionPlan, type LintResult,
+  type GateStatus,
 } from './engine.ts';
 import { SearchIndex, type SearchResult } from './search.ts';
 import { listSkills, type SkillInfo } from './skills.ts';
@@ -39,6 +40,7 @@ import {
   loadSizing, indexGraph, routeLayout, analysePhases, criticalPath, remainingWork,
   resolveBudget, weightOf, type Sizing, type PhaseAnalysis,
 } from './analysis/graph.ts';
+import { loadGateVocab, gateKindOf, type GateVocab, type GateKind } from './analysis/gates.ts';
 import {
   planStats, portfolio, etaSamples, etaFrom, rateFor, phaseEtaFor, healthIssues, isClosedStatus, splitRepos,
   type PlanStats, type Portfolio, type PlanContext, type EtaEstimate, type EtaSample,
@@ -151,6 +153,8 @@ export type PhaseView = {
   gated: boolean;
   gates?: string;
   gateCheck?: string;
+  /** The gate's category — who can clear it. Mirrors `--gate-kind`. */
+  gateKind: GateKind;
   model?: string;
   effort?: string;
   goal?: string;
@@ -540,6 +544,7 @@ export class Service {
   store: Store | null = null;
   readonly search = new SearchIndex();
   readonly sizing: Sizing;
+  readonly gateVocab: GateVocab;
   generation = 0;
 
   private watcher: DocsWatcher;
@@ -604,6 +609,7 @@ export class Service {
     this.flags = flags;
     this.prefs = loadPrefs();
     this.sizing = loadSizing(flags.scriptsDir);
+    this.gateVocab = loadGateVocab(flags.scriptsDir);
     // A new shell opens where you are working, not in `$HOME` — the source
     // directory is what every command you were about to type is relative to.
     this.terminals = new Terminals({
@@ -2139,6 +2145,67 @@ export class Service {
     ));
   }
 
+  /**
+   * Approve (or revoke) a phase's gate — the clearance record every gate kind
+   * honours (`gate-approve.sh` → docs/handoffs/<slug>/gate-status.md). The
+   * verdict is the POSTCONDITION read back from the engine, not the script's
+   * exit code, the same shape as activateQa. With `continueRun`, a run that
+   * parked on this gate is retried at once — approving from the phase page is
+   * one action, not two. Revoking reports the write's own outcome: an auto
+   * gate may legitimately still read clear on its own merits afterwards.
+   */
+  async approveGate(
+    slug: string,
+    phase: number,
+    opts: { approve: boolean; by?: string; note?: string; continueRun?: boolean },
+  ): Promise<{ ok: boolean; gate: GateStatus | null; detail: string; resumed?: boolean }> {
+    if (!this.flags.allowWrites) {
+      return { ok: false, gate: null, detail: 'Writes are disabled. Restart with --allow-writes to enable them.' };
+    }
+    const record = this.store?.get(slug);
+    if (!record || !this.root) return { ok: false, gate: null, detail: `No plan named ${slug}.` };
+
+    let outcome;
+    try {
+      outcome = await runWrite(
+        planWrite(
+          { action: 'gate-approve' as const, slug, phase, by: opts.by, reason: opts.note, revoke: !opts.approve },
+          { root: this.root.path, docsDir: this.root.docsDir },
+        ),
+        { scriptsDir: this.flags.scriptsDir, root: this.root.path },
+      );
+    } catch (error) {
+      return { ok: false, gate: null, detail: (error as Error).message };
+    }
+
+    this.reread(slug);
+    const gate = await this.gateStatus(slug, phase);
+    const ok = opts.approve ? Boolean(gate?.clear) : outcome.ok;
+    log.info('gate.approve', { slug, phase, approve: opts.approve, ok, by: opts.by, code: outcome.code });
+    if (ok) this.invalidateAll();
+
+    let resumed = false;
+    if (ok && opts.approve && opts.continueRun) {
+      try {
+        resumed = Boolean(await this.retryPhase(slug, phase));
+      } catch (error) {
+        return {
+          ok, gate, detail: `Gate approved, but the run did not continue: ${(error as Error).message}`,
+        };
+      }
+    }
+    return {
+      ok,
+      gate,
+      ...(resumed ? { resumed } : {}),
+      detail: ok
+        ? (opts.approve
+          ? `Gate approved for ${slug} phase ${phase}${resumed ? ' — the run is continuing' : ''}.`
+          : `Gate approval revoked for ${slug} phase ${phase} — the gate is back in force.`)
+        : (outcome.stderr || outcome.stdout).trim() || 'The write did not change the gate.',
+    };
+  }
+
   async qaPrompt(slug: string, phase: number): Promise<string> {
     const record = this.store?.get(slug);
     if (!record) return '';
@@ -2251,6 +2318,7 @@ export class Service {
         gated: detail?.gated ?? false,
         gates: detail?.gates,
         gateCheck: detail?.gateCheck,
+        gateKind: gateKindOf(detail?.gateCheck, detail?.gated ?? false, this.gateVocab),
         model: detail?.model,
         effort: detail?.effort,
         goal: detail?.goal,

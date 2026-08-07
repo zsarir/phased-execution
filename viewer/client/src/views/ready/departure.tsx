@@ -57,7 +57,17 @@ export function reasons(d: Departure): { key: string; text: string; tone: 'good'
   const out: { key: string; text: string; tone: 'good' | 'warn' | 'bad' }[] = [];
   if (isClaimed(d.lock)) out.push({ key: 'lock', text: `claimed by ${d.lock!.owner}`, tone: 'bad' });
   if (d.qaFailed) out.push({ key: 'qa', text: 'QA failed here before', tone: 'bad' });
-  if (d.gated) out.push({ key: 'gated', text: 'a gate must be cleared first', tone: 'warn' });
+  if (d.gated) {
+    out.push({
+      key: 'gated',
+      text: d.gateKind === 'ai'
+        ? 'gated (ai) — the session clears it on boot'
+        : d.gateKind === 'auto'
+          ? 'gated — an automatic check must clear'
+          : 'gated — a person must approve first',
+      tone: 'warn',
+    });
+  }
   if (d.unblocks > 0) out.push({ key: 'unblocks', text: `frees ${plural(d.unblocks, 'phase')}`, tone: 'good' });
   if (d.onCriticalPath) out.push({ key: 'critical', text: 'on the critical path', tone: 'good' });
   if (d.idleDays >= 7) out.push({ key: 'idle', text: `untouched for ${plural(d.idleDays, 'day')}`, tone: 'warn' });

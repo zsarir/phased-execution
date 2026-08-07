@@ -310,7 +310,7 @@ function PhaseRows({
   // phase — so they can be rendered disabled rather than disappearing.
   const blockedRunAlone = Boolean(can.heldBy) && !live && p.state === 'ready' && allowRun;
   const blockedRetry = Boolean(can.heldBy) && !live
-    && ['failed', 'interrupted', 'parked'].includes(r?.status ?? '');
+    && ['failed', 'interrupted', 'parked', 'gated'].includes(r?.status ?? '');
   const heldTitle = can.heldBy
     ? `Phase ${p.phase} is claimed by ${can.heldBy.owner}`
       + (can.heldBy.host ? ` on ${can.heldBy.host}` : '')
@@ -461,7 +461,7 @@ function PhaseRows({
             {/* The one thing a failed-HERE-finished-ELSEWHERE row still owes:
                 the statement that nothing needs fixing. A red chip beside an
                 empty actions cell read as a dead end (reported live). */}
-            {p.elsewhere && r && ['failed', 'interrupted', 'parked'].includes(r.status) && (
+            {p.elsewhere && r && ['failed', 'interrupted', 'parked', 'gated'].includes(r.status) && (
               <span
                 className="text-2xs text-ink-faint"
                 title={'This run\'s own attempt stopped'

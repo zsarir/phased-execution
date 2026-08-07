@@ -606,6 +606,10 @@ export interface PhaseView {
   gated: boolean;
   gates?: string;
   gateCheck?: string;
+  /** The gate's category — who can clear it. Mirrors `--gate-kind`. Optional
+   * so a freshly built client keeps working against a not-yet-restarted older
+   * server; absent reads as `none`. */
+  gateKind?: 'human' | 'ai' | 'auto' | 'none';
   model?: string;
   effort?: string;
   goal?: string;
@@ -1440,6 +1444,10 @@ export const api = {
   boardText: (slug: string) => request<string>(`/api/plans/${q(slug)}/board`),
   memoryBlock: (slug: string) => request<string>(`/api/plans/${q(slug)}/memory-block`),
   gate: (slug: string, phase: number | string) => request<GateStatus>(`/api/plans/${q(slug)}/gate/${phase}`),
+  approveGate: (slug: string, phase: number, body: { approve: boolean; by?: string; note?: string; continueRun?: boolean }) =>
+    post<{ ok: boolean; gate: GateStatus | null; detail: string; resumed?: boolean }>(
+      `/api/plans/${q(slug)}/gate/${phase}`, body,
+    ),
   sessionPlan: (slug: string, model?: string) =>
     request<unknown>(`/api/plans/${q(slug)}/session-plan${model ? `?model=${q(model)}` : ''}`),
 

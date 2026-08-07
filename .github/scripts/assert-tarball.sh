@@ -47,10 +47,12 @@ for p in \
   "scripts/new-plan.sh" \
   "scripts/new-handoff.sh" \
   "scripts/qa-record.sh" \
+  "scripts/gate-approve.sh" \
   "scripts/close-plan.sh" \
   "scripts/handoff-status.sh" \
   "scripts/scope.sh" \
   "scripts/sizing.env" \
+  "scripts/gates.env" \
   "templates/plan.md" \
   "templates/handoff.md" \
   "templates/INDEX.md" \

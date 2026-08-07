@@ -45,7 +45,11 @@ it is in fact committed at sha XXXXXXX. Use `git log` as the source of truth; ig
      Cell accepts: 4 · 4, 5 · a range 1–7 · 1–7 (+8–10) · — for none.
      After filling it in, run `scripts/phase-graph.sh <slug>` and confirm the parsed count
      matches `phases:` above (it warns on drift). Mark externally-blocked phases *(GATED)* in
-     their ### Phase N heading + a "- **Gates (must clear first):** …" line.
+     their ### Phase N heading + a "- **Gates (must clear first):** …" line + a categorized
+     "- **Gate-check:** …" — `ai <check>` (a session verifies/does/clears it itself — PREFER this) |
+     `manual <who>` (a person does the numbered steps, then approves on the console's Gate card) |
+     `date`/`phase`/`phases`/`plan`/`deadline`/`cmd` (self-evaluating). -->
+<!--
      Tag each phase's rough working-set with "- **Size:** S|M|L" in its ### Phase N block, then
      `scripts/phase-graph.sh <slug> --session-plan <model>` proposes which sequential small phases
      to batch into one session. See references/sizing.md. -->
@@ -65,7 +69,10 @@ it is in fact committed at sha XXXXXXX. Use `git log` as the source of truth; ig
 ### Phase 1 — TODO
 - **Goal:**
 - **Size:** M  <!-- S | M | L — rough working-set; drives batching. Optional: "- **Model:** <alias>" -->
-  <!-- Externally gated? add: "- **Gate-check:** date 2026-12-01 | phase 8 | manual <who>" -->
+  <!-- Externally gated? mark *(GATED)* in the heading, write the conditions (numbered operator steps
+       for human gates) in "- **Gates (must clear first):**", and categorize with
+       "- **Gate-check:** ai <check>" (a session clears it — prefer) | "manual <who>" (a person
+       approves via the console's Gate card or scripts/gate-approve.sh) | "date 2026-12-01" | "phase 8". -->
 - **Read first:** this plan §Phase 1 (phase 1 has no prior handoff)
 - **Files to create/modify:**
 - **Steps:** high level (the `p1.taskM` task list is created at execution time)

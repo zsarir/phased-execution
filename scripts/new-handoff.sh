@@ -217,7 +217,15 @@ prompts_tmp="$(mktemp)"
       fi
       for p in $ready; do
         gated="$(bash "$ENGINE" "$slug" --gated "$p" 2>/dev/null || echo no)"
-        gmark=""; [ "$gated" = yes ] && gmark=' — 🔒 GATED'
+        gmark=""
+        if [ "$gated" = yes ]; then
+          gk="$(bash "$ENGINE" "$slug" --gate-kind "$p" 2>/dev/null || echo human)"
+          case "$gk" in
+            ai)   gmark=' — 🔒 GATED·ai (the session clears the gate first)' ;;
+            auto) gmark=' — 🔒 GATED·auto (confirm --gate-status reads clear)' ;;
+            *)    gmark=' — 🔒 GATED·human (operator must approve first)' ;;
+          esac
+        fi
         printf '### Phase %s%s\n\n' "$p" "$gmark"
         printf '```\n'
         bash "$ENGINE" "$slug" --boot-prompt "$p"

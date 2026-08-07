@@ -425,6 +425,30 @@ describe('the plan surface renders its parts', () => {
       // `ready` on the board, but the gate is the wall a booted session hits.
       expect(await screen.findByText(/stops at the gate check/i)).toBeInTheDocument();
     });
+
+    it('the Gate card names the category and, with writes off, says how to approve', async () => {
+      const gated = DETAIL.phases.map((p) => (p.phase === 2
+        ? { ...p, gated: true, gateKind: 'human' as const, gates: '1. mint the keys\n2. export them' }
+        : p));
+      vi.mocked(api.plan).mockResolvedValue({ ...DETAIL, phases: gated });
+      renderPlan(['demo', 'phase', '2']);
+
+      expect(await screen.findByText('human gate')).toBeInTheDocument();
+      expect(await screen.findByText(/gate-approve\.sh/)).toBeInTheDocument();
+      // Writes are off in this console's state mock — no button, an honest hint.
+      expect(screen.queryByText('Approve gate')).toBeNull();
+    });
+
+    it('an ai gate says booting IS the way through', async () => {
+      const gated = DETAIL.phases.map((p) => (p.phase === 2
+        ? { ...p, gated: true, gateKind: 'ai' as const, gates: 'staging deployed' }
+        : p));
+      vi.mocked(api.plan).mockResolvedValue({ ...DETAIL, phases: gated });
+      renderPlan(['demo', 'phase', '2']);
+
+      expect(await screen.findByText('ai gate')).toBeInTheDocument();
+      expect(await screen.findByText(/booting IS the way through/i)).toBeInTheDocument();
+    });
   });
 
   it('renders a handoff body as markdown', async () => {

@@ -61,7 +61,7 @@ export function nextStepRows(
       // A red record on a green phase: this run's attempt stopped, the work
       // was finished and verified outside it. Nothing to press — but leaving
       // the chip unexplained is the dead end this card exists to remove.
-      if (record && ['failed', 'interrupted', 'parked'].includes(record.status)) {
+      if (record && ['failed', 'interrupted', 'parked', 'gated'].includes(record.status)) {
         rows.push({
           phase: p.phase,
           title: p.title,
@@ -88,22 +88,24 @@ export function nextStepRows(
       continue;
     }
 
-    if (p.gated && (!record || record.status === 'parked' || record.status === 'pending')) {
+    if (p.gated && (!record || ['parked', 'gated', 'pending'].includes(record.status))) {
       rows.push({
         phase: p.phase,
         title: p.title,
         state: p.state,
         why: record?.note
-          ?? (p.gates
-            ? `gated — the plan asks a person to confirm first: ${excerpt(p.gates, 220)}`
-            : 'gated — the plan names a condition a person must confirm before this phase runs.'),
+          ?? (p.gateKind === 'ai'
+            ? `gated (ai-clearable) — a booted session verifies and clears it itself${p.gates ? `: ${excerpt(p.gates, 200)}` : '.'}`
+            : p.gates
+              ? `gated — the plan asks a person to confirm first: ${excerpt(p.gates, 220)}`
+              : 'gated — the plan names a condition a person must confirm before this phase runs.'),
         retry: 'rechecks-gate',
         readMore: phaseHref(slug, p.phase),
       });
       continue;
     }
 
-    if (record && ['failed', 'interrupted', 'parked'].includes(record.status)) {
+    if (record && ['failed', 'interrupted', 'parked', 'gated'].includes(record.status)) {
       const haltHere = run?.halt?.phase === p.phase ? run.halt.reason : undefined;
       rows.push({
         phase: p.phase,

@@ -122,6 +122,11 @@ describe('SizeCell and FlagsCell', () => {
     expect(screen.getByText('~40m')).toBeTruthy();
   });
 
+  it('the gated chip names the category when the plan declares one', () => {
+    render(<FlagsCell slug="alpha" phase={phase({ gated: true, gateKind: 'ai' })} />);
+    expect(screen.getByText('gated·ai')).toBeTruthy();
+  });
+
   it('the flag pile deliberately excludes the claim — that gets a column', () => {
     render(
       <FlagsCell

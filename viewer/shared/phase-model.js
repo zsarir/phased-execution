@@ -87,7 +87,7 @@ export function phaseActions(phase, { live, allowRun, owner = null }) {
   // to show it is what sent people to a terminal. The actions inside the
   // panel are the part that is gated.
   const diagnose = !live
-    && ['failed', 'interrupted', 'parked', 'awaiting-verification'].includes(status);
+    && ['failed', 'interrupted', 'parked', 'gated', 'awaiting-verification'].includes(status);
 
   if (!allowRun || phase.state === 'done') {
     return { runAlone: false, retry: false, skip: false, diagnose, heldBy: held, staleLock };
@@ -96,7 +96,9 @@ export function phaseActions(phase, { live, allowRun, owner = null }) {
     // Only a phase the board says is ready can be run: anything else is either
     // finished, blocked by a dependency, or already going.
     runAlone: !live && phase.state === 'ready' && !held,
-    retry: !live && ['failed', 'interrupted', 'parked'].includes(status) && !held,
+    // `gated` is retryable on purpose: Retry re-checks the gate, which is
+    // exactly the move after approving it on the phase page.
+    retry: !live && ['failed', 'interrupted', 'parked', 'gated'].includes(status) && !held,
     // Skipping takes a phase off a running loop's list; with no loop there is
     // nothing to take it off.
     skip: Boolean(live) && status !== 'skipped' && status !== 'done',

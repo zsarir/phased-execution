@@ -17,6 +17,8 @@
 #   phase-graph.sh <slug> --dependents N  # phases that list N as a dependency (static)
 #   phase-graph.sh <slug> --deps N        # N's own dependencies (space-separated)
 #   phase-graph.sh <slug> --gated N       # "yes"/"no"
+#   phase-graph.sh <slug> --gate-kind N   # gate category: human|ai|auto|none
+#   phase-graph.sh <slug> --gate-status N # evaluate the gate (exit 0 clear, 1 blocked/manual/ai)
 #   phase-graph.sh <slug> --size N        # rough working-set size of phase N (S|M|L; default M)
 #   phase-graph.sh <slug> --repos N       # phase N's SCOPE as normalized csv (Repos column; "" → all)
 #   phase-graph.sh <slug> --boot-prompt N # full copy-paste boot prompt for phase N
@@ -29,7 +31,7 @@
 # Run from the repo root that owns docs/, or set DOCS_ROOT.
 set -euo pipefail
 
-slug="${1:?usage: phase-graph.sh <slug> [--lint|--qa-mode|--qa-result N|--qa-prompt N|--gate-status N|--memory-block|--plan-status|--closed|--ready|--ready-after N|--dependents N|--deps N|--gated N|--size N|--repos N|--boot-prompt N|--session-plan [model|budget]]}"
+slug="${1:?usage: phase-graph.sh <slug> [--lint|--qa-mode|--qa-result N|--qa-prompt N|--gate-status N|--gate-kind N|--memory-block|--plan-status|--closed|--ready|--ready-after N|--dependents N|--deps N|--gated N|--size N|--repos N|--boot-prompt N|--session-plan [model|budget]]}"
 mode="${2:-board}"
 arg="${3:-}"
 
@@ -161,12 +163,30 @@ is_gated() {  # is_gated <phase>  → echoes yes|no
   fi
 }
 
-# Extract a gated phase's gate conditions from "- **Gates (must clear first):** …".
-gate_conditions() {  # gate_conditions <phase>
-  grep -A6 "^### Phase ${1}\b" "$plan_file" 2>/dev/null \
-    | grep -i 'Gates (must clear' \
-    | sed 's/.*Gates[^:]*:[[:space:]]*//; s/^[*[:space:]]*//; s/[[:space:]]*$//' \
-    | head -1 || true
+# A gated phase's full gate conditions: the "- **Gates (must clear first):** …"
+# bullet INCLUDING its continuation lines (indented prose, or the numbered
+# operator steps a human gate carries), up to the next bullet. Block-scoped via
+# the same awk shape as phase_block — the old grep -A6 window went blind past
+# six lines and its head -1 truncated multi-line gates mid-sentence, so the boot
+# prompt showed a fragment of the instructions the console rendered in full.
+gate_conditions() {  # gate_conditions <phase>  (may be multi-line)
+  phase_block "$1" | awk '
+    inb && (/^[[:space:]]*[-*][[:space:]]/ || /^###/) { exit }
+    inb { sub(/^[[:space:]]+/, ""); print; next }
+    /^[[:space:]]*[-*].*[Gg]ates \(must clear/ {
+      line=$0
+      sub(/.*[Gg]ates[^:]*:[[:space:]]*/, "", line)
+      gsub(/\*/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (length(line)) print line
+      inb=1
+    }
+  '
+}
+
+# One-line form for status verdicts and other single-line surfaces.
+gate_conditions_line() {  # gate_conditions_line <phase>
+  gate_conditions "$1" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g; s/[[:space:]]*$//'
 }
 
 # Lines of the "### Phase N" block (until the next ### Phase / ## heading) — read
@@ -190,14 +210,65 @@ gate_check_directive() {  # gate_check_directive <phase>
     | head -1 || true
 }
 
-# The gate-check vocabulary, in one place so --gate-status and --lint cannot
-# drift apart. A directive whose type is not on this list is treated as manual
-# (fail-safe), and --lint now reports it rather than letting it pass silently:
-# a typo used to demote an automated gate to a human one with no warning.
-GATE_TYPES="phase phases plan cmd date deadline by manual"
+# The gate-check vocabulary + its human/ai/auto category split. Canonical
+# values live in scripts/gates.env — ONE source shared with the console (F5
+# pattern, like sizing.env: viewer/server/analysis/gates.ts reads the same
+# file), so --gate-status, --lint and the UI cannot drift apart. A directive
+# whose type is not on the list is treated as manual (fail-safe), and --lint
+# reports it rather than letting it pass silently: a typo used to demote an
+# automated gate to a human one with no warning. These defaults keep the script
+# alive if the file is ever missing.
+GATE_TYPES="phase phases plan cmd date deadline by manual ai"
+GATE_TYPES_HUMAN="manual"
+GATE_TYPES_AI="ai"
+# shellcheck source=/dev/null
+[ -f "$SCRIPT_DIR/gates.env" ] && . "$SCRIPT_DIR/gates.env"
 
 _gate_type_known() {  # _gate_type_known <type>
   case " $GATE_TYPES " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
+# Which category a phase's gate falls into — drives the boot prompt, the
+# console's Gate card and the runner's park-vs-proceed decision.
+#   human — a person must act (manual gates; a *(GATED)* heading with no
+#           Gate-check line at all; unknown types — fail-safe)
+#   ai    — an AI session may verify/do/clear it (a person may still approve)
+#   auto  — the engine evaluates it by itself
+#   none  — not gated
+gate_kind() {  # gate_kind <phase> → human|ai|auto|none
+  local gc gtype
+  [ "$(is_gated "$1")" = yes ] || { echo none; return; }
+  gc="$(gate_check_directive "$1")"
+  [ -z "$gc" ] && { echo human; return; }
+  gtype="${gc%% *}"
+  case " $GATE_TYPES_HUMAN " in *" $gtype "*) echo human; return ;; esac
+  case " $GATE_TYPES_AI "    in *" $gtype "*) echo ai; return ;; esac
+  if _gate_type_known "$gtype"; then echo auto; else echo human; fi
+}
+
+# ---- Gate approvals (the clearance record) ---------------------------------
+# docs/handoffs/<slug>/gate-status.md — written by gate-approve.sh (the
+# console's Gate card, or an AI session that verified the conditions), read
+# here. An approved row clears --gate-status for EVERY gate kind: an approval
+# is the operator's override, the same philosophy as a QA waiver. A separate
+# file from test-status.md on purpose — that file's very existence switches QA
+# gating on, and recording a gate approval must never flip an unrelated regime.
+gate_approved() {  # gate_approved <phase> → "yes<TAB>by<TAB>date" | "no"
+  local f="$DOCS_ROOT/docs/handoffs/${slug}/gate-status.md"
+  [ -f "$f" ] || { echo no; return; }
+  sed 's/–/-/g; s/—/-/g' "$f" | awk -F'|' -v want="$1" '
+    function trim(s){ sub(/^[ \t]+/,"",s); sub(/[ \t]+$/,"",s); return s }
+    tolower($0) ~ /^##[[:space:]]+gate approvals/ { ing=1; seen=0; next }
+    ing && seen && $0 !~ /^[[:space:]]*\|/ { ing=0 }
+    ing && /^[[:space:]]*\|/ {
+      seen=1; ph=trim($2); gsub(/[*`]/,"",ph); ph=trim(ph)
+      if (ph != want) next
+      if (tolower(trim($3)) == "yes") printf "yes\t%s\t%s\n", trim($4), trim($5)
+      else print "no"
+      found=1; exit
+    }
+    END { if (!found) print "no" }
+  '
 }
 
 # A real YYYY-MM-DD, not merely something shaped like one. Shape alone let
@@ -736,6 +807,14 @@ case "$mode" in
     echo "${GATED[$arg]:-no}"
     exit 0
     ;;
+  --gate-kind)
+    # The gate's category: human (a person must act) | ai (an AI session may
+    # verify/do/clear it — a person may still approve) | auto (the engine
+    # evaluates it by itself) | none (not gated).
+    [ -z "$arg" ] && { echo "usage: --gate-kind <phase>" >&2; exit 2; }
+    gate_kind "$arg"
+    exit 0
+    ;;
   --repos)
     # The phase's SCOPE: what it touches, from the plan's Repos column, as the
     # csv `phase-lock.sh --scope` and `conflicts` speak. Never empty — an
@@ -785,11 +864,25 @@ case "$mode" in
     exit 0
     ;;
   --gate-status)
-    # F12: evaluate a phase's machine-checkable gate. Exit 0 = clear, 1 = blocked/manual.
+    # F12: evaluate a phase's gate. Exit 0 = clear, 1 = blocked/manual/ai.
     [ -z "$arg" ] && { echo "usage: --gate-status <phase>" >&2; exit 2; }
     gc="$(gate_check_directive "$arg")"
+    # A recorded approval clears ANY gate kind — the operator's override from
+    # the console's Gate card, or an AI session's recorded clearance. Checked
+    # only for phases that actually carry a gate, so an ungated phase still
+    # answers "clear (no gate)".
+    if [ -n "$gc" ] || [ "$(is_gated "$arg")" = yes ]; then
+      ga="$(gate_approved "$arg")"
+      case "$ga" in
+        yes*)
+          ga_by="$(printf '%s\n' "$ga" | cut -f2)"
+          ga_on="$(printf '%s\n' "$ga" | cut -f3)"
+          printf 'clear (approved by %s on %s)\n' "${ga_by:-someone}" "${ga_on:-an unrecorded date}"
+          exit 0 ;;
+      esac
+    fi
     if [ -z "$gc" ]; then
-      if [ "$(is_gated "$arg")" = yes ]; then printf 'manual: %s\n' "$(gate_conditions "$arg")"; exit 1; fi
+      if [ "$(is_gated "$arg")" = yes ]; then printf 'manual: %s\n' "$(gate_conditions_line "$arg")"; exit 1; fi
       echo "clear (no gate)"; exit 0
     fi
     gtype="${gc%% *}"; gval="${gc#"$gtype"}"; gval="${gval# }"
@@ -826,6 +919,11 @@ case "$mode" in
         today="$(date +%F)"; ti="${today//-/}"; gi="${gval//-/}"
         if [ "$ti" -gt "$gi" ]; then echo "OVERDUE: deadline $gval passed (today $today)"; exit 1
         else echo "clear (before deadline $gval)"; exit 0; fi ;;
+      ai)
+        # AI-clearable: unapproved means "a session must verify these
+        # conditions, do the work to make them true, and record the clearance
+        # via gate-approve.sh". The boot prompt carries the full duty.
+        echo "ai: ${gval:-$(gate_conditions_line "$arg")}"; exit 1 ;;
       manual) echo "manual: $gval"; exit 1 ;;
       *)      echo "manual: $gc"; exit 1 ;;
     esac
@@ -921,12 +1019,45 @@ case "$mode" in
     sk="$(plan_skills)"
     [ -n "$sk" ] && printf 'First, invoke these skills (every session in this plan uses them): %s\n' "$sk"
     if [ "${GATED[$p]}" = yes ]; then
-      gc="$(gate_conditions "$p")"
-      if [ -n "$gc" ]; then
-        printf '⚠️  GATED phase — confirm these gates are cleared before implementing: %s\n' "$gc"
-      else
-        printf '⚠️  GATED phase — confirm external gates are cleared first (see plan §Phase %s).\n' "$p"
-      fi
+      gk="$(gate_kind "$p")"
+      ga="$(gate_approved "$p")"
+      gc_text="$(gate_conditions "$p")"
+      case "$ga" in
+        yes*)
+          ga_by="$(printf '%s\n' "$ga" | cut -f2)"; ga_on="$(printf '%s\n' "$ga" | cut -f3)"
+          printf '✅ GATED phase — gate already approved by %s on %s. Proceed straight to the work.\n' "${ga_by:-someone}" "${ga_on:-an unrecorded date}"
+          ;;
+        *)
+          [ -n "$gc_text" ] || gc_text="(the heading is marked GATED but the plan lists no gate text — see §Phase $p)"
+          case "$gk" in
+            ai)
+              printf '⚠️  GATED phase (ai-clearable) — the GATE CHECK is this session'\''s FIRST task, before any\n'
+              printf 'implementation. Conditions:\n'
+              printf '%s\n' "$gc_text" | sed 's/^/    /'
+              printf 'Verify each condition for real. If one does not hold yet, DO THE WORK to make it true —\n'
+              printf 'clearing this gate is in scope for this session. When every condition holds, record it:\n'
+              printf '    bash %s/gate-approve.sh %s %s --by "ai-session" --note "<one line of evidence>"\n' "$SCRIPT_DIR" "$slug" "$p"
+              printf 'then commit + push docs/handoffs/%s/gate-status.md and continue into the phase.\n' "$slug"
+              printf 'Only if a condition is genuinely out of reach (missing credentials, a third party):\n'
+              printf 'STOP, report exactly what is missing and what you verified, and hand it to the operator.\n'
+              ;;
+            human)
+              printf '🧍 GATED phase (human) — STOP: a person must clear this gate before implementation.\n'
+              printf 'Operator steps:\n'
+              printf '%s\n' "$gc_text" | sed 's/^/    /'
+              printf 'Ask the operator to do these steps and approve the gate — Phase Console → plan → phase %s\n' "$p"
+              printf -- '→ Gate card, or: bash %s/gate-approve.sh %s %s --by "<who>" --note "<what was done>"\n' "$SCRIPT_DIR" "$slug" "$p"
+              printf 'Do NOT implement past an unapproved human gate.\n'
+              ;;
+            *)
+              gs="$(PHASE_EXEC_GATES=0 DOCS_ROOT="$DOCS_ROOT" "$0" "$slug" --gate-status "$p" 2>/dev/null || true)"
+              printf '⚠️  GATED phase (auto-checked) — current verdict: %s\n' "${gs:-unknown}"
+              printf 'Confirm it is clear before implementing:  bash %s/phase-graph.sh %s --gate-status %s\n' "$SCRIPT_DIR" "$slug" "$p"
+              printf '(An operator can override a stuck check: bash %s/gate-approve.sh %s %s)\n' "$SCRIPT_DIR" "$slug" "$p"
+              ;;
+          esac
+          ;;
+      esac
     fi
     printf 'Bootstrap from disk only:\n'
     [ -n "$dep_lines" ] && printf '%s' "$dep_lines"
@@ -1003,7 +1134,13 @@ echo
 ready_list=""; waiting_list=""; inprog_list=""
 for p in "${PHASES[@]}"; do
   state="$(phase_state "$p")"
-  gmark=""; [ "${GATED[$p]}" = yes ] && gmark=" 🔒GATED"
+  gmark=""
+  if [ "${GATED[$p]}" = yes ]; then
+    gmark=" 🔒GATED"
+    gk="$(gate_kind "$p")"
+    [ "$gk" != none ] && gmark=" 🔒GATED·${gk}"
+    case "$(gate_approved "$p")" in yes*) gmark="${gmark} ✓approved" ;; esac
+  fi
   case "$state" in
     done)        icon="✅"; extra=""
                  if [ "$QA_GATING" = 1 ] && ! plan_is_closed; then

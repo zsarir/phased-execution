@@ -15,7 +15,7 @@ import { isAbsolute, join, normalize, resolve } from 'node:path';
 import { openerCandidates } from './platform.ts';
 
 export type WriteAction =
-  | 'new-plan' | 'new-handoff' | 'qa-record' | 'lock-claim' | 'lock-release'
+  | 'new-plan' | 'new-handoff' | 'qa-record' | 'gate-approve' | 'lock-claim' | 'lock-release'
   | 'close-plan' | 'reopen-plan' | 'open-editor';
 
 export type WriteRequest = {
@@ -29,8 +29,12 @@ export type WriteRequest = {
   owner?: string;
   /** Why a plan is being closed — recorded in its front matter, one line. */
   reason?: string;
+  /** Who cleared a gate — a name, not the owner's account/session pair. */
+  by?: string;
   qa?: boolean;
   force?: boolean;
+  /** Un-approve a gate: the row flips to `revoked` and the gate is back in force. */
+  revoke?: boolean;
   path?: string;
 };
 
@@ -45,6 +49,10 @@ export type WriteOutcome = {
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const TITLE = /^[a-z0-9][a-z0-9-]{1,63}$/;
+/** A gate approver: a short human name, not the OWNER account/session pair.
+ * The first character must not be a dash — an option-shaped name would read
+ * as a flag by any hand that later pastes the recorded value into a shell. */
+const GATE_BY = /^[\w.@+][\w .@+-]{0,63}$/;
 const HANDOFF_STATUS = ['complete', 'in-progress', 'blocked', 'pending'];
 const QA_RESULT = ['pass', 'fail', 'waived', 'pending'];
 const OWNER = /^[\w.@+-]{1,64}\/[\w.@+-]{1,64}$/;
@@ -123,6 +131,27 @@ export function planWrite(request: WriteRequest, opts: { root: string; docsDir?:
         script: 'qa-record.sh',
         args: [slug, String(phase), result, '--report', report],
         description: `Record QA ${result} for ${slug} phase ${phase}`,
+      };
+    }
+
+    case 'gate-approve': {
+      const slug = requireSlug(request.slug);
+      const phase = requirePhase(request.phase);
+      const by = (request.by ?? '').trim();
+      if (by && !GATE_BY.test(by)) {
+        throw new WriteError('Who approved must be 1-64 characters: letters, digits, spaces, dots, @, + or dashes.');
+      }
+      const note = cleanReason(request.reason);
+      const args = [slug, String(phase)];
+      if (by) args.push('--by', by);
+      if (note) args.push('--note', note);
+      if (request.revoke) args.push('--revoke');
+      return {
+        script: 'gate-approve.sh',
+        args,
+        description: request.revoke
+          ? `Revoke the phase ${phase} gate approval on ${slug}`
+          : `Approve the phase ${phase} gate on ${slug}${by ? ` as ${by}` : ''}`,
       };
     }
 

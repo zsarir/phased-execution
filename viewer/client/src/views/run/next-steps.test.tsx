@@ -52,6 +52,26 @@ describe('nextStepRows', () => {
     expect(rows[0].recoveryClass).toBeUndefined();
   });
 
+  it('an ai gate says the session clears it itself — it is not a person\'s job', () => {
+    const rows = nextStepRows('demo', [
+      phase({ phase: 2, state: 'ready', gated: true, gateKind: 'ai', gates: 'staging deployed' }),
+    ], null, false);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].why).toContain('verifies and clears it itself');
+    expect(rows[0].why).toContain('staging deployed');
+  });
+
+  it('a record the runner held as gated still surfaces, quoting its note', () => {
+    const rows = nextStepRows('demo', [
+      phase({ phase: 2, state: 'ready', gated: true }),
+    ], run({ phases: { 2: { phase: 2, status: 'gated', attempts: 0, costUsd: 0,
+      note: 'gate not clear: manual — mint the fixture keys' } } } as never), false);
+
+    expect(rows[0].why).toContain('mint the fixture keys');
+    expect(rows[0].retry).toBe('rechecks-gate');
+  });
+
   it('prefers the runner\'s own parked note when the record has one', () => {
     const rows = nextStepRows('demo', [
       phase({ phase: 2, state: 'ready', gated: true }),
