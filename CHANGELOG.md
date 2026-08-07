@@ -6,7 +6,7 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
-## [Unreleased]
+## [1.6.0] - 2026-08-07
 
 The run heals itself, and the console stops keeping secrets from its own surfaces. A recovery
 session's success now *moves the run record* — phase done, halt cleared, run resumed — instead of
