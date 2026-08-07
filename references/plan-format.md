@@ -175,6 +175,31 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
      the console now parks on at boarding instead. Commands that depend on their directory
      (`docker compose`, `pnpm`, `npm`, `task`, `pytest`, …) need the phase's `- **Verify in:** <path>`
      bullet — a bare path on ONE line — or they run at the repository root.
+     **Both of these shapes are machine-read** (the extractor sees backticked spans and fenced lines;
+     prose around them is ignored; nested sub-bullets fold into the field and nested bold labels like
+     a nested `**Verify in:**` stay addressable):
+
+     ~~~
+     - **Verification:**
+       ```
+       task audit:schema
+       pytest tests/unit -q
+       ```
+     - **Verify in:** services/api
+     ~~~
+
+     or, equivalently, as nested bullets:
+
+     ~~~
+     - **Verification:**
+       - **Verify in:** services/api
+       - `task audit:schema`
+       - `pytest tests/unit -q`
+     ~~~
+
+     `validate.sh` warns (F14) on any open phase whose §Verification would extract nothing runnable
+     — heed it at plan time; at run time the same defect parks the phase at boarding (and, under
+     keep-going autonomy, dispatches a plan-repair agent to author the bullet from the exit criteria).
      **Phase-finish runs these green before handing off** (Mode 3 step 1). Add a deterministic test for
      every criterion you can; flag any that can only be reasoned about. Before relying on a CLI flag's
      semantics in one of these commands, re-check the tool's current docs and note the check in the

@@ -120,7 +120,10 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    load-bearing: the `## Phase graph` table.** Its `Depends on` column is the machine-readable dependency
    source the engine parses — every phase must list **every** phase that must finish first (comma-separated
    numbers, ranges like `1–7`, or `—` for none). Also fill `Parallel-safe with`, repos, exit criteria, and
-   the explicit **"Blocking vs simultaneous"** callout. **Gates are categorized.** Mark externally-gated
+   the explicit **"Blocking vs simultaneous"** callout. **Every phase needs a runnable
+   `- **Verification:**`** — whole backticked commands or a fenced block proving its exit criteria
+   (`validate.sh` warns F14 on any open phase without one; the autopilot parks such a phase at boarding).
+   **Gates are categorized.** Mark externally-gated
    phases `*(GATED)*` in their `### Phase N` heading with a `- **Gates (must clear first):** …` line AND a
    category directive `- **Gate-check:** …`:
    - **`ai <one-line check>` — the DEFAULT unless a person is genuinely required.** An AI session can
