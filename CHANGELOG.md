@@ -6,6 +6,54 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [1.8.0] - 2026-08-07
+
+A plan that stated its verification was read as having none. The bullet reader treated any
+0–3-space bullet as top level, so a §Verification written as nested 2-space sub-bullets — the
+shape LLM authoring sessions naturally produce, five hub plans already carry it — parsed to an
+empty string. The autopilot then parked every ready phase with "the plan states no verification"
+(false), halted with a fixed tail advertising gate confirmation and Repair-with-AI to a run with
+no gate and no blocked handoff, and nothing anywhere could heal it. This release fixes the read,
+makes every earlier link of that chain visible, and closes the loop so the same defect now
+repairs itself.
+
+### Fixed
+
+- **`labelledBullets` keeps nested sub-bullets** (`viewer/server/parse/markdown.ts`). Indentation
+  is the nesting signal: while a bullet is open, only a column-0 bullet starts or closes a field;
+  an indented bullet folds into the open bullet's body, and a nested bold label (`  - **Verify
+  in:** api`) is ALSO emitted addressably — same-line remainder only — so `verifyIn` resolves
+  from either level. Heals `verification`, `files`, `steps`, `gates` and the QA brief's
+  Verification block for every plan written in the nested shape.
+- **Park messages blame the right thing.** "The plan states no verification" is now reserved for
+  plans that actually omit the bullet; a declared-but-unreadable one gets its own sentence
+  pointing at the format reference, and the drive loop's halt tail names only doors that exist —
+  gates when a gate blocks, Repair-with-AI when a handoff is blocked, Retry/Skip when something
+  failed, a plan edit / repair for a verification park.
+
+### Added
+
+- **F14 (warning, never gates)**: `phase-graph.sh --lint` — and therefore `validate.sh` and the
+  console's lint panel — names every open, not-done phase whose §Verification would extract
+  nothing runnable, at plan time instead of boarding time. Closed plans are not scanned.
+- **Start-time preflight**: `POST /api/run/<slug>/start` answers `{ run, preflight }` — the same
+  extractor boarding uses, run over every open phase the moment the operator presses Start.
+- **Boarding warnings are visible**: `PhaseRecord.preflight` carries the refused-fragment /
+  cwd-sensitive / missing-lead warnings onto the run page (they previously lived only in the
+  journal, which nothing renders); cleared on retry.
+- **A verification-parked run heals itself.** The all-verification halt carries
+  `kind: 'verification-preflight'` + an anchor phase; auto-recovery classifies it as
+  `plan-repair` (kind-gated — lock parks stay a person's), the repair agent gets advice to author
+  the §Verification from the phase's exit criteria (honestly — never `true`), the verdict is
+  re-extraction rather than warning-tier lint, the write-back resets parked phases to **pending**
+  (never `done` — they never ran), and the existing auto-continue resume boards them again.
+  Bounded by the standing caps: 2 attempts per phase, 5 per run, identical failure twice refused.
+- **`healthIssues` kind `verification-unrunnable`** (warning) — the issue that makes the repair
+  resolvable, visible on the plan/stats surfaces, scoped away from done phases and closed plans.
+- **Docs**: `references/plan-format.md` §6 shows BOTH accepted §Verification shapes and the
+  machine contract; the console's plan wizard and SKILL.md Mode 1 name the runnable-Verification
+  requirement beside dependencies, sizes and exit criteria.
+
 ## [1.7.0] - 2026-08-07
 
 Gates get categories, and a door. A `manual` gate used to be a wall with no way through — the
