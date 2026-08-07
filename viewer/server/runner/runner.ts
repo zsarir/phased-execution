@@ -56,6 +56,16 @@ import {
 
 export type RunnerEvent = (event: string, data: Record<string, unknown>) => void;
 
+/**
+ * Recognises the three park sentences `preflightVerification` writes. The
+ * drive loop's halt matches record notes against this to name the right
+ * remedy and to mark an all-verification halt machine-recoverable; the
+ * service's recovery write-back uses the same test to know which parked
+ * records a plan repair may reset. Lives beside the code that writes those
+ * sentences: change one, change both.
+ */
+export const VERIFICATION_PARK_NOTE = /§Verification|states no verification/;
+
 export type RunnerDeps = {
   scriptsDir: string;
   /** Injectable so the loop can be tested without spending money on a model. */
@@ -3120,13 +3130,7 @@ export class Runner {
     'bash', 'sh', 'command', 'export',
   ]);
 
-  /**
-   * Recognises the three park sentences `preflightVerification` writes — the
-   * drive loop's halt matches record notes against this to name the right
-   * remedy and to mark an all-verification halt machine-recoverable. Lives
-   * beside the code that writes those sentences: change one, change both.
-   */
-  private static readonly VERIFICATION_PARK = /§Verification|states no verification/;
+  private static readonly VERIFICATION_PARK = VERIFICATION_PARK_NOTE;
 
   /** The program a command starts with, past any `FOO=1` prefixes — or null. */
   private leadToken(command: string): string | null {

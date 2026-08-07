@@ -14,6 +14,7 @@ import {
   type Sizing,
 } from './graph.ts';
 import { parseScope } from '../../shared/scope.js';
+import { extractCommands } from '../runner/verify.ts';
 
 export type PlanContext = { record: PlanRecord; board: Board; qaMode: QaMode };
 
@@ -254,6 +255,7 @@ export function isClosedStatus(raw?: string): boolean {
  */
 export const PROGRESS_ISSUE_KINDS = new Set([
   'stale-handoff', 'qa-fail', 'missing-handoff', 'depends-drift', 'index-drift', 'stale-lock', 'no-handoff-dir',
+  'verification-unrunnable',
 ]);
 
 /**
@@ -309,6 +311,20 @@ export function healthIssues(ctx: PlanContext): HealthIssue[] {
       add('info', 'gate-uncategorized',
         `Phase ${row.phase} is GATED with no Gate-check — add \`ai <check>\` (a session clears it) `
         + 'or `manual <who>` (the Gate card clears it)', row.phase);
+    }
+    // A phase whose §Verification yields nothing runnable boards the autopilot
+    // only to park ("nothing would prove the work"). Judged by the SAME
+    // extractor boarding uses, skipped for done phases (their proof is their
+    // handoff) — and it is the issue the plan-repair agent knows how to fix,
+    // which is what lets `resolveRecovery` accept a repair for it at all.
+    if (!board.done.includes(row.phase)
+      && !extractCommands(detail?.verification).commands.length) {
+      const declared = /\*\*\s*Verification\b/i.test(detail?.raw ?? '');
+      add('warning', 'verification-unrunnable',
+        declared
+          ? `Phase ${row.phase}'s §Verification yields nothing the runner can execute — it will park at boarding`
+          : `Phase ${row.phase} has no §Verification — it will park at boarding`,
+        row.phase);
     }
   }
 

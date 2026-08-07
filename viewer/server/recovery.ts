@@ -526,6 +526,12 @@ const REPAIR_ADVICE: Record<string, string> = {
   'missing-handoff': 'a phase counts as done with no handoff file. Verify it really is done, then '
     + 'write the handoff.',
   'qa-fail': 'a recorded QA failure gates every dependent — re-run QA, do not overwrite the row.',
+  'verification-unrunnable': "a phase's §Verification yields nothing the runner can execute, so "
+    + 'the autopilot parks it at boarding. Author the `- **Verification:**` bullet from the '
+    + "phase's exit criteria: whole, copy-runnable commands in backticks or a fenced block "
+    + '(references/plan-format.md §6 shows both accepted shapes), with `- **Verify in:** <dir>` '
+    + 'when they are cwd-sensitive. Real commands that prove the exit criteria — never `true`, '
+    + 'and never a command you have not confirmed exists in that repository.',
   engine: 'the engine could not read the graph at all. The table is malformed; fix its shape first.',
   default: 'read what the issue says, check the repository, and correct whichever artefact is wrong.',
 };

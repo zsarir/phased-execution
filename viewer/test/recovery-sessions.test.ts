@@ -236,6 +236,23 @@ test('a plan repair names the issues and how each KIND is repaired', () => {
   assert.match(text, /never\s+the\s+one\s+that\s+makes\s+the\s+checker\s+quiet/);
 });
 
+test('an unrunnable §Verification is authored from the exit criteria, honestly', () => {
+  const text = recoveryPrompt(facts({
+    class: 'plan-repair',
+    issues: [{
+      kind: 'verification-unrunnable', severity: 'warning', phase: 1,
+      message: "Phase 1's §Verification yields nothing the runner can execute — it will park at boarding",
+    }],
+  }));
+  assert.match(text, /verification-unrunnable —/, 'the kind gets its own repair advice');
+  assert.match(text, /exit criteria/);
+  assert.match(text, /copy-runnable/);
+  assert.match(text, /plan-format\.md/);
+  assert.match(text, /Verify in:/);
+  // The advice that keeps the repair honest: proof, not appeasement.
+  assert.match(text, /never `true`/);
+});
+
 test('a recorded QA failure is re-run and re-recorded, never overwritten', () => {
   const text = recoveryPrompt(facts({
     class: 'plan-repair',
@@ -473,6 +490,22 @@ test('a phase row is classified by its own record', () => {
   assert.equal(classifyPhase('skipped'), undefined);
 });
 
+test('a parked run offers repair only for the verification-preflight kind', () => {
+  const verificationPark = {
+    status: 'parked',
+    halt: { reason: 'nothing left to run on its own — phase 1 is parked (…§Verification…)', kind: 'verification-preflight' },
+  };
+  assert.equal(classifyRun(verificationPark), 'plan-repair');
+  assert.equal(classifyPhase('parked', verificationPark), 'plan-repair');
+
+  // A kindless park — a lock, a live-orphan adoption — gets Retry alone; the
+  // halt text once promised "Repair with AI" to parks no repair could honour.
+  const lockPark = { status: 'parked', halt: { reason: 'phase 2 is locked by someone-else' } };
+  assert.equal(classifyRun(lockPark), undefined);
+  assert.equal(classifyPhase('parked', lockPark), undefined);
+  assert.equal(classifyPhase('parked'), undefined);
+});
+
 /* ------------------------------------------------------------------ *
  * The guards
  * ------------------------------------------------------------------ */
@@ -497,9 +530,11 @@ phases: 2
 
 ### Phase 1 — schema
 - **Size:** S
+- **Verification:** \`true\`
 
 ### Phase 2 — cart api endpoint
 - **Size:** S
+- **Verification:** \`true\`
 `;
 
 /**

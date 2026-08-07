@@ -48,7 +48,7 @@ import {
 } from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
 import {
-  Runner, applySettings,
+  Runner, applySettings, VERIFICATION_PARK_NOTE,
   type AskResult, type RecoverMode, type RunSettingsPatch, type StartOptions,
 } from './runner/runner.ts';
 import { Scheduler, type LockView } from './runner/scheduler.ts';
@@ -519,6 +519,14 @@ export function autoRecoveryClass(
   // An interrupted run is the crash this console is booting back from — the
   // one case where the status alone is the whole diagnosis.
   if (status === 'interrupted') return 'interrupted-resume';
+  // The one PARKED shape an agent can clear: every ready phase held by an
+  // unrunnable §Verification, named as such by the drive loop. plan-repair is
+  // the class whose briefing knows the fix (author the bullet from the exit
+  // criteria); a parked run with any other kind — or none, like a lock park
+  // or a live-orphan adoption — stays a person's.
+  if (status === 'parked') {
+    return halt?.kind === 'verification-preflight' ? 'plan-repair' : null;
+  }
   if (status !== 'halted' || !halt) return null;
 
   switch (halt.kind) {
@@ -1410,7 +1418,11 @@ export class Service {
       // The attempts counter was bumped at every launch and persisted, so the
       // relaunch is bounded by whatever the budget still allows; everything
       // else is re-checked by `maybeAutoRecover` when the timer fires.
-      if (state && (state.status === 'halted' || state.status === 'interrupted') && state.autoRecover) {
+      // A verification-preflight park rides the same door: it is the one
+      // parked shape whose halt names a machine-clearable kind.
+      if (state && state.autoRecover
+        && (state.status === 'halted' || state.status === 'interrupted'
+          || (state.status === 'parked' && state.halt?.kind === 'verification-preflight'))) {
         this.scheduleAutoRecover(record.slug);
       }
     }
@@ -1760,8 +1772,12 @@ export class Service {
     if (!state) return;
     // A halt is also the auto-recovery trigger — scheduled and debounced here,
     // decided entirely by `maybeAutoRecover` when the timer fires: the run may
-    // have been continued, fixed by hand, or opted out by then.
-    if (state.status === 'halted' && state.halt) this.scheduleAutoRecover(state.slug);
+    // have been continued, fixed by hand, or opted out by then. The
+    // verification-preflight park is the one parked shape that qualifies.
+    if (state.halt && (state.status === 'halted'
+      || (state.status === 'parked' && state.halt.kind === 'verification-preflight'))) {
+      this.scheduleAutoRecover(state.slug);
+    }
     // Dedupe on the run *and* its status. Keying on the run alone — which this
     // did — meant a run announced once as parked could later halt, or finish,
     // in silence.
@@ -3672,6 +3688,27 @@ export class Service {
     this.reread(slug);
 
     if (link.kind === 'plan-repair') {
+      // A repair launched for a verification-preflight park is judged by the
+      // thing that parked the run: does every open phase now extract at least
+      // one runnable command? `lint.ok` cannot judge it — F14 is warning-tier
+      // and leaves lint green before AND after, which would call every such
+      // repair "fixed" no matter what the session did.
+      const pooled = this.runners.get(slug)?.current();
+      const target = pooled && pooled.slug === slug && (!link.runId || pooled.id === link.runId)
+        ? pooled
+        : link.runId ? loadRun(this.root.path, slug, link.runId, this.liveRunId()) : null;
+      if (target?.halt?.kind === 'verification-preflight') {
+        const advisories = await this.verificationPreflight(
+          slug, target.onlyPhases?.length ? target.onlyPhases : undefined);
+        const fixed = advisories.length === 0;
+        return {
+          fixed,
+          headline: fixed ? `${slug}'s §Verification is runnable` : `${slug} still has unrunnable §Verification`,
+          detail: fixed
+            ? 'Every open phase now extracts a runnable verification command — boarding will pass.'
+            : advisories.join('; '),
+        };
+      }
       const lint = await this.lint(slug);
       const fixed = Boolean(lint?.ok);
       return {
@@ -3748,6 +3785,43 @@ export class Service {
 
     const now = new Date().toISOString();
     const phase = link.phase;
+
+    // A plan repair for a run that PARKED at the verification preflight: the
+    // parked phases never ran, so "fixed" must not mark anything done — they
+    // go back to pending, the halt clears, and the auto-continue resume
+    // boards them again through the same preflight that parked them. Checked
+    // by the halt's own kind, read BEFORE anything clears it, and checked
+    // ahead of the generic phase branch below — which would otherwise write
+    // `done` on a phase that has not spent a minute.
+    if (link.kind === 'plan-repair' && target.halt?.kind === 'verification-preflight') {
+      const slotKey = phase != null ? String(phase) : 'plan';
+      return this.writeStoredRun(target, (state) => {
+        const slot = ((state.recoveries ??= {})[slotKey] ??= { attempts: 0, lastAt: now });
+        slot.lastAt = now;
+        if (!outcome.fixed) {
+          if (state.halt?.reason) slot.lastReason = state.halt.reason;
+          delete slot.fixed;
+          return;
+        }
+        for (const record of Object.values(state.phases)) {
+          if (record.status !== 'parked') continue;
+          if (!VERIFICATION_PARK_NOTE.test(record.note ?? '')) continue;
+          record.status = 'pending';
+          record.note = undefined;
+          record.endedAt = undefined;
+          delete record.preflight;
+        }
+        slot.fixed = true;
+        delete slot.lastReason;
+        state.halt = null;
+        state.consecutiveFailures = 0;
+        state.resolved = null;
+        state.reopenedAt = null;
+        state.status = 'parked';
+        state.finishedReason = `the plan's §Verification is runnable again — repaired by ${by}. `
+          + 'Continue to carry on through the rest of the plan.';
+      });
+    }
 
     if (link.kind === 'plan-repair' && phase == null) {
       if (!outcome.fixed) return null;

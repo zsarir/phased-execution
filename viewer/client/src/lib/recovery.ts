@@ -110,7 +110,7 @@ const VERIFICATION = /did not verify|failing validate\.sh|verification/i;
 
 type RunLike = {
   status: string;
-  halt?: { reason: string } | null;
+  halt?: { reason: string; kind?: string } | null;
   resolved?: unknown;
 };
 
@@ -129,6 +129,13 @@ export function classifyRun(
   opts: { authFailure?: boolean } = {},
 ): RecoveryClass | undefined {
   if (!run) return undefined;
+  // A parked run is a person's to unstick — except the one park the server
+  // names as machine-repairable: every ready phase held by an unrunnable
+  // §Verification. Kind-gated so a lock park or a live-orphan park (which
+  // write no kind) never grows a repair button they cannot honour.
+  if (run.status === 'parked') {
+    return run.halt?.kind === 'verification-preflight' ? 'plan-repair' : undefined;
+  }
   if (run.status !== 'halted' && run.status !== 'interrupted') return undefined;
   if (opts.authFailure) return 'auth-interrupted';
 
@@ -162,6 +169,10 @@ export function classifyPhase(
     case 'verifying':
     case 'pending':
       return 'interrupted-resume';
+    case 'parked':
+      // Only the server-named verification park is repairable; a lock park or
+      // a gate park stays a person's call (and gets Retry alone, as before).
+      return run?.halt?.kind === 'verification-preflight' ? 'plan-repair' : undefined;
     default:
       return undefined;
   }

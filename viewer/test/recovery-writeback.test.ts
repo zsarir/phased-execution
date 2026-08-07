@@ -116,6 +116,28 @@ function haltedRun(root: string, over: Partial<RunState> = {}): RunState {
   return state;
 }
 
+/** A run that parked at the verification preflight, exactly as the drive loop writes one. */
+function verificationParkedRun(root: string, over: Partial<RunState> = {}): RunState {
+  const state = newRun({ slug: 'alpha', root });
+  state.status = 'parked';
+  state.halt = {
+    at: new Date().toISOString(),
+    reason: 'nothing left to run on its own — phase 1 is parked (the plan states no verification '
+      + 'for phase 1 — nothing would prove the work. Add a §Verification command to the plan, then '
+      + 'Retry.). an unrunnable §Verification takes a plan edit or Repair with AI, then Retry.',
+    phase: 1,
+    kind: 'verification-preflight',
+  };
+  state.finishedReason = state.halt.reason;
+  const record = phaseRecord(state, 1);
+  record.status = 'parked';
+  record.note = 'the plan states no verification for phase 1 — nothing would prove the work. '
+    + 'Add a §Verification command to the plan, then Retry.';
+  Object.assign(state, over);
+  saveRun(state);
+  return state;
+}
+
 function drives(svc: ReturnType<typeof service>, slug: string, runId: string): void {
   (svc as never as { runners: Map<string, unknown> }).runners.set(slug, {
     busy: () => true,
@@ -438,5 +460,54 @@ test('a not-fixed outcome never auto-continues', async () => {
 
     assert.equal(calls.length, 0);
     assert.equal(loadRun(root, 'alpha', run.id, null)?.status, 'halted');
+  } finally { cleanup(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * The verification-preflight park: repaired phases go back to PENDING
+ * ------------------------------------------------------------------ */
+
+test('a repaired verification park resets its phases to pending — never to done', () => {
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    const run = verificationParkedRun(root);
+
+    const synced = svc.syncRecoveredRun(
+      { kind: 'plan-repair', slug: 'alpha', phase: 1, runId: run.id },
+      { fixed: true, headline: 'alpha verifies', detail: 'every open phase extracts a command' },
+    );
+
+    assert.ok(synced, 'the sync found its run');
+    // The generic phase branch writes `done` on a fixed outcome; this park's
+    // phase never ran a minute, so `done` would be a lie the board repeats.
+    assert.equal(synced.phases['1'].status, 'pending');
+    assert.equal(synced.phases['1'].note, undefined);
+    assert.equal(synced.halt, null);
+    assert.equal(synced.status, 'parked', 'parked is what auto-continue resumes');
+    assert.match(synced.finishedReason ?? '', /runnable again/);
+    assert.equal(synced.recoveries?.['1']?.fixed, true);
+    assert.equal(loadRun(root, 'alpha', run.id, null)?.phases['1'].status, 'pending');
+  } finally { cleanup(); }
+});
+
+test('a missed verification repair records the reason and leaves the park standing', () => {
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    const run = verificationParkedRun(root);
+
+    const synced = svc.syncRecoveredRun(
+      { kind: 'plan-repair', slug: 'alpha', phase: 1, runId: run.id },
+      { fixed: false, headline: 'still unrunnable', detail: 'phase 1 has no §Verification' },
+    );
+
+    assert.ok(synced);
+    assert.equal(synced.phases['1'].status, 'parked', 'a miss moves nothing');
+    assert.ok(synced.halt, 'the halt keeps standing with its words');
+    // The miss is what the identical-failure refusal reads on the next pass —
+    // recorded under the SAME slot the launcher bumps, or the budget forks.
+    assert.equal(synced.recoveries?.['1']?.lastReason, synced.halt?.reason);
+    assert.equal(synced.recoveries?.['1']?.fixed, undefined);
   } finally { cleanup(); }
 });

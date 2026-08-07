@@ -349,3 +349,82 @@ test('readoptQueued leaves an opted-out halted run for a person', async () => {
     assert.deepEqual(scheduled, []);
   } finally { cleanup(); }
 });
+
+/* ------------------------------------------------------------------ *
+ * The verification-preflight park: the one parked shape an agent heals
+ * ------------------------------------------------------------------ */
+
+test('a verification-preflight park classifies as plan-repair — and only exactly that shape', () => {
+  const halt = { reason: 'nothing left to run on its own — phase 1 is parked (…§Verification…)', kind: 'verification-preflight' };
+  assert.equal(autoRecoveryClass(halt, 'parked'), 'plan-repair');
+  // The kind travels with `parked` only: the drive loop never writes it on a
+  // halted run, so meeting one there means something else is going on.
+  assert.equal(autoRecoveryClass(halt, 'halted'), null);
+  // A kindless park (a lock, a live-orphan adoption) stays a person's.
+  assert.equal(autoRecoveryClass({ reason: 'phase 1 is locked by someone-else' }, 'parked'), null);
+});
+
+/** A run parked at the verification preflight, as the drive loop writes one. */
+function verificationParkedRun(root: string, over: Partial<RunState> = {}): RunState {
+  const state = newRun({ slug: 'alpha', root, autoRecover: true });
+  state.status = 'parked';
+  state.halt = {
+    at: new Date().toISOString(),
+    reason: 'nothing left to run on its own — phase 1 is parked (the plan states no verification '
+      + 'for phase 1 — nothing would prove the work. Add a §Verification command to the plan, then '
+      + 'Retry.). an unrunnable §Verification takes a plan edit or Repair with AI, then Retry.',
+    phase: 1,
+    kind: 'verification-preflight',
+  };
+  state.finishedReason = state.halt.reason;
+  const record = phaseRecord(state, 1);
+  record.status = 'parked';
+  record.note = 'the plan states no verification for phase 1 — nothing would prove the work. '
+    + 'Add a §Verification command to the plan, then Retry.';
+  Object.assign(state, over);
+  saveRun(state);
+  return state;
+}
+
+test('a verification-preflight park launches the plan-repair agent by itself', async () => {
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    const minted = stubMint(svc);
+    const run = verificationParkedRun(root);
+
+    const out = await svc.maybeAutoRecover('alpha');
+
+    assert.equal(out.launched, true, out.reason);
+    assert.equal(minted.length, 1);
+    const meta = (minted[0] as { meta?: { recovery?: Record<string, unknown> } }).meta;
+    assert.equal(meta?.recovery?.kind, 'plan-repair');
+    assert.equal(meta?.recovery?.slug, 'alpha');
+    // Anchored on the halt's own phase — without it the launch dies at
+    // "no phase to anchor a recovery on" (activePhase is null after a park).
+    assert.equal(meta?.recovery?.phase, 1);
+    assert.equal(loadRun(root, 'alpha', run.id, null)?.recoveries?.['1']?.attempts, 1);
+  } finally { cleanup(); }
+});
+
+test('a failed verification repair cannot loop: the same reason twice is refused', async () => {
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    stubMint(svc);
+    const run = verificationParkedRun(root);
+
+    assert.equal((await svc.maybeAutoRecover('alpha')).launched, true);
+    // The repair came back empty-handed; the sync records the miss under the
+    // SAME slot the launcher bumped.
+    svc.syncRecoveredRun(
+      { kind: 'plan-repair', slug: 'alpha', phase: 1, runId: run.id },
+      { fixed: false, headline: '', detail: '' },
+    );
+
+    const again = await svc.maybeAutoRecover('alpha');
+    assert.equal(again.launched, false);
+    assert.match(again.reason ?? '', /same failure twice/,
+      'a deterministic reason string meets the identical-failure refusal, and the loop ends');
+  } finally { cleanup(); }
+});
