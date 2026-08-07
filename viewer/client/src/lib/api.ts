@@ -839,6 +839,8 @@ export interface PhaseRecord {
   startedAt?: string;
   endedAt?: string;
   note?: string;
+  /** Boarding-preflight warnings on the §Verification — advisory, absent when clean. */
+  preflight?: string[];
   verification?: VerifySummary;
   lint?: { ok: boolean; summary: string };
   closeout?: { at: string; ok: boolean; sessionId?: string; note?: string };
@@ -1108,6 +1110,8 @@ export type OnLimitPolicy = 'wait' | 'switch' | 'pause';
 /** `{ run }` — every mutating run endpoint answers in this envelope. */
 export interface RunEnvelope {
   run: RunState | null;
+  /** Start only: phases whose §Verification would park at boarding — advisory. */
+  preflight?: string[];
   error?: string;
 }
 

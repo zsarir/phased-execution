@@ -64,6 +64,14 @@ export type RunnerDeps = {
   /** The plan's `**Verification:**` text for a phase, from the service's store. */
   verificationText: (slug: string, phase: number) => Promise<string | undefined> | string | undefined;
   /**
+   * Whether the phase's raw plan block DECLARES a Verification bullet at all —
+   * regardless of what the parser made of it. Separates two park messages that
+   * used to be one: "the plan states no verification" was also shown for a
+   * plan that stated it in a shape the parser lost, and the operator went
+   * looking for a bug in their plan instead of ours.
+   */
+  verificationDeclared?: (slug: string, phase: number) => Promise<boolean> | boolean;
+  /**
    * The plan's `**Verify in:**` path for a phase — where those commands mean to
    * be run, relative to the run's root. Read from the same store and for the
    * same reason: the plan is the only thing that knows.
@@ -2115,21 +2123,46 @@ export class Runner {
             // gated phase parked with "is parked", and a blocked-handoff phase
             // hid behind "waiting on a gate or an earlier phase", and both
             // read as dead ends (reported twice, with two real plans).
+            const readyRecords = board.ready.map((p) => ({ p, record: phaseRecord(state, p) }));
             const held = [
-              ...board.ready.map((p) => {
-                const record = phaseRecord(state, p);
-                return `phase ${p} is ${record.status}${record.note ? ` (${record.note})` : ''}`;
-              }),
+              ...readyRecords.map(({ p, record }) =>
+                `phase ${p} is ${record.status}${record.note ? ` (${record.note})` : ''}`),
               ...board.stuck.map((p) =>
                 `phase ${p}'s handoff is marked blocked — its Outstanding section says why`),
             ].join('; ');
+
+            // The remedy tail names only doors that exist. It used to be one
+            // fixed sentence advertising gate confirmation and Repair with AI
+            // to runs with no gate and no blocked handoff — an operator did
+            // nothing on that advice, correctly, and the run stayed down.
+            const verificationParked = readyRecords.filter(({ record }) =>
+              record.status === 'parked' && Runner.VERIFICATION_PARK.test(record.note ?? ''));
+            const remedies: string[] = [];
+            if (readyRecords.some(({ record }) => record.status === 'gated')) {
+              remedies.push('Gates need your confirmation (then Retry re-checks them)');
+            }
+            if (board.stuck.length) remedies.push('a blocked handoff has Repair with AI');
+            if (readyRecords.some(({ record }) => record.status === 'failed')) {
+              remedies.push('failed phases take Retry or Skip');
+            }
+            if (verificationParked.length) {
+              remedies.push('an unrunnable §Verification takes a plan edit or Repair with AI, then Retry');
+            }
+            const tail = remedies.length ? ` ${remedies.join('; ')}.` : '';
+
+            // When the ONLY thing in the way is verification parks, the halt
+            // carries a machine-readable kind (and a phase to anchor on) so
+            // auto-recovery can pick it up instead of a person.
+            const allVerification = verificationParked.length > 0
+              && verificationParked.length === readyRecords.length && !board.stuck.length;
             state.halt ??= {
               at: new Date().toISOString(),
               reason: held
-                ? `nothing left to run on its own — ${held}. Gates need your confirmation `
-                  + '(then Retry re-checks them); a blocked handoff has Repair with AI; '
-                  + 'failed phases take Retry or Skip.'
+                ? `nothing left to run on its own — ${held}.${tail}`
                 : `nothing is ready to run: ${outstanding.length} phase(s) are still waiting on a gate or an earlier phase.`,
+              ...(allVerification
+                ? { kind: 'verification-preflight', phase: verificationParked[0].p }
+                : {}),
             };
             state.finishedReason = state.halt.reason;
           }
@@ -3087,6 +3120,14 @@ export class Runner {
     'bash', 'sh', 'command', 'export',
   ]);
 
+  /**
+   * Recognises the three park sentences `preflightVerification` writes — the
+   * drive loop's halt matches record notes against this to name the right
+   * remedy and to mark an all-verification halt machine-recoverable. Lives
+   * beside the code that writes those sentences: change one, change both.
+   */
+  private static readonly VERIFICATION_PARK = /§Verification|states no verification/;
+
   /** The program a command starts with, past any `FOO=1` prefixes — or null. */
   private leadToken(command: string): string | null {
     let rest = command.trim();
@@ -3128,13 +3169,24 @@ export class Runner {
 
     if (!commands.length) {
       const specimen = notRun[0];
-      return text?.trim()
-        ? `phase ${phase}'s §Verification contains nothing the runner can execute — `
+      if (text?.trim()) {
+        return `phase ${phase}'s §Verification contains nothing the runner can execute — `
           + `${notRun.length} entr${notRun.length === 1 ? 'y' : 'ies'} refused`
           + (specimen ? ` (first: ${specimen.reason})` : '')
-          + '. Fix the plan bullet into whole, copy-runnable commands, then Retry.'
-        : `the plan states no verification for phase ${phase} — nothing would prove the work. `
-          + 'Add a §Verification command to the plan, then Retry.';
+          + '. Fix the plan bullet into whole, copy-runnable commands, then Retry.';
+      }
+      // The parser handed over nothing — but a plan that DECLARES the bullet
+      // deserves a different sentence than one that omits it: the first sends
+      // the author to their formatting, the second to their keyboard. Blaming
+      // "the plan states no verification" for a shape the parser lost once
+      // sent an operator hunting a bug in a plan that had none.
+      if (await this.deps.verificationDeclared?.(state.slug, phase)) {
+        return `phase ${phase}'s §Verification exists in the plan but the console could not read `
+          + 'a runnable command out of it — check the bullet\'s shape against '
+          + 'references/plan-format.md §6, or Repair with AI, then Retry.';
+      }
+      return `the plan states no verification for phase ${phase} — nothing would prove the work. `
+        + 'Add a §Verification command to the plan, then Retry.';
     }
 
     const warnings: string[] = [];
@@ -3165,9 +3217,16 @@ export class Runner {
       if (!found) warnings.push(`\`${lead}\` is not on the verification PATH — its command would exit 127`);
     }
 
+    // On the record too, not just the journal: the journal is rendered by
+    // nothing, and these warnings' first visible symptom used to be the
+    // verification failing after the money was spent.
+    const record = phaseRecord(state, phase);
     if (warnings.length) {
+      record.preflight = warnings;
       this.record('phase.verify-preflight', { warnings }, phase);
       this.emit('phase', { phase, preflight: warnings });
+    } else {
+      delete record.preflight;
     }
     return null;
   }

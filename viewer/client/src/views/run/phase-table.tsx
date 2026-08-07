@@ -304,7 +304,7 @@ function PhaseRows({
   // board calls done is the defect this table was rebuilt for.
   const can = actionsFor(p, { live, allowRun });
   const detoured = fellOver(r);
-  const hasNote = Boolean(r?.note || r?.verification || can.diagnose);
+  const hasNote = Boolean(r?.note || r?.verification || r?.preflight?.length || can.diagnose);
 
   // What the two start-work buttons would have offered if nothing held the
   // phase — so they can be rendered disabled rather than disappearing.
@@ -570,6 +570,16 @@ function PhaseRows({
                       <code className="font-mono">{n.text}</code> — {n.reason}
                     </li>
                   ))}
+                </ul>
+              </details>
+            ) : null}
+            {r?.preflight?.length ? (
+              <details className="mt-1">
+                <summary className="cursor-pointer text-2xs text-gated">
+                  {r.preflight.length} verification warning{r.preflight.length === 1 ? '' : 's'} from boarding
+                </summary>
+                <ul className="mt-1 flex flex-col gap-0.5 text-2xs">
+                  {r.preflight.map((warning, i) => <li key={i}>{warning}</li>)}
                 </ul>
               </details>
             ) : null}

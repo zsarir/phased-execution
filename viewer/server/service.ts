@@ -60,6 +60,7 @@ import {
   slugsNeedingBoard, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
+import { extractCommands } from './runner/verify.ts';
 import { checkAuth, checkAuthFor, forgetAuth, openLoginTerminal, openCommandTerminal, shellQuote, type AuthStatus } from './runner/auth.ts';
 import { Accounts, DEFAULT_ACCOUNT_ID, profileConfigDir, type AccountView } from './accounts/index.ts';
 import { portTranscript } from './accounts/transcripts.ts';
@@ -885,6 +886,11 @@ export class Service {
       // The plan is the only source for what proves a phase worked, exactly as
       // it is the only source for what the phase should do.
       verificationText: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verification,
+      // Raw-text presence check, distinct from the parsed field above: it is
+      // what lets the park message tell "the plan omits it" apart from "the
+      // plan states it in a shape the parser lost".
+      verificationDeclared: (slug, phase) =>
+        /\*\*\s*Verification\b/i.test(this.store?.get(slug)?.plan?.phases[phase]?.raw ?? ''),
       // …and where they mean to be run. Same store, same reason.
       verifyIn: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verifyIn,
       // Read only to SUGGEST a `Verify in:` on a failure — never to pick a
@@ -2694,6 +2700,32 @@ export class Service {
   }
 
   /**
+   * The boarding preflight's answer for every open phase, at the moment the
+   * operator presses Start — advisory only, computed with the SAME extractor
+   * boarding will use. The runner still parks per phase; this exists because
+   * that park used to be the operator's first sight of a defect that was
+   * readable before the run was created.
+   */
+  async verificationPreflight(slug: string, onlyPhases?: number[]): Promise<string[]> {
+    const record = this.store?.get(slug);
+    if (!record?.plan?.phased) return [];
+    const board = await this.board(slug).catch(() => null);
+    const done = new Set(board?.done ?? []);
+    const out: string[] = [];
+    for (const row of record.plan.graph) {
+      if (done.has(row.phase)) continue;
+      if (onlyPhases?.length && !onlyPhases.includes(row.phase)) continue;
+      const detail = record.plan.phases[row.phase];
+      if (extractCommands(detail?.verification).commands.length) continue;
+      const declared = /\*\*\s*Verification\b/i.test(detail?.raw ?? '');
+      out.push(declared
+        ? `phase ${row.phase}'s §Verification yields nothing the runner can execute — it will park at boarding`
+        : `phase ${row.phase} has no §Verification — it will park at boarding`);
+    }
+    return out;
+  }
+
+  /**
    * Start or continue a run. Whether the plan is fresh or half-finished is not
    * a distinction the caller has to make — the engine derives ready phases from
    * the done-set, so both are the same code path.
@@ -3282,6 +3314,7 @@ export class Service {
       record.status = 'pending';
       record.note = undefined;
       record.endedAt = undefined;
+      delete record.preflight;
       state.consecutiveFailures = 0;
       state.halt = null;
     });

@@ -1862,6 +1862,7 @@ function call(
       stop: async () => {}, skip() {}, retry() {},
     },
     startRun: async (slug: string, options: unknown) => { started.push({ slug, options }); return { id: 'r1' }; },
+    verificationPreflight: async () => ['phase 3 has no §Verification — it will park at boarding'],
     pauseRun: record('pauseRun'),
     resumePause: record('resumePause'),
     configureRun: record('configureRun'),
@@ -1945,12 +1946,15 @@ test('another origin cannot drive the autopilot', async () => {
 });
 
 test('a proper start request reaches the service with its options', async () => {
-  const { status, started } = await call('/api/run/demo/start', {
+  const { status, payload, started } = await call('/api/run/demo/start', {
     method: 'POST', allowRun: true,
     headers: { 'x-phase-console': '1', origin: 'http://127.0.0.1:4123' },
     body: { model: 'sonnet', effort: 'high', autonomy: 'keep-going', phaseBudgetUsd: 4 },
   });
   assert.equal(status, 200);
+  // The start response carries the verification advisory so the operator hears
+  // about a would-park phase at Start, not at boarding.
+  assert.match(((payload as { preflight?: string[] }).preflight ?? []).join('\n'), /park at boarding/);
   assert.equal(started.length, 1);
   const { slug, options } = started[0] as { slug: string; options: Record<string, unknown> };
   assert.equal(slug, 'demo');
@@ -2503,6 +2507,27 @@ test('a plan with no verification at all parks the same way, saying so', async (
   r.cleanup();
 });
 
+test('a declared-but-unreadable verification blames the shape, not the plan', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  // The parser handed over '' but the raw block DOES declare the bullet — the
+  // real ai-builder shape. "The plan states no verification" here once sent an
+  // operator hunting a bug in a plan that had none.
+  const { instance } = runner(r, workingSession(r, seen), '', undefined, {
+    verificationDeclared: () => true,
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1] });
+  await instance.wait();
+
+  assert.deepEqual(seen, []);
+  const note = instance.current()!.phases['1'].note ?? '';
+  assert.match(note, /exists in the plan but the console could not read/);
+  assert.match(note, /plan-format\.md/);
+  assert.doesNotMatch(note, /states no verification/,
+    'the omission message is reserved for plans that actually omit it');
+  r.cleanup();
+});
+
 test('preflight warnings are journalled without blocking the phase', async () => {
   const r = repo();
   const seen: number[] = [];
@@ -2520,6 +2545,31 @@ test('preflight warnings are journalled without blocking the phase', async () =>
     .filter((j) => j.event === 'phase.verify-preflight');
   assert.equal(preflights.length, 1);
   assert.match(preflights[0].data?.warnings?.join('\n') ?? '', /a person will be asked/);
+  // On the record too — the journal is rendered by nothing, and the operator's
+  // first sight of these used to be the verification failing after the spend.
+  assert.match(instance.current()!.phases['1'].preflight?.join('\n') ?? '', /a person will be asked/);
+  r.cleanup();
+});
+
+test('an all-verification park halts with a machine-readable kind and an anchor phase', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  // Unscoped: phase 1 parks at preflight, later phases stay waiting, so the
+  // loop runs out of candidates with work outstanding — the real run's shape.
+  const { instance } = runner(r, workingSession(r, seen), '');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'parked');
+  assert.equal(state.halt?.kind, 'verification-preflight',
+    'auto-recovery keys on this — a kindless halt is invisible to it');
+  assert.equal(state.halt?.phase, 1, 'recovery needs a phase to anchor on');
+  assert.match(state.halt?.reason ?? '', /unrunnable §Verification takes a plan edit or Repair with AI/);
+  assert.doesNotMatch(state.halt?.reason ?? '', /Gates need your confirmation/,
+    'no gate exists here — the old fixed tail advertised one anyway');
+  assert.doesNotMatch(state.halt?.reason ?? '', /blocked handoff/,
+    'no handoff is blocked either');
   r.cleanup();
 });
 
@@ -2539,6 +2589,9 @@ test('a parked run names a gated phase with the gate note, and says what to do',
   assert.match(state.halt?.reason ?? '', /phase 1 is gated \(gate not clear/,
     'the gate itself is quoted, not summarised into "waiting on a gate"');
   assert.match(state.halt?.reason ?? '', /Gates need your confirmation/);
+  assert.doesNotMatch(state.halt?.reason ?? '', /Repair with AI/,
+    'no blocked handoff and no verification park — the tail names only doors that exist');
+  assert.equal(state.halt?.kind, undefined, 'a gate needs a person, never auto-recovery');
   r.cleanup();
 });
 
@@ -2553,6 +2606,9 @@ test('a stuck phase is named as blocked-by-its-handoff, never "waiting on a gate
   assert.equal(state.status, 'parked');
   assert.match(state.halt?.reason ?? '', /phase 1's handoff is marked blocked/);
   assert.match(state.halt?.reason ?? '', /Repair with AI/);
+  assert.doesNotMatch(state.halt?.reason ?? '', /Gates need your confirmation/,
+    'nothing here is gated — the tail names only doors that exist');
+  assert.equal(state.halt?.kind, undefined, 'a blocked handoff is not the verification kind');
   r.cleanup();
 });
 

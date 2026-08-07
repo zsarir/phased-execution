@@ -155,6 +155,15 @@ export type PhaseRecord = {
   endedAt?: string;
   note?: string;
   gate?: { clear: boolean; kind: string; detail: string };
+  /**
+   * Boarding-preflight warnings for the phase's §Verification — refused
+   * fragments, cwd-sensitive commands with no `Verify in:`, leads missing
+   * from the PATH. Non-blocking by design, but they used to live only in the
+   * journal, which nothing renders: an operator's first sight of them was the
+   * verification failing an hour later. Overwritten each boarding, absent
+   * when clean, cleared on retry.
+   */
+  preflight?: string[];
   verification?: VerifySummary;
   /**
    * Where the verification commands actually ran, relative to the run's root

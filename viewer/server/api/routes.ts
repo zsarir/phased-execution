@@ -1172,7 +1172,14 @@ export async function handleApi(
               // run) or the run's own sticky choice (resume) decide.
               autoRecover: typeof body.autoRecover === 'boolean' ? body.autoRecover : undefined,
             });
-            json(res, 200, { run: state });
+            // Advisory, best-effort: which phases will park at boarding for an
+            // unrunnable §Verification. The run is already created either way —
+            // this line is why the operator hears it now and not hours in.
+            let preflight: string[] = [];
+            try {
+              preflight = await service.verificationPreflight(slug, phaseList(body.onlyPhases));
+            } catch { /* advisory only — a start never fails over its warning */ }
+            json(res, 200, { run: state, preflight });
             return true;
           }
           // Every one of these goes through the service, not the runner: after a
