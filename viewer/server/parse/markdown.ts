@@ -60,6 +60,19 @@ export type Bullet = {
 /**
  * Read `- **Label:** body` bullets out of a block, keeping continuation lines
  * (indented text, nested lists, numbered exit criteria) with their label.
+ *
+ * Indentation is the nesting signal. While a bullet is open, only a bullet at
+ * column 0 starts a new field or closes the open one; an INDENTED bullet —
+ * labelled or not — belongs to the open bullet's body. Plans written by LLM
+ * sessions routinely nest a field's content as 2-space sub-bullets
+ * (`- **Verification:**` over `  - \`cmd\``), and dropping those lines once
+ * parked a whole run on "the plan states no verification" while the plan
+ * plainly stated it. A nested bullet that carries its own bold label
+ * (`  - **Verify in:** api`) is additionally emitted as an addressable bullet
+ * of its own — same-line remainder only, it never accumulates continuations —
+ * so `bullet(list, 'Verify in')` resolves no matter which level the author
+ * chose. Bullets are pushed when opened, parents before their children:
+ * `bullet()` is first-match-wins, so a top-level label shadows a nested one.
  */
 export function labelledBullets(block: string): Bullet[] {
   const lines = block.split('\n');
@@ -67,26 +80,40 @@ export function labelledBullets(block: string): Bullet[] {
   let current: Bullet | null = null;
   let inFence = false;
 
+  const open = (label: string, body: string): Bullet => {
+    const opened = { label: label.trim().replace(/:$/, ''), body: body.trim() };
+    out.push(opened);
+    return opened;
+  };
+
   for (const line of lines) {
     if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
 
-    const start = inFence ? null : /^\s{0,3}[-*]\s+\*\*([^*]+?):?\*\*:?\s*(.*)$/.exec(line);
-    if (start) {
-      if (current) out.push(current);
-      current = { label: start[1].trim().replace(/:$/, ''), body: start[2].trim() };
+    const item = inFence ? null : /^(\s*)[-*]\s+(.*)$/.exec(line);
+    const bold = item ? /^\*\*([^*]+?):?\*\*:?\s*(.*)$/.exec(item[2]) : null;
+    const indent = item ? item[1].length : 0;
+
+    // A labelled bullet at the top level opens a new field (with nothing open
+    // yet, up to 3 spaces of indent still count as top level — CommonMark's
+    // tolerance, kept for documents that indent everything).
+    if (item && bold && (current ? indent === 0 : indent <= 3)) {
+      current = open(bold[1], bold[2]);
       continue;
     }
     if (!current) continue;
 
-    // A new top-level bullet without a bold label closes the current field.
-    if (!inFence && /^\s{0,3}[-*]\s+/.test(line) && !/^\s{4,}/.test(line)) {
-      out.push(current);
+    // A top-level bullet without a bold label closes the current field.
+    if (item && indent === 0) {
       current = null;
       continue;
     }
+
+    // Everything else continues the open bullet's body — prose, numbered
+    // items, and any indented bullet. An indented labelled bullet is also
+    // emitted on its own so nested single-value fields stay addressable.
+    if (item && bold) open(bold[1], bold[2]);
     current.body += (current.body ? '\n' : '') + line.replace(/^\s{0,2}/, '');
   }
-  if (current) out.push(current);
   return out.map((b) => ({ ...b, body: b.body.trim() }));
 }
 

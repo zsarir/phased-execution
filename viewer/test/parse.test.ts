@@ -374,6 +374,86 @@ test('markdown helpers split sections, bullets and fences', () => {
   assert.equal(code[0].code, 'run me');
 });
 
+test('indented sub-bullets continue their field instead of ending it', () => {
+  // The shape a real run parked on: every command nested 2 spaces under the
+  // label. The field must keep the whole list, and the nested labelled bullet
+  // must stay addressable on its own.
+  const bullets = labelledBullets(`- **Verification:**
+  - **Verify in:** services/billing-api
+  - \`task audit:schema\`
+  - \`pytest -q\`
+- **Handoff must record:** the revision id.`);
+
+  assert.deepEqual(
+    bullets.map((b) => b.label),
+    ['Verification', 'Verify in', 'Handoff must record'],
+    'parent emitted before its nested child; the sibling closes the parent',
+  );
+  const verification = bullets.find((b) => b.label === 'Verification')?.body ?? '';
+  assert.match(verification, /task audit:schema/);
+  assert.match(verification, /pytest -q/);
+  assert.match(verification, /\*\*Verify in:\*\*/, 'the nested line stays in the parent body too');
+  assert.equal(
+    bullets.find((b) => b.label === 'Verify in')?.body, 'services/billing-api',
+    'a nested single-value field carries its same-line remainder only, never the sibling lines',
+  );
+});
+
+test('bullet boundaries: top level closes at column 0, legacy indent opens when nothing is open', () => {
+  // An indent-0 unlabelled bullet still closes the field; an indented one no
+  // longer does. With nothing open, CommonMark's 3-space tolerance still opens.
+  const closed = labelledBullets('- **Steps:** a\n- plain sibling\n  - orphan nested line');
+  assert.deepEqual(closed.map((b) => b.label), ['Steps']);
+  assert.equal(closed[0].body, 'a', 'the sibling closed the field; the orphan bullet opened nothing');
+
+  const legacy = labelledBullets('   - **Goal:** indented but top level');
+  assert.deepEqual(legacy.map((b) => b.label), ['Goal']);
+  assert.equal(legacy[0].body, 'indented but top level');
+
+  // Bullet-shaped lines inside a fence never open, close, or emit anything.
+  const fenced = labelledBullets('- **Verification:**\n  ```\n  - **Not a field:** x\n  - not a close\n  ```\n  tail');
+  assert.deepEqual(fenced.map((b) => b.label), ['Verification']);
+  assert.match(fenced[0].body, /Not a field/);
+  assert.match(fenced[0].body, /tail/);
+});
+
+test('a phase written with nested verification parses whole', () => {
+  // Structural mirror of the real plan whose five phases all parsed to
+  // verification: '' and parked the run at boarding (private names changed —
+  // this repository is public and a fixture is still a string in it).
+  const plan = parsePlan(`# Nested
+
+## Phase graph
+
+| Phase | Title | Depends on | Parallel-safe with | Repos | Exit criteria |
+|---|---|---|---|---|---|
+| 1 | Backend | — | — | api | green |
+
+## Phases
+
+### Phase 1 — Backend
+- **Goal:** stamped-basis billing.
+- **Size:** M
+- **Files to create/modify:**
+  - **Migration** (one Alembic file): the columns
+  - \`api/routes.py\`: the reserve
+- **Exit criteria:**
+  1. Charges once.
+- **Verification:**
+  - **Verify in:** services/billing-api
+  - \`task audit:schema\`
+  - \`pytest -q\`
+- **Handoff must record:** the shapes as shipped.
+`, 'nested', '/tmp/nested.md');
+
+  assert.match(plan.phases[1].verification ?? '', /task audit:schema/);
+  assert.match(plan.phases[1].verification ?? '', /pytest -q/);
+  assert.equal(plan.phases[1].verifyIn, 'services/billing-api');
+  assert.match(plan.phases[1].files ?? '', /Migration/, 'nested bold sub-bullets no longer empty the field');
+  assert.match(plan.phases[1].files ?? '', /api\/routes\.py/);
+  assert.match(plan.phases[1].handoffMustRecord ?? '', /shapes as shipped/);
+});
+
 test('a fenced code block cannot be mistaken for a heading or bullet', () => {
   const secs = sections('## Real\n\n```\n## Not a heading\n```\n\ntail\n');
   assert.equal(secs.length, 1);

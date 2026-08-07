@@ -74,6 +74,24 @@ test('the block that produced "4 checks only you can make" is two commands', () 
   assert.equal(notRun.length, 0, 'nothing here needs a person');
 });
 
+/**
+ * The OTHER real shape: every command a 2-space sub-bullet under the label,
+ * `**Verify in:**` nested among them. This is the body `labelledBullets` now
+ * hands over for such plans (it used to hand over '' and park the run). The
+ * un-backticked Verify-in line is prose to the extractor; only the commands
+ * are candidates.
+ */
+test('a bullet-list verification body extracts its commands and nothing else', () => {
+  const body = [
+    '- **Verify in:** services/billing-api',
+    '- `task audit:schema`',
+    '- `.venv/bin/python -m pytest tests/unit -q`',
+  ].join('\n');
+  const { commands, notRun } = only(body);
+  assert.deepEqual(commands, ['task audit:schema', '.venv/bin/python -m pytest tests/unit -q']);
+  assert.equal(notRun.length, 0, 'the nested Verify-in line is not a person-check');
+});
+
 test('a line continued with a backslash is one command, not two', () => {
   const { commands } = only('```bash\nnpm test \\\n  --silent\n```');
   assert.deepEqual(commands, ['npm test --silent']);
