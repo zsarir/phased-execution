@@ -22,6 +22,8 @@ import { planWrite, runWrite, openInEditor, WriteError, type WriteRequest } from
 import { TERMINAL_PATH, type LaunchSpec } from '../terminal.ts';
 import { tailscaleStatus } from '../tailscale.ts';
 import { ACCOUNT_ID_RE, DEFAULT_ACCOUNT_ID } from '../accounts/index.ts';
+import { searchCatalog } from '../mcp/index.ts';
+import { MCP_ID_RE } from '../mcp/store.ts';
 import { isOnLimitPolicy, type PhaseOptions } from '../runner/state.ts';
 
 export type ApiContext = { service: Service };
@@ -134,6 +136,19 @@ function guardAnySession(req: IncomingMessage, service: Service): string | null 
 }
 
 /**
+ * Registering an MCP server points this console's sessions at somebody else's
+ * tools, whose descriptions enter the prompt and whose results a model acts on.
+ * Its own flag, for the same reason accounts have one. READING the registry,
+ * the catalog and the connection statuses is not gated — seeing what your own
+ * sessions connect to is display.
+ */
+function guardMcp(req: IncomingMessage, service: Service): string | null {
+  return guardMutation(req, service.flags.allowMcp
+    ? null
+    : 'MCP registration is disabled. Restart with --allow-mcp to enable it.');
+}
+
+/**
  * The cross-site check on its own, for POSTs that are not a capability.
  *
  * Choosing a source directory and saving a theme both have to work in a
@@ -177,6 +192,24 @@ function accountChoice(value: unknown, service: Service): string | undefined {
   if (value === 'auto') return 'auto';
   if (value === DEFAULT_ACCOUNT_ID) return DEFAULT_ACCOUNT_ID;
   return ACCOUNT_ID_RE.test(value) && service.accounts.has(value) ? value : undefined;
+}
+
+/**
+ * MCP server ids from the browser, checked against the LIVE registry.
+ *
+ * Never passed through, for the same reason `accountChoice` is not: the value
+ * becomes part of a child process's configuration. An id that no longer
+ * resolves is dropped here rather than parked on later — the browser's list may
+ * simply be a few seconds stale, and silently attaching nothing would be worse
+ * than either. What a PLAN names is a different matter and is checked at
+ * boarding, where the operator can be told which server is missing.
+ */
+function mcpList(value: unknown, service: Service): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids = value
+    .filter((id): id is string => typeof id === 'string' && MCP_ID_RE.test(id))
+    .filter((id) => service.mcp.isEnabled(id));
+  return [...new Set(ids)];
 }
 
 /** Env maps cross into `LaunchSpec.env`, which is `Record<string, string>`. */
@@ -244,7 +277,7 @@ function skillList(value: unknown): string[] | undefined {
  * values end up in a child process's argv, so "whatever the client sent" is not
  * an acceptable definition of any of them.
  */
-function phaseOptions(value: unknown): Record<string, PhaseOptions> | undefined {
+function phaseOptions(value: unknown, service: Service): Record<string, PhaseOptions> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const out: Record<string, PhaseOptions> = {};
   for (const [key, raw] of Object.entries(value as Record<string, unknown>).slice(0, 500)) {
@@ -269,6 +302,11 @@ function phaseOptions(value: unknown): Record<string, PhaseOptions> | undefined 
     // thing, and storing the false would put a key in every phase's options and
     // make `Object.keys(option).length` below claim the operator chose something.
     if (item.skillsOff === true) option.skillsOff = true;
+    const servers = mcpList(item.mcpServers, service);
+    if (servers?.length) option.mcpServers = servers;
+    // Only ever written when true, exactly as `skillsOff` is and for the same
+    // reason: a stored `false` would claim the operator chose something.
+    if (item.mcpOff === true) option.mcpOff = true;
     if (Object.keys(option).length) out[String(phase)] = option;
   }
   return out;
@@ -702,6 +740,100 @@ export async function handleApi(
      * can take a moment; Settings polls it only while it is open. */
     if (head === 'tailscale' && req.method === 'GET') {
       json(res, 200, await tailscaleStatus(service.flags.port));
+      return true;
+    }
+
+    /* ---------------- MCP servers ----------------
+     * Above the source-directory guard for the same reason as accounts: the
+     * registry is an INSTANCE fact, not a project one, and Settings — where
+     * registration lives — is exactly where you are before a root is open. The
+     * list is redacted by construction (`McpServerView` carries no secret and
+     * no path); the mutating verbs are behind `--allow-mcp`. */
+    if (head === 'mcp') {
+      if (req.method === 'GET' && rest.length === 0) {
+        json(res, 200, {
+          servers: await service.listMcp(),
+          allowMcp: service.flags.allowMcp,
+        });
+        return true;
+      }
+      // The catalog is a read, and deliberately ungated: browsing what exists
+      // is how somebody decides whether to turn the flag on at all.
+      if (req.method === 'GET' && rest[0] === 'catalog') {
+        const query = url.searchParams.get('q') ?? '';
+        const registry = url.searchParams.get('registry') !== '0';
+        try {
+          json(res, 200, await searchCatalog(query, { includeRegistry: registry }));
+        } catch (error) {
+          json(res, 502, { error: (error as Error).message });
+        }
+        return true;
+      }
+      if (req.method === 'POST' && rest[0] === 'refresh') {
+        // A probe spawns a process per distinct server set, so it is a POST and
+        // it is CSRF-guarded — but it is not behind `--allow-mcp`: re-checking
+        // whether your own servers are up changes nothing.
+        const refusal = guardCsrf(req);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        try {
+          json(res, 200, { servers: await service.refreshMcp(true) });
+        } catch (error) {
+          json(res, 500, { error: (error as Error).message });
+        }
+        return true;
+      }
+      if (req.method === 'POST' && rest.length === 0) {
+        const refusal = guardMcp(req, service);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        try {
+          json(res, 200, { server: await service.addMcpServer(body) });
+        } catch (error) {
+          json(res, 400, { error: (error as Error).message });
+        }
+        return true;
+      }
+      if (rest.length >= 1) {
+        const id = rest[0];
+        if (!MCP_ID_RE.test(id)) { json(res, 400, { error: 'not an MCP server id' }); return true; }
+
+        if (req.method === 'DELETE' && rest.length === 1) {
+          const refusal = guardMcp(req, service);
+          if (refusal) { json(res, 403, { error: refusal }); return true; }
+          json(res, 200, { removed: await service.removeMcpServer(id) });
+          return true;
+        }
+        if (req.method === 'PATCH' && rest.length === 1) {
+          const refusal = guardMcp(req, service);
+          if (refusal) { json(res, 403, { error: refusal }); return true; }
+          const body = await readBody(req);
+          try {
+            const server = await service.patchMcpServer(id, body);
+            if (!server) { json(res, 404, { error: `no MCP server called ${id}` }); return true; }
+            json(res, 200, { server });
+          } catch (error) {
+            json(res, 400, { error: (error as Error).message });
+          }
+          return true;
+        }
+        if (req.method === 'POST' && rest[1] === 'login') {
+          const refusal = guardMcp(req, service);
+          if (refusal) { json(res, 403, { error: refusal }); return true; }
+          try {
+            json(res, 200, await service.beginMcpLogin(id));
+          } catch (error) {
+            json(res, 400, { error: (error as Error).message });
+          }
+          return true;
+        }
+        if (req.method === 'POST' && rest[1] === 'acknowledge') {
+          const refusal = guardCsrf(req);
+          if (refusal) { json(res, 403, { error: refusal }); return true; }
+          json(res, 200, { acknowledged: service.mcp.acknowledgeDrift(id) });
+          return true;
+        }
+      }
+      json(res, 405, { error: 'method not allowed' });
       return true;
     }
 
@@ -1148,8 +1280,9 @@ export async function handleApi(
               runBudgetUsd: numberOrNull(body.runBudgetUsd),
               resumeRunId: typeof body.resumeRunId === 'string' ? body.resumeRunId : undefined,
               onlyPhases: phaseList(body.onlyPhases),
-              phaseOptions: phaseOptions(body.phaseOptions),
+              phaseOptions: phaseOptions(body.phaseOptions, service),
               skills: skillList(body.skills),
+              mcpServers: mcpList(body.mcpServers, service),
               // Anything unrecognised is `guarded`. A typo must not be the
               // reason a run takes the guard rails off.
               permissionProfile: isPermissionProfile(body.permissionProfile)
@@ -1304,8 +1437,9 @@ export async function handleApi(
               ...('maxConsecutiveFailures' in body
                 ? { maxConsecutiveFailures: Number(body.maxConsecutiveFailures) } : {}),
               ...('onlyPhases' in body ? { onlyPhases: phaseList(body.onlyPhases) ?? null } : {}),
-              ...('phaseOptions' in body ? { phaseOptions: phaseOptions(body.phaseOptions) ?? null } : {}),
+              ...('phaseOptions' in body ? { phaseOptions: phaseOptions(body.phaseOptions, service) ?? null } : {}),
               ...('skills' in body ? { skills: skillList(body.skills) ?? null } : {}),
+              ...('mcpServers' in body ? { mcpServers: mcpList(body.mcpServers, service) ?? null } : {}),
               ...(isPermissionProfile(body.permissionProfile)
                 ? { permissionProfile: body.permissionProfile } : {}),
               ...(body.gitMode === 'new-branch' || body.gitMode === 'default-branch'

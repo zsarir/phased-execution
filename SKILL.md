@@ -13,7 +13,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 metadata:
-  version: 4.2.0
+  version: 4.3.0
 ---
 
 # Phased Execution
@@ -110,7 +110,14 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    **If the user named skills to use for this work** (e.g. `design-system`,
    a TDD skill), record them on a `**Skills (every session):**` line in that note — backtick each — so the
    engine re-injects them into every phase's boot prompt (and the QA brief) and each fresh session re-invokes
-   them. Also record the **branch** in that note: by default the branch already
+   them.
+   **If the work needs MCP servers** (a browser, an issue tracker, a docs server), record them the
+   same way on an `**MCP servers (every session):**` line — backticked *registry ids* from Phase
+   Console → MCP, three to six at most. A phase that needs one the rest of the plan does not gets its
+   own `- **MCP:** \`server\`` bullet, which is UNIONED with the plan-wide line. The console checks
+   them before a phase boards and parks it — before spending anything — if one cannot connect,
+   because an unattended session cannot sign a server in.
+   Also record the **branch** in that note: by default the branch already
    checked out — **don't create a new branch**; only if the user explicitly asked, create ONE feature
    branch for the whole plan (every phase, including concurrent ones, commits to it) and record its name.
    (The console can also impose a run-level work branch `pe/<slug>` at launch; the plan line stays the
@@ -153,7 +160,11 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    whether it is genuinely `ready`. Read this phase's **dependency** handoffs (the phase's `depends_on`, not
    merely the previous number), `docs/plans/<slug>.md` §Phase N + §Session budget, and memory
    `project_<slug>`. **Invoke any skills named on §Session budget's `Skills (every session):` line** before
-   implementing (the boot prompt lists them too). That must be enough — if it isn't, the previous handoff was
+   implementing (the boot prompt lists them too). If the plan or the phase names **MCP servers**, confirm
+   they are connected (`/mcp`, or `claude mcp list`) before implementing; if one needs authentication,
+   **stop and ask the operator to sign it in** rather than working around it — the plan chose that server
+   for a reason, and a phase that quietly did without is worse than one that stopped and said why.
+   That must be enough — if it isn't, the previous handoff was
    deficient; note the gap so it gets fixed.
 2. **Confirm readiness, then the budget.** If the board shows this phase as `waiting`, a dependency isn't
    actually done — stop and surface that rather than building on an unfinished base (earlier-numbered phases

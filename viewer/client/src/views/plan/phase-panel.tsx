@@ -83,6 +83,7 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
                       {view.gateKind && view.gateKind !== 'none' ? `gated·${view.gateKind}` : 'gated'}
                     </Chip>
                   )}
+                  {view.mcpServers?.map((id) => <Chip key={id} mono>mcp {id}</Chip>)}
                   {view.analysis?.onCriticalPath && <Chip>critical path</Chip>}
                   <QaVerdict qa={view.qa} />
                 </div>
@@ -181,6 +182,12 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
                   qaMode: detail.summary.qaMode,
                   ...(view.qa ? { qa: view.qa } : {}),
                   planSkills: detail.plan?.sessionBudget?.skills ?? [],
+                  planMcp: [
+                    ...new Set([
+                      ...(detail.plan?.sessionBudget?.mcpServers ?? []),
+                      ...(view.mcpServers ?? []),
+                    ]),
+                  ],
                 }}
                 allowAgent={Boolean(state?.allowAgent)}
                 allowWrites={Boolean(state?.allowWrites)}

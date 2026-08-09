@@ -30,6 +30,7 @@ import { DEFAULT_MAX_SESSIONS, SKILL_DIR, VIEWER_DIR } from './config.ts';
 /** The five capability switches, the full set the launcher turns on. */
 export const FULL_FLAGS = [
   '--allow-writes', '--allow-run', '--allow-terminal', '--allow-agent', '--allow-accounts',
+  '--allow-mcp',
 ] as const;
 
 export type LauncherPlan = {
@@ -131,7 +132,7 @@ export function renderCommandFile(source: string, opts: {
     `MAX_SESSIONS="${opts.maxSessions != null && opts.maxSessions !== DEFAULT_MAX_SESSIONS ? opts.maxSessions : ''}"`);
   patched = patched.replace(/^DEFAULT_SKILLS=.*$/m, `DEFAULT_SKILLS="${(opts.defaultSkills ?? []).join(',')}"`);
   for (const line of ['WRITES="--allow-writes"', 'RUNS="--allow-run"', 'TERM_FLAG="--allow-terminal"',
-    'AGENT="--allow-agent"', 'ACCOUNTS="--allow-accounts"']) {
+    'AGENT="--allow-agent"', 'ACCOUNTS="--allow-accounts"', 'MCP="--allow-mcp"']) {
     if (!patched.includes(line)) {
       throw new Error(`the launcher template is missing its ${line.split('=')[0]} knob — update the template first`);
     }

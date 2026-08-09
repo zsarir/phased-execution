@@ -52,6 +52,8 @@ export interface Departure {
   repos: string[];
   branch?: string;
   skills: string[];
+  /** MCP servers the plan attaches to every session. */
+  mcpServers: string[];
   model?: string;
   effort?: string;
   /** This phase failed its QA gate on a previous attempt. */
@@ -131,6 +133,7 @@ export function toDepartures(
         repos: plan.repos ?? [],
         branch: plan.branch,
         skills: plan.skills ?? [],
+        mcpServers: plan.mcpServers ?? [],
         model: view?.model ?? plan.targetModel,
         effort: view?.effort,
         qaFailed: (plan.qaFailures ?? []).includes(phase),

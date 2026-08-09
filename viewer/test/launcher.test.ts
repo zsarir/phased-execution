@@ -61,10 +61,10 @@ test('a written copy bakes in the root as $HOME-relative, the port, and every sw
   assert.match(elsewhere, /^ROOT="\/srv\/repo"$/m);
 });
 
-test('PIN: the template is at LAUNCHER_REV 7 — bump it whenever the argv changes', () => {
+test('PIN: the template is at LAUNCHER_REV 8 — bump it whenever the argv changes', () => {
   // The rev is what tells an installed copy it is stale. Adding a knob or a
   // flag without bumping this leaves every Desktop copy silently behind.
-  assert.match(TEMPLATE, /^LAUNCHER_REV=7$/m);
+  assert.match(TEMPLATE, /^LAUNCHER_REV=8$/m);
 });
 
 test('the rev-7 knobs bake this console\'s remote, session and skills settings', () => {

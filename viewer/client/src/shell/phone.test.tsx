@@ -33,7 +33,7 @@ const render = (ui: ReactElement) => renderBare(
 );
 
 const counts = (over: Partial<ShellCounts> = {}): ShellCounts => ({
-  plans: 0, phases: 0, ready: 0, approvals: 0, unread: 0, agentSessions: 0, terminalSessions: 0,
+  plans: 0, phases: 0, ready: 0, approvals: 0, unread: 0, agentSessions: 0, terminalSessions: 0, mcpAttention: 0,
   ...over,
 });
 

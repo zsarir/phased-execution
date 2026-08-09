@@ -152,6 +152,8 @@ Set up a Phase Console launcher on my Desktop.
      AGENT       --allow-agent: interactive claude sessions + the New-plan wizard
      ACCOUNTS    --allow-accounts: register more than one Claude account and let a
                  run move to one with headroom (the usage meters work without it)
+     MCP         --allow-mcp: register MCP servers and attach them to plans and
+                 phases (reading the registry and its statuses works without it)
      PORT        leave blank — each project derives its own; set one to pin it
      SUPERVISED  leave "yes" — it installs a launchd agent, and that is what makes
                  the app's own Restart and Shut down buttons work

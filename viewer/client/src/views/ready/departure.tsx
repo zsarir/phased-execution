@@ -336,6 +336,7 @@ export function DepartureRow({ d, index }: { d: Departure; index: number }) {
                   ...(d.effort ? { effort: d.effort } : {}),
                   qa: { result: 'fail' },
                   planSkills: d.skills ?? [],
+                  planMcp: d.mcpServers ?? [],
                 }}
                 allowAgent={Boolean(state?.allowAgent)}
                 allowWrites={Boolean(state?.allowWrites)}

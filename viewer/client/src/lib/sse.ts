@@ -56,6 +56,11 @@ export const SSE_EVENTS = [
   // added or signed in, a poll landed, a window was learned exhausted. The
   // full redacted list rides on the event.
   'accounts',
+  // The MCP registry or its health moved — a server was added, switched off,
+  // signed in, or answered a probe differently. The full redacted list rides on
+  // the event, exactly as `accounts` does, so this is a cache write and not a
+  // reason to go and ask again.
+  'mcp',
 ] as const;
 
 export type SseEvent = (typeof SSE_EVENTS)[number];

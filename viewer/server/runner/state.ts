@@ -133,6 +133,18 @@ export type PhaseRecord = {
    */
   frozenMs?: number;
   /**
+   * How many times this phase actually called each attached MCP server, by id.
+   *
+   * The only honest answer to "was attaching that worth it". Every attached
+   * server costs context on every turn and adds names that can collide with
+   * another server's tools, so the advice everyone converges on is three to six
+   * — but nobody can act on that advice without knowing which of their six were
+   * ever touched. Absent means the phase attached none, or ran before this was
+   * recorded; zero for an id means it was attached and never used, which is the
+   * interesting number.
+   */
+  mcpCalls?: Record<string, number>;
+  /**
    * A session to hand to `--resume` when this phase next runs, left behind by a
    * freeze that was checkpointed. Cleared as soon as it is used: a session id
    * offered twice is the "Session ID … is already in use" refusal that killed
@@ -292,6 +304,19 @@ export type PhaseOptions = {
    * checkpoint reads as "inherit" — which is what it meant.
    */
   skillsOff?: boolean;
+  /** MCP servers to attach on top of the plan's and the run's, for this phase. */
+  mcpServers?: string[];
+  /**
+   * Drop the RUN's MCP servers for this phase — its own still apply, and so
+   * does the plan's own `**MCP:**` bullet, which is a versioned statement about
+   * what this phase needs rather than an operator's choice for one run.
+   *
+   * Exactly `skillsOff`'s escape hatch, for the same reason and with the same
+   * cost model: a server attached to every phase of a run is dead weight in the
+   * one phase that touches nothing it can see, and every attached server is paid
+   * for on every turn.
+   */
+  mcpOff?: boolean;
 };
 
 export type RunState = {
@@ -402,6 +427,14 @@ export type RunState = {
   phaseOptions?: Record<string, PhaseOptions>;
   /** Skills every phase of this run invokes, on top of the plan's own. */
   skills?: string[];
+  /**
+   * MCP servers every phase of this run attaches, on top of the plan's own.
+   *
+   * Registry ids, checked against the live registry when the run starts —
+   * they become a child process's configuration, so an id that no longer
+   * resolves parks the phase rather than silently running without it.
+   */
+  mcpServers?: string[];
   /**
    * How many phases of THIS run may be in flight at once.
    *
@@ -526,6 +559,7 @@ export type NewRunOptions = {
   onlyPhases?: number[];
   phaseOptions?: Record<string, PhaseOptions>;
   skills?: string[];
+  mcpServers?: string[];
   permissionProfile?: PermissionProfile;
   maxParallel?: number;
   gitMode?: 'default-branch' | 'new-branch';
@@ -585,6 +619,7 @@ export function newRun(opts: NewRunOptions): RunState {
     ...(opts.onlyPhases?.length ? { onlyPhases: [...opts.onlyPhases] } : {}),
     ...(opts.phaseOptions ? { phaseOptions: { ...opts.phaseOptions } } : {}),
     ...(opts.skills?.length ? { skills: [...opts.skills] } : {}),
+    ...(opts.mcpServers?.length ? { mcpServers: [...opts.mcpServers] } : {}),
     ...(opts.maxParallel && opts.maxParallel > 0 ? { maxParallel: opts.maxParallel } : {}),
     // **Absent still means `guarded` when reading**, and that does not change:
     // a run file written before profiles existed must not become trusted because

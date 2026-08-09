@@ -325,6 +325,78 @@ export interface AccountsState {
   allowAccounts: boolean;
 }
 
+/* ---------------- MCP servers ---------------- */
+
+/** As the CLI spells them in `.mcp.json`. `streamable-http` is normalised to `http`. */
+export type McpTransport = 'http' | 'sse' | 'ws' | 'stdio';
+
+/** What the CLI's own `system/init` reports for a server, plus our "never asked". */
+export type McpStatus = 'connected' | 'needs-auth' | 'pending' | 'failed' | 'unknown';
+
+/** One registered server. Carries no secret and no path — the facade sees to that. */
+export interface McpServerView {
+  id: string;
+  label: string;
+  transport: McpTransport;
+  url?: string;
+  command?: string;
+  enabled: boolean;
+  auth: {
+    kind: 'none' | 'oauth' | 'header' | 'env';
+    /** Which values it needs, and whether the console holds each. Never the values. */
+    secrets: { ref: string; held: boolean }[];
+  };
+  status: McpStatus;
+  /** When that status was taken, so the UI can age it honestly. */
+  checkedAt?: string;
+  issue?: string;
+  toolCount?: number;
+  /** Tools an unattended run could never approve (`requiresUserInteraction`). */
+  interactiveTools?: string[];
+  /** The advertised tools changed since we last looked — the rug-pull flag. */
+  toolsChanged?: { added: string[]; removed: string[]; seenAt: string };
+  source?: string;
+  lastUsed?: string;
+}
+
+export interface McpState {
+  servers: McpServerView[];
+  allowMcp: boolean;
+}
+
+/** One suggestion, from our curated list or from the official registry. */
+export interface McpCatalogEntry {
+  id: string;
+  label: string;
+  description: string;
+  transport: McpTransport;
+  url?: string;
+  command?: string;
+  args?: string[];
+  auth: 'none' | 'oauth' | 'header' | 'env';
+  secretRefs?: { kind: 'header' | 'env'; name: string; template?: string }[];
+  authNote?: string;
+  category: string;
+  registryName?: string;
+  source: 'curated' | 'registry';
+  homepage?: string;
+}
+
+export interface McpCatalogResult {
+  entries: McpCatalogEntry[];
+  /** Set when the official registry could not be reached — curated only. */
+  registryError?: string;
+}
+
+/** The multi-modal outcome of starting `claude mcp login` — as accounts do it. */
+export interface McpLoginStart {
+  id: string;
+  command: string;
+  mode: 'embedded' | 'external' | 'command';
+  terminal?: { sessionId: string; token: string; expiresAt: number };
+  detail?: string;
+}
+
 /** Where a one-click desktop launcher would land, and whether this platform can. */
 export interface LauncherPlanView {
   platform: string;
@@ -365,6 +437,11 @@ export interface ConsoleState {
   allowAgent?: boolean;
   /** `--allow-accounts`: registering Claude accounts. The meters are always on. */
   allowAccounts?: boolean;
+  /**
+   * Whether MCP servers may be REGISTERED here. Reading the registry, the
+   * catalog and the connection statuses never needs it.
+   */
+  allowMcp?: boolean;
   autopilot?: boolean;
   /** True once `server/` on disk is newer than the process serving this page. */
   serverStale?: boolean;
@@ -550,6 +627,8 @@ export interface PlanSummaryFull {
   targetModel?: string;
   branch?: string;
   skills: string[];
+  /** `**MCP servers (every session):**` — attached to every phase of this plan. */
+  mcpServers: string[];
   qaMode: string;
   qaFailures: number[];
   locks: PhaseLock[];
@@ -618,6 +697,8 @@ export interface PhaseView {
   steps?: string;
   exitCriteria?: string;
   verification?: string;
+  /** `**MCP:**` — registry ids this phase needs, on top of the plan-wide line. */
+  mcpServers?: string[];
   handoffMustRecord?: string;
   bullets: { label: string; body: string }[];
   row?: PhaseRow;
@@ -676,6 +757,8 @@ export interface SessionBudgetView {
   budget?: string;
   branch?: string;
   skills: string[];
+  /** `**MCP servers (every session):**` — attached to every phase of this plan. */
+  mcpServers: string[];
   qaGate?: 'on' | 'off';
 }
 
@@ -829,6 +912,12 @@ export interface PhaseRecord {
   turns?: number;
   durationMs?: number;
   frozenMs?: number;
+  /**
+   * How many times this phase called each attached MCP server, by id. Zero for
+   * an id means it was attached and never touched — the interesting number,
+   * since every attached server is paid for on every turn.
+   */
+  mcpCalls?: Record<string, number>;
   /** Left by a checkpointed freeze; makes Continue a `--resume` rather than a restart. */
   resumeSessionId?: string;
   model?: string;
@@ -855,6 +944,14 @@ export interface PhaseOptions {
   skills?: string[];
   /** Drop the RUN's skills for this phase; its own `skills` still apply. */
   skillsOff?: boolean;
+  /** MCP servers this phase attaches, on top of the plan's and the run's. */
+  mcpServers?: string[];
+  /**
+   * Drop the RUN's MCP servers for this phase. The PLAN's own `**MCP:**` bullet
+   * still applies — that is a versioned statement about what the phase needs,
+   * not somebody's preference for one run.
+   */
+  mcpOff?: boolean;
 }
 
 /** One live `claude -p` process: which phase it is on, and the session it holds. */
@@ -911,6 +1008,8 @@ export interface RunState {
   onlyPhases?: number[];
   phaseOptions?: Record<string, PhaseOptions>;
   skills?: string[];
+  /** MCP servers every phase of this run attaches, on top of the plan's own. */
+  mcpServers?: string[];
   permissionProfile?: PermissionProfile;
   /** The Claude account this run spawns as. Absent = the machine login. */
   accountId?: string;
@@ -1085,6 +1184,8 @@ export interface RunSettings {
   runBudgetUsd?: number | null;
   phaseOptions?: Record<string, PhaseOptions>;
   skills?: string[];
+  /** MCP servers every phase of this run attaches, on top of the plan's own. */
+  mcpServers?: string[];
   permissionProfile?: PermissionProfile;
   onlyPhases?: number[];
   resumeRunId?: string;
@@ -1631,6 +1732,24 @@ export const api = {
     ),
   /** "I signed in over there — look again." Re-reads one account's identity. */
   accountRefresh: (accountId?: string) => post<{ account: AccountView }>('/api/accounts/refresh', { accountId }),
+
+  /* ---- MCP servers ---- */
+  mcp: () => request<McpState>('/api/mcp'),
+  /** Ungated: browsing what exists is how somebody decides to turn the flag on. */
+  mcpCatalog: (query: string, registry = true) =>
+    request<McpCatalogResult>(`/api/mcp/catalog?q=${q(query)}${registry ? '' : '&registry=0'}`),
+  mcpAdd: (body: Record<string, unknown>) => post<{ server: McpServerView }>('/api/mcp', body),
+  mcpDelete: (id: string) => request<{ removed: boolean }>(`/api/mcp/${q(id)}`, { method: 'DELETE' }),
+  mcpPatch: (id: string, body: Record<string, unknown>) => request<{ server: McpServerView }>(
+    `/api/mcp/${q(id)}`,
+    { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) },
+  ),
+  /** Starts `claude mcp login <id> --no-browser` where a person can answer it. */
+  mcpLogin: (id: string) => post<McpLoginStart>(`/api/mcp/${q(id)}/login`, {}),
+  /** Re-probe every enabled server. Not behind the flag — checking changes nothing. */
+  mcpRefresh: () => post<{ servers: McpServerView[] }>('/api/mcp/refresh', {}),
+  /** "I have seen that its tools changed." Clears the rug-pull flag. */
+  mcpAcknowledge: (id: string) => post<{ acknowledged: boolean }>(`/api/mcp/${q(id)}/acknowledge`, {}),
 
   /* ---- signing in, and restarting the console itself ---- */
   auth: (force?: boolean) => request<AuthStatus>(`/api/auth${force ? '?force=1' : ''}`),

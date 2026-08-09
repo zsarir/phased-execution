@@ -131,13 +131,16 @@ rather than refusing.
 
 - **Engine parity.** `viewer/test/engine-parity.test.ts` re-derives every plan's board from the JS
   parser and asserts it matches `phase-graph.sh`. Run it after touching *either* parser.
-- **F5 — one sizing source.** `scripts/sizing.env` holds every size weight and per-model budget.
+- **F5 — one sizing source.** `scripts/sizing.env` holds every size weight and per-model budget, and
+  `scripts/mcp.env` the per-attached-server surcharge.
   `phase-graph.sh` sources it, `references/sizing.md` documents those exact numbers, and
   `viewer/server/analysis/graph.ts` reads the same file. Change a number only there.
 - **F1/F2/F3 — structural lint** (malformed phase cell, undefined dependency, cycle) lives in
   `phase-graph.sh --lint`; `validate.sh` delegates to it and adds handoff body/consistency checks.
   **F14** rides the same arm as a WARNING (stderr, exit untouched): an open, not-done phase whose
   §Verification holds nothing runnable — the thing the autopilot would otherwise park on at boarding.
+  **F15** rides it too, same tier and same reasoning: a plan or phase naming an MCP server this
+  machine has not registered.
 - **bash 3.2.** The scripts' target runtime is macOS system bash. `tests/helpers/test_helper.bash`
   forces `/bin/bash` for every script under test — no associative arrays, no `${var^^}`, no `mapfile`.
 - **Never implicitly build the client.** `client/dist` is gitignored; the console warns when the build
@@ -161,13 +164,37 @@ rather than refusing.
   included), the per-run push carve-out **never resurrects** a struck wall, and profiles still never
   move deny. `approvals.test.ts` pins all three.
 
+### MCP servers
+
+`server/mcp/` is per-instance, like `accounts/` and for the same reason. `store.ts` holds no secret
+(`credentials.ts` is the only file that does — keychain, else 0600); `health.ts` is the probe, and
+the probe is a **one-turn `claude -p`** whose `system/init` reports each server's real status before
+any model call, because that is the only place `needs-auth` is knowable; `catalog.ts` degrades to a
+shipped curated list when the official registry is unreachable; `config.ts` writes the per-run
+`--mcp-config`, 0600, `chmod` after the write.
+
+Three rules the code is built around. **`--mcp-config` is always paired with
+`--strict-mcp-config`** — alone it would UNION the machine's own servers into an unattended run, and
+determinism here is a safety property. **The preflight parks before the spawn, never after**: an
+unattended session cannot sign a server in (no `/mcp` panel in `-p`; the CLI tells the *model* the
+tools are missing), so a wall found at boarding costs a probe and a wall found later costs an hour.
+And **a probe that could not RUN never parks** — "I could not check" and "they are down" are
+different facts, and turning a flaky subprocess into a stopped plan is the worse failure.
+
+A phase's servers are the union of what the PLAN says (`--mcp` from the engine), what the run
+attaches, and what the phase attaches; `mcpOff` drops only the run's, because the plan's statement is
+versioned and describes the work. F15 warns at plan time when a plan names a server the registry
+lacks — the engine is TOLD the registry through `PE_MCP_SERVERS` rather than reading JSON in bash 3.2.
+
 ### Flags gate capability, one act each
 
 `--allow-writes` (scaffold plans/handoffs, record QA, take locks — never commits or pushes, `--git` is
 never passed), `--allow-run` (spawn unattended `claude -p` sessions that edit a repo for hours),
 `--allow-terminal` (a real shell), `--allow-agent` (interactive sessions and the plan wizard),
 `--allow-accounts` (register Claude accounts for this instance, pick one per run, switch mid-run —
-*reading* the usage meters needs no flag). All five default off. Shut down is deliberately *not*
+*reading* the usage meters needs no flag), `--allow-mcp` (register MCP servers, hold their
+credentials, attach them to plans and phases — *reading* the registry, the statuses and the catalog
+needs no flag). All six default off. Shut down is deliberately *not*
 behind a flag.
 
 ## Packaging, versions and releases

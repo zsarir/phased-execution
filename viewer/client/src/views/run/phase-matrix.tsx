@@ -13,7 +13,8 @@ import { useState } from 'react';
 import { Chip, TBody, TD, TH, THead, TR, Table, TableWrap } from '@/components/ui';
 import { EFFORTS, MODELS, effortAlias, modelAlias } from './defaults';
 import { SkillPicker } from './skill-picker';
-import type { PhaseOptions, PhaseView, SkillInfo } from '@/lib/api';
+import { McpPicker } from './mcp-picker';
+import type { McpServerView, PhaseOptions, PhaseView, SkillInfo } from '@/lib/api';
 
 export function PhaseMatrix({
   planPhases,
@@ -22,6 +23,8 @@ export function PhaseMatrix({
   runEffort,
   skills,
   runSkills = [],
+  servers = [],
+  runMcp = [],
   disabled,
   onChange,
 }: {
@@ -32,10 +35,17 @@ export function PhaseMatrix({
   skills: SkillInfo[];
   /** What the run gives every phase — what the Skip box turns off for one. */
   runSkills?: string[];
+  /** The registry, so a phase can attach one the run did not. */
+  servers?: McpServerView[];
+  /** What the RUN attaches — what `skip run's` would drop for this phase. */
+  runMcp?: string[];
   disabled?: boolean;
   onChange: (next: Record<string, PhaseOptions>) => void;
 }) {
   const [skillsFor, setSkillsFor] = useState<number | null>(null);
+  const [mcpFor, setMcpFor] = useState<number | null>(null);
+  // Phase, Title, Model, Effort, plus whichever optional columns render.
+  const columns = 4 + (skills.length ? 1 : 0) + (servers.length ? 1 : 0);
   if (!planPhases.length) return null;
 
   const set = (
@@ -82,6 +92,7 @@ export function PhaseMatrix({
                 <TH scope="col">Model</TH>
                 <TH scope="col">Effort</TH>
                 {skills.length > 0 && <TH scope="col">Skills</TH>}
+                {servers.length > 0 && <TH scope="col">MCP</TH>}
               </TR>
             </THead>
             <TBody>
@@ -173,16 +184,59 @@ export function PhaseMatrix({
                         </div>
                       </TD>
                     )}
+                    {servers.length > 0 && (
+                      <TD>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            aria-expanded={mcpFor === p.phase}
+                            onClick={() => setMcpFor(mcpFor === p.phase ? null : p.phase)}
+                            className="rounded border border-rule px-1.5 py-0.5 text-2xs disabled:opacity-50"
+                          >
+                            {own.mcpServers?.length ? `${own.mcpServers.length} extra` : 'add'}
+                          </button>
+                          {runMcp.length > 0 && (
+                            <label
+                              className="flex items-center gap-1 text-2xs text-ink-faint"
+                              title={`Run phase ${p.phase} without the run's MCP servers `
+                                + `(${runMcp.join(', ')}). The plan's own still apply, and so do `
+                                + 'extras chosen here.'}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={Boolean(own.mcpOff)}
+                                disabled={disabled}
+                                onChange={(e) => set(p.phase, 'mcpOff', e.target.checked)}
+                              />
+                              skip run&rsquo;s
+                            </label>
+                          )}
+                        </div>
+                      </TD>
+                    )}
                   </TR>,
                   skillsFor === p.phase ? (
                     <TR key={`${p.phase}-skills`}>
-                      <TD colSpan={skills.length ? 5 : 4}>
+                      <TD colSpan={columns}>
                         <SkillPicker
                           label={`Extra skills for phase ${p.phase} only`}
                           skills={skills}
                           chosen={own.skills ?? []}
                           disabled={disabled}
                           onChange={(next) => set(p.phase, 'skills', next)}
+                        />
+                      </TD>
+                    </TR>
+                  ) : null,
+                  mcpFor === p.phase ? (
+                    <TR key={`${p.phase}-mcp`}>
+                      <TD colSpan={columns}>
+                        <McpPicker
+                          label={`Extra MCP servers for phase ${p.phase} only`}
+                          servers={servers}
+                          chosen={own.mcpServers ?? []}
+                          onChange={(next) => set(p.phase, 'mcpServers', next)}
                         />
                       </TD>
                     </TR>

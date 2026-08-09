@@ -8,7 +8,7 @@
 # double-clicked window cannot be that something — it IS the server's parent.
 # See SUPERVISED below for the older "this window is the server" behaviour.
 #
-# Seven knobs, edit below. The five switches are five separate decisions on
+# Eight knobs, edit below. The six switches are six separate decisions on
 # purpose — each opens a different door, and a wider one is never implied by a
 # narrower one:
 #   ROOT   the repository to read (any directory with docs/plans; you can also
@@ -40,6 +40,12 @@
 #          a run that hits its usage window switch to the account with headroom.
 #          Holding credentials is its own decision, so it is its own switch.
 #          The usage meters in the chrome work without it.
+#   MCP    --allow-mcp turns on MCP server REGISTRATION for this instance (the
+#          MCP page): add servers, hold their credentials, and attach them to
+#          plans, runs and single phases. A registered server is one your
+#          sessions may connect to and whose tool descriptions enter their
+#          prompts, so it is its own switch. READING the registry, the
+#          connection statuses and the catalog needs no flag.
 #
 #   SUPERVISED
 #          yes  install/keep a launchd agent (deploy/agent.sh) and open it. The
@@ -65,6 +71,7 @@ RUNS="--allow-run"
 TERM_FLAG="--allow-terminal"
 AGENT="--allow-agent"
 ACCOUNTS="--allow-accounts"
+MCP="--allow-mcp"
 # Remote access (the Tailscale Serve proxy): space-separated proxy hostnames,
 # and the tailnet logins allowed through them. Both or neither — the console
 # refuses --remote without --remote-user. Managed here since rev 7; empty
@@ -105,7 +112,10 @@ SUPERVISED="yes"
 #    the launchd install) now carries the full option set. A rev-6 copy still
 #    carries such flags forward from an existing plist ("keeping …"), but
 #    cannot set or clear them from its own knobs.
-LAUNCHER_REV=7
+# 8: the MCP knob (--allow-mcp — register MCP servers, hold their credentials,
+#    attach them to plans and phases). A rev-7 copy neither passes the flag nor
+#    notices when the running console lacks it.
+LAUNCHER_REV=8
 
 set -uo pipefail
 
@@ -334,6 +344,7 @@ banner() {
   echo "  terminal ${TERM_FLAG:-off} ${TERM_FLAG:+— the Terminal page opens a real shell as you}"
   echo "  agent    ${AGENT:-off} ${AGENT:+— the Agent page runs interactive claude sessions}"
   echo "  accounts ${ACCOUNTS:-off} ${ACCOUNTS:+— register several Claude accounts; runs may switch at a usage limit}"
+  echo "  mcp      ${MCP:-off} ${MCP:+— register MCP servers and attach them to plans and phases}"
   [ -n "$REMOTE" ] && echo "  remote   $REMOTE — logins: ${REMOTE_USERS:-none (the console will refuse to start)}"
   [ -n "$MAX_SESSIONS" ] && echo "  sessions at most $MAX_SESSIONS at once"
   [ -n "$DEFAULT_SKILLS" ] && echo "  skills   $DEFAULT_SKILLS (offered to every run)"
@@ -381,6 +392,7 @@ if [ "$SUPERVISED" = yes ]; then
     plist_wants "$TERM_FLAG" "--allow-terminal"
     plist_wants "$AGENT"     "--allow-agent"
     plist_wants "$ACCOUNTS"  "--allow-accounts"
+    plist_wants "$MCP"       "--allow-mcp"
     # The managed extras, grep-honest like the switches. Each composed value
     # must be in the plist; a knob gone empty must notice a leftover flag. The
     # check cannot say WHICH --remote drifted — good enough to reinstall, which
@@ -458,7 +470,7 @@ if [ "$SUPERVISED" = yes ]; then
     echo "This builds the client first, so it takes a minute the first time."
     echo
     if ! bash "$VIEWER/deploy/agent.sh" install \
-           --root "$ROOT" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT $ACCOUNTS \
+           --root "$ROOT" --port "$PORT" $WRITES $RUNS $TERM_FLAG $AGENT $ACCOUNTS $MCP \
            ${EXTRA[@]+"${EXTRA[@]}"} \
            ${carried[@]+"${carried[@]}"}; then
       echo

@@ -65,7 +65,7 @@ const DETAIL: PlanDetail = {
     percent: 33, remainingWeight: 130_000, remainingSessions: 1, criticalPath: [2, 3],
     criticalWeight: 130_000, minimumSessions: 1, bottleneck: { phase: 2, blocks: 1 },
     nextBest: { phase: 2, unblocks: 1 }, budget: 200_000, targetModel: 'claude-opus-5',
-    branch: 'main', skills: [], qaMode: 'off', qaFailures: [], locks: [], repos: ['skill'],
+    branch: 'main', skills: [], mcpServers: [], qaMode: 'off', qaFailures: [], locks: [], repos: ['skill'],
     handoffCount: 1, lastCompleted: '2026-08-02', spanDays: 1, medianGapDays: 1, issues: [],
     issueCounts: { error: 0, warning: 0, info: 0 }, hasHandoffs: true,
   },
@@ -73,7 +73,7 @@ const DETAIL: PlanDetail = {
     slug: 'demo', title: 'demo plan',
     context: 'Why this exists.', architecture: 'How it hangs together.',
     endToEnd: '1. Everything green.',
-    sessionBudget: { raw: '**Target model:** `claude-opus-5`', targetModel: 'claude-opus-5', branch: 'main', skills: [] },
+    sessionBudget: { raw: '**Target model:** `claude-opus-5`', targetModel: 'claude-opus-5', branch: 'main', skills: [], mcpServers: [] },
     graph: [
       { phase: 1, title: 'Foundations', dependsOn: [], parallelSafe: '—', repos: 'skill', exitCriteria: 'it builds' },
       { phase: 2, title: 'Surface', dependsOn: [1], parallelSafe: '3', repos: 'skill', exitCriteria: 'it renders' },

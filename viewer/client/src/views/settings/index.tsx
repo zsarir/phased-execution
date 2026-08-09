@@ -21,6 +21,7 @@ import { applyUpdateNow } from '@/lib/pwa';
 import { Page } from '../_page';
 import { AutomationCard } from './automation';
 import { AccountsCard } from './accounts';
+import { McpCard } from './mcp';
 import { StartCommandCard } from './start-command';
 import { PolicyCard } from './policy';
 import { RestartButton } from './restart';
@@ -185,6 +186,8 @@ export default function SettingsView() {
         <AutomationCard />
 
         <AccountsCard />
+
+        <McpCard />
 
         <Card>
           <CardHeader><CardTitle>Appearance</CardTitle></CardHeader>

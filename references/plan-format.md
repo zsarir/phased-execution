@@ -75,6 +75,18 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
    line listing them, **backticked** (e.g. `` `design-system` ``). The engine reads that line and
    re-injects those skills into **every** phase's boot prompt (and the QA brief), so each cold-start session
    re-invokes them rather than forgetting them.
+   The same shape carries **MCP servers**: when the work needs one, add an
+   **`MCP servers (every session):`** line naming them **backticked** (e.g.
+   `` **MCP servers (every session):** `github`, `context7` ``). Those are *registry ids* from the
+   Phase Console's MCP page — what the phase needs, never how to reach it, because the how is
+   per-machine. The engine re-injects them into every boot prompt and the QA brief, the console
+   attaches them to the session with `--mcp-config`, and a phase whose servers cannot connect
+   **parks before it is paid for** rather than improvising around a missing tool for an hour. A
+   plan naming a server this machine has not registered is reported at plan time as an **F15**
+   warning (advisory — it never fails the lint).
+   **Keep the set small — three to six.** Every attached server puts its instructions and tool names
+   in the system prompt of *every* turn, and attaching one mid-phase busts the prompt cache
+   (`references/sizing.md`), which is why attachment happens at a phase boundary and nowhere else.
    **QA is off by default** — add a line with exactly `**QA gate:** on` ONLY when the user asked for QA on
    this work (then every phase-finish dispatches a fresh-context QA subagent); `**QA gate:** off` records
    an explicit waiver (rows written as `waived`, no subagents). Only that exact bolded form is
@@ -158,6 +170,11 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
      a model here does not discard an effort, or the reverse. Write the alias anywhere in the line
      (`**Model:** Opus — the hard reasoning` parses); anything unrecognised is ignored rather than
      guessed at.
+     Add `- **MCP:** \`server\`, \`server\`` when THIS phase needs servers the rest of the plan does
+     not — a browser-driving phase wanting `playwright`, a triage phase wanting `sentry`. Backticked
+     registry ids, same as the plan-wide line, and **unioned** with it: a phase gets the plan's
+     servers plus its own. An operator can add more for one run from the console; they cannot untick
+     what the plan named, because that is a statement about the work rather than a preference.
    - **Read first:** exact artifacts to load (phase 1: just this plan; later: the prior handoff + this
      plan §Phase N + memory project_<slug>).
    - **Files to create/modify:** concrete paths.

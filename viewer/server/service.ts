@@ -48,7 +48,7 @@ import {
 } from './analysis/stats.ts';
 import type { PhaseDetail, PhaseRow } from './parse/plan.ts';
 import {
-  Runner, applySettings, VERIFICATION_PARK_NOTE,
+  Runner, applySettings, VERIFICATION_PARK_NOTE, MCP_PARK_NOTE,
   type AskResult, type RecoverMode, type RunSettingsPatch, type StartOptions,
 } from './runner/runner.ts';
 import { Scheduler, type LockView } from './runner/scheduler.ts';
@@ -63,6 +63,7 @@ import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/t
 import { extractCommands } from './runner/verify.ts';
 import { checkAuth, checkAuthFor, forgetAuth, openLoginTerminal, openCommandTerminal, shellQuote, type AuthStatus } from './runner/auth.ts';
 import { Accounts, DEFAULT_ACCOUNT_ID, profileConfigDir, type AccountView } from './accounts/index.ts';
+import { Mcp, type McpServerView } from './mcp/index.ts';
 import { portTranscript } from './accounts/transcripts.ts';
 import { FULL_FLAGS, installDesktopLauncher, launcherPlan } from './launcher.ts';
 import {
@@ -613,6 +614,9 @@ export class Service {
   /** This instance's Claude accounts — registry, meters, per-run environments. */
   readonly accounts: Accounts;
   private accountsEmitTimer: NodeJS.Timeout | null = null;
+  /** This instance's MCP servers — registry, credentials, health, per-run configs. */
+  readonly mcp: Mcp;
+  private mcpEmitTimer: NodeJS.Timeout | null = null;
 
   constructor(flags: Flags) {
     this.flags = flags;
@@ -713,6 +717,40 @@ export class Service {
             : `${name} is signed out. Sign in again from Settings → Claude accounts before running `
               + 'work as it.',
           tag: tagFor('limits', 'auth', view.id),
+        });
+      },
+    });
+    this.mcp = new Mcp({
+      onChange: () => this.emitMcp(),
+      // A server's advertised tools changed under a plan that already trusted
+      // it. This is the documented MCP supply-chain attack — a server that was
+      // safe when it was attached, republished with a tool that is not — and a
+      // client's only defence is to have written down what it used to be. Rides
+      // `limits`, whose catalogue copy already covers "something needs you".
+      onToolsChanged: (view, added, removed) => {
+        const parts = [
+          added.length ? `added ${added.join(', ')}` : '',
+          removed.length ? `removed ${removed.join(', ')}` : '',
+        ].filter(Boolean).join('; ');
+        this.announce('limits', {
+          title: `MCP server changed its tools — ${view.label}`,
+          body: `${view.label} now advertises different tools (${parts}). Review it before the next `
+            + 'run attaches it: a server whose tools change under you is how a trusted integration '
+            + 'becomes an untrusted one.',
+          tag: tagFor('limits', 'mcp-drift', view.id),
+        });
+      },
+      // A server went from working to needing attention. Transitions only —
+      // the poller has already tried; this is the point at which a person must.
+      onStatusChange: (view, status) => {
+        this.announce('limits', {
+          title: `MCP server unavailable — ${view.label}`,
+          body: status === 'needs-auth'
+            ? `${view.label} needs signing in. An unattended run cannot do it, so any phase that `
+              + 'names this server will park until someone does — Settings → MCP has the button.'
+            : `${view.label} will not connect${view.issue ? `: ${view.issue}` : ''}. Phases that name `
+              + 'it will park at boarding.',
+          tag: tagFor('limits', 'mcp', view.id, status),
         });
       },
     });
@@ -917,6 +955,23 @@ export class Service {
         const detail = this.store?.get(slug)?.plan?.phases[phase];
         if (!detail) return undefined;
         return { model: modelAlias(detail.model), effort: effortOf(detail.effort) };
+      },
+      // What the PLAN says this phase needs — its §Session budget line unioned
+      // with its own `**MCP:**` bullet. Read from the parsed plan rather than
+      // shelled per phase: the runner asks for this on every boarding, and
+      // `engine-parity.test.ts` is what keeps the two readings honest.
+      planMcp: (slug, phase) => {
+        const plan = this.store?.get(slug)?.plan;
+        if (!plan) return [];
+        return [...new Set([...(plan.sessionBudget.mcpServers ?? []), ...(plan.phases[phase]?.mcpServers ?? [])])];
+      },
+      // Absent when the flag is off: a console that may not REGISTER servers
+      // still resolves plans that name them, because reading is not the gated
+      // act — but with an empty registry every such name parks, which is the
+      // honest outcome and exactly what the preflight message explains.
+      mcp: {
+        preflight: (ids, cwd) => this.mcp.preflight(ids, { cwd }),
+        configFor: (runId, ids) => this.mcp.configFor(runId, ids),
       },
       // The plan's Branch prose and title, for the git-strategy block: the
       // prose is read only to WARN on a mismatch, the title names the PR.
@@ -1130,6 +1185,26 @@ export class Service {
           });
         }
       }).catch((error) => log.warn('accounts.login.complete-failed', { account: loginAccount, error }));
+      return;
+    }
+
+    // An MCP sign-in's exit is answered the same way: by re-probing rather than
+    // by trusting that the terminal closing meant success. Somebody who gave up
+    // halfway leaves the server exactly as it was, and the card keeps saying so.
+    const loginMcp = session.meta?.intent === 'login' ? session.meta.mcpServer : undefined;
+    if (loginMcp) {
+      void this.refreshMcp(true).then(async (servers) => {
+        const view = servers.find((server) => server.id === loginMcp);
+        if (view?.status === 'connected') {
+          this.announce('limits', {
+            title: 'MCP server signed in',
+            body: `${view.label} is connected and available to runs on this console.`,
+            tag: tagFor('limits', 'mcp-login', loginMcp),
+          });
+          // A run parked waiting for exactly this can now be re-armed.
+          await this.healMcpParks(loginMcp);
+        }
+      }).catch((error) => log.warn('mcp.login.complete-failed', { server: loginMcp, error }));
       return;
     }
 
@@ -2081,7 +2156,14 @@ export class Service {
    * ---------------------------------------------------------------- */
 
   private engineOpts() {
-    return { scriptsDir: this.flags.scriptsDir, root: this.root!.path };
+    return {
+      scriptsDir: this.flags.scriptsDir,
+      root: this.root!.path,
+      // What the engine needs for F15, which it cannot read for itself. Always
+      // passed — an empty registry is a real answer and must warn, while an
+      // ABSENT one (a bare skill install, with no console) turns the check off.
+      mcpServers: this.mcp.enabledIds(),
+    };
   }
 
   private async cached<T>(
@@ -2349,6 +2431,7 @@ export class Service {
         steps: detail?.steps,
         exitCriteria: detail?.exitCriteria,
         verification: detail?.verification,
+        mcpServers: detail?.mcpServers,
         handoffMustRecord: detail?.handoffMustRecord,
         bullets: detail?.bullets ?? [],
         row,
@@ -2643,6 +2726,10 @@ export class Service {
       // behind it — watching your own quota is display — this only decides
       // whether the Add/Sign-in/Remove verbs exist.
       allowAccounts: this.flags.allowAccounts,
+      // The MCP-registration gate. The registry LIST, the catalog and the
+      // connection statuses are not behind it — seeing what your own sessions
+      // connect to is display — this only decides whether Add/Remove/Sign-in exist.
+      allowMcp: this.flags.allowMcp,
       // Every live run. The old singular `run` — "the FIRST live run of any
       // plan" — was dropped once the pool made it a lie: with two plans
       // driving, any consumer of it read plan B's run while looking at plan A.
@@ -4463,6 +4550,193 @@ export class Service {
    * The accounts stream, debounced: a poller sweep touches every account in a
    * burst, and one event carrying the whole list is what the header wants.
    */
+  /* ---------------- MCP servers ---------------- */
+
+  /** The registry, already redacted by the facade. Never gated — this is display. */
+  async listMcp(): Promise<McpServerView[]> {
+    return this.mcp.list();
+  }
+
+  /**
+   * Registering a server is a credential-holding, supply-chain-widening act, so
+   * it is behind its own flag — and refused HERE as well as at the route, because
+   * the route guard is not the only wall (see `assertAccountsAllowed`).
+   */
+  assertMcpAllowed(): void {
+    if (!this.flags.allowMcp) {
+      throw new Error('MCP registration is disabled. Restart with --allow-mcp to enable it.');
+    }
+  }
+
+  /**
+   * Re-probe, then tell every browser. A registry change also invalidates the
+   * engine cache: F15's verdict is a function of what is registered, so a plan
+   * that linted clean a moment ago may not now.
+   */
+  async refreshMcp(force = false): Promise<McpServerView[]> {
+    await this.mcp.refresh({ force, ...(this.root ? { cwd: this.root.path } : {}) });
+    invalidate();
+    return this.mcp.list();
+  }
+
+  /**
+   * Register a server from a browser payload.
+   *
+   * Validation lives in the facade (`Mcp.add`) rather than here or in the
+   * route: it is the layer that knows the registry, and a URL that carries its
+   * own credential must be refused whoever asks. This is the shape-narrowing
+   * step — turning `unknown` from the wire into the facade's argument.
+   */
+  async addMcpServer(body: Record<string, unknown>): Promise<McpServerView> {
+    this.assertMcpAllowed();
+    const strings = (value: unknown): string[] | undefined =>
+      Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : undefined;
+    const record = (value: unknown): Record<string, string> | undefined => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+      const out: Record<string, string> = {};
+      for (const [key, item] of Object.entries(value)) if (typeof item === 'string') out[key] = item;
+      return out;
+    };
+    const server = await this.mcp.add({
+      ...(typeof body.id === 'string' ? { id: body.id } : {}),
+      label: typeof body.label === 'string' ? body.label : '',
+      transport: typeof body.transport === 'string' ? body.transport : '',
+      ...(typeof body.url === 'string' ? { url: body.url } : {}),
+      ...(typeof body.command === 'string' ? { command: body.command } : {}),
+      ...(strings(body.args) ? { args: strings(body.args)! } : {}),
+      ...(record(body.env) ? { env: record(body.env)! } : {}),
+      ...(record(body.headers) ? { headers: record(body.headers)! } : {}),
+      ...(Array.isArray(body.secretRefs) ? { secretRefs: body.secretRefs as never } : {}),
+      ...(record(body.secrets) ? { secrets: record(body.secrets)! } : {}),
+      ...(body.alwaysLoad === true ? { alwaysLoad: true } : {}),
+      ...(typeof body.timeoutMs === 'number' ? { timeoutMs: body.timeoutMs } : {}),
+      source: body.source === 'catalog' ? 'catalog' : 'manual',
+    });
+    // A new server can only be reachable or not; find out rather than showing
+    // `unknown` until something else happens to probe.
+    void this.refreshMcp(true).catch((error) => log.warn('mcp.refresh-failed', { error }));
+    return server;
+  }
+
+  /** Rename, enable/disable, or replace a secret. One verb per call. */
+  async patchMcpServer(id: string, body: Record<string, unknown>): Promise<McpServerView | undefined> {
+    this.assertMcpAllowed();
+    if (typeof body.enabled === 'boolean') {
+      if (!this.mcp.setEnabled(id, body.enabled)) return undefined;
+    }
+    if (typeof body.secret === 'string' && body.secretRef && typeof body.secretRef === 'object') {
+      await this.mcp.setSecret(id, body.secretRef as never, body.secret);
+    }
+    if (typeof body.label === 'string') return this.mcp.rename(id, body.label);
+    return (await this.mcp.list()).find((server) => server.id === id);
+  }
+
+  async removeMcpServer(id: string): Promise<boolean> {
+    this.assertMcpAllowed();
+    return this.mcp.remove(id);
+  }
+
+  /**
+   * Start `claude mcp login <name>` where a person can answer it.
+   *
+   * The same multi-modal shape as an account login, and for the same reason:
+   * OAuth needs a browser and a paste-back, which is a terminal's job. The
+   * console never sees the resulting token — `claude mcp login` writes it into
+   * the CLI's own store, which is the one credential store we never touch.
+   */
+  async beginMcpLogin(id: string): Promise<{
+    id: string;
+    command: string;
+    mode: 'embedded' | 'external' | 'command';
+    terminal?: { sessionId: string; token: string; expiresAt: number };
+    detail?: string;
+  }> {
+    this.assertMcpAllowed();
+    const meta = this.mcp.meta(id);
+    if (!meta) throw new Error(`no MCP server called ${id}`);
+    if (meta.transport === 'stdio') {
+      throw new Error('a stdio server does not sign in — it needs its environment set, not an OAuth flow.');
+    }
+
+    // `--no-browser` because the console is routinely driven from a phone or
+    // over ssh: it prints the authorization URL and takes the pasted callback,
+    // which works in a terminal pane and degrades to a copyable command when
+    // there is none. A local browser flow would simply hang on those machines.
+    const command = `claude mcp login ${shellQuote(id)} --no-browser`;
+    const minted = await this.terminals.mint(undefined, undefined, {
+      kind: 'claude',
+      file: 'claude',
+      args: ['mcp', 'login', id, '--no-browser'],
+      label: `Sign in — ${meta.label ?? id}`,
+      meta: { intent: 'login', mcpServer: id },
+    });
+    if (minted.ok) {
+      return {
+        id,
+        command,
+        mode: 'embedded',
+        terminal: { sessionId: minted.sessionId, token: minted.token, expiresAt: minted.expiresAt },
+      };
+    }
+
+    const external = openCommandTerminal(command);
+    const detail = external.detail ?? minted.error;
+    return { id, command, mode: external.opened ? 'external' : 'command', ...(detail ? { detail } : {}) };
+  }
+
+  /**
+   * A server came back — re-arm every phase that parked waiting for it.
+   *
+   * This is the whole point of parking BEFORE the spawn rather than failing
+   * after it. The park cost nothing but a probe, it named the server, and the
+   * moment somebody signs that server in the run can simply carry on. Nobody
+   * has to remember which of six plans was blocked on the thing they just fixed.
+   *
+   * Deliberately narrow: only records parked by the MCP preflight, only when
+   * the note names THIS server, and only for runs that are still live. A phase
+   * parked for any other reason is left exactly where it is.
+   */
+  private async healMcpParks(serverId: string): Promise<void> {
+    for (const runner of this.runners.values()) {
+      const state = runner.current();
+      if (!state) continue;
+      for (const record of Object.values(state.phases ?? {})) {
+        if (record.status !== 'parked') continue;
+        const note = record.note ?? '';
+        if (!MCP_PARK_NOTE.test(note) || !note.includes(serverId)) continue;
+        log.info('mcp.park-healed', { slug: state.slug, phase: record.phase, server: serverId });
+        // `parked` is the category that announced the park; its unparking is
+        // the same conversation, so it goes to the same subscribers.
+        this.announce('parked', {
+          title: `Phase ${record.phase} unblocked — ${state.slug}`,
+          body: `${serverId} is connected again, so the phase that parked waiting for it has been `
+            + 'requeued.',
+          tag: tagFor('run', 'mcp-healed', state.slug, String(record.phase)),
+        });
+        try {
+          await this.retryPhase(state.slug, record.phase);
+        } catch (error) {
+          // A claimed phase refuses; that is correct and not our business to
+          // force. The park stays, and the operator's own Retry still works.
+          log.warn('mcp.park-heal-refused', { slug: state.slug, phase: record.phase, error });
+        }
+      }
+    }
+  }
+
+  private emitMcp(): void {
+    // A registry change moves F15, which the lint panel reads from the engine.
+    invalidate();
+    if (this.mcpEmitTimer) return;
+    this.mcpEmitTimer = setTimeout(() => {
+      this.mcpEmitTimer = null;
+      void this.mcp.list()
+        .then((servers) => this.emit('mcp', { servers }))
+        .catch((error) => log.warn('mcp.emit-failed', { error }));
+    }, 150);
+    this.mcpEmitTimer.unref?.();
+  }
+
   private emitAccounts(): void {
     if (this.accountsEmitTimer) return;
     this.accountsEmitTimer = setTimeout(() => {

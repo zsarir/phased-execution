@@ -52,7 +52,7 @@ const plan = (over: Partial<PlanSummaryFull> = {}): PlanSummaryFull => ({
   criticalWeight: 40_000,
   minimumSessions: 1,
   budget: 200_000,
-  skills: [],
+  skills: [], mcpServers: [],
   qaMode: 'off',
   qaFailures: [],
   locks: [],

@@ -64,6 +64,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
   const slug = detail.summary.slug;
   const planPhases = detail.phases;
   const planSkills = detail.plan?.sessionBudget?.skills ?? [];
+  const planMcp = detail.plan?.sessionBudget?.mcpServers ?? [];
 
   const client = useQueryClient();
   const { data: state } = useConsoleState();
@@ -244,6 +245,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
         allowRun={allowRun}
         planPhases={planPhases}
         planSkills={planSkills}
+        planMcp={planMcp}
         skills={skills ?? []}
         defaultSkills={state?.defaultSkills ?? []}
         automation={automationPrefs(state)}

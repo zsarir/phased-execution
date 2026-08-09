@@ -6,6 +6,47 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [1.9.0] - 2026-08-09
+
+MCP servers become something a plan can ask for and a console can prove. A phase whose GitHub
+server was never signed in used to spend an hour discovering that — an unattended `claude -p` has
+no `/mcp` panel, so the CLI reports the missing tools to the *model*, which improvises around them
+and hands back work that used none of what was chosen for it. Now the plan names the servers, the
+console holds them, and the phase parks before it is paid for.
+
+### Added
+
+- **MCP servers in the plan format.** `**MCP servers (every session):**` in §Session budget and a
+  per-phase `- **MCP:**` bullet, unioned — a phase runs with the plan's servers plus its own.
+  Backticked *registry ids*: what the phase needs, never how to reach it. Read by both parsers
+  (`scripts/phase-graph.sh --mcp [N]` and `viewer/server/parse/plan.ts`), re-injected into every
+  boot prompt and the QA brief, and held in step by `engine-parity.test.ts`.
+- **A per-instance MCP registry** (`viewer/server/mcp/`), modelled on `accounts/`: `store.ts` holds
+  no secret, `credentials.ts` is the only file that touches one (keychain, else 0600), `catalog.ts`
+  suggests servers from a verified curated list plus the official registry, `config.ts` resolves a
+  set into the `--mcp-config` document, and `index.ts` is the facade whose every answer is already
+  redacted. Behind `--allow-mcp`; reading the registry, the statuses and the catalog is not gated.
+- **A preflight that parks before it spends.** `system/init` from a one-turn `claude -p` reports
+  each server's real status, so a run whose servers cannot connect stops at boarding with a message
+  naming the server — and requeues itself when the server is signed in.
+- **`--mcp-config` on the spawn**, always with `--strict-mcp-config`, so the resolved set is the
+  only set an unattended session gets rather than whatever the machine happens to hold.
+- **Rug-pull detection.** Every probe fingerprints the tools a server advertised; a change raises
+  an alert instead of being absorbed silently. Tools marked `requiresUserInteraction` are flagged
+  too — an unattended run can never approve one.
+- **Per-phase MCP call counts**, so "was attaching that worth it" has an answer. A server at zero
+  was paid for on every turn and never used.
+- **F15** — a plan naming a server this machine has not registered warns at plan time on stderr,
+  exit code untouched, in exactly F14's shape.
+- **An MCP page, a Settings card and a guide section**, plus attachment in the launch dialog, the
+  Autopilot controls and the phase matrix.
+
+### Changed
+
+- **A phase's weight includes its servers.** `scripts/mcp.env` (F5) holds the surcharge, read by
+  `phase-graph.sh` and documented in `references/sizing.md`, so session batching stays honest about
+  what an attached server costs on every turn.
+
 ## [1.8.0] - 2026-08-07
 
 A plan that stated its verification was read as having none. The bullet reader treated any

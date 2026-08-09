@@ -383,13 +383,14 @@ describe('the nav entry', () => {
 
   it('hides nothing else', () => {
     expect(visibleNav({ ...BASE_STATE, allowTerminal: false }).map((i) => i.id)).toEqual([
-      'dashboard', 'ready', 'plans', 'runs', 'notifications', 'stats', 'search', 'guide', 'settings',
+      'dashboard', 'ready', 'plans', 'runs', 'notifications', 'stats', 'search', 'mcp', 'guide',
+      'settings',
     ]);
     // With both capabilities on, the two gated entries appear in NAV order —
     // Agent, then Terminal — and everything else stays put.
     expect(visibleNav({ ...BASE_STATE, allowTerminal: true, allowAgent: true }).map((i) => i.id)).toEqual([
       'dashboard', 'ready', 'plans', 'runs', 'notifications', 'stats', 'search',
-      'agent', 'terminal', 'guide', 'settings',
+      'agent', 'terminal', 'mcp', 'guide', 'settings',
     ]);
   });
 });

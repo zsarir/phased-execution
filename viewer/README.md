@@ -434,6 +434,48 @@ account, so runs paying with a different one keep flowing. Everything is journal
 wall that is actually hit and every login that needs signing in again, and the 80/95% early warning
 is its own off-by-default category, *Usage climbing*.
 
+## MCP servers
+
+Sessions can call tools you attach: a browser, an issue tracker, a documentation server. The
+console's contribution is narrow — Claude Code connects to MCP servers perfectly well on its own.
+What it cannot do is tell you, before an unattended run spends an hour, that the server the plan
+chose was never signed in.
+
+A plan states what it needs (`**MCP servers (every session):**` in §Session budget, and a per-phase
+`- **MCP:**` bullet, unioned). Those are **registry ids** — what the phase needs, never how to reach
+it, because the how is per-machine. The registry lives under the instance's state dir, per instance
+like the accounts one and for the same reason: a server that belongs to one project is exactly the
+wrong thing to hand another.
+
+Before a phase boards, the console probes the exact set it would run with — a one-turn
+`claude -p --strict-mcp-config --mcp-config <set>` whose `system/init` reports each server's real
+status before any model call. A server that is unregistered, switched off or unreachable **parks the
+phase before anything is spent**, with a message naming it; signing it in requeues the parked phase
+on its own. That matters because an unattended session cannot fix it: there is no `/mcp` panel in
+`-p`, and the CLI reports the missing tools to the *model*, which then improvises around them.
+
+The spawn always pairs `--mcp-config` with `--strict-mcp-config`, so the resolved set is the whole
+set — without it the CLI would union in whatever `~/.claude.json` and the project's `.mcp.json`
+happen to hold, and the run would be talking to servers nobody chose for it.
+
+Three kinds of credential, and the console holds one. **OAuth** goes through
+`claude mcp login <id> --no-browser` in a terminal, and the token stays in the CLI's own store — a
+second writer is how two processes corrupt one login. **A header token** is ours: keychain on macOS,
+a 0600 file elsewhere, never in `servers.json`, never in the browser. **`${VAR}`** is not a secret
+but the name of one, passed through unexpanded so the CLI resolves it in the child's environment. A
+URL carrying its own credential is refused on add.
+
+Every probe fingerprints the tools a server advertised. A change raises an alert rather than being
+absorbed: a server whose tool *descriptions* change can change what your sessions are instructed to
+do, which is the documented supply-chain attack against MCP. Tools marked `requiresUserInteraction`
+are flagged too — an unattended run can never approve one.
+
+MCP calls never reach the console's PreToolUse hook, so `mcp__server` rules land in the settings
+file's `permissions.deny` and hold whether or not this console is running.
+
+`--allow-mcp` gates registration. Reading the registry, the connection statuses and the catalog does
+not — seeing what your own sessions connect to is display, not capability.
+
 ## From a phone
 
 The point of an unattended run is that you stop watching it, and the point of the approval queue is

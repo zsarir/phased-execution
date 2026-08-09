@@ -33,12 +33,13 @@ import {
 } from '@/components/ui';
 import { api, type AccountView, type PhaseOptions, type PhaseView, type RunSettings, type RunState, type SkillInfo }
   from '@/lib/api';
-import { keys, useAccounts } from '@/lib/queries';
+import { keys, useAccounts, useMcp } from '@/lib/queries';
 import { cn } from '@/lib/cn';
 import {
   AUTONOMY_LABEL, DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS, PROFILE_LABEL,
 } from './defaults';
 import { PhaseMatrix } from './phase-matrix';
+import { McpPicker } from './mcp-picker';
 import { SkillPicker } from './skill-picker';
 import type { Autonomy, PermissionProfile } from '@/lib/api';
 
@@ -100,6 +101,7 @@ export function Controls({
   allowRun,
   planPhases,
   planSkills,
+  planMcp = [],
   skills,
   defaultSkills = [],
   automation,
@@ -114,6 +116,8 @@ export function Controls({
   allowRun: boolean;
   planPhases: PhaseView[];
   planSkills: string[];
+  /** What the plan attaches to every session — shown, never unticked here. */
+  planMcp?: string[];
   skills: SkillInfo[];
   /** What a NEW run would start with. An existing run's own list wins. */
   defaultSkills?: string[];
@@ -139,6 +143,8 @@ export function Controls({
   const [runBudget, setRunBudget] = useState(String(run?.runBudgetUsd ?? ''));
   const [overrides, setOverrides] = useState<Record<string, PhaseOptions>>(run?.phaseOptions ?? {});
   const [runSkills, setRunSkills] = useState<string[]>(() => seedSkills(run, defaultSkills));
+  const { data: mcp } = useMcp();
+  const [runMcp, setRunMcp] = useState<string[]>(() => run?.mcpServers ?? []);
   const [profile, setProfile] = useState<PermissionProfile>(
     run?.permissionProfile ?? (run ? 'guarded' : DEFAULTS.permissionProfile),
   );
@@ -200,6 +206,7 @@ export function Controls({
     runBudgetUsd: Number(runBudget) || null,
     phaseOptions: overrides,
     skills: runSkills,
+    mcpServers: runMcp,
     // Sent explicitly rather than omitted: `routes.ts` reads an unrecognised or
     // missing profile as `guarded`, which is the right safety rule and the reason
     // the client must say what it means.
@@ -220,6 +227,7 @@ export function Controls({
     || (gitMode === 'new-branch' && openPr !== (run?.openPr ?? true))
     || JSON.stringify(overrides) !== JSON.stringify(run?.phaseOptions ?? {})
     || JSON.stringify(runSkills) !== JSON.stringify(run?.skills ?? [])
+    || JSON.stringify(runMcp) !== JSON.stringify(run?.mcpServers ?? [])
   );
 
   const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
@@ -363,8 +371,14 @@ export function Controls({
             defaultSkills={defaultSkills} disabled={disabled} onChange={setRunSkills} />
         )}
 
+        <McpPicker servers={mcp?.servers ?? []} chosen={runMcp} planServers={planMcp}
+          onChange={setRunMcp}
+          note="Checked before each phase boards. A server that cannot connect parks the phase
+                instead of letting it run without." />
+
         <PhaseMatrix planPhases={planPhases} overrides={overrides} runModel={model}
           runEffort={effort} skills={skills} runSkills={runSkills} disabled={disabled}
+          servers={mcp?.servers ?? []} runMcp={runMcp}
           onChange={setOverrides} />
 
         {changed && (

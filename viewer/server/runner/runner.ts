@@ -32,7 +32,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import { log } from '../log.ts';
 import { onShutdown, offShutdown } from '../lifecycle.ts';
 import { run as engineRun, readMemoryBlock, readGateStatus, readLint, readText, type Board } from '../engine.ts';
-import { skillDirective } from '../skills.ts';
+import { mcpDirective, skillDirective } from '../skills.ts';
 import { classify, fallbackChain, limitBucket, nextModel, type Disposition } from './errors.ts';
 import { markFor, spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
 import { extractCommands, hardenedPath, verifyPhase } from './verify.ts';
@@ -65,6 +65,16 @@ export type RunnerEvent = (event: string, data: Record<string, unknown>) => void
  * sentences: change one, change both.
  */
 export const VERIFICATION_PARK_NOTE = /§Verification|states no verification/;
+
+/**
+ * Recognises the park sentences `preflightMcp` writes, so the halt can name the
+ * right remedy and the recovery classifier can pick between "sign it in" and
+ * "it is not registered". Lives beside the code that writes those sentences:
+ * change one, change both.
+ */
+export const MCP_PARK_NOTE = /MCP server/;
+/** The half of those that a person fixes by signing in, rather than by editing. */
+export const MCP_AUTH_PARK_NOTE = /needs authentication/;
 
 export type RunnerDeps = {
   scriptsDir: string;
@@ -120,6 +130,33 @@ export type RunnerDeps = {
    * because the plan is the source for what a phase needs.
    */
   phaseDefaults?: (slug: string, phase: number) => { model?: string; effort?: string } | undefined;
+  /**
+   * The MCP servers the PLAN says a phase needs — its §Session budget line
+   * unioned with the phase's own `**MCP:**` bullet, as `phase-graph.sh --mcp N`
+   * computes it. Read from the engine for the same reason `phaseDefaults` is
+   * read from the store: the plan is the source for what a phase needs, and a
+   * console-side re-derivation would be a second parser to keep in step.
+   */
+  planMcp?: (slug: string, phase: number) => string[];
+  /**
+   * Resolve a phase's server set into a `--mcp-config` file, and check it can
+   * actually connect before the phase boards.
+   *
+   * Both are one dependency because they must agree: the set that is probed has
+   * to be the set that is passed, or the preflight is answering about something
+   * else. Absent in harnesses that are not exercising MCP, in which case a run
+   * attaches nothing and behaves exactly as it did before this existed.
+   */
+  mcp?: {
+    preflight: (ids: string[], cwd: string) => Promise<{
+      ok: boolean;
+      blocking: { id: string; status: string; error?: { message: string } }[];
+      unknown: string[];
+      disabled: string[];
+      probeError?: string;
+    }>;
+    configFor: (runId: string, ids: string[]) => Promise<string | null>;
+  };
   /**
    * The plan's own `**Branch:**` prose from §Session budget, verbatim. Read
    * only to WARN: when a run's console-set git strategy contradicts a branch
@@ -184,6 +221,8 @@ export type StartOptions = {
   phaseOptions?: Record<string, PhaseOptions>;
   /** Skills every phase invokes, on top of the plan's own. */
   skills?: string[];
+  /** MCP servers every phase attaches, on top of the plan's own. */
+  mcpServers?: string[];
   /** How much this run may do unasked. Defaults to `guarded`. */
   permissionProfile?: PermissionProfile;
   /** Lanes this run may fill. Never above the console's own cap. */
@@ -625,6 +664,7 @@ export class Runner {
       onlyPhases: options.onlyPhases,
       phaseOptions: options.phaseOptions,
       skills: options.skills,
+      mcpServers: options.mcpServers,
       permissionProfile: options.permissionProfile,
       gitMode: options.gitMode,
       openPr: options.openPr,
@@ -2422,6 +2462,21 @@ export class Runner {
       return true;
     }
 
+    /* ---- MCP preflight ----
+     * Same place and same reasoning as the verification preflight: before the
+     * prompt and before the spawn, because a phase whose GitHub server was
+     * never signed in will otherwise spend an hour discovering that, and the
+     * session cannot fix it — there is no `/mcp` panel in `-p`, and the CLI
+     * says so to the model rather than to anyone who could act. */
+    const mcpProblem = await this.preflightMcp(phase, this.optionsFor(phase));
+    if (mcpProblem) {
+      record.status = 'parked';
+      record.note = mcpProblem;
+      this.record('phase.mcp-preflight-parked', { reason: mcpProblem }, phase);
+      this.emit('phase', { phase, status: 'parked', note: mcpProblem });
+      return true;
+    }
+
     /* ---- prompt ---- */
     const engineText = readText(await this.engine(['--boot-prompt', String(phase)]));
     if (!engineText.trim()) {
@@ -2452,7 +2507,14 @@ export class Runner {
     // plan still speaks first, the operator's branch rule is stated before the
     // work begins, and the skill directive keeps the last word.
     const git = await this.gitStrategy(phase, board);
-    const prompt = engineText + (context ? `\n\n${context}\n` : '') + git + skillDirective(extraSkills);
+    // The MCP directive names only what the CONSOLE added: the engine's own text
+    // already names what the plan asked for, and repeating it would read as two
+    // authorities saying the same thing slightly differently.
+    const ownMcp = own?.mcpOff
+      ? [...(own.mcpServers ?? [])]
+      : [...(state.mcpServers ?? []), ...(own?.mcpServers ?? [])];
+    const prompt = engineText + (context ? `\n\n${context}\n` : '') + git
+      + skillDirective(extraSkills) + mcpDirective(ownMcp);
     if (context) this.record('phase.retry-context', { bytes: Buffer.byteLength(context) }, phase);
     if (extraSkills.length) this.record('phase.skills', { skills: [...new Set(extraSkills)] }, phase);
 
@@ -2676,8 +2738,27 @@ export class Runner {
       tools: chosen.tools,
       permissionMode: chosen.permissionMode,
       skills: chosen.skills,
+      mcpServers: chosen.mcpServers,
+      mcpOff: chosen.mcpOff,
       source,
     };
+  }
+
+  /**
+   * Every MCP server this phase runs with, deduped, first-seen order.
+   *
+   * Three contributors, and they compose rather than override: what the PLAN
+   * says the phase needs (its §Session budget line plus its own `**MCP:**`
+   * bullet, from the engine), what the operator chose for this RUN, and what
+   * they chose for this PHASE. `mcpOff` drops only the run's — the plan's
+   * statement is versioned and survives, because a phase that says it needs
+   * Playwright is describing the work, not somebody's preference for one run.
+   */
+  private mcpFor(phase: number, chosen: PhaseOptions): string[] {
+    const state = this.state!;
+    const fromPlan = this.deps.planMcp?.(state.slug, phase) ?? [];
+    const fromRun = chosen.mcpOff ? [] : (state.mcpServers ?? []);
+    return [...new Set([...fromPlan, ...fromRun, ...(chosen.mcpServers ?? [])])].filter(Boolean);
   }
 
   /**
@@ -2747,6 +2828,11 @@ export class Runner {
         // A mechanical phase can run with a small tool set and no MCP servers:
         // less blast radius, and a smaller system prompt to pay for every turn.
         tools: chosen.tools?.length ? chosen.tools : undefined,
+        // Resolved per attempt, not per run: a server signed in between attempts
+        // has to be usable by the retry, and the file is rewritten cheaply.
+        // Absent means "attach nothing", which leaves the machine's own MCP
+        // configuration in place — what every run did before this existed.
+        mcpConfig: (await this.armMcp(phase, chosen)) ?? undefined,
         permissionMode: chosen.permissionMode as never,
         // Read fresh each attempt, so a profile changed mid-run is in force for
         // the next phase rather than for the next run.
@@ -3165,6 +3251,98 @@ export class Runner {
    * A custom `verify` dep owns the question entirely: predicting the default
    * extractor against a substitute verifier would judge a different machine.
    */
+  /**
+   * Can this phase's MCP servers actually be reached, BEFORE a session is paid for?
+   *
+   * The same lesson as the verification preflight, from the other direction. An
+   * unattended `-p` run cannot fix a server that needs signing in: there is no
+   * `/mcp` panel, `claude mcp login` wants a browser, and what the CLI does
+   * instead is tell the MODEL that the tools are unavailable — so the session
+   * improvises around a missing server for an hour and hands back work that
+   * used none of what the plan chose it for.
+   *
+   * Three outcomes, three sentences, each naming what a person would do:
+   *
+   *  · an id nobody registered → the plan and the machine disagree; register it
+   *    or drop it from the plan (this is F15's advisory, arriving as a fact);
+   *  · a registered server switched off → the operator already said no, so say
+   *    that rather than reconnecting it behind their back;
+   *  · a server that will not connect → sign it in, or fix its credential.
+   *
+   * A probe that could not RUN never parks. "I could not check" and "they are
+   * down" are different facts, and turning a flaky subprocess into a stopped
+   * plan would be the worse of the two failures.
+   */
+  private async preflightMcp(phase: number, chosen: PhaseOptions): Promise<string | null> {
+    const state = this.state!;
+    const ids = this.mcpFor(phase, chosen);
+    if (!ids.length) return null;
+    if (!this.deps.mcp) {
+      // No registry wired in (a harness, or a console built before this): the
+      // phase runs on whatever MCP configuration the machine already has, which
+      // is exactly what every run did before this existed.
+      this.record('phase.mcp-unmanaged', { servers: ids }, phase);
+      return null;
+    }
+
+    const result = await this.deps.mcp.preflight(ids, state.root);
+
+    if (result.unknown.length) {
+      return `phase ${phase} names MCP server${result.unknown.length === 1 ? '' : 's'} this console has `
+        + `not registered: ${result.unknown.join(', ')}. Register ${result.unknown.length === 1 ? 'it' : 'them'} `
+        + 'in Phase Console → MCP, or drop the name from the plan, then Retry.';
+    }
+    if (result.disabled.length) {
+      return `phase ${phase} needs MCP server${result.disabled.length === 1 ? '' : 's'} that ${result.disabled.length === 1 ? 'is' : 'are'} `
+        + `switched off here: ${result.disabled.join(', ')}. Turn ${result.disabled.length === 1 ? 'it' : 'them'} back on `
+        + 'in Phase Console → MCP, or drop the name from the plan, then Retry.';
+    }
+    if (result.probeError) {
+      this.record('phase.mcp-preflight-skipped', { reason: result.probeError, servers: ids }, phase);
+      return null;
+    }
+    if (!result.ok) {
+      const named = result.blocking.map((row) => {
+        const why = row.status === 'needs-auth'
+          ? 'needs authentication'
+          : row.error?.message ?? 'will not connect';
+        return `${row.id} (${why})`;
+      });
+      return `phase ${phase} cannot start: MCP server${named.length === 1 ? '' : 's'} ${named.join(', ')}. `
+        + 'An unattended session cannot sign a server in — do it from Phase Console → MCP '
+        + '(or `claude mcp login <name>`), then Retry.';
+    }
+
+    this.record('phase.mcp', { servers: ids }, phase);
+    return null;
+  }
+
+  /**
+   * Write this phase's `--mcp-config`, or null when it attaches nothing.
+   *
+   * Per attempt rather than per run, unlike the settings file: a server the
+   * operator signed in between two attempts must be usable by the second, and
+   * the file costs a JSON write. It carries secrets, so it is 0600 and passed
+   * as a path — argv is world-readable in `ps`.
+   */
+  private async armMcp(phase: number, chosen: PhaseOptions): Promise<string | null> {
+    if (!this.deps.mcp) return null;
+    const state = this.state!;
+    const ids = this.mcpFor(phase, chosen);
+    if (!ids.length) return null;
+    try {
+      return await this.deps.mcp.configFor(state.id, ids);
+    } catch (error) {
+      // Never fatal. The preflight has already said the servers are reachable;
+      // failing to WRITE the file is our problem, and a phase that runs without
+      // its servers is worse only than one that runs with them — not worse than
+      // one that never runs at all.
+      log.error('runner.mcp-config', { error, servers: ids });
+      this.record('phase.mcp-config-failed', { error: (error as Error).message, servers: ids }, phase);
+      return null;
+    }
+  }
+
   private async preflightVerification(phase: number): Promise<string | null> {
     const state = this.state!;
     if (this.deps.verify) return null;
@@ -3655,6 +3833,20 @@ export class Runner {
   private onStream(phase: number, event: StreamEvent): void {
     if (event.kind === 'retry') this.record('phase.api-retry', { ...event }, phase);
 
+    // Which attached servers this phase actually reached for. Counted here
+    // because the stream is already being read and the name is already parsed;
+    // the alternative is asking the operator to guess, which is how a run ends
+    // up paying for six servers it used two of.
+    if (event.kind === 'tool' && event.name.startsWith('mcp__') && this.state) {
+      const rest = event.name.slice(5);
+      const split = rest.indexOf('__');
+      if (split > 0) {
+        const record = phaseRecord(this.state, phase);
+        const id = rest.slice(0, split);
+        record.mcpCalls = { ...record.mcpCalls, [id]: (record.mcpCalls?.[id] ?? 0) + 1 };
+      }
+    }
+
     // What the session says it is running on, which is not always what we
     // asked for: `--fallback-model` demotes in-place and tells nobody. A
     // journal that records the request rather than the reality is a journal
@@ -3849,6 +4041,13 @@ export type RunSettingsPatch = {
   onlyPhases?: number[] | null;
   phaseOptions?: Record<string, PhaseOptions> | null;
   skills?: string[] | null;
+  /**
+   * The run's MCP servers, changeable mid-run. Lands on the NEXT phase: the
+   * config file is written per attempt, and the child already running loaded
+   * its own at startup and cannot reload it — the same honesty the settings
+   * file is documented with.
+   */
+  mcpServers?: string[] | null;
   permissionProfile?: PermissionProfile;
   gitMode?: 'default-branch' | 'new-branch';
   openPr?: boolean;
@@ -3894,6 +4093,10 @@ export function applySettings(state: RunState, patch: RunSettingsPatch): RunStat
   if (patch.skills !== undefined) {
     if (patch.skills?.length) state.skills = [...patch.skills];
     else delete state.skills;
+  }
+  if (patch.mcpServers !== undefined) {
+    if (patch.mcpServers?.length) state.mcpServers = [...patch.mcpServers];
+    else delete state.mcpServers;
   }
   if (patch.permissionProfile) {
     if (patch.permissionProfile === 'guarded') delete state.permissionProfile;

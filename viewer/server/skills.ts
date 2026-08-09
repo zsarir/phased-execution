@@ -280,3 +280,29 @@ export function skillDirective(skills: string[]): string {
     + `(chosen for this run, in addition to any the plan names): ${named.map((s) => `/${s}`).join(', ')}\n`
     + `\n${KNOWLEDGE_GRAPH_DIRECTIVE}\n`;
 }
+
+/**
+ * The line appended to a boot prompt for MCP servers chosen in the console.
+ *
+ * Same shape and same reason as `skillDirective`: the engine's boot prompt
+ * already names what the PLAN says a phase needs, and this is the operator
+ * adding to it for one run.
+ *
+ * The session is told these are already connected, because by the time it reads
+ * this the preflight has proved they are — and told not to work around a
+ * missing one, because that is precisely the failure this whole path exists to
+ * prevent. In `-p` there is no `/mcp` panel: the CLI reports an unavailable
+ * server to the MODEL, and a model that treats it as a hint improvises for an
+ * hour and hands back work that used none of what was chosen for it.
+ */
+export function mcpDirective(servers: string[]): string {
+  const named = [...new Set(servers.filter(Boolean))];
+  if (!named.length) return '';
+  const list = named.map((name) => `\`${name}\``).join(', ');
+  return `\nThe following MCP server${named.length === 1 ? ' is' : 's are'} attached to this session `
+    + `and verified connected before it started: ${list}. `
+    + `Prefer ${named.length === 1 ? 'its' : 'their'} tools over improvising the same information by hand.\n`
+    + `If one turns out to be unavailable mid-phase, say so plainly in your handoff rather than working `
+    + 'around it silently — an unattended session cannot sign a server in, and a phase that quietly did '
+    + 'without is worse than one that stopped and said why.\n';
+}

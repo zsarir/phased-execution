@@ -45,7 +45,10 @@ working tree), `--allow-agent` (the **Agent** page — interactive `claude` sess
 terminal, plus a *New plan with AI* wizard that authors a plan from a brief),
 `--allow-accounts` (register several **Claude accounts** per instance — sign-ins or
 `claude setup-token` tokens — pick one per run, and let a run that hits its usage limit switch to
-the account with headroom; the usage meters themselves need no flag), or
+the account with headroom; the usage meters themselves need no flag),
+`--allow-mcp` (register **MCP servers** — a browser, an issue tracker, a docs server — hold their
+credentials, and attach them to a plan, a run or one phase; a phase whose servers cannot connect
+parks *before* it spends anything, and reading the registry and its statuses needs no flag), or
 `--allow-terminal` (a real shell); it never commits or pushes. One-time setup per machine:
 `cd viewer && npm ci && npm run build` — skipped entirely on an npm or Homebrew install, which ships
 the client prebuilt — see `viewer/README.md`.

@@ -31,7 +31,7 @@
 # Run from the repo root that owns docs/, or set DOCS_ROOT.
 set -euo pipefail
 
-slug="${1:?usage: phase-graph.sh <slug> [--lint|--qa-mode|--qa-result N|--qa-prompt N|--gate-status N|--gate-kind N|--memory-block|--plan-status|--closed|--ready|--ready-after N|--dependents N|--deps N|--gated N|--size N|--repos N|--boot-prompt N|--session-plan [model|budget]]}"
+slug="${1:?usage: phase-graph.sh <slug> [--lint|--qa-mode|--qa-result N|--qa-prompt N|--gate-status N|--gate-kind N|--memory-block|--plan-status|--closed|--ready|--ready-after N|--dependents N|--deps N|--gated N|--size N|--repos N|--mcp [N]|--boot-prompt N|--session-plan [model|budget]]}"
 mode="${2:-board}"
 arg="${3:-}"
 
@@ -48,6 +48,12 @@ SIZE_S=15000; SIZE_M=40000; SIZE_L=90000
 BUDGET_HAIKU=90000; BUDGET_BIG=1000000; BUDGET_DEFAULT=120000
 # shellcheck source=/dev/null
 [ -f "$SCRIPT_DIR/sizing.env" ] && . "$SCRIPT_DIR/sizing.env"
+
+# F5, same shape: what an attached MCP server costs a phase's working set.
+# Canonical values live in scripts/mcp.env (documented in references/sizing.md).
+MCP_SURCHARGE=1500; MCP_SURCHARGE_MAX=12000
+# shellcheck source=/dev/null
+[ -f "$SCRIPT_DIR/mcp.env" ] && . "$SCRIPT_DIR/mcp.env"
 
 # ---------------------------------------------------------------------------
 # Resolve DOCS_ROOT (superproject-aware: handles submodule cwd).
@@ -208,6 +214,20 @@ gate_check_directive() {  # gate_check_directive <phase>
     | grep -iE '^[[:space:]]*[-*].*gate-check' \
     | sed -E 's/.*[Gg]ate-check[^:]*:[[:space:]]*//; s/[*`]//g; s/^[[:space:]]*//; s/[[:space:]]*$//' \
     | head -1 || true
+}
+
+# The per-phase MCP directive: backticked server names on a "- **MCP:** `a`, `b`"
+# bullet inside the ### Phase N block. Block-scoped through phase_block for the
+# same reason Gate-check is (F12) — a grep window would read a neighbour's line.
+# Empty if none. The names are registry ids, not URLs: what a phase states is
+# WHICH server it needs, never how to reach it, because the how is per-machine
+# and belongs to the console's registry.
+mcp_directive() {  # mcp_directive <phase>
+  # `|| true` throughout: a no-match grep mid-pipe exits 1, which under
+  # `set -euo pipefail` would abort every caller (--boot-prompt included).
+  phase_block "$1" \
+    | grep -iE '^[[:space:]]*[-*][[:space:]]*\*{0,2}MCP\*{0,2}[[:space:]]*:' \
+    | head -1 | grep -oE '`[^`]+`' | tr -d '`' | paste -sd ',' - | sed 's/,/, /g' || true
 }
 
 # The gate-check vocabulary + its human/ai/auto category split. Canonical
@@ -576,6 +596,49 @@ verification_advisories() {
   return 0
 }
 
+# F15: a named MCP server this machine does not have — ADVISORY, never a gate.
+# Same tier and same reasoning as F14: the autopilot's preflight would park the
+# run on this at boarding, so the author should hear it while the plan is still
+# open in front of them. Exit codes never move, and done phases are not nagged.
+#
+# The registry is the CONSOLE's, so bash is told rather than asked: PE_MCP_SERVERS
+# carries the configured ids as a plain space/comma list. Unset means "no console
+# in this environment" and disables the check entirely — a bare skill install has
+# no registry to disagree with, and inventing a failure there would be a lie.
+# Set-but-empty is a real answer (a console with nothing registered) and does warn.
+mcp_advisories() {
+  [ -z "${PE_MCP_SERVERS+set}" ] && return 0
+  local known p named t missing
+  known=" $(printf '%s' "${PE_MCP_SERVERS:-}" | tr ',' ' ' | tr -s ' ') "
+  _unknown() {  # _unknown <csv> → csv of ids not in the registry
+    local acc="" one
+    local IFS=,
+    for one in $1; do
+      one="$(printf '%s' "$one" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+      [ -z "$one" ] && continue
+      case "$known" in *" $one "*) continue ;; esac
+      acc="${acc:+$acc, }$one"
+    done
+    printf '%s' "$acc"
+  }
+  missing="$(_unknown "$(plan_mcp)")"
+  if [ -n "$missing" ]; then
+    printf 'F15 plan: MCP server(s) not registered on this machine: %s — every phase will park at boarding; register them in Phase Console → MCP, or drop them from §Session budget\n' "$missing"
+    # Said once, at the level it was written. A phase that merely repeats the
+    # plan-wide line would otherwise re-report it on every row.
+    known="${known}$(printf '%s' "$missing" | tr ',' ' ' | tr -s ' ') "
+  fi
+  for p in "${PHASES[@]}"; do
+    _is_done "$p" && continue
+    named="$(mcp_directive "$p")"
+    [ -z "$named" ] && continue
+    t="$(_unknown "$named")"
+    [ -n "$t" ] && \
+      printf 'F15 phase %s: MCP server(s) not registered on this machine: %s — the autopilot will park it at boarding; register them in Phase Console → MCP, or drop them from the phase\n' "$p" "$t"
+  done
+  return 0
+}
+
 # F6: model named in the plan's "## Session budget" section (empty if none).
 plan_model() {
   awk 'tolower($0) ~ /^##[[:space:]]+session budget/{f=1;next} /^##[[:space:]]/{f=0} f' "$plan_file" \
@@ -594,6 +657,43 @@ plan_skills() {
   # would otherwise abort every caller (e.g. --boot-prompt) on a plan with no Skills line.
   awk 'tolower($0) ~ /^##[[:space:]]+session budget/{f=1;next} /^##[[:space:]]/{f=0} f' "$plan_file" \
     | grep -i 'skills (every session)' | grep -oE '`[^`]+`' | tr -d '`' | paste -sd ',' - | sed 's/,/, /g' || true
+}
+
+# MCP directive: backtick-quoted server ids on the canonical
+# "**MCP servers (every session):**" line in the plan's "## Session budget" section —
+# the servers EVERY session in this plan needs. Re-injected into every boot prompt +
+# the QA brief, and read by the console's preflight so a run parks before it spends
+# tokens rather than after. Empty if none. ONLY that exact phrase matches, for the
+# same reason plan_skills() is strict: a loose 'mcp' match would swallow backticked
+# tokens out of unrelated budget prose.
+plan_mcp() {
+  awk 'tolower($0) ~ /^##[[:space:]]+session budget/{f=1;next} /^##[[:space:]]/{f=0} f' "$plan_file" \
+    | grep -i 'mcp servers (every session)' | grep -oE '`[^`]+`' | tr -d '`' | paste -sd ',' - | sed 's/,/, /g' || true
+}
+
+# Every server this phase runs with: the plan-wide line unioned with the phase's
+# own bullet, deduped, first-seen order. The union is the point — a plan-wide
+# server is not something a phase opts into, and a phase bullet adds rather than
+# replaces. (Dropping the run's servers for one phase is a RUN-level decision the
+# console owns via `mcpOff`, not something a versioned plan should have to say.)
+mcp_for_phase() {  # mcp_for_phase <phase>
+  local combined seen out t
+  combined="$(plan_mcp)"
+  t="$(mcp_directive "$1")"
+  [ -n "$t" ] && combined="${combined:+$combined, }$t"
+  [ -z "$combined" ] && return 0
+  seen=" "; out=""
+  # bash 3.2: no associative arrays, so membership is a substring test on a
+  # space-delimited string — the same trick _gate_type_known uses.
+  local IFS=,
+  for t in $combined; do
+    t="$(printf '%s' "$t" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -z "$t" ] && continue
+    case "$seen" in *" $t "*) continue ;; esac
+    seen="${seen}${t} "
+    out="${out:+$out, }$t"
+  done
+  printf '%s' "$out"
 }
 
 # done-set override hook: --ready-after N treats N as already done.
@@ -705,6 +805,21 @@ _deps_intersect() {  # at least one dep of <phase> is in <set>
 _size_weight() {  # token estimate for S|M|L — values from sizing.env (F5)
   case "$1" in S) echo "$SIZE_S" ;; L) echo "$SIZE_L" ;; *) echo "$SIZE_M" ;; esac
 }
+# What this phase's MCP servers cost its working set — values from mcp.env (F5).
+# Capped, because tool search defers the schemas and the tenth server costs far
+# less than the first. A phase with no servers pays nothing.
+_mcp_surcharge() {  # _mcp_surcharge <phase>
+  local n
+  n="$(mcp_for_phase "$1" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | grep -c . || true)"
+  [ "${n:-0}" -eq 0 ] && { echo 0; return; }
+  n=$((n * MCP_SURCHARGE))
+  [ "$n" -gt "$MCP_SURCHARGE_MAX" ] && n="$MCP_SURCHARGE_MAX"
+  echo "$n"
+}
+# The number batching actually spends: the phase's size plus what its servers add.
+_phase_weight() {  # _phase_weight <phase>
+  echo $(( $(_size_weight "${SIZE[$1]:-M}") + $(_mcp_surcharge "$1") ))
+}
 resolve_budget() {  # model alias OR raw token number → per-session budget (F5)
   local a; a="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
   [ -z "$a" ] && { echo "$BUDGET_DEFAULT"; return; }
@@ -742,7 +857,7 @@ compute_groups() {  # compute_groups <budget>
     st="${STATUS[$p]:-not-started}"
     if [ "$st" = "done" ]; then done_before="${done_before}${p} "; continue; fi
     if [ "$st" = in-progress ] || [ "$st" = stuck ]; then continue; fi
-    w="$(_size_weight "${SIZE[$p]:-M}")"
+    w="$(_phase_weight "$p")"
     if [ -n "$cur" ] \
        && [ "$cur_sealed" = 0 ] \
        && [ "${GATED[$p]:-no}" != yes ] \
@@ -784,10 +899,12 @@ case "$mode" in
       issues="${issues}"$'\n'"phase count mismatch: frontmatter says ${declared} but the table parses ${#PHASES[@]} rows"
     fi
     issues="$(printf '%s' "$issues" | sed '/^[[:space:]]*$/d')"
-    # F14 advisories ride stderr beside the issues but never gate the exit —
+    # F14/F15 advisories ride stderr beside the issues but never gate the exit —
     # a closed plan is not even scanned (nothing left to board there).
     if ! plan_is_closed; then
       advisories="$(verification_advisories)"
+      [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
+      advisories="$(mcp_advisories)"
       [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
     fi
     if [ -n "$issues" ]; then
@@ -807,6 +924,14 @@ case "$mode" in
       exit 0
     fi
     printf 'LINT OK: %s — %s phases, well-formed and acyclic\n' "$slug" "${#PHASES[@]}"
+    exit 0
+    ;;
+  --mcp)
+    # Which MCP servers a phase runs with, as the console's preflight reads it.
+    # With no argument: the plan-wide line alone. With one: that phase's full set
+    # (plan line ∪ its own bullet). Always a csv, empty when the plan names none.
+    if [ -n "$arg" ]; then mcp_for_phase "$arg"; else printf '%s' "$(plan_mcp)"; fi
+    printf '\n'
     exit 0
     ;;
   --ready|--ready-after)
@@ -887,6 +1012,8 @@ case "$mode" in
     printf 'from the plan + the real diff.\n\n'
     sk="$(plan_skills)"
     [ -n "$sk" ] && printf 'First invoke these skills (the plan uses them for every session): %s\n\n' "$sk"
+    mc="$(mcp_for_phase "$p")"
+    [ -n "$mc" ] && printf 'The phase ran with these MCP servers: %s — you may use them to establish ground\ntruth, but never take a server'\''s word for whether the work is correct.\n\n' "$mc"
     printf -- '1. `git pull`. Read docs/plans/%s.md §Phase %s — goal, exit criteria, Verification.\n' "$slug" "$p"
     printf -- '2. Read the handoff %s (its claims + key_files), then read ALL code the phase changed\n' "$hf_rel"
     printf '   COLD: `git diff` of its commits + every key_files path, in full.\n'
@@ -1017,7 +1144,7 @@ case "$mode" in
         g="$(echo $g)"                       # trim surrounding whitespace
         [ -z "$g" ] && continue
         gi=$((gi + 1))
-        gw=0; for q in $g; do gw=$((gw + $(_size_weight "${SIZE[$q]:-M}"))); done
+        gw=0; for q in $g; do gw=$((gw + $(_phase_weight "$q"))); done
         np="$(set -- $g; echo $#)"
         flags=""
         first="${g%% *}"
@@ -1054,6 +1181,13 @@ case "$mode" in
     printf 'Continue the "%s" plan — start Phase %s in this fresh session.\n' "$slug" "$p"
     sk="$(plan_skills)"
     [ -n "$sk" ] && printf 'First, invoke these skills (every session in this plan uses them): %s\n' "$sk"
+    mc="$(mcp_for_phase "$p")"
+    if [ -n "$mc" ]; then
+      printf 'This phase needs these MCP servers: %s\n' "$mc"
+      printf 'Confirm they are connected before implementing (`/mcp`, or `claude mcp list`). If one\n'
+      printf 'needs authentication, STOP and ask the operator to sign it in — do not work around a\n'
+      printf 'missing server by hand, because the plan chose it for a reason.\n'
+    fi
     if [ "${GATED[$p]}" = yes ]; then
       gk="$(gate_kind "$p")"
       ga="$(gate_approved "$p")"

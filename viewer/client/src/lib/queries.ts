@@ -26,7 +26,7 @@ import {
 import {
   api,
   type AccountsState, type ConsoleState, type InboxQuery, type NotificationScope, type PlanDetail,
-  type PlanSummary, type TerminalState,
+  type PlanSummary, type TerminalState, type McpState,
 } from './api';
 import { isClosed } from './closure';
 import { SSE_EVENTS, onSse, type SseEvent } from './sse';
@@ -84,6 +84,8 @@ export const keys = {
   diagnosis: (slug: string, phase: number | string) => ['diagnosis', slug, String(phase)] as const,
   auth: () => ['auth'] as const,
   accounts: () => ['accounts'] as const,
+  mcp: () => ['mcp'] as const,
+  mcpCatalog: (query: string) => ['mcp', 'catalog', query] as const,
   launcher: () => ['launcher'] as const,
   skills: () => ['skills'] as const,
   notifications: () => ['notifications'] as const,
@@ -143,6 +145,15 @@ const patchAccounts: Effect['patch'] = (client, data) => {
   client.setQueryData(keys.accounts(), (prev: AccountsState | undefined) => ({
     accounts: data.accounts as AccountsState['accounts'],
     allowAccounts: prev?.allowAccounts ?? false,
+  }));
+};
+
+/** The server list travels on the event; writing it beats asking for it back. */
+const patchMcp: Effect['patch'] = (client, data) => {
+  if (!Array.isArray(data.servers)) return;
+  client.setQueryData(keys.mcp(), (prev: McpState | undefined) => ({
+    servers: data.servers as McpState['servers'],
+    allowMcp: prev?.allowMcp ?? false,
   }));
 };
 
@@ -222,6 +233,13 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
      `/api/accounts` also carries `allowAccounts`. */
   accounts: { invalidate: [keys.accounts()], patch: patchAccounts },
 
+  /* ---- MCP servers ----
+     Same shape as accounts, and for the same reason: the redacted list rides on
+     the event, and the invalidation is the belt to those braces because
+     `/api/mcp` also carries `allowMcp`. A registry change also moves F15, which
+     the lint panel reads through the plan — hence `plans` too. */
+  mcp: { invalidate: [keys.mcp(), keys.plans()], patch: patchMcp },
+
   /* ---- the firehose ----
      These two arrive many times a second while a phase is talking. The run view
      subscribes to them directly and appends; routing them through the cache
@@ -286,6 +304,28 @@ export function usePlans(enabled = true) {
 /** The instance's Claude accounts with their meters — live via the `accounts` event. */
 export function useAccounts(enabled = true) {
   return useQuery({ queryKey: keys.accounts(), queryFn: api.accounts, enabled });
+}
+
+/** This instance's MCP servers with their health — live via the `mcp` event. */
+export function useMcp(enabled = true) {
+  return useQuery({ queryKey: keys.mcp(), queryFn: api.mcp, enabled });
+}
+
+/**
+ * The catalog for one search string.
+ *
+ * Its own key per query rather than one cache entry, because the registry half
+ * of the answer is a network round trip and re-typing a search you already ran
+ * should not repeat it. `staleTime: Infinity` (the app default) is right here:
+ * the published catalog does not move while somebody is reading it.
+ */
+export function useMcpCatalog(query: string, enabled = true) {
+  return useQuery({
+    queryKey: keys.mcpCatalog(query),
+    queryFn: () => api.mcpCatalog(query),
+    enabled,
+    placeholderData: keepPreviousData,
+  });
 }
 
 /** Where a one-click desktop launcher would land on the server's platform. */
@@ -733,6 +773,12 @@ export interface ShellCounts {
   agentSessions: number;
   /** Live shells — the Terminal entry's badge. */
   terminalSessions: number;
+  /**
+   * Registered MCP servers that need a person: not signed in, not connecting,
+   * or advertising different tools than they used to. Not a count of servers —
+   * a healthy registry of nine shows nothing at all.
+   */
+  mcpAttention: number;
 }
 
 export function shellCounts(
@@ -746,6 +792,10 @@ export function shellCounts(
   // its own, because a single number on two entries reads as double-counting.
   // Ended records are excluded — a badge is "what is running", not history.
   sessions?: readonly { kind?: string; exited?: unknown }[],
+  // Only what makes a badge light. A disabled server is excluded on purpose:
+  // the operator already said no to it, and nagging about a thing they turned
+  // off is how a badge becomes something people stop reading.
+  mcp?: readonly { enabled: boolean; status: string; toolsChanged?: unknown }[],
 ): ShellCounts {
   const list = plans ?? [];
   const live = (sessions ?? []).filter((session) => !session.exited);
@@ -764,5 +814,7 @@ export function shellCounts(
     unread,
     agentSessions: live.filter((session) => session.kind === 'claude').length,
     terminalSessions: live.filter((session) => (session.kind ?? 'shell') === 'shell').length,
+    mcpAttention: (mcp ?? []).filter((server) => server.enabled
+      && (server.status === 'needs-auth' || server.status === 'failed' || server.toolsChanged)).length,
   };
 }

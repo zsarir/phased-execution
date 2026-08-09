@@ -28,6 +28,12 @@ for p in \
   "viewer/server/platform.js" \
   "viewer/server/fallback-sw.js" \
   "viewer/server/accounts/index.ts" \
+  "viewer/server/mcp/index.ts" \
+  "viewer/server/mcp/store.ts" \
+  "viewer/server/mcp/credentials.ts" \
+  "viewer/server/mcp/health.ts" \
+  "viewer/server/mcp/catalog.ts" \
+  "viewer/server/mcp/config.ts" \
   "viewer/server/accounts/index.js" \
   "viewer/server/accounts/usage.ts" \
   "viewer/server/accounts/transcripts.ts" \
@@ -52,6 +58,7 @@ for p in \
   "scripts/handoff-status.sh" \
   "scripts/scope.sh" \
   "scripts/sizing.env" \
+  "scripts/mcp.env" \
   "scripts/gates.env" \
   "templates/plan.md" \
   "templates/handoff.md" \

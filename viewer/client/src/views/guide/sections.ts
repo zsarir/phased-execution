@@ -23,6 +23,7 @@ import autopilot from '@/content/guide/autopilot.md?raw';
 import sessions from '@/content/guide/sessions.md?raw';
 import notifications from '@/content/guide/notifications.md?raw';
 import permissions from '@/content/guide/permissions.md?raw';
+import mcp from '@/content/guide/mcp.md?raw';
 import mobile from '@/content/guide/mobile.md?raw';
 import troubleshooting from '@/content/guide/troubleshooting.md?raw';
 import reference from '@/content/guide/reference.md?raw';
@@ -99,6 +100,13 @@ export const SECTIONS: readonly GuideSection[] = [
     lede: 'Which layer actually stops an unattended run — and which one fails open.',
     kind: 'topic',
     body: permissions,
+  },
+  {
+    id: 'mcp',
+    label: 'MCP servers',
+    lede: 'Attaching tools to a plan, and finding out they are signed in before an hour is spent.',
+    kind: 'topic',
+    body: mcp,
   },
   {
     id: 'mobile',

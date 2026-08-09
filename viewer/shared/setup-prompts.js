@@ -34,6 +34,8 @@ export const DESKTOP_LAUNCHER_PROMPT = `Set up a Phase Console launcher on my De
      AGENT       --allow-agent: interactive claude sessions + the New-plan wizard
      ACCOUNTS    --allow-accounts: register more than one Claude account and let a
                  run move to one with headroom (the usage meters work without it)
+     MCP         --allow-mcp: register MCP servers and attach them to plans and
+                 phases (reading the registry and its statuses works without it)
      PORT        leave blank — each project derives its own; set one to pin it
      SUPERVISED  leave "yes" — it installs a launchd agent, and that is what makes
                  the app's own Restart and Shut down buttons work
@@ -78,10 +80,11 @@ export const INSTALL_PROMPT = `Install the phased-execution skill for me, and as
      --allow-writes   scaffold plans and handoffs, record QA, take phase locks,
                       close and reopen plans
      --allow-run      spawn unattended Claude sessions that edit my repository
-                      for hours — the widest of the five, say so plainly
+                      for hours — the widest of the six, say so plainly
      --allow-terminal a real shell in the browser, running as me
      --allow-agent    interactive claude sessions and the New-plan wizard
      --allow-accounts register Claude accounts and switch between them mid-run
+     --allow-mcp      register MCP servers and attach them to plans and phases
    Default every one of them to off. Then install with only what I chose:
      bash <skill>/viewer/deploy/agent.sh install --root <repo> [flags]
    (from npm or brew: phase-console --install-agent --root <repo> [flags])

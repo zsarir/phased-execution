@@ -24,13 +24,16 @@ describe('SSE → Query bridge', () => {
     expect(extra, `phantom events: ${extra.join(', ')}`).toEqual([]);
   });
 
-  it('carries the 18 wire names, run events included', () => {
-    expect(SSE_EVENTS).toHaveLength(18);
+  it('carries the 19 wire names, run events included', () => {
+    expect(SSE_EVENTS).toHaveLength(19);
     // Sessions are on the stream deliberately: the socket is a session's own
     // live channel, but the dashboard card and the nav badges do not hold it.
     expect(SSE_EVENTS).toContain('sessions');
     // Accounts ride the stream so the header meters move without polling.
     expect(SSE_EVENTS).toContain('accounts');
+    // So does the MCP registry: a server that goes needs-auth changes what
+    // every launch dialog may offer, and no page is holding that.
+    expect(SSE_EVENTS).toContain('mcp');
     // The runner prefixes its own events (`server/runner/runner.ts` emits
     // `run:` + event). Listening for `phase` instead of `run:phase` is the
     // mistake this pins down.
@@ -78,7 +81,7 @@ describe('shellCounts', () => {
     );
     expect(counts).toEqual({
       plans: 2, phases: 11, ready: 2, approvals: 1, unread: 4,
-      agentSessions: 0, terminalSessions: 0,
+      agentSessions: 0, terminalSessions: 0, mcpAttention: 0,
     });
   });
 
@@ -120,7 +123,7 @@ describe('shellCounts', () => {
   it('survives an empty cache', () => {
     expect(shellCounts(undefined, undefined, 0)).toEqual({
       plans: 0, phases: 0, ready: 0, approvals: 0, unread: 0,
-      agentSessions: 0, terminalSessions: 0,
+      agentSessions: 0, terminalSessions: 0, mcpAttention: 0,
     });
   });
 });

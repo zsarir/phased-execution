@@ -252,6 +252,12 @@ export type SessionMeta = {
   intent?: 'plan' | 'recovery' | 'qa' | 'login';
   /** The account this session runs as — display + the login exit hook. */
   accountId?: string;
+  /**
+   * The MCP server a `login` session is signing in — set instead of
+   * `accountId` when the thing being authenticated is a server rather than a
+   * Claude identity. Its exit is what tells the registry to re-probe.
+   */
+  mcpServer?: string;
   /** Set on a session minted by a recovery action; absent on every other session. */
   recovery?: RecoveryLink;
   /** Set on a session minted to QA one phase; absent on every other session. */

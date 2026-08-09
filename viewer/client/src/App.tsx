@@ -6,7 +6,7 @@ import { useOnline, useServiceWorker } from '@/lib/pwa';
 import { onSse, useSseStatus } from '@/lib/sse';
 import { useConsoleStopped } from '@/lib/shutdown';
 import {
-  shellCounts, useApprovals, useConsoleState, useLiveData, usePlans, useSessions,
+  shellCounts, useApprovals, useConsoleState, useLiveData, useMcp, usePlans, useSessions,
 } from '@/lib/queries';
 import { Banner, Spinner, Toaster, TooltipProvider, toast } from '@/components/ui';
 import { CHROMELESS_HEADS, navigate, resolveView, useRoute } from '@/router';
@@ -75,8 +75,9 @@ export function App() {
   // Sessions outlive the page that opened them, so the badge has to be shell-wide
   // rather than something the Agent/Terminal pages know while you are on them.
   const { data: sessions } = useSessions(state);
+  const { data: mcp } = useMcp();
 
-  const counts = shellCounts(plans, approvals, state?.unread ?? 0, sessions?.sessions);
+  const counts = shellCounts(plans, approvals, state?.unread ?? 0, sessions?.sessions, mcp?.servers);
 
   // Going anywhere closes the sheet — including "back", which is the gesture a
   // sheet is most often dismissed with.

@@ -273,6 +273,13 @@ export type SpawnRequest = {
   name?: string;
   /** Restrict the built-in tool set for this phase (`--tools`). */
   tools?: string[];
+  /**
+   * Path to the resolved `--mcp-config` for this run, from `mcp/config.ts`.
+   *
+   * A file rather than the inline JSON the flag also accepts: the document
+   * carries secrets, and argv is world-readable in `ps`.
+   */
+  mcpConfig?: string;
   /** Ignore every MCP server not passed explicitly. */
   strictMcp?: boolean;
   /** JSON passed to `--settings`: the per-run hook and its ask-rules (W3). */
@@ -395,7 +402,14 @@ export function buildArgv(request: SpawnRequest): string[] {
   if (request.budgetUsd && request.budgetUsd > 0) argv.push('--max-budget-usd', String(request.budgetUsd));
   if (request.maxTurns && request.maxTurns > 0) argv.push('--max-turns', String(request.maxTurns));
   if (request.tools?.length) argv.push('--tools', request.tools.join(','));
-  if (request.strictMcp) argv.push('--strict-mcp-config');
+  // The two go together on purpose. `--mcp-config` alone would ADD this run's
+  // servers to whatever `~/.claude.json` and the project's `.mcp.json` happen
+  // to hold, and an unattended session would be talking to servers nobody chose
+  // for it; `--strict-mcp-config` makes the resolved set the whole set. A run
+  // that attaches nothing passes neither and inherits the machine's own, which
+  // is what every run did before this existed.
+  if (request.mcpConfig) argv.push('--mcp-config', request.mcpConfig, '--strict-mcp-config');
+  else if (request.strictMcp) argv.push('--strict-mcp-config');
   if (request.partialMessages) argv.push('--include-partial-messages');
   if (request.subagentText) argv.push('--forward-subagent-text');
   if (request.hookEvents) argv.push('--include-hook-events');

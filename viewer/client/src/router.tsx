@@ -51,6 +51,7 @@ export const VIEWS: Record<string, View> = {
   stats: lazy(() => import('./views/stats')),
   search: lazy(() => import('./views/search')),
   settings: lazy(() => import('./views/settings')),
+  mcp: lazy(() => import('./views/mcp')),
   source: lazy(() => import('./views/source')),
   notifications: lazy(() => import('./views/notifications')),
   guide: lazy(() => import('./views/guide')),

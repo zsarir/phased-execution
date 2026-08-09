@@ -58,6 +58,15 @@ export type PhaseDetail = {
    * now there was no way for it to say so.
    */
   verifyIn?: string;
+  /**
+   * `**MCP:**` — the MCP servers this phase needs, as registry ids.
+   *
+   * What a phase states is WHICH server it needs, never how to reach it: the
+   * how is per-machine and belongs to the console's registry, so a plan naming
+   * `github` works on any machine that has one registered and parks honestly on
+   * one that does not (F15 says so at plan time, the preflight at boarding).
+   */
+  mcpServers?: string[];
   handoffMustRecord?: string;
   /** Every labelled bullet, so nothing in an unusual plan is dropped. */
   bullets: { label: string; body: string }[];
@@ -70,6 +79,8 @@ export type SessionBudget = {
   budget?: string;
   branch?: string;
   skills: string[];
+  /** `**MCP servers (every session):**` — attached to every phase of this plan. */
+  mcpServers: string[];
   /** Literal plan directive, if present: `on` | `off`. */
   qaGate?: 'on' | 'off';
 };
@@ -226,13 +237,34 @@ function parseSessionBudget(section?: Section): SessionBudget {
   const skillsLine = /\*\*Skills \(every session\):\*\*\s*(.+)/i.exec(flat)?.[1] ?? '';
   const skills = [...skillsLine.matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());
 
+  // Only the exact phrase, exactly as `plan_mcp()` in phase-graph.sh is strict:
+  // a loose `mcp` match would swallow backticked tokens out of unrelated budget
+  // prose, which is the regression the skills line already learned the hard way.
+  const mcpLine = /\*\*MCP servers \(every session\):\*\*\s*(.+)/i.exec(flat)?.[1] ?? '';
+  const mcpServers = [...mcpLine.matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());
+
   let qaGate: 'on' | 'off' | undefined;
   for (const line of raw.split('\n')) {
     const m = /^[\s>]*\*\*QA gate:\*\*\s*(on|off)\s*$/i.exec(line);
     if (m) { qaGate = m[1].toLowerCase() as 'on' | 'off'; break; }
   }
 
-  return { raw, targetModel: model, budget, branch, skills, qaGate };
+  return { raw, targetModel: model, budget, branch, skills, mcpServers, qaGate };
+}
+
+/**
+ * The phase's `- **MCP:** \`a\`, \`b\`` ids, or undefined when it names none.
+ *
+ * An EXACT label match, not `bullet()`'s prefix match, because the bash side
+ * (`mcp_directive`) matches the exact word: a prefix match here would read a
+ * hypothetical `- **MCP notes:**` bullet as a server list and the two parsers
+ * would disagree, which `engine-parity.test.ts` exists to prevent.
+ */
+function mcpBullet(bullets: { label: string; body: string }[]): string[] | undefined {
+  const hit = bullets.find((b) => b.label.trim().toLowerCase() === 'mcp');
+  if (!hit) return undefined;
+  const ids = [...hit.body.matchAll(/`([^`]+)`/g)].map((m) => m[1].trim()).filter(Boolean);
+  return ids.length ? [...new Set(ids)] : undefined;
 }
 
 function calloutLines(text: string): string[] {
@@ -276,6 +308,10 @@ export function parsePlan(text: string, slug: string, path: string): Plan {
       // Distinct prefixes: neither `verification` nor `verify in` starts with
       // the other, so `bullet()`'s prefix match cannot confuse them.
       verifyIn: bullet(bullets, 'Verify in'),
+      // Backticked ids off the bullet, matching `mcp_directive()` in
+      // phase-graph.sh. Absent rather than empty when the bullet says nothing,
+      // so "no bullet" and "a bullet naming nothing" read the same downstream.
+      mcpServers: mcpBullet(bullets),
       handoffMustRecord: bullet(bullets, 'Handoff must record'),
       bullets,
       raw: block.raw,

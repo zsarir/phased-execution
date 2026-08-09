@@ -430,6 +430,17 @@ function PhaseRows({
                   ran on {r.actualModel}
                 </div>
               )}
+              {/* Which attached servers this phase actually reached for — the
+                  only honest answer to "was attaching that worth it". A zero is
+                  the interesting number: it was paid for on every turn and
+                  never used. */}
+              {r.mcpCalls && Object.keys(r.mcpCalls).length > 0 && (
+                <div className="text-2xs text-ink-faint">
+                  mcp {Object.entries(r.mcpCalls)
+                    .map(([id, calls]) => `${id} ×${calls}`)
+                    .join(' · ')}
+                </div>
+              )}
             </>
           ) : (
             <span className="text-ink-faint">not attempted</span>

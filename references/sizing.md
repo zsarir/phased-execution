@@ -33,6 +33,14 @@ So the lever isn't "avoid re-reads." There are three real ones:
    level, connecting/disconnecting an MCP server, `/compact`, resuming after a Claude Code upgrade, or
    a >5-minute idle gap (the cache TTL expires)**. Several of these in one long session are where the
    "quadratic" feeling actually comes from.
+**Attached MCP servers add to a phase's weight.** Each one puts its instructions (capped at 2 KB by
+the CLI) and its tool names into the system prompt of *every* turn; tool search defers the full
+schemas, which is why the cost is a few hundred tokens per server rather than a few thousand, and why
+it flattens as you add more. The engine and the console both charge `MCP_SURCHARGE` per attached
+server, capped at `MCP_SURCHARGE_MAX` — canonical values in `scripts/mcp.env` (F5), currently
+**1,500 tokens each, capped at 12,000**. The cache-bust above is the bigger cost and is *not* in that
+number, which is exactly why servers are attached at a phase boundary and never mid-phase.
+
 3. **Bootstrap overhead (the counterweight).** Every fresh session re-pays a fixed cost: reading the
    handoff + plan + memory and re-exploring the code — plus the closeout ceremony the previous session
    paid to hand off (handoff file, commits, boot prompts). Splitting work into *too many tiny* sessions

@@ -75,6 +75,8 @@ export type PlanStats = {
   targetModel?: string;
   branch?: string;
   skills: string[];
+  /** `**MCP servers (every session):**` — attached to every phase of this plan. */
+  mcpServers: string[];
   qaMode: QaMode['mode'];
   qaFailures: number[];
   locks: { phase: number; owner: string; expired: boolean; leaseUntil?: number }[];
@@ -208,6 +210,7 @@ export function planStats(ctx: PlanContext, sizing: Sizing): PlanStats {
     targetModel: plan?.sessionBudget.targetModel,
     branch: plan?.sessionBudget.branch,
     skills: plan?.sessionBudget.skills ?? [],
+    mcpServers: plan?.sessionBudget.mcpServers ?? [],
     qaMode: qaMode.mode,
     qaFailures: record.qa.filter((q) => q.result === 'fail').map((q) => q.phase),
     locks: record.locks.map((l) => ({ phase: l.phase, owner: l.owner, expired: l.expired, leaseUntil: l.leaseUntil })),

@@ -27,7 +27,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   Banner, Button, Dialog, DialogClose, DialogContent, DialogFooter, toast,
 } from '@/components/ui';
-import { keys, useAccounts, useConsoleState, useSkills } from '@/lib/queries';
+import { keys, useAccounts, useConsoleState, useMcp, useSkills } from '@/lib/queries';
 import { api, automationPrefs, type OnLimitPolicy, type PhaseLock, type RunState } from '@/lib/api';
 import { countdown, relativeTime } from '@/lib/format';
 import { ReleaseStaleButton } from '@/components/release-lock';
@@ -39,6 +39,7 @@ import {
   DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS, PROFILE_LABEL,
 } from '@/views/run/defaults';
 import { SkillPicker } from '@/views/run/skill-picker';
+import { McpPicker } from '@/views/run/mcp-picker';
 import type { PermissionProfile } from '@/lib/api';
 
 const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
@@ -57,6 +58,7 @@ export interface QaTarget {
   qa?: { result: string; report?: string };
   /** Skills the plan asks every session to invoke. */
   planSkills?: string[];
+  planMcp?: string[];
 }
 
 export type LaunchRequest =
@@ -66,13 +68,13 @@ export type LaunchRequest =
   }
   | {
     kind: 'phase'; slug: string; phase: number; run: RunState | null;
-    qaMode?: string; allowWrites?: boolean; planSkills?: string[];
+    qaMode?: string; allowWrites?: boolean; planSkills?: string[]; planMcp?: string[];
     /** Who holds this phase, if anyone. Decides whether this dialog may submit. */
     lock?: PhaseLock;
   }
   | {
     kind: 'continue'; slug: string; run: RunState;
-    qaMode?: string; allowWrites?: boolean; planSkills?: string[];
+    qaMode?: string; allowWrites?: boolean; planSkills?: string[]; planMcp?: string[];
   }
   | { kind: 'qa'; target: QaTarget; allowWrites?: boolean; lock?: PhaseLock };
 
@@ -167,6 +169,9 @@ export function LaunchDialog({ request, onClose, onDone }: {
   const planSkills = request.kind === 'qa'
     ? request.target.planSkills ?? []
     : (request.kind === 'phase' || request.kind === 'continue') ? request.planSkills ?? [] : [];
+  const planMcp = request.kind === 'qa'
+    ? request.target.planMcp ?? []
+    : (request.kind === 'phase' || request.kind === 'continue') ? request.planMcp ?? [] : [];
 
   // Seeded from the record that already exists — the run's own settings, the
   // phase's own plan bullets — so the dialog opens on what would happen and
@@ -185,6 +190,11 @@ export function LaunchDialog({ request, onClose, onDone }: {
   const [chosen, setChosen] = useState<string[]>(
     qaTarget ? qaTarget.planSkills ?? [] : run?.skills ?? [],
   );
+  const { data: mcp } = useMcp();
+  // Seeded from the run's own record on a resume, exactly as `chosen` is: the
+  // run is the single truth once it exists, and re-deriving from a preference
+  // would silently re-attach something the operator had unticked.
+  const [mcpChosen, setMcpChosen] = useState<string[]>(run?.mcpServers ?? []);
 
   // The preference-seeded fields derive LIVE until the operator touches them:
   // `/api/state` arrives after the first render, and a useState seed taken
@@ -270,6 +280,9 @@ export function LaunchDialog({ request, onClose, onDone }: {
         runBudgetUsd: run?.runBudgetUsd ?? null,
         permissionProfile: profile,
         skills: chosen,
+        // Omitted when empty, like every other "the default is absence" field:
+        // a run file that never named servers must keep meaning what it meant.
+        ...(mcpChosen.length ? { mcpServers: mcpChosen } : {}),
         ...(attach ? { attachDefaultSkills: true } : {}),
         gitMode,
         ...(gitMode === 'new-branch' ? { openPr } : {}),
@@ -462,6 +475,18 @@ export function LaunchDialog({ request, onClose, onDone }: {
             defaultSkills={defaultSkills}
             onChange={setChosen}
             label={request.kind === 'qa' ? 'Skills for this review' : 'Skills for this run'}
+          />
+
+          {/* Servers are attached at a PHASE boundary, never mid-phase: connecting
+              one busts the prompt cache and re-reads the whole context. */}
+          <McpPicker
+            servers={mcp?.servers ?? []}
+            chosen={mcpChosen}
+            planServers={planMcp}
+            onChange={setMcpChosen}
+            label={request.kind === 'qa' ? 'MCP servers for this review' : 'MCP servers for this run'}
+            note="Checked before the phase boards. A server that cannot connect parks the phase
+                  instead of letting it run without."
           />
 
           {(request.kind === 'phase' || request.kind === 'continue') && (

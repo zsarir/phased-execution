@@ -71,6 +71,19 @@ export type Flags = {
    */
   allowAccounts: boolean;
   /**
+   * A sixth decision. Registering an MCP server tells this console's sessions
+   * to connect to somebody else's tools — a database, an issue tracker, a
+   * remote endpoint that returns text a model will act on. That is a distinct
+   * act from spawning a session (`--allow-run`) and from holding a Claude login
+   * (`--allow-accounts`): an MCP server is a *supply chain*, whose tool
+   * descriptions enter the prompt and whose results are attacker-controllable
+   * if the server is. So it gets its own flag.
+   *
+   * Reading the list, the catalog and the connection status is not gated:
+   * seeing what your own sessions connect to is display, not capability.
+   */
+  allowMcp: boolean;
+  /**
    * Hostnames this console answers to besides localhost, reached through an
    * authenticating proxy that puts the caller's identity in a header.
    *
@@ -333,6 +346,7 @@ export function parseFlags(argv: string[], instance: Instance = INSTANCE): Flags
     allowTerminal: false,
     allowAgent: false,
     allowAccounts: false,
+    allowMcp: false,
     remoteHosts: [],
     remoteUsers: splitList(process.env.PHASE_CONSOLE_REMOTE_USERS),
     scriptsDir: join(SKILL_DIR, 'scripts'),
@@ -354,6 +368,7 @@ export function parseFlags(argv: string[], instance: Instance = INSTANCE): Flags
     else if (arg === '--allow-terminal') flags.allowTerminal = true;
     else if (arg === '--allow-agent') flags.allowAgent = true;
     else if (arg === '--allow-accounts') flags.allowAccounts = true;
+    else if (arg === '--allow-mcp') flags.allowMcp = true;
     else if (arg === '--remote') flags.remoteHosts.push(...splitList(next()));
     else if (arg === '--remote-user') flags.remoteUsers.push(...splitList(next()));
     else if (arg === '--scripts') flags.scriptsDir = resolve(expandHome(next() ?? ''));
@@ -530,6 +545,9 @@ function printHelp(): void {
   --allow-accounts  enable Claude account registration for this instance: sign
                     additional accounts in, paste setup-tokens, pick an account
                     per run. Usage meters are shown regardless.
+  --allow-mcp       enable MCP server registration for this instance: add
+                    servers, hold their credentials, attach them to plans and
+                    phases. Connection status and the catalog are shown regardless.
   --remote <host>   also answer to this hostname, fronted by an authenticating
                     proxy (e.g. \`tailscale serve\`). Repeatable. Turns on strict
                     Host checking, so any other Host is refused.

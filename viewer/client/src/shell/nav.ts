@@ -1,5 +1,5 @@
 import {
-  Bell, Bot, Compass, LayoutGrid, LineChart, ListChecks, Search, Settings, FileText,
+  Bell, Bot, Compass, LayoutGrid, LineChart, ListChecks, Plug, Search, Settings, FileText,
   TerminalSquare, Zap,
   type LucideIcon,
 } from 'lucide-react';
@@ -27,7 +27,7 @@ export interface NavItem {
   /** What it is, shown in the More sheet. */
   note: string;
   /** Which count decorates it, if any. Must be a `ShellCounts` key. */
-  badge?: 'ready' | 'approvals' | 'unread' | 'agentSessions' | 'terminalSessions';
+  badge?: 'ready' | 'approvals' | 'unread' | 'agentSessions' | 'terminalSessions' | 'mcpAttention';
   /** In the phone tab bar. */
   tab?: boolean;
   /** In the rail's main block (vs its footer). */
@@ -69,6 +69,8 @@ export const NAV: readonly NavItem[] = [
     badge: 'terminalSessions',
     requires: 'allowTerminal',
   },
+  { id: 'mcp', label: 'MCP servers', icon: Plug, note: 'Tools your sessions may connect to',
+    badge: 'mcpAttention' },
   { id: 'guide', label: 'Guide', icon: Compass, note: 'How the runner works, and the phone setup' },
   { id: 'settings', label: 'Settings', icon: Settings, note: 'Notifications, permission rules, devices' },
 ];
