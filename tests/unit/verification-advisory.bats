@@ -50,3 +50,41 @@ load ../helpers/test_helper
   [ "$status" -eq 0 ]
   [[ "$output" != *"F14"* ]]
 }
+
+# F16 — a §Verification that waits on an external clock warns at lint time,
+# never gates. F14 asks "is anything runnable?"; F16 asks "does what runs ever
+# finish on its own?". The live incident: a phase whose verification WAS the
+# deploy of a CI-built image (34-65 min build) passed F14, boarded, and the
+# session died holding the wait.
+
+@test "F16: a fenced 'gh run watch' and a bulleted 'task deploy' are named, exit stays 0" {
+  setup_docs unbounded-verification unb
+  run pg unb --lint
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "LINT OK"
+  assert_contains "$output" "F16 phase 2"
+  assert_contains "$output" "gh run watch"
+  assert_contains "$output" "F16 phase 3"
+  assert_contains "$output" "task deploy"
+}
+
+@test "F16: a bounded verification stays silent" {
+  setup_docs unbounded-verification unb
+  run pg unb --lint
+  [[ "$output" != *"F16 phase 1"* ]]
+}
+
+@test "F16: runnable-but-unbounded does not trip F14" {
+  setup_docs unbounded-verification unb
+  run pg unb --lint
+  [[ "$output" != *"F14"* ]]
+}
+
+@test "F16: a done phase is not nagged about history" {
+  setup_docs unbounded-verification unb
+  write_handoff unb 2 watch complete
+  write_handoff unb 3 deploy complete
+  run pg unb --lint
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"F16"* ]]
+}

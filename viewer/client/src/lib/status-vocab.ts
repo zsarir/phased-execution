@@ -126,6 +126,10 @@ export const PHASE_STATUS_HELP: Record<PhaseStatus, StatusHelp> = {
     means: 'Waiting for repos another phase or plan is holding; starts itself when they free.',
     then: 'Nothing to do — the queued chip names what it waits on.',
   },
+  waiting: {
+    means: 'Parked on an external clock the session declared — a CI build, a PR auto-merge, a deploy window.',
+    then: 'Nothing to do — the runner resumes the phase\'s own session when the window elapses.',
+  },
 };
 
 /** The BOARD's state — what is true of the phase on disk, departures spelling. */
@@ -249,6 +253,9 @@ export const PHASE_STATUS_TONE: Record<PhaseStatus, StatusTone> = {
   'awaiting-verification': 'warn',
   // In a line behind another scope, not stuck and not asking for anything.
   queued: 'busy',
+  // Asleep on an external clock, by its own declaration; resumes itself.
+  // Not `warn`: nothing is wrong and nobody is being asked for anything.
+  waiting: 'busy',
   skipped: undefined,
   pending: undefined,
 };

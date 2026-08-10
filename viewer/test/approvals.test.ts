@@ -1085,3 +1085,22 @@ test('an upgrade that ships a new default still applies it to a file with strike
   assert.deepEqual(policyExtras(globalFile).removed.ask, [ASK[0]]);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('the Stop hook rides beside PreToolUse — same origin, same token, and profiles never change it', () => {
+  const settings = buildSettings({ runId: 'r1', token: 'secret-token', origin: 'http://127.0.0.1:4123' });
+  const stop = (settings.hooks as {
+    Stop: { hooks: { type: string; url: string; headers: Record<string, string>; timeout: number }[] }[];
+  }).Stop[0].hooks[0];
+  assert.equal(stop.type, 'http');
+  assert.equal(stop.url, 'http://127.0.0.1:4123/hooks/stop');
+  assert.equal(stop.headers.Authorization, 'Bearer secret-token');
+  assert.ok(stop.timeout > 0, 'a hook with no timeout is a session that can hang on a dead console');
+
+  // Profiles move only the ask list. The hook set — like deny — is identical
+  // across all three: a profile must never change what a session may end with,
+  // only what it must ask about along the way.
+  const byProfile = (['guarded', 'trusted', 'bypass'] as const).map((profile) =>
+    JSON.stringify(buildSettings({ runId: 'r1', token: 't', origin: 'http://x', profile }).hooks));
+  assert.equal(byProfile[0], byProfile[1]);
+  assert.equal(byProfile[1], byProfile[2]);
+});

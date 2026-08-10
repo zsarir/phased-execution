@@ -144,3 +144,66 @@ process.on('exit', () => {
   rmSync(CONFIG_HOME, { recursive: true, force: true });
   rmSync(STATE_HOME, { recursive: true, force: true });
 });
+
+/* ------------------------------------------------------------------ *
+ * The Stop hook: may this session end its turn?
+ *
+ * The delivery-overhaul incident again, from the enforcement side: a session
+ * about to end with neither a handoff on the board nor a declared outcome is
+ * told exactly what to do INSTEAD of exiting into a halt. Fail-open by
+ * construction — the runner's own exit-time check is the load-bearing layer.
+ * ------------------------------------------------------------------ */
+
+function serviceForStop(over: {
+  boardState?: string;
+  phases?: Record<string, { phase: number; sessionId?: string; startedAt?: string }>;
+} = {}): InstanceType<typeof Service> {
+  const service = new Service(flags as never);
+  const state = {
+    id: 'r1', slug: 'demo', root: '/tmp/nowhere', activePhase: 2,
+    phases: over.phases ?? { 2: { phase: 2, sessionId: 'sess-stop', startedAt: '2026-01-01T00:00:00Z' } },
+  };
+  (service as unknown as { runners: Map<string, unknown> }).runners.set('demo', {
+    busy: () => true,
+    current: () => state,
+    note: () => {},
+  });
+  (service as unknown as { root: unknown }).root = { ok: true, path: '/tmp/nowhere' };
+  (service as unknown as { boardStates: (slug: string) => Promise<Record<number, string>> })
+    .boardStates = async () => ({ 2: over.boardState ?? 'ready' });
+  return service;
+}
+
+test('Stop: a phase whose board reads done may end its turn', async () => {
+  const service = serviceForStop({ boardState: 'done' });
+  const decision = await service.decideStop({ session_id: 'sess-stop' }, 'r1');
+  assert.deepEqual(decision, {});
+});
+
+test('Stop: no handoff and no outcome blocks, naming both scripts', async () => {
+  const service = serviceForStop();
+  const decision = await service.decideStop({ session_id: 'sess-stop' }, 'r1') as {
+    hookSpecificOutput?: { hookEventName: string; decision: string; reason: string };
+  };
+  assert.equal(decision.hookSpecificOutput?.hookEventName, 'Stop');
+  assert.equal(decision.hookSpecificOutput?.decision, 'block');
+  assert.match(decision.hookSpecificOutput?.reason ?? '', /new-handoff\.sh demo 2/);
+  assert.match(decision.hookSpecificOutput?.reason ?? '', /phase-outcome\.sh demo 2 waiting-external/);
+});
+
+test('Stop: the third ask from one session is allowed — the loop guard', async () => {
+  const service = serviceForStop();
+  const first = await service.decideStop({ session_id: 'sess-stop' }, 'r1');
+  const second = await service.decideStop({ session_id: 'sess-stop' }, 'r1');
+  const third = await service.decideStop({ session_id: 'sess-stop' }, 'r1');
+  assert.ok((first as { hookSpecificOutput?: unknown }).hookSpecificOutput, 'first: blocked');
+  assert.ok((second as { hookSpecificOutput?: unknown }).hookSpecificOutput, 'second: blocked');
+  assert.deepEqual(third, {}, 'third: the guard yields — two nudges bound the loop');
+});
+
+test('Stop: an unknown run, session or missing body fails open', async () => {
+  const service = serviceForStop();
+  assert.deepEqual(await service.decideStop({}, 'r1'), {});
+  assert.deepEqual(await service.decideStop({ session_id: 'sess-stop' }, undefined), {});
+  assert.deepEqual(await service.decideStop({ session_id: 'sess-stop' }, 'r-unknown'), {});
+});

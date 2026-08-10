@@ -86,6 +86,13 @@ export type Holder = {
   scope: string[];
   /** Which tokens actually collided — the *why*, not just the *that*. */
   overlaps: string[];
+  /**
+   * When a `lock` holder's lease lapses (ms epoch). The queue page turns it
+   * into "lease ends <t>", and the lock timer wakes the scan at the soonest
+   * one — a foreign lock's release is the one event this process may never
+   * hear otherwise.
+   */
+  leaseUntil?: number;
 };
 
 export type QueueEntry = {
@@ -111,6 +118,13 @@ export type LockView = {
   owner: string;
   expired: boolean;
   scope?: string[];
+  /**
+   * `lease_until` from the lock file, ms epoch. The `expired` bit above is
+   * frozen at store-scan time; this lets the scheduler decide expiry by the
+   * clock instead, so a lease that lapses between docs refreshes stops
+   * blocking the moment it lapses.
+   */
+  leaseUntil?: number;
 };
 
 export type SchedulerDeps = {
@@ -202,6 +216,8 @@ export class Scheduler {
   private throttled = new Map<string, number>();
   private throttleTimer: NodeJS.Timeout | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
+  /** Armed at the soonest lease expiry among blocking locks. See `armLockTimer`. */
+  private lockTimer: NodeJS.Timeout | null = null;
   private closed = false;
 
   constructor(deps: SchedulerDeps = {}) {
@@ -438,6 +454,7 @@ export class Scheduler {
       changed = true;
     }
 
+    this.armLockTimer();
     if (changed) this.announce();
   }
 
@@ -479,8 +496,10 @@ export class Scheduler {
     this.closed = true;
     if (this.throttleTimer) clearTimeout(this.throttleTimer);
     if (this.idleTimer) clearInterval(this.idleTimer);
+    if (this.lockTimer) clearTimeout(this.lockTimer);
     this.throttleTimer = null;
     this.idleTimer = null;
+    this.lockTimer = null;
     for (const entry of [...this.queue]) this.cancel(entry, false);
     this.grants.clear();
   }
@@ -530,15 +549,19 @@ export class Scheduler {
 
     const own = autopilotOwner(entry.runId);
     for (const lock of this.deps.locks?.() ?? []) {
-      if (lock.expired) continue;
+      if (this.lockLapsed(lock)) continue;
       // Our own run's locks. Its other lanes claimed them, and the grants above
       // already speak for those.
       if (lock.owner === own) continue;
-      // The very phase we are asking for. A foreign holder here is not a scope
-      // problem to queue behind — it is a specific, nameable refusal, and
-      // `runPhase`'s own belt-check parks on it with the holder's name. Queuing
-      // instead would hide a stale lock as an indefinite silent wait.
-      if (lock.slug === entry.slug && lock.phase === entry.phase) continue;
+      // A foreign lock on the very slug+phase being requested blocks like any
+      // other. This used to be carved out ("the boarding belt-check parks on
+      // it with the holder's name") — and the park was TERMINAL: parked is a
+      // settled status, so a phase somebody was working by hand never boarded
+      // again for the life of the run. Queueing is not a silent wait any
+      // more: the holder is named on the queue page with its lease end, the
+      // lock timer wakes the scan when the lease lapses, the docs watcher
+      // wakes it when the lock file changes, and the runner's own lock-wait
+      // cap turns a wait that outlives all of that into an honest park.
 
       const scope = this.scopeOfLock(lock);
       if (!scopesIntersect(scope, entry.scope)) continue;
@@ -549,6 +572,7 @@ export class Scheduler {
         owner: lock.owner,
         scope,
         overlaps: intersectingTokens(scope, entry.scope),
+        ...(lock.leaseUntil != null ? { leaseUntil: lock.leaseUntil } : {}),
       });
     }
 
@@ -566,6 +590,16 @@ export class Scheduler {
     }
 
     return holders;
+  }
+
+  /**
+   * Expiry decided by the clock, not by the bit the store froze at scan time.
+   * A lease that lapsed since the last docs refresh must stop blocking NOW —
+   * otherwise a dead claim holds the queue until an unrelated file changes.
+   */
+  private lockLapsed(lock: LockView): boolean {
+    if (lock.expired) return true;
+    return lock.leaseUntil != null && lock.leaseUntil <= this.now();
   }
 
   /**
@@ -636,6 +670,35 @@ export class Scheduler {
       this.poll();
     }, delay);
     this.throttleTimer.unref?.();
+  }
+
+  /**
+   * Wake at the SOONEST lease expiry among the locks currently blocking the
+   * queue. A foreign on-disk lock is the one holder whose release this
+   * process may never hear about — the holder is a manual session, another
+   * console, another machine — but the lease is its promise to lapse, and
+   * this timer turns that promise into an admission the moment it does,
+   * instead of a wait for the idle poll or an unrelated docs event. Re-armed
+   * on every poll because the blocking set changes under it.
+   */
+  private armLockTimer(): void {
+    if (this.lockTimer) { clearTimeout(this.lockTimer); this.lockTimer = null; }
+    if (this.closed) return;
+    let soonest = Infinity;
+    for (const entry of this.queue) {
+      if (entry.settled) continue;
+      for (const holder of entry.waitingOn) {
+        if (holder.kind !== 'lock' || holder.leaseUntil == null) continue;
+        if (holder.leaseUntil < soonest) soonest = holder.leaseUntil;
+      }
+    }
+    if (!Number.isFinite(soonest)) return;
+    const delay = Math.max(0, soonest - this.now());
+    this.lockTimer = setTimeout(() => {
+      this.lockTimer = null;
+      this.poll();
+    }, delay);
+    this.lockTimer.unref?.();
   }
 
   /**

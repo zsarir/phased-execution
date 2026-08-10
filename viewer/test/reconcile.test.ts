@@ -26,8 +26,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  reconcileRun, newRun, phaseRecord, saveRun, loadRun, listRuns, latestRun, runDir,
-  IN_FLIGHT, type RunState,
+  reconcileRun, reconcileRecordsAgainstBoard, newRun, phaseRecord, saveRun, loadRun,
+  listRuns, latestRun, runDir, IN_FLIGHT, type RunState,
 } from '../server/runner/state.ts';
 
 function scratchRoot(): { root: string; cleanup: () => void } {
@@ -292,5 +292,100 @@ test('a waiting run with no recorded reset still reconciles the old way', () => 
     state.waitUntil = null;
     assert.equal(reconcileRun(state, undefined), true);
     assert.equal(state.status, 'interrupted', 'without a clock there is nothing to re-arm');
+  } finally { dir.cleanup(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * Record-level board reconciliation
+ *
+ * The live incident this section defends: delivery-overhaul run 647b3ad7
+ * ended with EIGHT phase records reading `failed`/`pending` while the board
+ * read done on every one of them — the work had been finished by hand, by
+ * closeout sessions, or by recoveries whose write-back was skipped, and
+ * nothing ever rewrote a record from the board. "Departed" chips over red
+ * records.
+ * ------------------------------------------------------------------ */
+
+test('records the board has overtaken become done, and the anchored halt clears', () => {
+  const state = newRun({ slug: 'demo', root: '/tmp/whatever', model: 'opus' });
+  state.status = 'halted';
+  state.consecutiveFailures = 2;
+  state.halt = { at: new Date().toISOString(), reason: 'no handoff', phase: 8, kind: 'no-handoff' };
+  phaseRecord(state, 8).status = 'failed';
+  phaseRecord(state, 2).status = 'pending';
+  const waiting = phaseRecord(state, 5);
+  waiting.status = 'waiting';
+  waiting.parkedUntil = '2099-01-01T00:00:00Z';
+  waiting.parkReason = 'ci';
+
+  const { changed, closed } = reconcileRecordsAgainstBoard(
+    state, { 8: 'done', 2: 'done', 5: 'done' },
+  );
+
+  assert.equal(changed, true);
+  assert.deepEqual(closed.sort((a, b) => a - b), [2, 5, 8]);
+  for (const phase of [2, 5, 8]) {
+    assert.equal(state.phases[String(phase)].status, 'done');
+    assert.match(state.phases[String(phase)].note ?? '', /closed outside this run/);
+  }
+  assert.equal(state.phases['5'].parkedUntil, undefined, 'a closed phase keeps no park clock');
+  assert.equal(state.halt, null, 'a halt about a phase that is now done is a card about nothing');
+  assert.equal(state.consecutiveFailures, 0);
+});
+
+test('a failed record whose phase the board does NOT read done is untouched — reconcile never re-runs', () => {
+  const state = newRun({ slug: 'demo', root: '/tmp/whatever', model: 'opus' });
+  state.status = 'halted';
+  state.halt = { at: new Date().toISOString(), reason: 'verify failed', phase: 3, kind: 'verify-failed' };
+  phaseRecord(state, 3).status = 'failed';
+
+  const { changed } = reconcileRecordsAgainstBoard(state, { 3: 'ready' });
+
+  assert.equal(changed, false);
+  assert.equal(state.phases['3'].status, 'failed');
+  assert.ok(state.halt, 'an unresolved halt stands');
+});
+
+test('QA gating cannot be reconciled past: a phase the board holds back is not closed', () => {
+  // The engine folds QA into the board — a complete handoff whose QA verdict
+  // is pending reads `in-progress`/not-done. Keying strictly on board `done`
+  // is what keeps reconcile from closing a phase QA still gates.
+  const state = newRun({ slug: 'demo', root: '/tmp/whatever', model: 'opus' });
+  phaseRecord(state, 4).status = 'failed';
+
+  const { changed } = reconcileRecordsAgainstBoard(state, { 4: 'in-progress' });
+
+  assert.equal(changed, false);
+  assert.equal(state.phases['4'].status, 'failed');
+});
+
+test('a live lane is never reconciled from under its loop', () => {
+  const state = newRun({ slug: 'demo', root: '/tmp/whatever', model: 'opus' });
+  phaseRecord(state, 6).status = 'running';
+
+  const { changed } = reconcileRecordsAgainstBoard(state, { 6: 'done' });
+
+  assert.equal(changed, false, 'running/verifying records belong to the loop, not the resolver');
+  assert.equal(state.phases['6'].status, 'running');
+});
+
+test('a restart mid-park reconciles to paused with the clock and the waiting records intact', () => {
+  const dir = scratchRoot();
+  try {
+    const state = newRun({ slug: 'demo', root: dir.root, model: 'opus' });
+    state.status = 'waiting';
+    state.waitUntil = '2099-01-01T00:00:00Z';
+    const record = phaseRecord(state, 8);
+    record.status = 'waiting';
+    record.parkedUntil = '2099-01-01T00:00:00Z';
+    record.sessionId = 'sess-8';
+
+    assert.equal(reconcileRun(state, null), true);
+    assert.equal(state.status, 'paused');
+    assert.equal(state.waitUntil, '2099-01-01T00:00:00Z', 'the park clock survives the restart');
+    assert.equal(state.phases['8'].status, 'waiting', 'a waiting record has no live child to reclaim');
+    assert.equal(state.phases['8'].parkedUntil, '2099-01-01T00:00:00Z');
+    assert.match(state.finishedReason ?? '', /external work/,
+      'the pause explains itself as a park, not a usage limit');
   } finally { dir.cleanup(); }
 });

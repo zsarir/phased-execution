@@ -428,3 +428,80 @@ test('a failed verification repair cannot loop: the same reason twice is refused
       'a deterministic reason string meets the identical-failure refusal, and the loop ends');
   } finally { cleanup(); }
 });
+
+/* ------------------------------------------------------------------ *
+ * The vehicle: session-API recovery first, pty only for plan repairs
+ * ------------------------------------------------------------------ */
+
+test('a halt with a resumable session takes the session API — under --allow-run alone, no pty minted', async () => {
+  const { root, cleanup } = scratch();
+  try {
+    // Agent capability OFF on purpose: the old router required --allow-agent
+    // even though the autopilot itself is --allow-run, so a console without
+    // agents silently never healed. The session vehicle needs only the runner.
+    const svc = service(root, { allowAgent: false });
+    const minted = stubMint(svc);
+    const run = haltedRun(root, {
+      halt: {
+        at: new Date().toISOString(),
+        reason: 'the session for phase 2 ended cleanly but the board still reads "ready" — no handoff was written',
+        phase: 2, kind: 'no-handoff',
+      },
+      phases: { 2: { phase: 2, status: 'failed', attempts: 1, costUsd: 0, sessionId: 'sess-0002' } },
+    });
+
+    const resumed: Array<{ phase: number; mode: string }> = [];
+    (svc as never as { recoverPhase: (slug: string, phase: number, mode: string) => Promise<null> })
+      .recoverPhase = async (_slug: string, phase: number, mode: string) => {
+        resumed.push({ phase, mode });
+        return null;
+      };
+
+    const out = await svc.maybeAutoRecover('alpha');
+    assert.equal(out.launched, true, out.reason);
+    assert.deepEqual(resumed, [{ phase: 2, mode: 'closeout' }],
+      'the recovery resumes the phase\'s own session through the runner');
+    assert.equal(minted.length, 0, 'no pty agent for a phase whose own session can be resumed');
+    const after = loadRun(root, 'alpha', run.id, null)!;
+    assert.equal(after.recoveries?.['2']?.attempts, 1, 'the budget was spent at launch');
+  } finally { cleanup(); }
+});
+
+test('the pre-recovery gate: a board that moved past the halt reconciles the records and launches nothing', async () => {
+  // The observed unnecessary-recovery class: sessions launched 19 and 61
+  // seconds AFTER the console logged "superseded — the board shows phase N
+  // done", because nothing read the board before minting.
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    const minted = stubMint(svc);
+    const run = haltedRun(root, {
+      halt: {
+        at: new Date().toISOString(),
+        reason: 'no handoff was written', phase: 2, kind: 'no-handoff',
+      },
+    });
+    // Somebody finished phase 2 by hand: a complete handoff appears on disk.
+    mkdirSync(join(root, 'docs', 'handoffs', 'alpha'), { recursive: true });
+    writeFileSync(join(root, 'docs', 'handoffs', 'alpha', 'phase-02-cart-api-endpoint.md'),
+      '---\nplan: docs/plans/alpha.md\nphase: 2\ntitle: cart\nstatus: complete\n---\n# done\n', 'utf8');
+    (svc as never as { reread: (slug: string) => void }).reread('alpha');
+
+    const out = await svc.maybeAutoRecover('alpha');
+    assert.equal(out.launched, false);
+    // Which layer catches it depends on who read the run first: the read-path
+    // resolver may reconcile before the gate ever runs (loading the run IS a
+    // read), or the gate does it against a pooled state the read path skips.
+    // Either way the contract holds: nothing launched, records closed.
+    assert.match(out.reason ?? '',
+      /board had already moved past the halt|the halt is not auto-recoverable|already resolved/);
+    assert.equal(minted.length, 0, 'nothing was spawned for work somebody already did');
+
+    const after = loadRun(root, 'alpha', run.id, null)!;
+    assert.equal(after.phases['2'].status, 'done');
+    assert.match(after.phases['2'].note ?? '', /closed outside this run/);
+    assert.equal(after.halt, null, 'the halt about the finished phase is stood down');
+    assert.ok(after.resolved, 'the run is resolved as superseded');
+    assert.match(after.resolved?.reason ?? '', /superseded/);
+  } finally { cleanup(); }
+});

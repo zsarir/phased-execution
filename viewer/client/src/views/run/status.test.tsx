@@ -263,3 +263,39 @@ describe('looksLikeAuthFailure', () => {
     expect(looksLikeAuthFailure(RUN, { loggedIn: true, checkedAt: 'x' })).toBe(false);
   });
 });
+
+describe('the halt card action — the session API leads, the pty agent follows', () => {
+  const halted = (kind?: string) => run({
+    status: 'halted',
+    slug: 'demo',
+    halt: { at: '2026-08-03T10:00:00Z', reason: 'no handoff was written', phase: 2, ...(kind ? { kind } : {}) },
+  });
+  const withRecovery = (state: RunState) => runNotes({
+    run: state, live: false, allowRun: true,
+    recovery: { kind: 'halted-missing-handoff', allowAgent: true, target: { slug: 'demo', phase: 2 } },
+  }).find((n) => n.id === 'halt');
+
+  it('a session-shaped halt leads with "Resume session & finish closeout"', () => {
+    const note = withRecovery(halted('no-handoff'));
+    render(<>{note?.action}</>);
+    const resume = screen.getByRole('button', { name: /Resume session & finish closeout/ });
+    expect(resume).toBeTruthy();
+    // The pty agent is still there — demoted, not removed: two buttons.
+    expect(screen.getAllByRole('button')).toHaveLength(2);
+  });
+
+  it('a plan-shaped halt keeps the agent button as the only remedy', () => {
+    const note = withRecovery(halted('plan-lint'));
+    render(<>{note?.action}</>);
+    expect(screen.queryByRole('button', { name: /Resume session & finish closeout/ })).toBeNull();
+  });
+
+  it('without --allow-run the session remedy is not offered', () => {
+    const note = runNotes({
+      run: halted('no-handoff'), live: false, allowRun: false,
+      recovery: { kind: 'halted-missing-handoff', allowAgent: true, target: { slug: 'demo', phase: 2 } },
+    }).find((n) => n.id === 'halt');
+    render(<>{note?.action}</>);
+    expect(screen.queryByRole('button', { name: /Resume session & finish closeout/ })).toBeNull();
+  });
+});

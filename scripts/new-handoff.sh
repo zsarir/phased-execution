@@ -242,7 +242,8 @@ prompts_tmp="$(mktemp)"
     printf -- '- docs/plans/%s.md §Phase %s + §Session budget (model, budget, branch)\n' "$slug" "$next_phase"
     printf -- '- memory %s\n' "$memory_key"
     printf 'Then build the p%s.task* list and implement Phase %s to its exit criteria.\n' "$next_phase" "$next_phase"
-    printf 'Stop + hand off when done.\n'
+    printf 'Finish with the handoff (bash scripts/new-handoff.sh %s %s <kebab-title> complete) —\n' "$slug" "$next_phase"
+    printf 'never end the session without one.\n'
     printf '```\n'
   fi
 } > "$prompts_tmp"

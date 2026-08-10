@@ -20,6 +20,8 @@ pe_nextp()    { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_S
 pe_hostatus() { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_SCRIPTS/handoff-status.sh"     "$@"; }
 qa_record()   { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_SCRIPTS/qa-record.sh"          "$@"; }
 gate_approve(){ DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_SCRIPTS/gate-approve.sh"       "$@"; }
+# phase-outcome.sh needs no DOCS_ROOT — it writes only $PE_OUTCOME_FILE (or stdout).
+pe_outcome()  {                                                "$SYS_BASH" "$PE_SCRIPTS/phase-outcome.sh"     "$@"; }
 # PE_TODAY keeps closure dates off the wall clock so assertions stay stable.
 pe_close()    { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" PE_TODAY="${PE_TODAY:-2026-01-02}" \
                 "$SYS_BASH" "$PE_SCRIPTS/close-plan.sh" "$@"; }

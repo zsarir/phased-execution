@@ -129,6 +129,56 @@ the process exits and takes its context with it. A phase advances only when thre
 agree: the plan's own verification commands pass, `validate.sh` still passes, and the board re-read
 **from disk** says done. Nothing asks the session whether it succeeded.
 
+**The outcome protocol.** A session can declare how it ended instead of leaving the runner to guess
+from a clean exit: `scripts/phase-outcome.sh <slug> <N> <status>` writes one atomic JSON file to the
+path the runner injects as `PE_OUTCOME_FILE`, and the runner reads, journals and consumes it on
+exit. Four statuses — `complete` (advisory; the board still decides), `waiting-external` (the work
+needs an external clock: a CI build, a PR auto-merge, a deploy window), `blocked` (with a
+`lock:<slug>/<N>` watch ref it re-queues; otherwise it halts with the session's own reason), and
+`needs-human` (parks the run for a person, not counted as a failure). Every prompt the runner sends
+carries the unattended-session contract naming this — including the fact that `ScheduleWakeup`,
+`Monitor` and backgrounded watchers do not survive a `-p` turn ending. A **Stop hook** enforces it,
+belt-and-braces: a session about to end with neither a handoff on the board nor a declared outcome
+is told exactly what to do instead (at most twice per session; fails open — the runner's own
+exit-time check is the load-bearing layer, and the hook carries workflow, never safety).
+
+**Waiting on external work.** A `waiting-external` outcome parks the phase as `waiting` — not a
+failure, not settled: the lane, its scope grant and its lock are released so siblings run, and at
+`parkedUntil` the runner **resumes the phase's own session** (`claude -p --resume`, context intact)
+to verify and close out, or re-file the wait. When every startable phase is parked, the run itself
+waits with the soonest clock (`waitUntil`) — restart-safe: a console reboot re-arms it exactly like
+a usage-window sleep. Caps make the wait honest: 4 waits and 8 hours parked per phase, then a
+`waiting-external-timeout` halt naming the watch refs.
+
+**The board is live, not per-lane.** The docs watcher pokes running loops, so a handoff written by a
+manual session mid-run is seen NOW rather than when a lane settles; a reconcile pass at the top of
+every drive tick closes any record the board has overtaken (`done`, noted "closed outside this run")
+and dissolves halts anchored to them — it only ever closes records, never re-runs a failed phase.
+
+**Recovery order.** Resolve first: before anything is launched, the board is re-read and reconciled
+— a halt the board has moved past becomes `superseded` with nothing spawned. Then the session API:
+for `no-handoff`, `verify-failed` and `waiting-external-timeout` halts with a resumable session,
+auto-recovery resumes the phase's own session through the runner (settings, deny rules, hooks and
+journal all apply; needs only `--allow-run`). The pty agent remains for plan-shaped repairs (an
+unrunnable §Verification, a failing `validate.sh`) under `--allow-agent`, and as the manual
+fallback. A recovery that finds nothing wrong records `no-defect` — the halt stands down without
+inventing `done` — and a recovery finishing under a live loop hands its verdict to the loop instead
+of being skipped.
+
+**Cross-plan locks.** A foreign unexpired lock — another plan's run, a manual session, another
+machine via the git-synced lock files — queues the phase behind the holder (named on the queue page
+with its lease end) instead of parking it terminally. The queue wakes on the docs watcher (lock
+files live under `docs/handoffs/**/.locks`), on a timer armed at the soonest blocking lease expiry,
+and on the idle poll; past a 2-hour lock wait the phase parks honestly, naming the holder. While a
+lane's session lives, the runner refreshes its lock every 10 minutes under the shared `PE_OWNER`
+(same-owner `claim` extends the lease), so a 47-minute phase can never silently lose its 30-minute
+claim; a foreign `--force` takeover is journalled and never fought.
+
+The park and lock knobs are runner constants, deliberately not in `scripts/sizing.env` (F5
+single-sources numbers both bash and TS read; bash never reads these): `WAIT_DEFAULT_MS` 30 min,
+`WAIT_MAX_PER_PHASE` 4, `WAIT_BUDGET_MS` 8 h, `LOCK_WAIT_CAP_MS` 2 h, `LEASE_REFRESH_MS` 10 min —
+all in `server/runner/runner.ts`.
+
 **The run drives to plan completion.** The board is re-read after every phase, so work a finishing
 phase unlocks starts itself — the queue only ever shows what can run *now*, and the **Waiting** tab
 beside the session tabs shows the rest: each dependency-waiting phase with exactly what it waits on,

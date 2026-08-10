@@ -185,7 +185,14 @@ const patchSessions: Effect['patch'] = (client, data) => {
 
 export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
   /* ---- the repo moved under us ---- */
-  changed: { invalidate: [keys.plans(), keys.stats(), keys.state()], slugScoped: 'plan' },
+  // Queue and runs ride along: lock files live under docs/handoffs, so a
+  // foreign claim or release arrives as `changed` — and the queue page used
+  // to sit stale (observed live: entries [] while a real manual lock held
+  // the phase) because nothing here invalidated it.
+  changed: {
+    invalidate: [keys.plans(), keys.stats(), keys.state(), keys.queue(), keys.runs()],
+    slugScoped: 'plan',
+  },
   warm: { all: true },
   /* Watcher/server health is part of what `/api/state` reports (including
      `serverStale`, which the shell turns into a banner). */

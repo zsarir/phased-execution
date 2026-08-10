@@ -39,9 +39,11 @@ import { extractCommands, hardenedPath, verifyPhase } from './verify.ts';
 import { failureContext } from './failure-context.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
+  PHASE_IN_FLIGHT, reconcileRecordsAgainstBoard,
   type Autonomy, type ChildRef, type OnLimitPolicy, type PhaseOptions, type PhaseRecord,
   type RunState, type PhaseStatus, type RunStatus, type VerifySummary,
 } from './state.ts';
+import { consumeOutcome, outcomeFileFor, readOutcome, type PhaseOutcome } from './outcome.ts';
 import {
   AdmissionAborted, autopilotOwner, type Scheduler, type ScopeGrant,
 } from './scheduler.ts';
@@ -202,6 +204,17 @@ export type RunnerDeps = {
   /** Copy a session transcript between two accounts' config dirs. See `accounts/transcripts.ts`. */
   portTranscript?: (sessionId: string, fromAccount: string | undefined, toAccount: string | undefined) => boolean;
   onEvent?: RunnerEvent;
+  /**
+   * The MCP registry's enabled ids, for `PE_MCP_SERVERS` on the runner's own
+   * engine calls — the same fact `Service.engineOpts` already passes on the
+   * service side, threaded here so the runner's `validate.sh` in `confirm()`
+   * carries the F15 advisory too instead of silently running without it.
+   */
+  mcpIds?: () => string[];
+  /** Lease keepalive cadence override — tests only; defaults to `LEASE_REFRESH_MS`. */
+  leaseRefreshMs?: number;
+  /** Minimum park window override — tests only; defaults to one minute. */
+  waitFloorMs?: number;
   now?: () => Date;
 };
 
@@ -289,6 +302,104 @@ const VERIFY_ANSWER_MS = 12 * 60 * 60 * 1_000;
  */
 const CLOSEOUT_MAX_TURNS = 60;
 
+/* ---- the waiting-external park (console-runtime knobs) ----
+ * Runner constants, deliberately NOT in scripts/sizing.env: the F5 single-source
+ * rule is for numbers both bash and TS read, and bash never reads these. They
+ * are documented in viewer/README.md beside the other runtime knobs. */
+
+/** A waiting-external outcome that names no window: check back in half an hour. */
+export const WAIT_DEFAULT_MS = 30 * 60_000;
+/**
+ * How many waiting-external parks one phase may take. A phase that keeps
+ * re-filing the same wait is not waiting, it is stuck — the cap turns that
+ * into an honest halt instead of an infinite quiet loop.
+ */
+export const WAIT_MAX_PER_PHASE = 4;
+/** Total wall-clock one phase may spend parked, across all its waits. */
+export const WAIT_BUDGET_MS = 8 * 60 * 60_000;
+/**
+ * How long a phase may queue behind a foreign lock before an honest park
+ * naming the holder. Bounds the dead-but-unexpired-lock case.
+ */
+export const LOCK_WAIT_CAP_MS = 2 * 60 * 60_000;
+/**
+ * The lease keepalive cadence — a third of phase-lock.sh's default 30-minute
+ * lease, so a live 47-minute phase can never silently lose its claim mid-work
+ * (a lapsed lease is taken over by anyone; that is the cooperative design, and
+ * it must not fire while the holder is alive and working).
+ */
+export const LEASE_REFRESH_MS = 10 * 60_000;
+
+/**
+ * The contract an unattended session cannot be assumed to infer, stated where
+ * it cannot be missed. Appended by the RUNNER (never woven into the engine's
+ * text) to every boot, closeout and wait-resume prompt, because it is true
+ * only under a supervisor: an interactive session may simply keep its turn
+ * and wait, and telling it otherwise would be wrong.
+ *
+ * Born from a live transcript: a phase-8 session did 47 minutes of real work,
+ * then called `ScheduleWakeup` and backgrounded two `gh` watchers and ended
+ * its turn — all three void under `claude -p`, where the process exits on the
+ * turn result and background tasks die seconds later. The exit read `success`;
+ * the board read `ready`; the run halted.
+ */
+function unattendedDirective(scriptsDir: string, slug: string, phase: number): string {
+  return [
+    '',
+    '',
+    'UNATTENDED SESSION CONTRACT (you are running under a supervisor, non-interactively):',
+    '- The process EXITS when your turn ends. ScheduleWakeup, Monitor, and backgrounded',
+    '  watcher loops do not survive it — never end your turn expecting to be woken.',
+    '- Your deliverable is the handoff. A phase with no handoff does not exist to the board,',
+    '  and a clean exit without one reads as a failed phase.',
+    '- If the work cannot finish because an EXTERNAL process must complete first (a CI build,',
+    '  a PR auto-merge, a deploy window): commit what is done, write the handoff now with',
+    '  `status: in-progress` (the durable pause marker), then declare the wait and stop:',
+    `      bash ${scriptsDir}/phase-outcome.sh ${slug} ${phase} waiting-external \\`,
+    '        --wait-minutes <realistic-window> --reason "<what you are waiting on>" --watch <ref>',
+    '  The supervisor parks the phase and RESUMES THIS SESSION when the window elapses.',
+    '- Blocked on a lock or scope conflict? Do not wait for a user reply that cannot come:',
+    `      bash ${scriptsDir}/phase-outcome.sh ${slug} ${phase} blocked --reason "lock held by <owner>" --watch lock:${slug}/${phase}`,
+    '  then stop; the supervisor queues the retry for when the lock frees.',
+    '- Need a person (an MCP sign-in, a manual gate, credentials)? Declare it and stop:',
+    `      bash ${scriptsDir}/phase-outcome.sh ${slug} ${phase} needs-human --reason "<what and why>"`,
+    '- Never end the turn silently waiting. Declare an outcome or finish the closeout.',
+  ].join('\n');
+}
+
+/**
+ * What the runner says when a waiting-external park's window elapses and the
+ * board still does not read done. Resumes the SAME session — its context is
+ * the whole point — and keeps the escape hatch open: an external process that
+ * genuinely needs longer gets a re-filed wait, not a lie.
+ */
+function waitResumePrompt(slug: string, phase: number, reason?: string, watch?: string[]): string {
+  return [
+    `The wait window you declared for phase ${phase} of \`${slug}\` has elapsed`
+      + `${reason ? ` (you were waiting on: ${reason})` : ''}.`,
+    ...(watch?.length ? [`You were watching: ${watch.join(', ')}.`] : []),
+    '',
+    'Pick up the closeout:',
+    '',
+    '1. Re-check the external process(es). If they finished, run the plan\'s §Verification',
+    '   commands, commit, and write the handoff `complete` (red verification → handoff',
+    '   `blocked` with the failure recorded — never `complete` on red).',
+    `2. If they are STILL not finished, re-file the wait with a realistic window —`,
+    `   \`bash scripts/phase-outcome.sh ${slug} ${phase} waiting-external --wait-minutes <M> --reason "…"\` —`,
+    '   and stop. Do not sit in the turn waiting.',
+    '3. If they failed, write the handoff `blocked` recording exactly what failed.',
+    '',
+    'Do not start new work. Never end the turn without a handoff or a declared outcome.',
+  ].join('\n');
+}
+
+/** A promise the drive loop can be woken through, re-armed after every fire. */
+function wakeSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
 /**
  * What the runner says to a session that finished its work and stopped short of
  * recording it.
@@ -315,6 +426,10 @@ function closeoutPrompt(slug: string, phase: number, boardState: string, branch?
       ? [`   This run works on the plan's branch \`${branch}\` — commit there (check it out if`,
         '   needed), never on the default branch.']
       : []),
+    '   If verification CANNOT finish because an external process must complete first (a CI',
+    '   build, a PR auto-merge, a deploy window), write the handoff `in-progress` instead and',
+    `   declare the wait — \`bash scripts/phase-outcome.sh ${slug} ${phase} waiting-external`,
+    '   --wait-minutes <M> --reason "…"\` — then stop; the supervisor resumes you when it elapses.',
     `4. Run \`scripts/new-handoff.sh ${slug} ${phase} <title> [status]\`, then fill in the frontmatter`,
     '   and the body. Review the generated "Start next phase(s)" section rather than rewriting it.',
     '5. Update `INDEX.md`.',
@@ -427,6 +542,13 @@ type Lane = {
    * the way an escalated freeze does. Null for the freeze path.
    */
   checkpointNote: { carryOn: boolean } | null;
+  /**
+   * The lease keepalive: refreshes the lane's phase lock every third of its
+   * lease while the lane lives, so a 47-minute session never silently loses
+   * its 30-minute claim mid-work. Cleared before the lock is released, and
+   * stopped the moment a refresh discovers a foreign takeover.
+   */
+  leaseTimer: NodeJS.Timeout | null;
 };
 
 export class Runner {
@@ -459,6 +581,21 @@ export class Runner {
   private injected = new Map<string, AskResult>();
   /** Set while `recover` drives a single session rather than the phase loop. */
   private recovering = false;
+  /**
+   * The docs watcher's poke. The FLAG is the truth; the promise only ends the
+   * drive loop's sleep — a wake that lands between the race settling and the
+   * signal re-arming is still seen, because the loop top reads the flag.
+   */
+  private docsDirty = false;
+  private wake = wakeSignal();
+  /**
+   * Resolutions the Service could not write because this loop owns the state
+   * (`syncRecoveredRun` used to return null there and the record stayed
+   * failed forever). Drained at the top of every drive tick.
+   */
+  private pendingResolutions: { phase: number; outcome: 'done' | 'no-defect'; by: string }[] = [];
+  /** Per-phase pokes armed at `parkedUntil`, so a live loop resumes a wait on time. */
+  private parkPokes = new Map<number, NodeJS.Timeout>();
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
@@ -466,6 +603,47 @@ export class Runner {
 
   current(): RunState | null { return this.state; }
   busy(): boolean { return this.driving !== null; }
+
+  /**
+   * The docs watcher saw the plan or a handoff (or a lock) change. Wakes the
+   * drive loop so the board is re-read NOW rather than when the current lane
+   * settles — which, on a one-lane run, used to be hours away.
+   */
+  noteDocsChanged(): void {
+    this.docsDirty = true;
+    this.wake.resolve();
+  }
+
+  /**
+   * A recovery finished while this loop owns the run: queue its write so the
+   * loop applies it under its own ownership next tick, instead of the Service
+   * skipping the write-back entirely (the stale-failed-record bug).
+   */
+  enqueueResolution(resolution: { phase: number; outcome: 'done' | 'no-defect'; by: string }): void {
+    if (!this.state) return;
+    this.pendingResolutions.push(resolution);
+    this.wake.resolve();
+  }
+
+  /**
+   * Rewrite this run's records from a board the caller already read. The
+   * stopped-run counterpart of the drive loop's own reconcile pass — the
+   * Service calls it before deciding a halt still needs a recovery.
+   */
+  reconcileAgainstBoard(board: Record<number, string>): { changed: boolean; closed: number[] } {
+    const state = this.state;
+    if (!state) return { changed: false, closed: [] };
+    const result = reconcileRecordsAgainstBoard(state, board);
+    if (result.changed) {
+      for (const phase of result.closed) {
+        this.clearParkPoke(phase);
+        this.record('phase.reconciled', { by: 'the board', outcome: 'done' }, phase);
+      }
+      this.persist();
+      this.emit('run', { state });
+    }
+    return result;
+  }
 
   /* ---------------------------------------------------------------- *
    * Lanes
@@ -847,23 +1025,19 @@ export class Runner {
     if (!record) throw new Error(`Run ${options.runId} never reached phase ${options.phase}.`);
 
     this.state = state;
-    // Why it stopped, kept before the banner is cleared. The clear below is for
-    // the console's benefit — a run being worked on must not go on looking
-    // stopped — and it used to take the reason with it, so the session opened to
-    // fix a halt was the one thing on the machine that could not read what the
-    // halt said. Only this phase's own halt: a stop recorded against another
-    // phase explains nothing here.
+    // Only this phase's own halt explains anything here: a stop recorded
+    // against another phase is not this recovery's story.
     const haltedWith = state.halt?.phase === options.phase ? state.halt.reason : null;
-    // A forward action supersedes the halt that was showing. The reason stays in
-    // the journal; what it must not do is keep the run looking stopped while
-    // this works.
-    state.halt = null;
+    // The halt is NOT cleared here. It used to be — "a run being worked on
+    // must not go on looking stopped" — and the cost was worse than the look:
+    // a recovery that crashed re-halted with a generic message and the
+    // original reason was gone, and a recovery skipped mid-way left the run
+    // looking unstopped over a phase still reading failed. The status flip to
+    // `running` below is what tells the console work is happening; the halt
+    // stands as the record of why until the recovery SUCCEEDS, and the
+    // success path (and only it) clears halt, resolution and reopen-veto
+    // together.
     delete state.finishedReason;
-    // Same rule as `start` on resume: the resolution and any reopen-veto were
-    // about the stop this recovery is ending, and a stale `resolved` silences
-    // the card the NEXT stop should raise.
-    state.resolved = null;
-    state.reopenedAt = null;
     state.status = 'running';
     state.activePhase = options.phase;
 
@@ -921,9 +1095,12 @@ export class Runner {
     // `children` so a console restart reconciles it like any other.
     const lane: Lane = {
       phase: options.phase, pid: null, handle: null, grant,
-      frozen: null, freezeTimer: null, stopped: null, checkpointed: false, checkpointNote: null,
+      frozen: null, freezeTimer: null, stopped: null, checkpointed: false, checkpointNote: null, leaseTimer: null,
     };
     this.lanes.set(options.phase, lane);
+    // A recovery session holds the phase lock exactly as a phase session does,
+    // and can run just as long — the keepalive applies equally.
+    this.armLeaseTimer(lane, autopilotOwner(state.id));
 
     try {
       if (options.mode !== 'recheck') {
@@ -939,7 +1116,28 @@ export class Runner {
       }
 
       const ok = await this.confirm(options.phase);
-      if (!ok) return; // confirm() halted and said why
+      if (!ok) return; // confirm() halted (or re-halted) and said why
+
+      // Success — and only success — retires the stop this recovery was
+      // about: the halt, its resolution, and any reopen-veto go together,
+      // exactly as `start` does on resume.
+      state.halt = null;
+      state.resolved = null;
+      state.reopenedAt = null;
+
+      if (record.status === 'waiting') {
+        // The recovery session declared waiting-external instead of closing —
+        // the honest outcome for a phase whose external clock has not landed.
+        // The run waits with the phase; the service re-arms the resume.
+        state.status = 'waiting';
+        state.waitUntil = record.parkedUntil ?? null;
+        state.finishedReason = `phase ${options.phase} is waiting on external work`
+          + `${record.parkReason ? ` (${record.parkReason})` : ''}; resumes at ${record.parkedUntil}.`;
+        this.record('run.waiting-external', {
+          phases: [options.phase], waitUntil: record.parkedUntil ?? null,
+        }, options.phase);
+        return;
+      }
 
       state.status = 'parked';
       state.finishedReason = `phase ${options.phase} was closed by ${options.by ?? 'console'}. `
@@ -949,6 +1147,7 @@ export class Runner {
       log.error('runner.recover.crashed', { error });
       this.halt(`the recovery of phase ${options.phase} failed: ${(error as Error)?.message ?? error}`, options.phase);
     } finally {
+      this.clearLeaseTimer(lane);
       await this.release(options.phase, owner);
       this.deps.scheduler?.release(lane.grant);
       this.clearFreezeTimer(lane);
@@ -1161,6 +1360,7 @@ export class Runner {
         env: await this.sessionEnv({
           PE_OWNER: autopilotOwner(state.id),
           PE_SCOPE: formatScope(this.lanes.get(phase)?.grant?.scope ?? await this.scopeFor(phase)),
+          PE_OUTCOME_FILE: this.outcomePath(phase),
         }),
         signal: this.abort?.signal,
         // The same wiring `attempt` uses, and for the same reason: `state.child`
@@ -2036,7 +2236,18 @@ export class Runner {
      */
     const settleOne = async (): Promise<void> => {
       if (!inFlight.size) return;
-      const done = await Promise.race(inFlight.values());
+      // The race includes the wake signal: a handoff written by an OUTSIDE
+      // session (a manual terminal, another console) used to be invisible
+      // until a lane settled — on a one-lane run, hours. The docs watcher
+      // resolves the signal; the loop top re-reads the board. `docsDirty` is
+      // the truth and the promise only ends the sleep, so a poke landing
+      // between the race settling and the re-arm is still seen.
+      const done = await Promise.race([
+        ...inFlight.values(),
+        this.wake.promise.then(() => null),
+      ]);
+      this.wake = wakeSignal();
+      if (done === null) { this.docsDirty = false; return; }
       inFlight.delete(done.phase);
       this.persist();
       if (!done.carryOn) stopping = true;
@@ -2081,6 +2292,15 @@ export class Runner {
           break;
         }
         if (state.status === 'halting') {
+          // The reconcile pass below can CLEAR a halt whose anchor phase the
+          // board has overtaken (someone finished it by hand mid-drain). A
+          // halting run whose halt is gone is not halting any more — it goes
+          // back to driving instead of finalizing a stop about nothing.
+          if (!state.halt) {
+            state.status = this.resumedStatus();
+            this.record('run.halt-superseded', { note: 'the board overtook the halt while lanes drained' });
+            continue;
+          }
           // A halt in one lane stops ADMITTING; what is already running drains
           // — the same shape as a pause, with a worse reason. Only when the
           // last lane settles may the run read `halted`: "halted" with live
@@ -2117,14 +2337,35 @@ export class Runner {
           break;
         }
 
+        // Records first: resolutions queued by recoveries, then anything the
+        // board has overtaken — a phase finished outside this run flips to
+        // done HERE, halts anchored to it clear, and the loop never spends a
+        // session on work somebody already did.
+        this.applyReconcile(board);
+
         const outstanding = [...board.ready, ...board.waiting, ...board.inProgress, ...board.stuck];
         // A run asked for specific phases is finished when THOSE are settled —
         // not when the plan is. Restricting the candidate list here rather than
         // in the caller keeps one definition of "ready" (the engine's).
         const asked = state.onlyPhases?.length ? new Set(state.onlyPhases) : null;
-        const candidates = board.ready
+        const nowIso = new Date().toISOString();
+        // A waiting-external phase whose window has elapsed re-boards through
+        // the normal lanes — but from the board's point of view it may read
+        // `in-progress` (the session wrote the durable pause marker before
+        // parking), which `board.ready` never lists. So expired waits join the
+        // candidate set explicitly, and unexpired ones are filtered out below.
+        const expiredWaits = Object.values(state.phases)
+          .filter((r) => r.status === 'waiting' && r.parkedUntil && r.parkedUntil <= nowIso)
+          .map((r) => r.phase)
+          .filter((p) => board.states[p] === 'ready' || board.states[p] === 'in-progress');
+        const candidates = [...new Set([...board.ready, ...expiredWaits])]
           .filter((p) => !asked || asked.has(p))
           .filter((p) => !SETTLED.includes(phaseRecord(state, p).status))
+          .filter((p) => {
+            const record = phaseRecord(state, p);
+            if (record.status !== 'waiting') return true;
+            return !!record.parkedUntil && record.parkedUntil <= nowIso;
+          })
           // A phase this loop is already driving is not a candidate to start
           // again. The board cannot know — it reads handoffs, and a phase in
           // flight has not written one yet.
@@ -2134,6 +2375,29 @@ export class Runner {
         // more phases ready. Concluding "finished" here is the fastest way to
         // stop a plan one phase in.
         if (!candidates.length && await draining()) continue;
+
+        // Everything startable is parked on an external clock: the RUN waits —
+        // restart-safe (`waiting`→`paused` keeps the clock on reconcile, and
+        // the service re-arms the resume at boot, exactly like a usage-window
+        // sleep) — instead of halting a plan that is merely early. Checked
+        // before the scoped-run ending, or a run scoped to a waiting phase
+        // would declare itself finished mid-wait.
+        const waitingRecords = Object.values(state.phases)
+          .filter((r) => r.status === 'waiting' && r.parkedUntil)
+          .filter((r) => !asked || asked.has(r.phase));
+        if (!candidates.length && waitingRecords.length) {
+          const soonest = [...waitingRecords].map((r) => r.parkedUntil!).sort()[0];
+          const names = waitingRecords.map((r) => r.phase).sort((a, b) => a - b).join(', ');
+          state.status = 'waiting';
+          state.waitUntil = soonest;
+          state.finishedReason = `waiting on external work — phase${waitingRecords.length === 1 ? '' : 's'} `
+            + `${names} parked (${waitingRecords.map((r) => r.parkReason).filter(Boolean).join('; ') || 'declared waits'}); `
+            + `resumes at ${soonest}.`;
+          this.record('run.waiting-external', {
+            phases: waitingRecords.map((r) => r.phase), waitUntil: soonest,
+          });
+          break;
+        }
 
         if (asked && !candidates.length) {
           state.status = 'finished';
@@ -2245,6 +2509,11 @@ export class Runner {
       // or the `catch` above halting with lanes still recorded — must still
       // land on the final word: nothing is running past this line.
       if (state.status === 'halting') state.status = 'halted';
+      // Park pokes die with the loop: a stopped run's resume is the service's
+      // boot/timer decision, made from `waitUntil` on the record — not a
+      // callback into a loop that no longer exists.
+      for (const timer of this.parkPokes.values()) clearTimeout(timer);
+      this.parkPokes.clear();
       // Whatever is left is not running any more, whichever way the loop left.
       for (const lane of this.lanes.values()) this.clearFreezeTimer(lane);
       this.lanes.clear();
@@ -2368,13 +2637,14 @@ export class Runner {
     // before its child has a pid — and so the `finally` below has exactly one
     // place to undo all of it.
     const lane: Lane = {
-      phase, pid: null, handle: null, grant, frozen: null, freezeTimer: null, stopped: null, checkpointed: false, checkpointNote: null,
+      phase, pid: null, handle: null, grant, frozen: null, freezeTimer: null, stopped: null, checkpointed: false, checkpointNote: null, leaseTimer: null,
     };
     this.lanes.set(phase, lane);
 
     try {
       return await this.runPhaseAdmitted(phase, board, lane);
     } finally {
+      this.clearLeaseTimer(lane);
       this.deps.scheduler?.release(lane.grant);
       this.clearFreezeTimer(lane);
       this.lanes.delete(phase);
@@ -2392,6 +2662,10 @@ export class Runner {
   ): Promise<boolean> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
+    // A waiting-external phase whose window elapsed boards as a RESUME of its
+    // own session, never a fresh boot — its context is the whole point.
+    // Decided here, before anything rewrites the status.
+    const resuming = record.status === 'waiting';
 
     /* ---- arrived from the queue into a run that stopped wanting it ----
      * The wait inside `admit()` can be minutes. A halt from another lane, an
@@ -2444,11 +2718,54 @@ export class Runner {
     const expired = status.stdout.includes('EXPIRED');
     const holder = expired ? undefined : /held by (\S+)/.exec(status.stdout)?.[1];
     if (holder && holder !== owner) {
-      record.status = 'parked';
-      record.note = `phase ${phase} is locked by ${holder} — ${status.stdout.trim().slice(0, 160)}`;
-      this.record('phase.lock-refused', { holder, detail: record.note }, phase);
-      return true;
+      /* This used to park — TERMINALLY, since `parked` is settled — so a phase
+       * a person was working by hand never boarded again for the life of the
+       * run (observed live). The scheduler now treats a foreign same-phase
+       * lock as an ordinary holder, so the right disposition is back to the
+       * queue: admission waits on the lock with the holder named, wakes on
+       * the docs watcher, the lease timer, and the idle poll — and this check
+       * shrinks to what it always really was, the race window between grant
+       * and spawn. Bounded: past the cap, the park returns, honestly worded. */
+      // Without a scheduler there is no queue to wait in, so the historical
+      // terminal park is the only honest disposition (harness configurations
+      // only — the console always wires one).
+      if (!this.deps.scheduler) {
+        record.status = 'parked';
+        record.note = `phase ${phase} is locked by ${holder} — ${status.stdout.trim().slice(0, 160)}`;
+        this.record('phase.lock-refused', { holder, detail: record.note }, phase);
+        return true;
+      }
+      const guardOn = this.deps.scheduler.snapshot().guard;
+      if (guardOn) {
+        record.lockWaitSince ??= new Date().toISOString();
+        const waitedMs = Date.now() - Date.parse(record.lockWaitSince);
+        if (waitedMs > LOCK_WAIT_CAP_MS) {
+          record.status = 'parked';
+          record.note = `phase ${phase} is locked by ${holder} and has waited `
+            + `${Math.round(waitedMs / 60_000)} minutes for it — ${status.stdout.trim().slice(0, 160)}`;
+          this.record('phase.lock-wait-capped', { holder, waitedMs }, phase);
+          this.emit('phase', { phase, status: 'parked', note: record.note });
+          return true;
+        }
+        record.status = 'queued';
+        record.note = `queued behind ${holder} — ${status.stdout.trim().slice(0, 160)}`;
+        this.record('phase.lock-race', { holder, detail: record.note }, phase);
+        this.emit('phase', { phase, status: 'queued', note: record.note });
+        // A one-second floor keeps the loop from spinning while the store's
+        // watcher-debounced lock view catches up with what the script just
+        // read off disk. The scheduler owns the real wait from here.
+        await this.sleep(1_000);
+        return true;
+      }
+      // Guard off: the operator has said cross-actor scope conflicts are
+      // theirs to manage. Proceed, with the fact journalled — matching what
+      // admission decided one layer up, so the two can never disagree.
+      this.record('phase.lock-ignored', { holder, note: 'the repo guard is off' }, phase);
     }
+    record.lockWaitSince = undefined;
+    // The child holds the lock; the supervisor keeps its lease alive. A live
+    // 47-minute session must never silently lose its 30-minute claim mid-work.
+    this.armLeaseTimer(lane, owner);
 
     /* ---- verification preflight ----
      * Before the prompt and the spawn: only "nothing would run at all" parks;
@@ -2513,8 +2830,15 @@ export class Runner {
     const ownMcp = own?.mcpOff
       ? [...(own.mcpServers ?? [])]
       : [...(state.mcpServers ?? []), ...(own?.mcpServers ?? [])];
-    const prompt = engineText + (context ? `\n\n${context}\n` : '') + git
-      + skillDirective(extraSkills) + mcpDirective(ownMcp);
+    // A wait-resume replaces the engine's boot text — the session already has
+    // the whole boot context; what it needs is the elapsed-window instruction.
+    // Everything appended after (git strategy, directives) applies to both.
+    const base = resuming
+      ? waitResumePrompt(state.slug, phase, record.parkReason, record.watch)
+      : engineText;
+    const prompt = base + (context ? `\n\n${context}\n` : '') + git
+      + skillDirective(extraSkills) + mcpDirective(ownMcp)
+      + unattendedDirective(this.deps.scriptsDir, state.slug, phase);
     if (context) this.record('phase.retry-context', { bytes: Buffer.byteLength(context) }, phase);
     if (extraSkills.length) this.record('phase.skills', { skills: [...new Set(extraSkills)] }, phase);
 
@@ -2538,6 +2862,21 @@ export class Runner {
 
     /* ---- what this phase runs as ---- */
     const chosen = this.optionsFor(phase);
+    if (resuming) {
+      // The park is over: accrue the time actually spent parked (the console
+      // may have been down past `parkedUntil`, so this is measured, not
+      // planned), hand the session id to the resume machinery, and clear the
+      // clock so a crash mid-resume re-parks cleanly rather than double-firing.
+      const parkedFrom = record.endedAt ?? record.parkedUntil;
+      record.parkedMs = (record.parkedMs ?? 0)
+        + (parkedFrom ? Math.max(0, Date.now() - Date.parse(parkedFrom)) : 0);
+      record.resumeSessionId ??= record.sessionId;
+      record.parkedUntil = undefined;
+      this.clearParkPoke(phase);
+      this.record('phase.wait-resume', {
+        waits: record.waits ?? 0, parkedMs: record.parkedMs, sessionId: record.sessionId ?? null,
+      }, phase);
+    }
     record.status = 'running';
     record.startedAt = new Date().toISOString();
     // The phase is now genuinely starting: the active-phase pointer follows
@@ -2557,7 +2896,10 @@ export class Runner {
     this.emit('phase', { phase, status: 'running', model: record.model, effort: record.effort });
 
     /* ---- the session, with the error policy driving retries ---- */
-    const settled = await this.attempt(phase, prompt, record.model!, owner, lane, chosen);
+    const settled = await this.attempt(phase, prompt, record.model!, owner, lane, chosen,
+      // A wait-resume is a continuation, not the phase: capped like a closeout
+      // so a session that misreads the ask and starts new work runs out.
+      resuming ? { maxTurns: CLOSEOUT_MAX_TURNS } : {});
     if (!settled.carryOn) { await this.release(phase, owner); return false; }
     if (!settled.completed) { await this.release(phase, owner); return true; }
 
@@ -2767,7 +3109,7 @@ export class Runner {
    */
   private async attempt(
     phase: number, prompt: string, model: string, owner: string, lane: Lane,
-    chosen: PhaseOptions = {},
+    chosen: PhaseOptions = {}, opts: { maxTurns?: number } = {},
   ): Promise<{ carryOn: boolean; completed: boolean }> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
@@ -2795,7 +3137,7 @@ export class Runner {
       }
     }
     let budget = state.phaseBudgetUsd;
-    let maxTurns: number | null = null;
+    let maxTurns: number | null = opts.maxTurns ?? null;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       // A per-lane stop can land between attempts — during a retry backoff, a
@@ -2803,6 +3145,9 @@ export class Runner {
       // next iteration starts a session for a phase the operator already ended.
       if (lane.stopped) return this.settleStoppedLane(lane, phase, 'spawn');
       record.attempts++;
+      // A stale outcome file from a previous attempt must never speak for
+      // this one — deleted here, AND rejected by `written_at` on read.
+      consumeOutcome(this.outcomePath(phase));
       const outcome = await spawn({
         prompt,
         cwd: state.root,
@@ -2855,6 +3200,10 @@ export class Runner {
         env: await this.sessionEnv({
           PE_OWNER: owner,
           PE_SCOPE: formatScope(lane.grant?.scope ?? await this.scopeFor(phase)),
+          // Where `phase-outcome.sh` writes the session's declared outcome —
+          // the machine-readable record the runner reads on exit instead of
+          // guessing from prose.
+          PE_OUTCOME_FILE: this.outcomePath(phase),
         }),
         signal: this.abort?.signal,
         onPid: (pid) => {
@@ -3103,6 +3452,13 @@ export class Runner {
     record.status = 'verifying';
     this.emit('phase', { phase, status: 'verifying' });
 
+    /* The session's declared outcome, read once and journalled. The board
+     * outranks it — a done board with a waiting outcome means the wait was
+     * about nothing — so `closed()` consults it only when the board is not
+     * done. Its absence means what it always meant: the session declared
+     * nothing, and every legacy path below is unchanged. */
+    const declared = this.takeOutcome(phase);
+
     /* 0. the board, re-read from disk — never the session's word for it.
      *
      * First, because it is free and it is decisive. It used to run last, after
@@ -3111,7 +3467,9 @@ export class Runner {
      * then threw their answer away, because the phase had never written a
      * handoff at all. Nobody should be asked to vouch for a phase that produced
      * nothing, and no test suite should be run to prove one. */
-    if (!await this.closed(phase)) return false;
+    const closed = await this.closed(phase, declared);
+    if (closed === 'waiting') return true; // parked or re-queued; the run carries on
+    if (closed === 'halted') return false;
 
     /* 1. the plan's own verification commands */
     const text = await this.deps.verificationText(state.slug, phase);
@@ -3526,17 +3884,41 @@ export class Runner {
    * session that did the work and stopped one step short of recording it should
    * be asked to finish rather than have the run halted under it.
    */
-  private async closed(phase: number): Promise<boolean> {
+  private async closed(phase: number, declared: PhaseOutcome | null): Promise<'done' | 'waiting' | 'halted'> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
 
     let board = await this.board();
-    if (board.states[phase] === 'done') return true;
+    if (board.states[phase] === 'done') {
+      if (declared && declared.status !== 'complete') {
+        // The board wins: whatever the session thought it was waiting on, the
+        // handoff exists and reads complete. Journalled, never acted on.
+        this.record('phase.outcome-superseded', { declared: declared.status }, phase);
+      }
+      return 'done';
+    }
+
+    // The declared outcome routes BEFORE the closeout nudge. A session that
+    // said "waiting on CI" must not be nudged to finish paperwork the external
+    // clock still blocks — on the live run this replaces, the nudge was
+    // answered in the same holding pattern, thirty seconds later, and halted.
+    if (declared) {
+      const routed = this.routeOutcome(phase, declared);
+      if (routed) return routed;
+    }
 
     const attempt = await this.closeout(phase, board.states[phase] ?? 'unknown');
     if (attempt.ran) {
+      // The closeout session may have filed an outcome instead of a handoff —
+      // the phase-8 shape exactly: "still waiting on the image build". Honor
+      // it the same way.
+      const late = this.takeOutcome(phase);
+      if (late) {
+        const routed = this.routeOutcome(phase, late);
+        if (routed) return routed;
+      }
       board = await this.board();
-      if (board.states[phase] === 'done') return true;
+      if (board.states[phase] === 'done') return 'done';
     }
 
     record.status = 'failed';
@@ -3553,7 +3935,114 @@ export class Runner {
       phase,
       'no-handoff',
     );
-    return false;
+    return 'halted';
+  }
+
+  /**
+   * Act on a session's declared outcome when the board does not read done.
+   * Returns the disposition `closed()` should report, or null to fall through
+   * (a `complete` declaration is advisory — the board decides).
+   */
+  private routeOutcome(phase: number, declared: PhaseOutcome): 'waiting' | 'halted' | null {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+    switch (declared.status) {
+      case 'waiting-external':
+        return this.parkWaiting(phase, declared) ? 'waiting' : 'halted';
+      case 'blocked': {
+        const lockRef = declared.watch.find((ref) => ref.startsWith('lock:'));
+        if (lockRef) {
+          // Not a defect: a foreign lock the session correctly refused to
+          // force. Back to the queue — admission waits on the holder with the
+          // same wake sources as any lock conflict.
+          record.status = 'pending';
+          record.note = declared.reason ?? `blocked on ${lockRef}`;
+          record.lockWaitSince ??= new Date().toISOString();
+          this.record('phase.outcome-lock-blocked', {
+            reason: declared.reason ?? null, watch: declared.watch,
+          }, phase);
+          this.emit('phase', { phase, status: 'pending', note: record.note });
+          return 'waiting';
+        }
+        record.status = 'failed';
+        record.note = declared.reason;
+        state.consecutiveFailures++;
+        this.halt(
+          `phase ${phase} declared itself blocked: ${declared.reason ?? 'no reason recorded'}`
+          + (declared.watch.length ? ` (watching ${declared.watch.join(', ')})` : ''),
+          phase,
+          'phase-blocked',
+        );
+        return 'halted';
+      }
+      case 'needs-human':
+        record.status = 'parked';
+        record.note = declared.reason ?? 'the session asked for a person';
+        this.record('phase.outcome-needs-human', { reason: declared.reason ?? null }, phase);
+        this.emit('phase', { phase, status: 'parked', note: record.note });
+        // The approvals-timeout vocabulary: nothing is wrong with the work,
+        // the question is open, and the phase retries the moment someone
+        // answers. Not counted against the failure budget.
+        this.park(`phase ${phase} needs a person: ${record.note}`, phase);
+        return 'halted';
+      case 'complete':
+        return null;
+    }
+  }
+
+  /**
+   * Park a phase on the external clock its session declared. True when
+   * parked; false when the wait budget is spent and the park became an
+   * honest halt instead.
+   */
+  private parkWaiting(phase: number, declared: PhaseOutcome): boolean {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+    const waits = record.waits ?? 0;
+    const parkedMs = record.parkedMs ?? 0;
+    if (waits >= WAIT_MAX_PER_PHASE || parkedMs >= WAIT_BUDGET_MS) {
+      record.status = 'failed';
+      record.note = declared.reason;
+      state.consecutiveFailures++;
+      this.halt(
+        `phase ${phase} is still waiting on external work after ${waits} wait(s) and `
+        + `${Math.round(parkedMs / 60_000)} minutes parked`
+        + ` (${declared.reason ?? 'no reason recorded'}`
+        + `${declared.watch.length ? `; watching ${declared.watch.join(', ')}` : ''})`
+        + ' — the wait budget is spent. Retry when the external work lands, or split the '
+        + 'phase behind a Gate-check.',
+        phase,
+        'waiting-external-timeout',
+      );
+      return false;
+    }
+    const now = Date.now();
+    const floor = this.deps.waitFloorMs ?? 60_000;
+    const requested = declared.resume_after ? Date.parse(declared.resume_after) : NaN;
+    // A requested window that has already lapsed (the closeout itself took
+    // longer than the wait) means "as soon as sensible", never the 30-minute
+    // default the session did not ask for — floored so a resume never chases
+    // its own tail.
+    const wanted = Number.isFinite(requested) ? Math.max(requested, now + floor) : now + WAIT_DEFAULT_MS;
+    const until = new Date(Math.min(
+      wanted,
+      // Never park past the remaining budget — the timeout must be reachable.
+      now + Math.max(floor, WAIT_BUDGET_MS - parkedMs),
+    )).toISOString();
+    record.status = 'waiting';
+    record.parkedUntil = until;
+    record.parkReason = declared.reason;
+    record.watch = declared.watch.length ? declared.watch : undefined;
+    record.waits = waits + 1;
+    // When the park began — what the resume accrues `parkedMs` from.
+    record.endedAt = new Date(now).toISOString();
+    record.resumeSessionId ??= record.sessionId;
+    this.record('phase.waiting', {
+      until, reason: declared.reason ?? null, watch: declared.watch, waits: record.waits,
+    }, phase);
+    this.emit('phase', { phase, status: 'waiting', note: record.parkReason, parkedUntil: until });
+    this.armParkPoke(phase, until);
+    return true;
   }
 
   /**
@@ -3586,6 +4075,9 @@ export class Runner {
     const started = new Date().toISOString();
     this.record('phase.closeout', { sessionId: record.sessionId, boardState, because: worked.why }, phase);
     this.emit('phase', { phase, status: 'verifying', closeout: true });
+    // The closeout may file an outcome instead of a handoff; a stale file
+    // must not be mistaken for it.
+    consumeOutcome(this.outcomePath(phase));
 
     let outcome;
     try {
@@ -3610,6 +4102,7 @@ export class Runner {
         env: await this.sessionEnv({
           PE_OWNER: autopilotOwner(state.id),
           PE_SCOPE: formatScope(this.lanes.get(phase)?.grant?.scope ?? await this.scopeFor(phase)),
+          PE_OUTCOME_FILE: this.outcomePath(phase),
         }),
         signal: this.abort?.signal,
         // As in `attempt` and `resumeWithInstruction`: a closeout is a live
@@ -3673,6 +4166,151 @@ export class Runner {
     }
 
     return { did: false, why: 'the session changed nothing on disk' };
+  }
+
+  /* ---------------------------------------------------------------- *
+   * The outcome protocol, the reconcile pass, and the park machinery
+   * ---------------------------------------------------------------- */
+
+  /** Where this run+phase's outcome file lives — the value of `PE_OUTCOME_FILE`. */
+  private outcomePath(phase: number): string {
+    const state = this.state!;
+    return outcomeFileFor(state.root, state.slug, state.id, phase);
+  }
+
+  /**
+   * Read, journal and consume the session's declared outcome. Null means the
+   * session declared nothing (or the file was stale/invalid), which degrades
+   * to every legacy path unchanged.
+   */
+  private takeOutcome(phase: number): PhaseOutcome | null {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+    const path = this.outcomePath(phase);
+    const declared = readOutcome(path, {
+      slug: state.slug, phase, notBefore: record.startedAt,
+    });
+    consumeOutcome(path);
+    if (declared) {
+      this.record('phase.outcome', {
+        status: declared.status, reason: declared.reason ?? null,
+        resumeAfter: declared.resume_after ?? null, watch: declared.watch,
+      }, phase);
+    }
+    return declared;
+  }
+
+  /**
+   * The drive loop's record-truth pass, run at the top of every tick: apply
+   * resolutions recoveries queued while this loop owned the state, then close
+   * whatever the board has overtaken. This is what lets a phase finished by a
+   * manual session flip to done mid-run, and a halt about it dissolve, without
+   * anyone pressing anything.
+   */
+  private applyReconcile(board: Board): void {
+    const state = this.state;
+    if (!state) return;
+    let touched = false;
+    const now = new Date().toISOString();
+    for (const resolution of this.pendingResolutions.splice(0)) {
+      const record = phaseRecord(state, resolution.phase);
+      const slot = ((state.recoveries ??= {})[String(resolution.phase)] ??= { attempts: 0, lastAt: now });
+      slot.lastAt = now;
+      if (resolution.outcome === 'done') {
+        if (record.status !== 'done' && !PHASE_IN_FLIGHT.includes(record.status)) {
+          record.status = 'done';
+          record.endedAt ??= now;
+          record.note = `closed by ${resolution.by}`;
+        }
+        slot.fixed = true;
+        slot.lastOutcome = 'fixed';
+        delete slot.lastReason;
+      } else {
+        slot.lastOutcome = 'no-defect';
+        state.resolved ??= {
+          at: now, auto: true,
+          reason: `a recovery by ${resolution.by} found nothing wrong`,
+        };
+      }
+      if (state.halt?.phase === resolution.phase) {
+        state.halt = null;
+        state.consecutiveFailures = 0;
+      }
+      this.record('phase.reconciled', { by: resolution.by, outcome: resolution.outcome }, resolution.phase);
+      touched = true;
+    }
+    const { changed, closed } = reconcileRecordsAgainstBoard(state, board.states);
+    if (changed) {
+      for (const phase of closed) {
+        this.clearParkPoke(phase);
+        this.record('phase.reconciled', { by: 'the board', outcome: 'done' }, phase);
+        this.emit('phase', { phase, status: 'done' });
+      }
+      touched = true;
+    }
+    if (touched) {
+      this.persist();
+      this.emit('run', { state });
+    }
+  }
+
+  /** Poke the drive loop when a park's window elapses, so the resume is on time. */
+  private armParkPoke(phase: number, untilIso: string): void {
+    this.clearParkPoke(phase);
+    const delay = Math.max(0, Date.parse(untilIso) - Date.now());
+    const timer = setTimeout(() => {
+      this.parkPokes.delete(phase);
+      this.wake.resolve();
+    }, delay);
+    timer.unref?.();
+    this.parkPokes.set(phase, timer);
+  }
+
+  private clearParkPoke(phase: number): void {
+    const timer = this.parkPokes.get(phase);
+    if (timer) clearTimeout(timer);
+    this.parkPokes.delete(phase);
+  }
+
+  /** Start the lane's lease keepalive. See `Lane.leaseTimer`. */
+  private armLeaseTimer(lane: Lane, owner: string): void {
+    this.clearLeaseTimer(lane);
+    const cadence = this.deps.leaseRefreshMs ?? LEASE_REFRESH_MS;
+    const timer = setInterval(() => { void this.refreshLease(lane, owner); }, cadence);
+    timer.unref?.();
+    lane.leaseTimer = timer;
+  }
+
+  private clearLeaseTimer(lane: Lane): void {
+    if (lane.leaseTimer) clearInterval(lane.leaseTimer);
+    lane.leaseTimer = null;
+  }
+
+  /**
+   * Refresh the lane's phase lock under the shared owner. Same-owner `claim`
+   * moves the lease forward (phase-lock.sh treats it as a refresh); `--scope`
+   * must ride along or the rewrite drops the `scope=` line and the lock starts
+   * colliding with everything. A refusal means a foreign `--force` takeover:
+   * journal it and stand down — the console never fights a person for a lock.
+   */
+  private async refreshLease(lane: Lane, owner: string): Promise<void> {
+    const state = this.state;
+    if (!state || !this.lanes.has(lane.phase)) return;
+    try {
+      const scope = formatScope(lane.grant?.scope ?? await this.scopeFor(lane.phase));
+      const result = await this.script('phase-lock.sh', [
+        state.slug, 'claim', String(lane.phase), '--owner', owner, '--scope', scope,
+      ]);
+      const text = (result.stdout + result.stderr).trim();
+      if (result.code === 0) {
+        this.record('phase.lock-refreshed', { detail: text.slice(0, 120) }, lane.phase);
+      } else {
+        this.record('phase.lock-lost', { detail: text.slice(0, 200) }, lane.phase);
+        this.clearLeaseTimer(lane);
+      }
+    } catch (error) {
+      log.warn('runner.lease-refresh', { phase: lane.phase, error });
+    }
   }
 
   /** Read-only git against the run's root. Empty string on any failure. */
@@ -3802,14 +4440,18 @@ export class Runner {
     // handoff, and the watcher that invalidates the cache may not have fired
     // yet — a cached "not done" here would fail a phase that succeeded.
     return engineRun(
-      { scriptsDir: this.deps.scriptsDir, root: state.root }, 'phase-graph.sh', [state.slug, ...args],
+      { scriptsDir: this.deps.scriptsDir, root: state.root, mcpServers: this.deps.mcpIds?.() },
+      'phase-graph.sh', [state.slug, ...args],
       undefined, env ? { env } : undefined,
     );
   }
 
   private script(script: string, args: string[]) {
     const state = this.state!;
-    return engineRun({ scriptsDir: this.deps.scriptsDir, root: state.root }, script, args);
+    return engineRun(
+      { scriptsDir: this.deps.scriptsDir, root: state.root, mcpServers: this.deps.mcpIds?.() },
+      script, args,
+    );
   }
 
   private async board(): Promise<Board> {

@@ -341,6 +341,22 @@ export async function handleApi(
     return true;
   }
 
+  /* ---------------- the closeout (Stop) hook ---------------- */
+  if (path === '/hooks/stop') {
+    // Same trust model as the approval hook above: the caller is a `claude`
+    // child, its credential is the per-run bearer token, and `guardWrite`
+    // deliberately does not apply.
+    if (req.method !== 'POST') { json(res, 405, { error: 'POST only' }); return true; }
+    if (!service.approvals.verify(req.headers.authorization)) {
+      log.warn('hook.rejected', { reason: service.approvals.armed() ? 'bad token' : 'no run is armed' });
+      json(res, 401, { error: 'bad or expired run token' });
+      return true;
+    }
+    const stopRunId = service.approvals.runIdFor(req.headers.authorization);
+    json(res, 200, await service.decideStop(await readBody(req), stopRunId));
+    return true;
+  }
+
   /* ---------------- live updates ---------------- */
   if (path === '/events') {
     res.writeHead(200, {

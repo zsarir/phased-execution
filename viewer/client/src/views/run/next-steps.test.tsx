@@ -168,7 +168,8 @@ describe('failed here, finished elsewhere', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].why).toContain("this run's own attempt stopped");
     expect(rows[0].why).toContain('no configuration file provided');
-    expect(rows[0].why).toContain('Nothing needs fixing');
+    expect(rows[0].why).toContain('nothing needs fixing');
+    expect(rows[0].why).toContain('reconciles to done');
     expect(rows[0].recoveryClass).toBeUndefined();
     expect(rows[0].retry).toBeUndefined();
   });

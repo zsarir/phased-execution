@@ -28,8 +28,9 @@ const { Runner } = await import('../server/runner/runner.ts');
 const { extractCommands, verifyPhase } = await import('../server/runner/verify.ts');
 const { buildArgv, sanitize, lineReader, userMessage } = await import('../server/runner/spawn.ts');
 const { nextModel, fallbackChain } = await import('../server/runner/errors.ts');
-const { listRuns, loadRun, newRun, saveRun, journalFile } = await import('../server/runner/state.ts');
+const { listRuns, loadRun, newRun, saveRun, journalFile, phaseRecord } = await import('../server/runner/state.ts');
 const { Journal } = await import('../server/runner/journal.ts');
+const { Scheduler } = await import('../server/runner/scheduler.ts');
 import type { SpawnFn, SpawnOutcome, SpawnRequest } from '../server/runner/spawn.ts';
 
 /* ------------------------------------------------------------------ *
@@ -46,6 +47,8 @@ type Repo = {
   setStuck: (phase: number) => void;
   setLockRefused: (yes: boolean) => void;
   setLockLapsed: (yes: boolean) => void;
+  /** Make `claim` refuse as a foreign takeover — the keepalive's lock-lost case. */
+  setClaimRefuse: (yes: boolean) => void;
   setLintFail: (yes: boolean) => void;
   /** Make the board read slow, so a control can be pressed while it is in flight. */
   setSlowBoard: (yes: boolean) => void;
@@ -109,6 +112,9 @@ esac
 set -u
 S="${state}"
 echo "$*" >> "$S/locks"
+if [ "\${2:-}" = "claim" ] && [ -f "$S/claim-refuse" ]; then
+  echo "phase \${3:-?} is being worked by someone/else"; exit 1
+fi
 if [ "\${2:-}" = "status" ]; then
   # The real script prints the holder for a LAPSED claim too, and appends the
   # marker. Both halves are the fake's job, because reading only the first is
@@ -137,6 +143,7 @@ echo "VALIDATE OK"
     setStuck: (phase) => writeFileSync(join(state, 'stuck'), `${phase}\n`),
     setLockRefused: (yes) => yes ? writeFileSync(join(state, 'lock-refused'), '') : rmSync(join(state, 'lock-refused'), { force: true }),
     setLockLapsed: (yes) => yes ? writeFileSync(join(state, 'lock-lapsed'), '') : rmSync(join(state, 'lock-lapsed'), { force: true }),
+    setClaimRefuse: (yes) => yes ? writeFileSync(join(state, 'claim-refuse'), '') : rmSync(join(state, 'claim-refuse'), { force: true }),
     setLintFail: (yes) => yes ? writeFileSync(join(state, 'lint-fail'), '') : rmSync(join(state, 'lint-fail'), { force: true }),
     setSlowBoard: (yes) => yes ? writeFileSync(join(state, 'slow-board'), '') : rmSync(join(state, 'slow-board'), { force: true }),
     setSlowGate: (yes) => yes ? writeFileSync(join(state, 'slow-gate'), '') : rmSync(join(state, 'slow-gate'), { force: true }),
@@ -2744,4 +2751,392 @@ test('the preflight probes the RUN’s account, and a refusal parks before any s
     'the refusal names the account, not the workspace');
   assert.equal(seen2.length, 0, 'nothing spawned behind the refusal');
   r2.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
+ * The outcome protocol: declared waits, parks, and session-API resumes
+ *
+ * The incident these replay: delivery-overhaul phase 8. A session did 47
+ * minutes of real work, ended its turn "waiting on the image build (34–65
+ * min)" in free prose, and the runner — with no vocabulary for that — read
+ * the clean exit as completion, found no handoff, nudged once (answered in
+ * the same holding pattern), and halted the run. The outcome file is the
+ * vocabulary; these pin what the runner does with it.
+ * ------------------------------------------------------------------ */
+
+function fileOutcome(request: SpawnRequest, body: Record<string, unknown>): void {
+  const path = request.env?.PE_OUTCOME_FILE;
+  assert.ok(typeof path === 'string' && path, 'the runner must inject PE_OUTCOME_FILE');
+  writeFileSync(path as string, JSON.stringify({
+    version: 1, slug: 'demo', written_at: new Date().toISOString(), watch: [], ...body,
+  }));
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('a declared waiting-external parks the phase — no halt, no closeout nudge — and the resume continues the SAME session', async () => {
+  const r = repo();
+  try {
+    const resumes: (string | undefined)[] = [];
+    let calls = 0;
+    const spawn: SpawnFn = async (request) => {
+      calls++;
+      if (calls === 1) {
+        fileOutcome(request, {
+          phase: 1, status: 'waiting-external',
+          reason: 'image build 6a94a514',
+          // Comfortably past the loop's own tick latency under full-suite
+          // load: a window that lapses before the next board read makes the
+          // loop resume IN-RUN (correct, but a different script than this
+          // test narrates — the two-act version needs the run to park).
+          resume_after: new Date(Date.now() + 2_000).toISOString(),
+          watch: ['gh:hub#run/1234'],
+        });
+        return ok({ resultText: 'holding pattern' });
+      }
+      resumes.push(request.resume);
+      assert.match(request.prompt, /wait window you declared/, 'a resume gets the elapsed-window prompt, not a fresh boot');
+      r.markDone(1);
+      return ok({ sessionId: 'sess-0001' });
+    };
+    const { instance, events } = runner(r, spawn, undefined, undefined, { waitFloorMs: 20 });
+    await instance.start({ slug: 'demo', root: r.root, onlyPhases: [1] });
+    await instance.wait();
+
+    let state = instance.current()!;
+    assert.equal(state.status, 'waiting', 'the run waits with the phase — it is not halted');
+    assert.equal(state.halt, null);
+    assert.equal(state.phases['1'].status, 'waiting');
+    assert.equal(state.phases['1'].parkReason, 'image build 6a94a514');
+    assert.deepEqual(state.phases['1'].watch, ['gh:hub#run/1234']);
+    assert.equal(state.phases['1'].waits, 1);
+    assert.ok(state.waitUntil, 'the run carries the soonest park clock');
+    assert.ok(journalled(events, 'phase.waiting').length, 'the park is journalled');
+    assert.equal(journalled(events, 'phase.closeout').length, 0, 'no closeout nudge for a declared wait');
+
+    // The window elapses; the service restarts the run (exactly what the boot
+    // re-arm does). The loop routes the expired wait as a resume. Derived
+    // from the recorded clock, not a fixed sleep — under full-suite load the
+    // park lands later than this test scheduled it.
+    await sleep(Math.max(0, Date.parse(state.waitUntil ?? '') - Date.now()) + 40);
+    await instance.start({ slug: 'demo', root: r.root, resumeRunId: state.id, onlyPhases: [1] });
+    await instance.wait();
+
+    state = instance.current()!;
+    assert.deepEqual(resumes, ['sess-0001'], 'the resume continued the phase\'s own session');
+    assert.equal(state.phases['1'].status, 'done');
+    assert.equal(state.status, 'finished');
+  } finally { r.cleanup(); }
+});
+
+test('the wait budget is finite: a phase that keeps re-filing the same wait halts honestly', async () => {
+  const r = repo();
+  try {
+    const spawn: SpawnFn = async (request) => {
+      fileOutcome(request, {
+        phase: 1, status: 'waiting-external', reason: 'a build that never lands',
+        resume_after: new Date(Date.now() + 15).toISOString(),
+      });
+      return ok();
+    };
+    const { instance } = runner(r, spawn, undefined, undefined, { waitFloorMs: 10 });
+    await instance.start({ slug: 'demo', root: r.root, onlyPhases: [1] });
+    await instance.wait();
+
+    let state = instance.current()!;
+    for (let round = 0; round < 6 && state.status === 'waiting'; round++) {
+      await sleep(30);
+      await instance.start({ slug: 'demo', root: r.root, resumeRunId: state.id, onlyPhases: [1] });
+      await instance.wait();
+      state = instance.current()!;
+    }
+
+    assert.equal(state.status, 'halted', 'the fourth re-file spends the budget');
+    assert.equal(state.halt?.kind, 'waiting-external-timeout');
+    assert.match(state.halt?.reason ?? '', /wait budget is spent/);
+    assert.equal(state.phases['1'].status, 'failed');
+  } finally { r.cleanup(); }
+});
+
+test('a closeout session that files waiting-external parks the phase instead of halting no-handoff', async () => {
+  // The exact phase-8 shape: the first session ends without paperwork, the
+  // nudge resumes it, and the honest answer is still "the external clock has
+  // not landed" — which used to become the halt. Now it becomes the park.
+  const r = repo();
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: r.root });
+    writeFileSync(join(r.root, 'half-finished.txt'), 'work in flight\n');
+    let closeoutResume: string | undefined;
+    let calls = 0;
+    const spawn: SpawnFn = async (request) => {
+      calls++;
+      if (calls === 1) return ok({ resultText: 'ended without paperwork' });
+      closeoutResume = request.resume;
+      fileOutcome(request, {
+        phase: 1, status: 'waiting-external', reason: 'deploys blocked on the image build',
+        resume_after: new Date(Date.now() + 60_000).toISOString(),
+      });
+      return ok({ sessionId: 'sess-0001' });
+    };
+    const { instance, events } = runner(r, spawn);
+    await instance.start({ slug: 'demo', root: r.root, onlyPhases: [1] });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.equal(calls, 2, 'the closeout nudge ran');
+    assert.equal(closeoutResume, 'sess-0001', 'the nudge resumed the same session');
+    assert.equal(state.halt, null, 'no no-handoff halt');
+    assert.equal(state.status, 'waiting');
+    assert.equal(state.phases['1'].status, 'waiting');
+    assert.ok(journalled(events, 'phase.closeout').length, 'the closeout is on the record');
+    assert.ok(journalled(events, 'phase.waiting').length);
+  } finally { r.cleanup(); }
+});
+
+test('a session with no outcome and no work still halts no-handoff — the legacy pin', async () => {
+  const r = repo();
+  try {
+    const { instance } = runner(r, async () => ok({ resultText: 'Phase complete!' }));
+    await instance.start({ slug: 'demo', root: r.root, onlyPhases: [1] });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.equal(state.status, 'halted');
+    assert.equal(state.halt?.kind, 'no-handoff');
+    assert.match(state.halt?.reason ?? '', /the board still reads/);
+  } finally { r.cleanup(); }
+});
+
+test('a stale outcome file from a previous attempt is ignored and the legacy path stands', async () => {
+  const r = repo();
+  try {
+    const spawn: SpawnFn = async (request) => {
+      // Written BEFORE the attempt started — a leftover from a crashed try.
+      fileOutcome(request, {
+        phase: 1, status: 'waiting-external', reason: 'ancient history',
+        written_at: '2020-01-01T00:00:00Z',
+      });
+      return ok({ resultText: 'Phase complete!' });
+    };
+    const { instance, events } = runner(r, spawn);
+    await instance.start({ slug: 'demo', root: r.root, onlyPhases: [1] });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.equal(state.halt?.kind, 'no-handoff', 'the stale declaration must not park anything');
+    assert.equal(journalled(events, 'phase.outcome').length, 0, 'a rejected file is never journalled as an outcome');
+    assert.equal(journalled(events, 'phase.waiting').length, 0);
+  } finally { r.cleanup(); }
+});
+
+test('outcome blocked on a lock re-queues the phase without a halt; needs-human parks the run for a person', async () => {
+  const r = repo();
+  try {
+    let calls = 0;
+    const spawn: SpawnFn = async (request) => {
+      calls++;
+      if (calls === 1) {
+        fileOutcome(request, {
+          phase: 1, status: 'blocked', reason: 'lock held by mobinzarekar@laptop',
+          watch: ['lock:demo/1'],
+        });
+        return ok();
+      }
+      r.markDone(1);
+      return ok();
+    };
+    const { instance, events } = runner(r, spawn);
+    await instance.start({ slug: 'demo', root: r.root, onlyPhases: [1] });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.equal(state.phases['1'].status, 'done', 'the re-queued phase boarded again and finished');
+    assert.equal(state.status, 'finished');
+    assert.ok(journalled(events, 'phase.outcome-lock-blocked').length);
+    assert.equal(journalled(events, 'run.halt').length, 0, 'a refused lock is not a defect');
+  } finally { r.cleanup(); }
+
+  const r2 = repo();
+  try {
+    const spawn: SpawnFn = async (request) => {
+      fileOutcome(request, { phase: 1, status: 'needs-human', reason: 'the staging gate needs an operator' });
+      return ok();
+    };
+    const { instance } = runner(r2, spawn);
+    await instance.start({ slug: 'demo', root: r2.root, onlyPhases: [1] });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.equal(state.status, 'parked', 'a person is needed — the approvals-park vocabulary');
+    assert.match(state.halt?.reason ?? '', /needs a person: the staging gate/);
+    assert.equal(state.phases['1'].status, 'parked');
+    assert.equal(state.consecutiveFailures, 0, 'nobody being available is not the phase failing');
+  } finally { r2.cleanup(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * Board freshness: the reconcile pass and the docs-watcher wake
+ * ------------------------------------------------------------------ */
+
+test('a failed record the board has overtaken is closed as "outside this run", never re-run', async () => {
+  // The live shape: a run halts with a phase reading `failed`, somebody
+  // finishes that phase by hand, the run is continued — and the stale record
+  // used to stand forever ("Departed" board chip over a red row) while the
+  // loop, with `failed` in SETTLED, wouldn't touch the phase either.
+  const r = repo();
+  try {
+    const stale = newRun({ slug: 'demo', root: r.root, model: 'opus' });
+    stale.status = 'halted';
+    stale.halt = { at: new Date().toISOString(), reason: 'no handoff', phase: 1, kind: 'no-handoff' };
+    phaseRecord(stale, 1).status = 'failed';
+    saveRun(stale);
+    r.markDone(1); // …then somebody finished phase 1 by hand
+
+    const seen: number[] = [];
+    const { instance } = runner(r, workingSession(r, seen));
+    await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', resumeRunId: stale.id });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.deepEqual(seen, [2, 3], 'no session was spent on the phase somebody already did');
+    assert.equal(state.phases['1'].status, 'done');
+    assert.match(state.phases['1'].note ?? '', /closed outside this run/);
+    assert.equal(state.status, 'finished');
+  } finally { r.cleanup(); }
+});
+
+test('the docs watcher wakes a mid-flight loop: a newly-ready phase boards before any lane settles', async () => {
+  const r = repo();
+  try {
+    const seen: number[] = [];
+    let releaseFirst!: () => void;
+    const held = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const spawn: SpawnFn = async (request) => {
+      const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+      seen.push(phase);
+      if (phase === 1) {
+        await held; // phase 1's session runs "for hours"
+        r.markDone(1);
+        return ok();
+      }
+      r.markDone(phase);
+      return ok();
+    };
+    const { instance } = runner(r, spawn, undefined, undefined, { maxParallel: 2 });
+    await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', maxParallel: 2 });
+
+    // Wait until phase 1's lane is live, then finish phase 1 OUTSIDE the run
+    // (a manual session writing the handoff) and poke, exactly as the
+    // service's onChange does.
+    for (let i = 0; i < 100 && !seen.includes(1); i++) await sleep(10);
+    r.markDone(1);
+    instance.noteDocsChanged();
+
+    // Phase 2 must board while lane 1 is still hanging.
+    for (let i = 0; i < 200 && !seen.includes(2); i++) await sleep(10);
+    assert.ok(seen.includes(2), 'the wake re-read the board mid-lane and admitted phase 2');
+
+    releaseFirst();
+    await instance.wait();
+    assert.equal(instance.current()!.status, 'finished');
+  } finally { r.cleanup(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * Cross-actor locks: queue-behind, wait cap, and the lease keepalive
+ * ------------------------------------------------------------------ */
+
+test('a foreign lock at boarding queues the phase behind the holder, and boards when it frees', async () => {
+  const r = repo();
+  try {
+    r.setLockRefused(true);
+    const seen: number[] = [];
+    const scheduler = new Scheduler({ locks: () => [] });
+    const { instance, events } = runner(r, workingSession(r, seen), undefined, undefined, { scheduler });
+    const started = instance.start({ slug: 'demo', root: r.root, onlyPhases: [1] });
+
+    // Free the lock after the belt-check has seen it at least once.
+    setTimeout(() => r.setLockRefused(false), 1_500);
+    await started;
+    await instance.wait();
+    scheduler.close();
+
+    const state = instance.current()!;
+    assert.deepEqual(seen, [1], 'the phase boarded once the holder released');
+    assert.equal(state.phases['1'].status, 'done');
+    assert.ok(journalled(events, 'phase.lock-race').length, 'the wait was journalled, not parked');
+    assert.equal(journalled(events, 'phase.lock-refused').length, 0, 'the terminal park is gone');
+  } finally { r.cleanup(); }
+});
+
+test('a lock wait that outlives the cap parks honestly, naming the holder and the wait', async () => {
+  const r = repo();
+  try {
+    r.setLockRefused(true);
+    // A run whose record says it has already queued behind this lock for
+    // three hours — the cap is two.
+    const stale = newRun({ slug: 'demo', root: r.root, model: 'opus' });
+    stale.status = 'paused';
+    stale.onlyPhases = [1];
+    const record = phaseRecord(stale, 1);
+    record.lockWaitSince = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+    saveRun(stale);
+
+    const scheduler = new Scheduler({ locks: () => [] });
+    const { instance, events } = runner(r, workingSession(r), undefined, undefined, { scheduler });
+    await instance.start({ slug: 'demo', root: r.root, resumeRunId: stale.id, onlyPhases: [1] });
+    await instance.wait();
+    scheduler.close();
+
+    const state = instance.current()!;
+    assert.equal(state.phases['1'].status, 'parked');
+    assert.match(state.phases['1'].note ?? '', /locked by someone\/else and has waited/);
+    assert.ok(journalled(events, 'phase.lock-wait-capped').length);
+  } finally { r.cleanup(); }
+});
+
+test('the lease keepalive refreshes the lock under the shared owner, and stands down on a foreign takeover', async () => {
+  const claims = (r: Repo): string[] => {
+    const path = join(r.state, 'locks');
+    if (!existsSync(path)) return [];
+    return readFileSync(path, 'utf8').split('\n').filter((line) => /\bclaim\b/.test(line));
+  };
+
+  const r = repo();
+  try {
+    // The session holds its turn until the supervisor's keepalive has fired —
+    // exactly the long-phase shape the keepalive exists for.
+    const spawn: SpawnFn = async () => {
+      for (let i = 0; i < 300 && !claims(r).length; i++) await sleep(10);
+      r.markDone(1);
+      return ok();
+    };
+    const { instance, events } = runner(r, spawn, undefined, undefined, { leaseRefreshMs: 40 });
+    await instance.start({ slug: 'demo', root: r.root, onlyPhases: [1] });
+    await instance.wait();
+
+    const refreshes = claims(r);
+    assert.ok(refreshes.length >= 1, 'the keepalive fired while the session worked');
+    assert.match(refreshes[0], /claim 1 --owner autopilot\/\S+ --scope /,
+      'the refresh claims under the shared owner WITH the scope');
+    assert.ok(journalled(events, 'phase.lock-refreshed').length, 'the refresh is on the record');
+  } finally { r.cleanup(); }
+
+  const r2 = repo();
+  try {
+    r2.setClaimRefuse(true); // every claim answers "held by someone else"
+    const spawn: SpawnFn = async () => {
+      for (let i = 0; i < 300 && !claims(r2).length; i++) await sleep(10);
+      await sleep(120); // long enough for a would-be second fire
+      r2.markDone(1);
+      return ok();
+    };
+    const { instance, events } = runner(r2, spawn, undefined, undefined, { leaseRefreshMs: 40 });
+    await instance.start({ slug: 'demo', root: r2.root, onlyPhases: [1] });
+    await instance.wait();
+
+    assert.equal(journalled(events, 'phase.lock-lost').length, 1,
+      'the takeover is journalled once, and the keepalive stands down instead of fighting');
+    assert.equal(claims(r2).length, 1, 'no second claim was attempted');
+  } finally { r2.cleanup(); }
 });

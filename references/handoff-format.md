@@ -46,9 +46,16 @@ phase may unblock several phases or none.
 Pass `in-progress` or `blocked` when scaffolding a handoff mid-phase. An `in-progress` handoff is also the
 durable **pause marker**: a session interrupted mid-phase (usage limit, died console, deliberate stop) that
 scaffolds one leaves the next session a bootstrap that says "continue from here, don't restart" — record
-what is done, what is uncommitted, and (for a usage-limit stop) when the window reopens. `pending` / `TBD`
+what is done, what is uncommitted, and (for a usage-limit stop) when the window reopens. The same marker
+covers an **external wait** (a CI build, a PR auto-merge, a deploy window): write the `in-progress`
+handoff *before* stopping, and — under a supervising runner — also declare the wait machine-readably with
+`scripts/phase-outcome.sh <slug> <N> waiting-external …` so the autopilot parks and resumes the session
+instead of reading the stop as a failure. The status vocabulary itself is unchanged
+(`complete | in-progress | blocked | pending`): `waiting` is a **runner** phase state, never a handoff
+status. `pending` / `TBD`
 are valid in `INDEX.md` rows for phases not yet written (added by hand — the script only scaffolds phases
-that exist).
+that exist). `INDEX.md` is an append log — per-handoff `status:` is the truth the board reads; a stale
+INDEX row is cosmetic.
 `new-handoff.sh` auto-detects the final phase by reading `phases:` from the plan and sets `next_phase: none`.
 Pass `--force` to re-scaffold (repair) an existing handoff.
 
@@ -105,7 +112,13 @@ Each fenced boot prompt is copy-pasted verbatim into a fresh session. Per ready 
     your scope — pull --rebase and retry up to 3 times if one races.)
 
     Then build the pP.task* list and implement Phase P to its exit criteria.
-    Stop + hand off when done.
+
+    When done, the deliverable is the HANDOFF — the board reads status: from it, and a
+    phase with no handoff does not exist to the board. Scaffold it with:
+        bash <scripts>/new-handoff.sh <slug> P <kebab-title> complete
+    then fill in docs/handoffs/<slug>/phase-PP-<kebab-title>.md and commit it.
+    Cannot finish? Hand off in-progress (paused, resumable) or blocked (needs help) —
+    never end the session without a handoff. Stop after the handoff exists.
 
 (4-space indent here avoids backtick nesting; the real handoff uses plain ` ``` ` fences.) The "Read first"
 lines point at **P's dependency handoffs** — the phases P builds on — not merely the previous number.

@@ -12,7 +12,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync,
+  renameSync, writeSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 import { instanceId } from '../../shared/instances.mjs';
@@ -73,6 +76,14 @@ export type PhaseStatus =
   | 'failed' | 'interrupted' | 'skipped' | 'parked'
   /** Waiting on the scheduler for a scope that something else is holding. */
   | 'queued'
+  /**
+   * Parked on an EXTERNAL clock the session declared (`phase-outcome.sh
+   * waiting-external`): a CI build, a PR auto-merge, a deploy window. Not
+   * settled — the runner resumes the phase's own session at `parkedUntil` —
+   * and not in flight — there is no live child while it waits. The one status
+   * where "nothing is running" and "nothing is wrong" are both true.
+   */
+  | 'waiting'
   /** Verified as far as a machine can; the rest is a question for a person. */
   | 'awaiting-verification';
 
@@ -200,6 +211,31 @@ export type PhaseRecord = {
    * not written took a manual dig through NDJSON to recover.
    */
   said?: string;
+  /**
+   * When a `waiting` park elapses and the runner re-checks / resumes. Absolute
+   * ISO so a console outage does the right thing on boot: an expired clock
+   * resumes immediately, an unexpired one re-arms for the remainder.
+   */
+  parkedUntil?: string;
+  /** The session's own words for what it is waiting on. */
+  parkReason?: string;
+  /** Machine-ish refs for the external things being waited on (`gh:…#run/N`, `lock:slug/N`). */
+  watch?: string[];
+  /**
+   * How many waiting-external parks this phase has taken. Capped: a phase that
+   * keeps re-filing the same wait is not waiting, it is stuck, and the cap is
+   * what turns that into an honest halt instead of an infinite quiet loop.
+   */
+  waits?: number;
+  /** Total wall-clock this phase has spent parked, accrued at each resume. */
+  parkedMs?: number;
+  /**
+   * When this phase first started waiting on a foreign LOCK (queued-behind-a-
+   * holder). Bounds the lock wait: past the cap the phase parks honestly with
+   * the holder named instead of queueing forever behind a dead-but-unexpired
+   * claim.
+   */
+  lockWaitSince?: string;
 };
 
 /**
@@ -492,7 +528,20 @@ export type RunState = {
    * the newest session ended, whoever started it. Absent on runs that predate
    * the feature, which reads as "never tried".
    */
-  recoveries?: Record<string, { attempts: number; lastAt: string; lastReason?: string; fixed?: boolean }>;
+  recoveries?: Record<string, {
+    attempts: number;
+    lastAt: string;
+    lastReason?: string;
+    fixed?: boolean;
+    /**
+     * How the newest recovery actually ended — `fixed` kept in parallel for
+     * old readers. `no-defect` (the recovery concluded nothing was wrong) and
+     * `superseded` (the board had already moved past the halt before anything
+     * was launched) both exist so an unnecessary recovery is RECORDED as
+     * unnecessary instead of scored as a failure that clears nothing.
+     */
+    lastOutcome?: 'fixed' | 'no-defect' | 'superseded' | 'failed';
+  }>;
   /**
    * The run heals itself: an auto-recoverable halt launches the fix agent, and
    * a fixed board resumes the run. Absent means off — a run file written
@@ -658,14 +707,31 @@ export function phaseRecord(state: RunState, phase: number): PhaseRecord {
   return state.phases[key];
 }
 
-/** Write the checkpoint atomically — rename is the only step a reader can see. */
+/**
+ * Write the checkpoint atomically — rename is the only step a reader can see —
+ * and durably: the file is fsync'd before the rename and the directory after,
+ * so a power cut can lose at most the newest write, never leave a torn one.
+ * The directory fsync is best-effort (not every platform permits it); rename
+ * already covers the torn-write case on its own.
+ */
 export function saveRun(state: RunState): void {
   state.updatedAt = new Date().toISOString();
   const target = runFile(state.root, state.slug, state.id);
-  mkdirSync(runDir(state.root, state.slug), { recursive: true });
+  const dir = runDir(state.root, state.slug);
+  mkdirSync(dir, { recursive: true });
   const tmp = `${target}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  const fd = openSync(tmp, 'w');
+  try {
+    writeSync(fd, `${JSON.stringify(state, null, 2)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, target);
+  try {
+    const dirFd = openSync(dir, 'r');
+    try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+  } catch { /* best-effort */ }
 }
 
 /* ------------------------------------------------------------------ *
@@ -773,8 +839,16 @@ export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
     delete state.children;
     state.pause = null;
     state.freeze = null;
-    state.finishedReason ??= `usage limit — this run meant to resume at ${state.waitUntil}. `
-      + 'Continue now under another account, or leave it to re-arm.';
+    // Two kinds of run-level wait share the clock: the usage window, and a
+    // park on external work some phase declared. Phase records tell them
+    // apart — a `waiting` record exists only for the second — and the boot
+    // re-arm (`Service.readoptQueued`) makes the same read.
+    const parked = Object.values(state.phases).some((record) => record.status === 'waiting');
+    state.finishedReason ??= parked
+      ? `waiting on external work — this run meant to resume at ${state.waitUntil}. `
+        + 'Continue now, or leave it to re-arm.'
+      : `usage limit — this run meant to resume at ${state.waitUntil}. `
+        + 'Continue now under another account, or leave it to re-arm.';
     for (const record of Object.values(state.phases)) {
       if (!PHASE_IN_FLIGHT.includes(record.status)) continue;
       record.status = 'pending';
@@ -849,6 +923,47 @@ export function decidingPhases(state: RunState): number[] {
 }
 
 /**
+ * Rewrite phase records the board has overtaken: any not-in-flight, not-done
+ * record whose phase the board now reads `done` becomes `done` with a note
+ * saying the work was closed outside this run.
+ *
+ * This is the record-level half the run-level resolver below never did — it
+ * annotates the RUN but leaves every `failed` phase record standing, which is
+ * how a live plan ended up with eight "failed" chips over a board reading
+ * done. Never the reverse: a phase the board does NOT read done is untouched,
+ * whatever its record says — reconcile closes records, it never re-opens or
+ * re-runs them. Clearing the halt is part of the same truth: a halt anchored
+ * to a phase that is now done is a card about nothing.
+ */
+export const RECONCILABLE: readonly PhaseStatus[] = [
+  'failed', 'parked', 'waiting', 'pending', 'interrupted', 'gated', 'queued',
+];
+
+export function reconcileRecordsAgainstBoard(
+  state: RunState,
+  board: Record<number, string>,
+  now = new Date().toISOString(),
+): { changed: boolean; closed: number[] } {
+  const closed: number[] = [];
+  for (const record of Object.values(state.phases)) {
+    if (!RECONCILABLE.includes(record.status)) continue;
+    if (board[record.phase] !== 'done') continue;
+    record.status = 'done';
+    record.note = 'closed outside this run (the board reads done)';
+    record.endedAt ??= now;
+    delete record.parkedUntil;
+    delete record.parkReason;
+    delete record.lockWaitSince;
+    closed.push(record.phase);
+  }
+  if (closed.length && state.halt?.phase != null && closed.includes(state.halt.phase)) {
+    state.halt = null;
+    state.consecutiveFailures = 0;
+  }
+  return { changed: closed.length > 0, closed };
+}
+
+/**
  * Resolve a stopped run the board has already moved past.
  *
  * The reconciliation above answers "is anything still driving this?"; this
@@ -912,7 +1027,16 @@ export function resolveRunsAgainst(
   const changed: RunState[] = [];
   for (const run of runs) {
     const board = boards.get(run.slug);
-    if (board && autoResolveRun(run, board)) changed.push(run);
+    if (!board) continue;
+    // Records first, run second: closing the overtaken phase records is what
+    // makes the run-level "superseded" annotation match what the phase table
+    // shows. Only stopped runs — a live loop owns its records and does the
+    // same reconcile itself at the top of every drive tick.
+    const records = RESOLVABLE.includes(run.status) && !run.reopenedAt
+      ? reconcileRecordsAgainstBoard(run, board)
+      : { changed: false, closed: [] };
+    const resolved = autoResolveRun(run, board);
+    if (records.changed || resolved) changed.push(run);
   }
   return changed;
 }

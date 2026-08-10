@@ -13,7 +13,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 metadata:
-  version: 4.3.0
+  version: 4.4.0
 ---
 
 # Phased Execution
@@ -164,6 +164,9 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    they are connected (`/mcp`, or `claude mcp list`) before implementing; if one needs authentication,
    **stop and ask the operator to sign it in** rather than working around it — the plan chose that server
    for a reason, and a phase that quietly did without is worse than one that stopped and said why.
+   (**Unattended** — no operator present: record it instead — `bash scripts/phase-outcome.sh <slug> <N>
+   needs-human --reason "mcp <name> needs sign-in"` — hand off `blocked`, and stop; the supervisor
+   parks the phase for the operator.)
    That must be enough — if it isn't, the previous handoff was
    deficient; note the gap so it gets fixed.
 2. **Confirm readiness, then the budget.** If the board shows this phase as `waiting`, a dependency isn't
@@ -189,7 +192,10 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    `conflicts` looks across **every plan**, because a working tree doesn't know which plan asked for it.
    If it names a live session — or `claim` reports the phase already held — **stop and ask the user**
    whether to wait, stop that session, take over (`--force`), or pick a ready phase with a disjoint
-   scope. Never build over a live session. The lock auto-expires (lease) and is released at phase-finish.
+   scope. Never build over a live session. (**Unattended**: never wait for an answer that cannot come —
+   file `bash scripts/phase-outcome.sh <slug> <N> blocked --reason "lock held by <owner>"
+   --watch lock:<slug>/<N>`, hand off `in-progress` if you already did work, and stop; the supervisor
+   queues the retry for when the lock frees.) The lock auto-expires (lease) and is released at phase-finish.
    See `references/conventions.md` §Locking + §Scoped concurrency.
 
    **Gate check — GATED phases only, and BEFORE implementing.** Run
@@ -204,6 +210,8 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    - `manual: …` / `blocked: …` / `OVERDUE: …` → **STOP.** Tell the operator what the gate needs and
      where to clear it: Phase Console → plan → phase → **Gate card** (Approve), or
      `scripts/gate-approve.sh <slug> <N> --by "<who>"`. Never implement past an unapproved human gate.
+     (**Unattended**: file `bash scripts/phase-outcome.sh <slug> <N> needs-human --reason "<gate> needs
+     the operator"` and stop.)
 3. **Reset the task list** (delete prior-phase tasks) and create THIS phase's tasks with subjects prefixed
    **`pN.taskM`** (e.g. `p2.task1 — wire endpoint`). Keep the roadmap in the plan, not the task list.
    (See `references/conventions.md` and memory `feedback_phase_task_list_reset`.)
@@ -263,6 +271,18 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
      phase's own boundary.
    - The user asks for QA on a plan that didn't record it? Pass `--qa` to `new-handoff.sh` (it creates
      `test-status.md`, backfilling earlier completed phases as `waived`), then follow the `on` path.
+   **External waits — when the proof depends on a clock you don't control** (a CI image build, a PR's
+   auto-merge, a deploy window): do not end the session silently waiting, and do not try to outlive the
+   wait with background watchers — in an unattended (`claude -p`) session the process exits when your
+   turn ends, `ScheduleWakeup`/`Monitor`/backgrounded loops die with it, and a clean exit with no
+   handoff reads as a failed phase. Instead: (1) commit what is done; (2) write the handoff **now** with
+   `status: in-progress` — the durable pause marker (`references/handoff-format.md`) — recording what is
+   done, what remains, and what you are waiting on; (3) declare the wait machine-readably:
+   `bash scripts/phase-outcome.sh <slug> <N> waiting-external --wait-minutes <M> --reason "<what>"
+   --watch <ref>`; (4) stop. The supervisor parks the phase and resumes THIS session when the window
+   elapses. (An interactive session may instead simply keep the turn and wait.) Plans avoid the park
+   entirely by splitting build ∥ verify-later behind a Gate-check — `references/plan-format.md`.
+
 5. **Stop & hand off, or batch.** Run the end-of-phase script (it prints the live board, batching advice,
    and a START COPY / END COPY boot prompt for **every** phase now ready):
    ```bash
@@ -279,7 +299,8 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
      exhausted** (session/weekly limit — note the reset time in the handoff so the next session knows when
      work can resume, or resumes at once under another account), or — with QA `on` — it depends on this
      phase's still-unrecorded verdict. Print the script's output verbatim as the **last message of this
-     session**, then **STOP**.
+     session**, then **STOP** — after the handoff exists; a session that stops without one has not
+     finished.
    - **Several phases ready:** run them in any order. Ones with **disjoint scopes** may run as separate
      sessions at the same time (the banner names which pairs those are); ones sharing a repo run one at a
      time. Continue into ONE of them here if the budget allows; the output lists a boot prompt for each of

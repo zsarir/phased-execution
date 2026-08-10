@@ -220,6 +220,8 @@ export interface QueueHolder {
   owner: string;
   scope: string[];
   overlaps: string[];
+  /** When a `lock` holder's lease lapses (ms epoch) — "lease ends <t>". */
+  leaseUntil?: number;
 }
 
 export interface QueueEntry {
@@ -884,6 +886,12 @@ export type PhaseStatus =
   | 'failed' | 'interrupted' | 'skipped' | 'parked'
   /** Waiting on the scheduler for a scope that something else is holding. */
   | 'queued'
+  /**
+   * Parked on an EXTERNAL clock the session declared (a CI build, a PR
+   * auto-merge, a deploy window). Not a failure and not settled: the runner
+   * resumes the phase's own session at `parkedUntil`.
+   */
+  | 'waiting'
   | 'awaiting-verification';
 
 export type Autonomy = 'halt-on-everything' | 'keep-going';
@@ -912,6 +920,16 @@ export interface PhaseRecord {
   turns?: number;
   durationMs?: number;
   frozenMs?: number;
+  /** When a `waiting` park elapses and the runner resumes the phase's session. */
+  parkedUntil?: string;
+  /** The session's own words for what it is waiting on. */
+  parkReason?: string;
+  /** Refs for the external things being waited on (`gh:…#run/N`, `lock:slug/N`). */
+  watch?: string[];
+  /** How many waiting-external parks this phase has taken (capped by the runner). */
+  waits?: number;
+  /** When this phase started queueing behind a foreign lock. */
+  lockWaitSince?: string;
   /**
    * How many times this phase called each attached MCP server, by id. Zero for
    * an id means it was attached and never touched — the interesting number,

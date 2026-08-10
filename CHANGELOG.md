@@ -6,6 +6,71 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [2.0.0] - 2026-08-10
+
+The autopilot learns to wait, to look, and to resume. A live plan's phase 8 did 47 minutes of real
+work, ended its turn "waiting on the image build (34–65 min)" in free prose, and the runner — with
+no vocabulary for that — read the clean exit as completion, found no handoff, nudged once into the
+same holding pattern, and halted. Across 14 real runs, "ended cleanly, no handoff" was the largest
+halt class, recoveries launched seconds after the board had already superseded them, eight of eleven
+phase records contradicted the board, and a foreign lock at boarding parked a phase forever. Every
+one of those is now a designed state instead of a failure.
+
+### Added
+
+- **The phase-outcome protocol** (`scripts/phase-outcome.sh` + `viewer/server/runner/outcome.ts`):
+  a session declares how it ended — `complete`, `waiting-external` (with a window and watch refs),
+  `blocked`, `needs-human` — as one atomic JSON file at the runner-injected `PE_OUTCOME_FILE`, read
+  once on exit, journalled, consumed, and staleness-guarded twice. Prose stops being the channel.
+- **`waiting` — the external-wait park.** A `waiting-external` outcome parks the phase (lane, grant
+  and lock released), the run sleeps on the soonest `parkedUntil` restart-safely, and the resume is
+  the phase's **own session** (`claude -p --resume`) told the window elapsed. Caps make it honest:
+  4 waits / 8 h per phase, then a `waiting-external-timeout` halt naming the watch refs.
+- **The unattended-session contract**, appended by the runner to every boot, closeout and
+  wait-resume prompt: the deliverable is the handoff; `ScheduleWakeup`/`Monitor`/backgrounded
+  watchers do not survive a `-p` turn ending; external waits, locks and needed humans are declared
+  via `phase-outcome.sh`, never waited out silently. The engine's own boot prompt now names the
+  deliverable too (`new-handoff.sh` argv, the handoff path, "the board reads `status:` from it")
+  instead of the six words "Stop + hand off when done."
+- **A Stop hook** beside the PreToolUse hook (same origin, token, fail-open philosophy): a session
+  ending with neither a handoff on the board nor a declared outcome is told exactly what to do
+  instead — at most twice per session; the runner's exit-time check stays the load-bearing layer.
+- **F16 lint advisory** (same warning arm as F14/F15): a §Verification command that waits on an
+  external clock — `gh run watch`, `task deploy`, `--watch`/`wait`, long sleeps — with the advice to
+  split the phase behind a Gate-check or expect the runtime park.
+- **Live-loop reconciliation.** The docs watcher pokes running drive loops (a manual session's
+  handoff is seen NOW, not when a lane settles hours later), and a reconcile pass at every tick
+  closes records the board has overtaken ("closed outside this run"), dissolving halts anchored to
+  them — closing only, never re-running a failed phase. The read path does the same for stopped
+  runs, so "Departed" board chips over red records correct themselves.
+- **Cross-plan lock orchestration.** A foreign unexpired lock queues the phase behind the named
+  holder (lease end on the queue page) instead of parking it terminally; the queue wakes on lock
+  churn under `docs/handoffs/**/.locks`, on a timer at the soonest blocking lease expiry, and on the
+  idle poll; a 2-hour cap turns an endless wait into an honest park. The runner keepalives its
+  lane's lock every 10 minutes under the shared `PE_OWNER` — a 47-minute phase can no longer
+  silently lose its 30-minute lease — and stands down on a foreign takeover.
+- **SKILL.md and references**: the external-waits discipline (in-progress handoff as the durable
+  pause + the outcome declaration), unattended alternates for every "stop and ask" step, and
+  plan-format guidance to split build ∥ verify-later behind a Gate-check.
+
+### Changed
+
+- **Recovery is resolve-first and session-API-first.** Before anything launches, the board is
+  re-read and reconciled — a superseded halt spawns nothing (the observed
+  launched-19-seconds-after-resolved class is dead). For `no-handoff`, `verify-failed` and
+  `waiting-external-timeout` halts with a resumable session, auto-recovery resumes the phase's own
+  session through the runner — settings, deny rules, hooks and journal all applying — under
+  `--allow-run` alone. The pty agent remains for plan-shaped repairs (`--allow-agent`) and as the
+  manual fallback; the halt card's primary action is now "Resume session & finish closeout".
+- **Recovery verdicts got honest.** "Found nothing wrong" is `no-defect` (halt stood down, nothing
+  invented `done`) instead of a failure that cleared nothing; a recovery finishing under a live
+  loop hands its verdict to the loop (`enqueueResolution`) instead of being skipped; `recover()` no
+  longer erases the halt before doing any work — success, and only success, retires it.
+- **`saveRun` is durable**: fsync on the checkpoint before the rename and best-effort on the
+  directory after.
+- **Engine fallback constants** in `phase-graph.sh` now match `scripts/sizing.env`; the runner's own
+  engine calls carry `PE_MCP_SERVERS`, so its `validate.sh` reads warn like the service's.
+
 ## [1.9.0] - 2026-08-09
 
 MCP servers become something a plan can ask for and a console can prove. A phase whose GitHub

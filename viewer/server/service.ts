@@ -7,7 +7,7 @@
  * bumps whenever one of its files changes.
  */
 
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
 
@@ -56,11 +56,13 @@ import { formatScope, scopeOfRow, scopesIntersect } from '../shared/scope.js';
 import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
 import {
-  childrenOf, latestRun, listRuns, loadRun, phaseRecord, pidAlive, resolveRunsAgainst, saveRun,
+  autoResolveRun, childrenOf, latestRun, listRuns, loadRun, phaseRecord, pidAlive,
+  reconcileRecordsAgainstBoard, resolveRunsAgainst, saveRun,
   slugsNeedingBoard, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, type RunState, type VerifySummary,
 } from './runner/state.ts';
+import { outcomeFileFor, readOutcome } from './runner/outcome.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
-import { extractCommands } from './runner/verify.ts';
+import { extractCommands, verifyPhase } from './runner/verify.ts';
 import { checkAuth, checkAuthFor, forgetAuth, openLoginTerminal, openCommandTerminal, shellQuote, type AuthStatus } from './runner/auth.ts';
 import { Accounts, DEFAULT_ACCOUNT_ID, profileConfigDir, type AccountView } from './accounts/index.ts';
 import { Mcp, type McpServerView } from './mcp/index.ts';
@@ -537,6 +539,10 @@ export function autoRecoveryClass(
     // person's (it has no phase to anchor the session on).
     case 'plan-lint': return 'halted-verification';
     case 'no-handoff': return 'halted-missing-handoff';
+    // A spent wait budget is the same closeout posture as a missing handoff:
+    // resume the phase's own session, check the external clock, finish the
+    // paperwork or re-file the wait.
+    case 'waiting-external-timeout': return 'halted-missing-handoff';
     case 'phase-crashed': return 'interrupted-resume';
     case undefined: break;
     default: return null; // a named kind that is not on this list is not healable
@@ -905,10 +911,16 @@ export class Service {
   private allLocks(): LockView[] {
     const out: LockView[] = [];
     for (const record of this.store?.list() ?? []) {
+      // Parity with `phase-lock.sh conflicts`, which skips closed plans: a
+      // closed plan's leftover locks are debris, not holders.
+      if (record.plan?.closed) continue;
       for (const lock of record.locks) {
         out.push({
           slug: record.slug, phase: lock.phase, owner: lock.owner,
           expired: lock.expired, scope: lock.scope,
+          // The lease clock, so the scheduler can judge expiry live instead
+          // of trusting the bit frozen at scan time — and arm a wake at it.
+          ...(lock.leaseUntil != null ? { leaseUntil: lock.leaseUntil } : {}),
         });
       }
     }
@@ -929,6 +941,9 @@ export class Service {
       scheduler: this.scheduler,
       maxParallel: () => this.flags.maxSessions,
       origin: `http://${flags.host}:${flags.port}`,
+      // The registry ids, so the runner's own engine calls (its validate.sh in
+      // confirm(), its board reads) carry PE_MCP_SERVERS like the service's do.
+      mcpIds: () => this.mcp.enabledIds(),
       // The plan is the only source for what proves a phase worked, exactly as
       // it is the only source for what the phase should do.
       verificationText: (slug, phase) => this.store?.get(slug)?.plan?.phases[phase]?.verification,
@@ -1480,13 +1495,19 @@ export class Service {
         }
         continue;
       }
-      // The second readoptable shape: a run reconciled off a usage-window
-      // sleep (`reconcileRun` turned waiting→paused, keeping `waitUntil`).
-      // Reconcile preserved the facts; THIS is what re-arms the clock — unless
-      // the run's own policy was "pause and ask me", which means what it says.
-      if (state?.status === 'paused' && state.waitUntil && (state.onLimit ?? 'wait') !== 'pause') {
-        this.armLimitResume(record.slug, state);
-        continue;
+      // The second readoptable shape: a run reconciled off a wait
+      // (`reconcileRun` turned waiting→paused, keeping `waitUntil`). Two wait
+      // kinds share that clock — the usage window, and a park on external
+      // work some phase declared — and phase records tell them apart: a
+      // `waiting` record exists only for the park. A park is always re-armed
+      // (it is not a limit, so `onLimit: 'pause'` does not speak for it); a
+      // limit honors the run's own policy.
+      if (state?.status === 'paused' && state.waitUntil) {
+        const parked = Object.values(state.phases).some((r) => r.status === 'waiting');
+        if (parked || (state.onLimit ?? 'wait') !== 'pause') {
+          this.armLimitResume(record.slug, state);
+          continue;
+        }
       }
       // The third readoptable shape: a run that halted — or was interrupted by
       // the very crash this boot is recovering from — with auto-recovery on.
@@ -1555,7 +1576,11 @@ export class Service {
     // Re-read before acting: the operator may have continued it by hand,
     // stopped it, or started something else in the hours this timer slept.
     const state = latestRun(this.root.path, slug, this.liveRunIds());
-    if (!state || state.id !== runId || state.status !== 'paused' || !state.waitUntil) return;
+    // `paused` is the reconciled shape; `waiting` is the same run read off a
+    // console that never restarted (the pooled state was never reconciled).
+    // Both mean "resume me at the clock".
+    if (!state || state.id !== runId || !state.waitUntil) return;
+    if (state.status !== 'paused' && state.status !== 'waiting') return;
     if (this.liveRunner(slug)) return;
     try {
       log.info('run.limit-resume', { slug, runId });
@@ -1881,9 +1906,19 @@ export class Service {
       case 'parked':
         push('parked', `${state.slug} parked`, state.halt?.reason ?? 'every remaining phase needs a person');
         break;
-      case 'waiting':
-        push('parked', `${state.slug} is waiting`, 'asleep until a usage window reopens');
+      case 'waiting': {
+        const parked = Object.values(state.phases).some((p) => p.status === 'waiting');
+        push('parked', `${state.slug} is waiting`,
+          parked
+            ? state.finishedReason ?? 'waiting on external work; resumes on its own'
+            : 'asleep until a usage window reopens');
+        // A run that ended its loop waiting re-arms its own resume — the same
+        // clock machinery as the usage-window sleep. Armed unconditionally
+        // (this emit can fire while the loop is still tearing down);
+        // `resumeLimitPaused` re-checks liveness and status when it fires.
+        if (state.waitUntil) this.armLimitResume(state.slug, state);
         break;
+      }
       case 'finished': {
         const done = Object.values(state.phases).filter((p) => p.status === 'done').length;
         push('finished', `${state.slug} finished`,
@@ -1979,6 +2014,15 @@ export class Service {
     this.generation++;
     void this.refreshRepoInfo();
     this.emit('changed', { slugs, generation: this.generation });
+
+    // The watcher is the one place external actors become visible, so both
+    // consumers that used to be blind to them are poked here. The scheduler:
+    // lock churn lives under docs/handoffs/**/.locks, and a foreign release
+    // is exactly the admission the queue may be waiting on. The live loops:
+    // a handoff written by a manual session used to go unseen until a lane
+    // settled — hours, on a one-lane run.
+    if (paths.some((p) => p.includes('/.locks/'))) this.scheduler.poll();
+    for (const slug of slugs) this.runners.get(slug)?.noteDocsChanged();
 
     if (!slugs.length) return;
     this.announce('changed', {
@@ -3753,6 +3797,44 @@ export class Service {
   }
 
   /**
+   * The gate in front of every recovery: is there anything left to recover?
+   *
+   * (1) Reconcile records against the live board — a phase finished outside
+   * the run closes here, the halt anchored to it dissolves, and the answer is
+   * `superseded` with nothing spawned. (2) A standing `resolved` on the run
+   * is an answer somebody (or the board resolver) already gave — honored, not
+   * relitigated.
+   */
+  private async preRecoveryGate(
+    slug: string, state: RunState, phase: number,
+  ): Promise<'proceed' | 'superseded' | 'resolved'> {
+    const board = await this.boardStates(slug).catch(() => null);
+    if (board) {
+      const pooled = this.runners.get(slug);
+      const holder = pooled?.current()?.id === state.id && !pooled.busy() ? pooled : null;
+      const result = holder
+        ? holder.reconcileAgainstBoard(board)
+        : reconcileRecordsAgainstBoard(state, board);
+      if (!holder && result.changed) {
+        try { saveRun(state); } catch { /* a failed write must not block the verdict */ }
+        this.emit('run:state', { state });
+      }
+      if (result.closed.includes(phase) || board[phase] === 'done') {
+        const now = new Date().toISOString();
+        const slot = ((state.recoveries ??= {})[String(phase)] ??= { attempts: 0, lastAt: now });
+        slot.lastAt = now;
+        slot.lastOutcome = 'superseded';
+        if (!state.resolved) autoResolveRun(state, board);
+        try { saveRun(state); } catch { /* as above */ }
+        this.emit('run:state', { state });
+        return 'superseded';
+      }
+    }
+    if (state.resolved) return 'resolved';
+    return 'proceed';
+  }
+
+  /**
    * What a finished recovery session actually achieved, checked rather than
    * assumed.
    *
@@ -3763,7 +3845,7 @@ export class Service {
    */
   async recoveryOutcome(link: {
     kind: string; slug?: string; phase?: number; runId?: string;
-  }): Promise<{ fixed: boolean; headline: string; detail: string }> {
+  }): Promise<{ fixed: boolean; noDefect?: boolean; headline: string; detail: string }> {
     const slug = link.slug;
     if (!slug || !this.root) {
       return { fixed: false, headline: 'Recovery finished', detail: 'Nothing to check it against.' };
@@ -3822,6 +3904,33 @@ export class Service {
         detail: `The board now reads done — ${RECOVERY_TITLES[link.kind as RecoveryClass] ?? 'the recovery'} worked.`,
       };
     }
+    // Before scoring a miss a failure, ask whether there was anything to fix:
+    // a verification-shaped recovery whose commands all pass found NO DEFECT,
+    // and "found nothing wrong" must not read as "failed to fix" — that
+    // scoring is what left halts standing over healthy phases.
+    if (link.kind === 'halted-verification') {
+      const run = this.runners.get(slug)?.current()
+        ?? (this.root ? listRuns(this.root.path, slug, this.liveRunId()).find((r) => r.phases[String(phase)]) : null);
+      const record = run?.phases[String(phase)];
+      const text = this.store?.get(slug)?.plan?.phases[phase]?.verification;
+      if (run && text) {
+        try {
+          const verification = await verifyPhase(text, {
+            cwd: join(run.root, record?.verifiedIn ?? '.'),
+            timeoutMs: 5 * 60_000,
+          });
+          if (verification.ran.length && verification.ran.every((r) => r.ok)) {
+            return {
+              fixed: false,
+              noDefect: true,
+              headline: `${slug} P${phase}: nothing to fix`,
+              detail: 'Every verification command is green — the recovery found no defect, '
+                + 'so the halt is stood down rather than re-armed.',
+            };
+          }
+        } catch { /* an unrunnable re-check keeps the honest miss below */ }
+      }
+    }
     return {
       fixed,
       headline: `${slug} P${phase} is still ${state}`,
@@ -3853,14 +3962,30 @@ export class Service {
    */
   syncRecoveredRun(
     link: { kind: string; slug?: string; phase?: number; runId?: string },
-    outcome: { fixed: boolean; headline?: string; detail?: string },
+    outcome: { fixed: boolean; noDefect?: boolean; headline?: string; detail?: string },
     by = 'an AI recovery session',
   ): RunState | null {
     const slug = link.slug;
     if (!slug || !this.root?.ok) return null;
 
     const pooled = this.runners.get(slug);
-    if (pooled?.busy()) return null;
+    if (pooled?.busy()) {
+      // The loop owns the state — hand it the write instead of skipping it.
+      // Returning null here (which this did) is how records stayed `failed`
+      // forever while the resumed run drove past them: auto-continue
+      // restarts the run inside the same exit handler, so the race was
+      // structural, not incidental. Only positive verdicts are queued; a
+      // true miss keeps the halt standing by design.
+      if (link.phase != null && link.kind !== 'plan-repair' && (outcome.fixed || outcome.noDefect)) {
+        pooled.enqueueResolution({
+          phase: link.phase,
+          outcome: outcome.fixed ? 'done' : 'no-defect',
+          by,
+        });
+        return pooled.current();
+      }
+      return null;
+    }
     const held = pooled?.current();
     const target = held && held.slug === slug && (!link.runId || held.id === link.runId)
       ? held
@@ -3936,11 +4061,28 @@ export class Service {
     return this.writeStoredRun(target, (state) => {
       const slot = ((state.recoveries ??= {})[String(phase)] ??= { attempts: 0, lastAt: now });
       slot.lastAt = now;
+      if (outcome.noDefect && !outcome.fixed) {
+        // The recovery concluded nothing was wrong. Clearing the halt and
+        // resolving the stop is the honest write; inventing `done` on a
+        // phase the board does not show done is not — the record keeps its
+        // status, annotated by the resolution.
+        slot.lastOutcome = 'no-defect';
+        delete slot.lastReason;
+        state.halt = null;
+        state.consecutiveFailures = 0;
+        state.resolved ??= {
+          at: now,
+          auto: true,
+          reason: `a recovery by ${by} found nothing wrong — ${outcome.detail ?? outcome.headline ?? 'verification passes'}`,
+        };
+        return;
+      }
       if (!outcome.fixed) {
         // The failed attempt is bookkeeping the auto-recovery budget reads;
         // the halt keeps standing so the operator still sees why it stopped.
         if (state.halt?.reason) slot.lastReason = state.halt.reason;
         delete slot.fixed;
+        slot.lastOutcome = 'failed';
         return;
       }
       const record = phaseRecord(state, phase);
@@ -3948,6 +4090,7 @@ export class Service {
       record.endedAt ??= now;
       record.note = `closed by ${by}`;
       slot.fixed = true;
+      slot.lastOutcome = 'fixed';
       delete slot.lastReason;
       state.halt = null;
       state.consecutiveFailures = 0;
@@ -3976,8 +4119,6 @@ export class Service {
   async maybeAutoRecover(slug: string): Promise<{ launched: boolean; reason?: string }> {
     const no = (reason: string) => ({ launched: false as const, reason });
     if (!this.root?.ok) return no('no source directory is open');
-    if (!agentEnabled(this.flags)) return no('auto-recovery needs --allow-agent');
-    if (this.terminals.availability() === 'no') return no('agent sessions are unavailable (node-pty)');
     if (this.liveRunner(slug)) return no('the run is live again');
 
     const state = await this.runFor(slug);
@@ -3990,6 +4131,17 @@ export class Service {
     const phase = state.halt?.phase ?? state.activePhase ?? childrenOf(state)[0]?.phase;
     if (phase == null) return no('no phase to anchor a recovery on');
 
+    /* The pre-recovery gate: reconcile against the board FIRST, and respect a
+     * standing resolution. This kills the observed class of recoveries
+     * launched 19 and 61 seconds AFTER the console had already logged
+     * "superseded — the board shows phase N done": the classifier never read
+     * the board, and `run.resolved` was never consulted. */
+    const gate = await this.preRecoveryGate(slug, state, phase);
+    if (gate === 'superseded') {
+      return no('the board had already moved past the halt — records reconciled, nothing to launch');
+    }
+    if (gate === 'resolved') return no('the stop is already resolved');
+
     const key = String(phase);
     const slot = state.recoveries?.[key];
     const cap = state.autoRecover.attempts;
@@ -4001,6 +4153,64 @@ export class Service {
     if (slot?.lastReason && state.halt?.reason === slot.lastReason && (slot.attempts ?? 0) >= 1) {
       return no('the same failure twice — a person should look before another session does');
     }
+
+    /* The right VEHICLE, by class. A phase whose own session can finish the
+     * paperwork is resumed through the RUNNER — `claude -p --resume`, with
+     * the settings file, the deny rules, the hooks and the journal all
+     * applying, under `--allow-run` — never a fresh interactive agent with
+     * none of that. The pty agent remains for plan-shaped repairs (a session
+     * to EDIT the plan) and for people. */
+    const sessionable = (cls === 'halted-missing-handoff' || cls === 'halted-verification')
+      && Boolean(state.phases[key]?.sessionId);
+    if (sessionable) {
+      if (!this.flags.allowRun) return no('session recovery needs --allow-run');
+      const now = new Date().toISOString();
+      const bumped = ((state.recoveries ??= {})[key] ??= { attempts: 0, lastAt: now });
+      bumped.attempts += 1;
+      bumped.lastAt = now;
+      if (state.halt?.reason) bumped.lastReason = state.halt.reason;
+      saveRun(state);
+      this.emit('run:state', { state });
+      log.info('run.auto-recovery', {
+        slug, runId: state.id, phase, class: cls, vehicle: 'session', attempt: bumped.attempts,
+      });
+      this.announce('session', {
+        title: `Auto-recovery started · ${slug} P${phase}`,
+        body: `${RECOVERY_TITLES[cls]} — resuming the phase's own session `
+          + `(attempt ${bumped.attempts} of ${cap}). The run resumes by itself when the board reads fixed.`,
+        tag: tagFor('session', state.id, `auto-recover-${phase}-${bumped.attempts}`),
+      }, { slug, runId: state.id, phase });
+      void this.recoverPhase(slug, phase, 'closeout', { by: 'auto-recovery' })
+        .then(async () => {
+          const after = this.runners.get(slug)?.current()
+            ?? (this.root ? loadRun(this.root.path, slug, state.id, this.liveRunIds()) : null);
+          if (!after || after.id !== state.id) return;
+          if (after.status === 'parked' && !after.halt) {
+            const done = ((after.recoveries ??= {})[key] ??= { attempts: 0, lastAt: now });
+            done.fixed = true;
+            done.lastOutcome = 'fixed';
+            delete done.lastReason;
+            saveRun(after);
+            if (this.prefs.autoContinueRecovery !== false && this.flags.allowRun && !this.liveRunner(slug)) {
+              log.info('run.recovery-continue', { slug, runId: after.id });
+              await this.startRun(slug, {
+                resumeRunId: after.id,
+                ...(after.onlyPhases?.length ? { onlyPhases: after.onlyPhases } : {}),
+                skills: after.skills ?? [],
+              });
+            }
+          } else if (after.status === 'waiting' && after.waitUntil) {
+            // The honest middle: the session declared the external clock has
+            // still not landed. The park machinery owns it from here.
+            this.armLimitResume(slug, after);
+          }
+        })
+        .catch((error) => log.warn('run.auto-recovery-failed', { slug, phase, error }));
+      return { launched: true };
+    }
+
+    if (!agentEnabled(this.flags)) return no('agent auto-recovery needs --allow-agent');
+    if (this.terminals.availability() === 'no') return no('agent sessions are unavailable (node-pty)');
 
     const request: RecoveryRequest = { class: cls, slug, phase, runId: state.id };
     const resolved = await this.resolveRecovery(request);
@@ -4765,6 +4975,69 @@ export class Service {
    * model so a denial reads as a decision it can work around rather than an
    * unexplained failure.
    */
+  /** Per-session Stop-hook block counter — the loop guard. Bounded; cleared wholesale. */
+  private stopBlocks = new Map<string, number>();
+
+  /**
+   * The Stop hook's decision: may this session end its turn?
+   *
+   * Yes when the phase's board reads done, or a valid outcome file is
+   * declared, or the session was already blocked twice (the loop guard), or
+   * anything about the question cannot be answered — fail open, always: this
+   * hook carries workflow, never safety, and the runner's own exit-time
+   * check is the load-bearing layer. A block carries the precise
+   * instructions: finish the closeout, or declare the wait.
+   *
+   * `hook.stop-seen` in the log doubles as the runtime probe for whether the
+   * CLI fires Stop hooks in `-p` at all — designed not to matter either way.
+   */
+  async decideStop(body: Record<string, unknown>, runId?: string | null): Promise<Record<string, unknown>> {
+    const allow = {};
+    const sessionId = typeof body.session_id === 'string' ? body.session_id : null;
+    if (!runId || !sessionId || !this.root?.ok) return allow;
+
+    const state = this.runBytoken(runId);
+    if (!state) return allow;
+    // WHICH phase this session belongs to — matched by session id against the
+    // run's own records, never guessed from "the current phase".
+    const entry = Object.values(state.phases).find((record) => record.sessionId === sessionId);
+    const phase = entry?.phase ?? state.activePhase;
+    if (phase == null) return allow;
+
+    log.info('hook.stop-seen', { slug: state.slug, runId: state.id, phase });
+
+    try {
+      const board = await this.boardStates(state.slug);
+      if (board[phase] === 'done') return allow;
+    } catch {
+      return allow;
+    }
+
+    const declared = readOutcome(outcomeFileFor(state.root, state.slug, state.id, phase), {
+      slug: state.slug, phase, ...(entry?.startedAt ? { notBefore: entry.startedAt } : {}),
+    });
+    if (declared) return allow;
+
+    const blocks = this.stopBlocks.get(sessionId) ?? 0;
+    if (blocks >= 2) return allow;
+    if (this.stopBlocks.size > 512) this.stopBlocks.clear();
+    this.stopBlocks.set(sessionId, blocks + 1);
+    log.info('hook.stop-blocked', { slug: state.slug, phase, sessionId, blocks: blocks + 1 });
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'Stop',
+        decision: 'block',
+        reason: `Phase ${phase} of ${state.slug} is not closed: the board does not read done and no `
+          + 'outcome is declared. Finish the closeout now — run the plan\'s §Verification commands, '
+          + 'commit with explicit paths, then run '
+          + `\`bash ${this.flags.scriptsDir}/new-handoff.sh ${state.slug} ${phase} <kebab-title> complete\` `
+          + 'and fill it in. If an external process must finish first, write the handoff `in-progress` '
+          + `and declare the wait: \`bash ${this.flags.scriptsDir}/phase-outcome.sh ${state.slug} ${phase} `
+          + 'waiting-external --wait-minutes <M> --reason "<what>" --watch <ref>` — then stop.',
+      },
+    };
+  }
+
   async decideToolUse(
     body: Record<string, unknown>, runId?: string | null,
   ): Promise<Record<string, unknown>> {

@@ -565,6 +565,21 @@ function PhaseRows({
         <TD colSpan={11}>
           <>
             {r?.note && <div className="text-2xs text-ink-faint">{r.note}</div>}
+            {r?.status === 'waiting' && (
+              // A declared external wait: what it waits on, when the runner
+              // resumes the phase's own session, and which round of waiting
+              // this is (the runner caps them).
+              <div className="text-2xs text-ink-faint">
+                Waiting on external work{r.parkReason ? `: ${r.parkReason}` : ''}
+                {r.parkedUntil ? ` — resumes ${new Date(r.parkedUntil).toLocaleTimeString()}` : ''}
+                {r.waits ? ` (wait ${r.waits})` : ''}
+                {r.watch?.length ? (
+                  <>
+                    {' '}· watching <code className="font-mono">{r.watch.join(', ')}</code>
+                  </>
+                ) : null}
+              </div>
+            )}
             {r?.verification && (
               <div className={cn('text-2xs', r.verification.ok ? 'text-done' : 'text-blocked')}>
                 {r.verification.reason}

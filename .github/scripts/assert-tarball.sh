@@ -53,6 +53,7 @@ for p in \
   "scripts/new-plan.sh" \
   "scripts/new-handoff.sh" \
   "scripts/qa-record.sh" \
+  "scripts/phase-outcome.sh" \
   "scripts/gate-approve.sh" \
   "scripts/close-plan.sh" \
   "scripts/handoff-status.sh" \

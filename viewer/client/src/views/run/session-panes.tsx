@@ -275,6 +275,13 @@ export function QueuedPane({
                       {' '}· overlaps <code className="font-mono">{holder.overlaps.join(', ')}</code>
                     </span>
                   )}
+                  {holder.kind === 'lock' && holder.leaseUntil != null && (
+                    // The lease is the holder's promise to lapse — the honest
+                    // answer to "how long can this possibly block me".
+                    <span className="text-ink-faint">
+                      {' '}· lease ends {new Date(holder.leaseUntil).toLocaleTimeString()}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>

@@ -58,17 +58,20 @@ export function nextStepRows(
     const record = run?.phases?.[String(p.phase)];
 
     if (p.state === 'done') {
-      // A red record on a green phase: this run's attempt stopped, the work
-      // was finished and verified outside it. Nothing to press — but leaving
-      // the chip unexplained is the dead end this card exists to remove.
-      if (record && ['failed', 'interrupted', 'parked', 'gated'].includes(record.status)) {
+      // A red record on a green phase used to be a standing contradiction —
+      // the reconcile pass now closes it as "closed outside this run" the
+      // moment any read or drive tick sees the board. This branch remains for
+      // a record the reconcile has not reached yet (an old console, a stale
+      // tab), and the copy says the correction is coming rather than
+      // apologising for a permanent state.
+      if (record && ['failed', 'interrupted', 'parked', 'waiting', 'gated'].includes(record.status)) {
         rows.push({
           phase: p.phase,
           title: p.title,
           state: 'done',
           why: `this run's own attempt stopped (${excerpt(record.note ?? record.status, 160)})`
-            + ' — but the phase was finished and verified outside it, and the board reads done.'
-            + ' Nothing needs fixing; the Why? button on its row shows what failed here.',
+            + ' — but the phase was finished outside it, and the board reads done.'
+            + ' The record reconciles to done on the next run tick; nothing needs fixing.',
           readMore: phaseHref(slug, p.phase),
         });
       }

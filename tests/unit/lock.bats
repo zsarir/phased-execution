@@ -27,6 +27,24 @@ load ../helpers/test_helper
   [ "$status" -eq 0 ]
 }
 
+# The autopilot's lease keepalive is exactly a same-owner re-claim on a timer:
+# a live 47-minute phase must never lose its 30-minute lease mid-work (a lapsed
+# lease is silently taken over by anyone). This pins the two facts the
+# keepalive stands on: the lease moves forward, and the scope line survives.
+@test "lock: same-owner re-claim REFRESHES the lease and keeps the scope line" {
+  setup_docs linear linear
+  pe_lock linear claim 1 --owner sessionA --scope "repoA" --lease 60
+  f="$DOCS_ROOT/docs/handoffs/linear/.locks/phase-01.lock"
+  first="$(grep '^lease_until=' "$f")"
+  run pe_lock linear claim 1 --owner sessionA --scope "repoA" --lease 3600
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "refreshed"
+  second="$(grep '^lease_until=' "$f")"
+  [ "$first" != "$second" ]
+  # scope_normalize lowercases; the file carries the normalized csv.
+  grep -q '^scope=.*repoa' "$f"
+}
+
 @test "lock: release frees the lock for another owner" {
   setup_docs linear linear
   pe_lock linear claim 1 --owner sessionA

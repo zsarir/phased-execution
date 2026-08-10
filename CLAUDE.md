@@ -140,7 +140,10 @@ rather than refusing.
   **F14** rides the same arm as a WARNING (stderr, exit untouched): an open, not-done phase whose
   §Verification holds nothing runnable — the thing the autopilot would otherwise park on at boarding.
   **F15** rides it too, same tier and same reasoning: a plan or phase naming an MCP server this
-  machine has not registered.
+  machine has not registered. **F16** completes the family: a §Verification command that waits on an
+  external clock (`gh run watch`, `task deploy`, `--watch`/`wait` flags, long sleeps) — runnable by
+  F14's test, unfinishable inside a session's turn; split the phase behind a Gate-check or expect a
+  runtime park.
 - **bash 3.2.** The scripts' target runtime is macOS system bash. `tests/helpers/test_helper.bash`
   forces `/bin/bash` for every script under test — no associative arrays, no `${var^^}`, no `mapfile`.
 - **Never implicitly build the client.** `client/dist` is gitignored; the console warns when the build
@@ -153,7 +156,28 @@ rather than refusing.
   identity check; it deliberately does not widen `--host`. The `Tailscale-User-Login` header is only
   trustworthy because nothing but the proxy can reach the port.
 - **Permission `deny` is identical across all three run profiles.** Profiles move only the ask list.
-  The PreToolUse hook fails open and carries workflow, never safety.
+  The PreToolUse hook fails open and carries workflow, never safety. The **Stop hook** rides the same
+  settings file with the same philosophy: it nudges a session ending with neither a handoff nor a
+  declared outcome (at most twice), fails open, and the runner's own exit-time outcome check — not
+  the hook — is the load-bearing enforcement.
+- **The outcome protocol is the session→runner channel; prose never is.** A session declares how it
+  ended via `scripts/phase-outcome.sh` → one atomic JSON file at `PE_OUTCOME_FILE`, read once,
+  journalled, consumed, staleness-guarded twice (deleted pre-spawn; `written_at` checked against the
+  attempt). `waiting-external` parks the phase as `waiting` and the resume is ALWAYS the phase's own
+  session (`--resume`) — never a fresh boot, never a pty agent. The handoff `.md` stays the
+  engine/human contract; its status vocabulary (`complete|in-progress|blocked|pending`) is frozen —
+  `waiting` is a runner state, never a handoff status.
+- **Reconcile closes records, never re-runs them.** The drive loop's reconcile pass (and the
+  read-path resolver) flips a record the board has overtaken to `done` ("closed outside this run")
+  and dissolves halts anchored to it; a `failed` record whose phase the board does not show done is
+  untouched. Recovery is resolve-first (board re-read before any launch), the session API is the
+  first vehicle (`--allow-run`), the pty agent is for plan repairs (`--allow-agent`) and people, and
+  "found nothing wrong" is a recorded outcome (`no-defect`), not a failure.
+- **A foreign unexpired lock queues, never terminally parks.** The scheduler owns the wait (holder
+  named, lease end shown; woken by the docs watcher, a lease-expiry timer, and the idle poll;
+  bounded by the 2-hour lock-wait cap); the boarding belt-check owns only the grant→spawn race
+  window and resolves it back to the queue. The runner keepalives its lane's lock every lease/3
+  under the shared `PE_OWNER` and stands down — never fights — on a foreign takeover.
 - **A shipped default is struck by name — `deny` included, since 2026-08-06.** Removing a default
   records it under `removed.<list>` in the policy file rather than copying the list out and editing
   it — a copied list would freeze the defaults at whatever version the first edit saw, and an

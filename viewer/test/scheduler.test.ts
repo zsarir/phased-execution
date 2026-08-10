@@ -215,16 +215,72 @@ test("a run's own lock never blocks its own next lane", async () => {
   assert.equal(next.phase, 2);
 });
 
-test('a foreign lock on the very phase being asked for is left to the runner to refuse by name', async () => {
-  const locks: LockView[] = [
+test('a foreign lock on the very phase being asked for QUEUES behind the holder, and frees on release', async () => {
+  // This used to be carved out — admitted, with the runner's belt-check left
+  // to refuse it by name. The refusal was a TERMINAL park (`parked` is a
+  // settled status), so a phase a person was working by hand never boarded
+  // again for the life of the run — observed live on delivery-overhaul
+  // phase 8. Now it queues like any other lock conflict, holder named, and
+  // admits the moment the lock goes away.
+  let locks: LockView[] = [
     { slug: 'mine', phase: 1, owner: 'someone/else', expired: false, scope: ['api'] },
   ];
   const s = scheduler({ locks: () => locks });
 
-  // Admitted, not queued: `runPhase` parks on this with the holder's name,
-  // which is an answer. Queuing would be a silent indefinite wait instead.
-  const grant = await s.admit({ slug: 'mine', phase: 1, runId: 'r1', scope: ['api'] });
+  const blocked = s.admit({ slug: 'mine', phase: 1, runId: 'r1', scope: ['api'] });
+  await tick();
+  assert.ok(await pending(blocked), 'a manual session owns this very phase');
+  const holder = s.snapshot().entries[0].waitingOn[0];
+  assert.equal(holder.kind, 'lock');
+  assert.equal(holder.owner, 'someone/else');
+
+  locks = [];
+  s.poll();
+  assert.equal((await blocked).phase, 1);
+  s.close();
+});
+
+test('a lease that lapses on the clock stops blocking even when the stored bit is stale', async () => {
+  // `LockView.expired` is frozen at store-scan time; the scheduler must judge
+  // by the clock, or a dead claim blocks until an unrelated docs change.
+  let clock = 1_000;
+  const locks: LockView[] = [
+    { slug: 'other', phase: 2, owner: 'someone/else', expired: false, scope: ['api'], leaseUntil: 5_000 },
+  ];
+  const s = scheduler({ locks: () => locks, now: () => clock });
+
+  const blocked = s.admit({ slug: 'mine', phase: 1, runId: 'r1', scope: ['api'] });
+  await tick();
+  assert.ok(await pending(blocked), 'the lease still has four seconds to run');
+  assert.equal(s.snapshot().entries[0].waitingOn[0].leaseUntil, 5_000);
+
+  clock = 5_001;
+  s.poll();
+  assert.equal((await blocked).phase, 1);
+  s.close();
+});
+
+test('the lock timer wakes the scan at the lease expiry with no external poke', async () => {
+  const locks: LockView[] = [
+    {
+      slug: 'other', phase: 2, owner: 'someone/else', expired: false,
+      scope: ['api'], leaseUntil: Date.now() + 60,
+    },
+  ];
+  const s = scheduler({ locks: () => locks });
+
+  const blocked = s.admit({ slug: 'mine', phase: 1, runId: 'r1', scope: ['api'] });
+  await tick();
+  assert.ok(await pending(blocked), 'the lease has not lapsed yet');
+  // No poll(), no release, no docs event — the armed timer must do it alone.
+  const grant = await Promise.race([
+    blocked,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('the lock timer never fired')), 2_000).unref?.();
+    }),
+  ]);
   assert.equal(grant.phase, 1);
+  s.close();
 });
 
 test('a throttle holds every admission until it expires', async () => {

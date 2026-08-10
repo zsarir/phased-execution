@@ -1409,6 +1409,26 @@ export function buildSettings(opts: SettingsOptions): Record<string, unknown> {
           ],
         },
       ],
+      // The closeout contract, enforced at the one moment it can still be
+      // acted on: a session about to end its turn with neither a handoff on
+      // the board nor a declared outcome is told exactly what to do instead
+      // of exiting into a halt. Same fail-open philosophy as the hook above —
+      // the console being unreachable means the CLI proceeds, and the
+      // runner's own exit-time check remains the load-bearing layer. Never a
+      // safety mechanism: `deny` above is that, and profiles still never
+      // move it.
+      Stop: [
+        {
+          hooks: [
+            {
+              type: 'http',
+              url: `${opts.origin}/hooks/stop`,
+              headers: { Authorization: `Bearer ${opts.token}` },
+              timeout: HOOK_TIMEOUT_SECONDS,
+            },
+          ],
+        },
+      ],
     },
   };
 }

@@ -217,6 +217,15 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
      `validate.sh` warns (F14) on any open phase whose §Verification would extract nothing runnable
      — heed it at plan time; at run time the same defect parks the phase at boarding (and, under
      keep-going autonomy, dispatches a plan-repair agent to author the bullet from the exit criteria).
+     It also warns (**F16**) when a §Verification command **waits on an external clock** — `gh run
+     watch`, a `task deploy` that needs a CI-built image, a `--watch`/`wait` flag, a long `sleep` —
+     because the runner bounds each verification command at 30 minutes and an unattended session cannot
+     outlive its turn. Prefer **splitting the phase**: a build phase whose verification proves what is
+     provable now, and a verify/deploy follow-up phase behind a `- **Gate-check:** ai <condition>` (or
+     `cmd <observe-only command>`) that clears once the external process lands. A phase that keeps an
+     external-clock verification will **park at runtime as `waiting`** instead of failing: the session
+     writes an `in-progress` handoff, declares the wait via `scripts/phase-outcome.sh … waiting-external`,
+     and the runner resumes it when the window elapses — capped at 4 waits / 8 h per phase.
      **Phase-finish runs these green before handing off** (Mode 3 step 1). Add a deterministic test for
      every criterion you can; flag any that can only be reasoned about. Before relying on a CLI flag's
      semantics in one of these commands, re-check the tool's current docs and note the check in the

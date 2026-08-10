@@ -45,7 +45,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # scripts/sizing.env (also documented in references/sizing.md); these defaults are
 # a fallback so the script still runs if the file is ever missing.
 SIZE_S=15000; SIZE_M=40000; SIZE_L=90000
-BUDGET_HAIKU=90000; BUDGET_BIG=1000000; BUDGET_DEFAULT=120000
+BUDGET_HAIKU=40000; BUDGET_BIG=200000; BUDGET_DEFAULT=40000
 # shellcheck source=/dev/null
 [ -f "$SCRIPT_DIR/sizing.env" ] && . "$SCRIPT_DIR/sizing.env"
 
@@ -596,6 +596,39 @@ verification_advisories() {
   return 0
 }
 
+# F16: a §Verification that waits on an external process — ADVISORY, never a
+# gate. Same arm as F14/F15. F14 asks "is anything runnable?"; F16 asks "does
+# what runs ever finish on its own?" — `gh run watch`, a deploy that blocks on
+# a CI-built image, a 3-digit sleep all pass F14 and then hold a session for
+# the full external duration (the runner bounds each verification command at
+# 30 minutes), hours after the author could have heard it. The scan is
+# conservative: only command-shaped text inside the §Verification reach —
+# backticked spans and fenced lines — is examined, and only for patterns that
+# by construction wait on a clock outside the session.
+verification_unbounded_advisories() {
+  local p hit
+  for p in "${PHASES[@]}"; do
+    _is_done "$p" && continue
+    hit="$(awk -v p="$p" '
+      /^###[[:space:]]+[Pp]hase[[:space:]]/ {
+        if (inblock) exit
+        if ($0 ~ ("^###[[:space:]]+[Pp]hase[[:space:]]+" p "([^0-9]|$)")) inblock = 1
+        next
+      }
+      /^##[[:space:]]/ { if (inblock) exit }
+      inblock && /^[[:space:]]*[-*][[:space:]]+\*\*Verification/ { seen = 1 }
+      seen && /^[[:space:]]*(~~~|```)/ { fence = !fence; next }
+      seen && (fence || /`/) { print }
+    ' "$plan_file" \
+      | grep -oE 'gh run watch|gh pr checks[^`]*--watch|[[:space:]]--watch|task deploy|sleep [0-9]{3,}|until [^`]+; *do|aws [a-z0-9-]+ wait |kubectl rollout status|docker[ -]compose logs -f|tail -f' \
+      | head -1 || true)"
+    hit="$(printf '%s' "$hit" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$hit" ] && \
+      printf 'F16 phase %s: §Verification waits on an external process (`%s`) — the runner bounds each command at 30min; split the phase (build ∥ verify-later behind a Gate-check) or expect a runtime park\n' "$p" "$hit"
+  done
+  return 0
+}
+
 # F15: a named MCP server this machine does not have — ADVISORY, never a gate.
 # Same tier and same reasoning as F14: the autopilot's preflight would park the
 # run on this at boarding, so the author should hear it while the plan is still
@@ -899,10 +932,12 @@ case "$mode" in
       issues="${issues}"$'\n'"phase count mismatch: frontmatter says ${declared} but the table parses ${#PHASES[@]} rows"
     fi
     issues="$(printf '%s' "$issues" | sed '/^[[:space:]]*$/d')"
-    # F14/F15 advisories ride stderr beside the issues but never gate the exit —
-    # a closed plan is not even scanned (nothing left to board there).
+    # F14/F15/F16 advisories ride stderr beside the issues but never gate the
+    # exit — a closed plan is not even scanned (nothing left to board there).
     if ! plan_is_closed; then
       advisories="$(verification_advisories)"
+      [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
+      advisories="$(verification_unbounded_advisories)"
       [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
       advisories="$(mcp_advisories)"
       [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
@@ -1252,7 +1287,13 @@ case "$mode" in
     printf 'part of your scope — if a commit or pull races another session, pull --rebase and retry\n'
     printf 'up to 3 times; git'\''s own index.lock is the serialization there.)\n'
     printf '\nThen build the p%s.task* list and implement Phase %s to its exit criteria.\n' "$p" "$p"
-    printf 'Stop + hand off when done.\n'
+    pad="$(printf '%02d' "$p")"
+    printf '\nWhen done, the deliverable is the HANDOFF — the board reads `status:` from it, and a\n'
+    printf 'phase with no handoff does not exist to the board. Scaffold it with:\n'
+    printf -- '    bash %s/new-handoff.sh %s %s <kebab-title> complete\n' "$SCRIPT_DIR" "$slug" "$p"
+    printf 'then fill in docs/handoffs/%s/phase-%s-<kebab-title>.md and commit it.\n' "$slug" "$pad"
+    printf 'Cannot finish? Hand off `in-progress` (paused, resumable) or `blocked` (needs help) —\n'
+    printf 'never end the session without a handoff. Stop after the handoff exists.\n'
     exit 0
     ;;
   board) ;;  # fall through to the human board

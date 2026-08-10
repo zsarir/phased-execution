@@ -138,12 +138,18 @@ function verificationParkedRun(root: string, over: Partial<RunState> = {}): RunS
   return state;
 }
 
-function drives(svc: ReturnType<typeof service>, slug: string, runId: string): void {
+function drives(
+  svc: ReturnType<typeof service>, slug: string, runId: string,
+  queued: { phase: number; outcome: string; by: string }[] = [],
+): void {
   (svc as never as { runners: Map<string, unknown> }).runners.set(slug, {
     busy: () => true,
     current: () => ({ slug, status: 'running', id: runId }),
     note: () => {},
     park: () => {},
+    enqueueResolution: (resolution: { phase: number; outcome: string; by: string }) => {
+      queued.push(resolution);
+    },
   });
 }
 
@@ -265,20 +271,86 @@ test('a run that is not stopped is refused — a live status is never rewritten'
  * Where the write lands: pool first, disk second, busy never
  * ------------------------------------------------------------------ */
 
-test('a busy runner is never written under', () => {
+test('a busy runner is handed the write instead of being skipped', () => {
+  // Returning null under a live loop is how records stayed `failed` forever:
+  // auto-continue restarts the run inside the same exit handler, so the
+  // write-back raced its own resume STRUCTURALLY. The loop now takes the
+  // verdict as a queued resolution and applies it under its own ownership;
+  // the disk is still never written from here.
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
     const run = haltedRun(root);
-    drives(svc, 'alpha', run.id);
+    const queued: { phase: number; outcome: string; by: string }[] = [];
+    drives(svc, 'alpha', run.id, queued);
 
     const synced = svc.syncRecoveredRun(
       { kind: 'halted-verification', slug: 'alpha', phase: 2, runId: run.id },
       { fixed: true, headline: '', detail: '' },
     );
 
-    assert.equal(synced, null, 'a live loop owns its own state');
-    assert.equal(loadRun(root, 'alpha', run.id, null)?.status, 'halted', 'the disk was left alone too');
+    assert.ok(synced, 'the loop-owned state is what the caller is handed back');
+    assert.deepEqual(queued.map((q) => ({ phase: q.phase, outcome: q.outcome })),
+      [{ phase: 2, outcome: 'done' }]);
+    assert.equal(loadRun(root, 'alpha', run.id, null)?.status, 'halted',
+      'the disk is still never written from under a live loop');
+  } finally { cleanup(); }
+});
+
+test('a true miss under a live loop queues nothing — the halt stands', () => {
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    const run = haltedRun(root);
+    const queued: { phase: number; outcome: string; by: string }[] = [];
+    drives(svc, 'alpha', run.id, queued);
+
+    const synced = svc.syncRecoveredRun(
+      { kind: 'halted-verification', slug: 'alpha', phase: 2, runId: run.id },
+      { fixed: false, headline: '', detail: '' },
+    );
+
+    assert.equal(synced, null, 'a failed recovery clears nothing, wherever the state lives');
+    assert.deepEqual(queued, []);
+  } finally { cleanup(); }
+});
+
+test('a no-defect verdict under a live loop is queued as such', () => {
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    const run = haltedRun(root);
+    const queued: { phase: number; outcome: string; by: string }[] = [];
+    drives(svc, 'alpha', run.id, queued);
+
+    svc.syncRecoveredRun(
+      { kind: 'halted-verification', slug: 'alpha', phase: 2, runId: run.id },
+      { fixed: false, noDefect: true, headline: '', detail: 'verification passes' },
+    );
+
+    assert.deepEqual(queued.map((q) => ({ phase: q.phase, outcome: q.outcome })),
+      [{ phase: 2, outcome: 'no-defect' }]);
+  } finally { cleanup(); }
+});
+
+test('a no-defect verdict on a stopped run clears the halt without inventing done', () => {
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    const run = haltedRun(root);
+
+    const synced = svc.syncRecoveredRun(
+      { kind: 'halted-verification', slug: 'alpha', phase: 2, runId: run.id },
+      { fixed: false, noDefect: true, headline: 'nothing to fix', detail: 'verification passes' },
+    );
+
+    assert.ok(synced);
+    assert.equal(synced.halt, null, 'the halt is stood down');
+    assert.ok(synced.resolved, 'the stop is resolved, with the reason recorded');
+    assert.match(synced.resolved?.reason ?? '', /found nothing wrong/);
+    assert.notEqual(synced.phases['2']?.status, 'done',
+      'no phase is invented done when the board does not show it');
+    assert.equal(synced.recoveries?.['2']?.lastOutcome, 'no-defect');
   } finally { cleanup(); }
 });
 

@@ -152,11 +152,30 @@ export function runNotes({
       // here rather than in the controls strip because this is where the reason
       // is — an operator reading "did not verify" should not have to go looking
       // for the thing that fixes it.
-      action: recovery?.kind && recovery.target
-        ? <RecoveryButton kind={recovery.kind} allowAgent={recovery.allowAgent}
-            {...(recovery.runningSessionId ? { runningSessionId: recovery.runningSessionId } : {})}
-            target={recovery.target} />
-        : undefined,
+      //
+      // The PRIMARY remedy for a session-shaped halt is the session API:
+      // resume the phase's OWN session (`claude -p --resume`) to finish the
+      // closeout, with the run's settings, deny rules and hooks all applying.
+      // The fresh pty agent — which carries none of that — is the secondary,
+      // for when the session is beyond resuming.
+      action: (() => {
+        const sessionShaped = run.halt.phase != null && allowRun
+          && ['no-handoff', 'verify-failed', 'waiting-external-timeout', 'phase-blocked']
+            .includes(run.halt.kind ?? '');
+        const agent = recovery?.kind && recovery.target
+          ? <RecoveryButton kind={recovery.kind} allowAgent={recovery.allowAgent}
+              {...(recovery.runningSessionId ? { runningSessionId: recovery.runningSessionId } : {})}
+              target={recovery.target}
+              {...(sessionShaped ? { variant: 'default' as const } : {})} />
+          : undefined;
+        if (!sessionShaped) return agent;
+        return (
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <SessionRecoverButton slug={run.slug} phase={run.halt.phase!} />
+            {agent}
+          </span>
+        );
+      })(),
     });
   }
 
@@ -356,12 +375,15 @@ export function RecoveryButton({
   allowAgent,
   runningSessionId,
   target,
+  variant = 'action',
 }: {
   kind: RecoveryClass;
   allowAgent: boolean;
   runningSessionId?: string;
   /** What the recovery is about — the dialog and the ticket both need it. */
   target: { slug: string; phase?: number; runId?: string };
+  /** Demoted to `default` when a session-API remedy takes the primary slot. */
+  variant?: 'action' | 'default';
 }) {
   const [open, setOpen] = useState(false);
   if (runningSessionId) {
@@ -377,7 +399,7 @@ export function RecoveryButton({
     <>
       <Button
         size="sm"
-        variant="action"
+        variant={variant}
         disabled={!allowAgent}
         title={allowAgent ? RECOVERY_BLURBS[kind] : 'Agent sessions are disabled. Restart the console with --allow-agent.'}
         onClick={() => setOpen(true)}
@@ -397,6 +419,34 @@ export function RecoveryButton({
         />
       )}
     </>
+  );
+}
+
+/**
+ * Resume the halted phase's own session to finish its closeout — the session
+ * API (`claude -p --resume`), through the runner: settings, deny rules, hooks
+ * and the journal all apply. The primary remedy for a session-shaped halt;
+ * the pty agent (which carries none of that) is the fallback beside it.
+ */
+function SessionRecoverButton({ slug, phase }: { slug: string; phase: number }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant="action"
+      disabled={busy}
+      title={'Resume the phase\'s own session (claude -p --resume) to finish the closeout — '
+        + 'its context is intact, and the run\'s settings, deny rules and hooks all apply.'}
+      onClick={() => {
+        setBusy(true);
+        api.runCloseout(slug, phase)
+          .then(() => toast('Resuming the phase\'s session to finish the closeout.'))
+          .catch((error: unknown) => toast((error as Error).message, 'error'))
+          .finally(() => setBusy(false));
+      }}
+    >
+      {busy ? 'Resuming…' : 'Resume session & finish closeout'}
+    </Button>
   );
 }
 
