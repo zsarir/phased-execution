@@ -133,6 +133,10 @@ describe('the submits', () => {
       runBudgetUsd: 40,
       permissionProfile: 'trusted',
       skills: ['design-review'],
+      // Always sent as shown, like `autoRecover` below. `continue` is the
+      // shipped default: an unreachable MCP server makes a phase report what it
+      // could not do, rather than stopping the plan.
+      mcpPolicy: 'continue',
       attachDefaultSkills: true,
       gitMode: 'default-branch',
       qa: true,

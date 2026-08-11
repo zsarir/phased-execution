@@ -30,6 +30,7 @@ import { ForceReleaseButton } from '@/components/release-lock';
 import { useNow } from '@/lib/clock';
 import { useDiagnosis } from '@/lib/queries';
 import { phaseProgress } from './header';
+import { MCP_REASON } from './defaults';
 import { classifyBoardPhase, classifyPhase, liveRecovery } from '@/lib/recovery';
 import { canQa, liveQa } from '@/lib/qa';
 import { QaButton, QaVerdict } from '@/components/qa-launcher';
@@ -304,7 +305,9 @@ function PhaseRows({
   // board calls done is the defect this table was rebuilt for.
   const can = actionsFor(p, { live, allowRun });
   const detoured = fellOver(r);
-  const hasNote = Boolean(r?.note || r?.verification || r?.preflight?.length || can.diagnose);
+  const hasNote = Boolean(
+    r?.note || r?.verification || r?.preflight?.length || r?.mcpDegraded?.length || can.diagnose,
+  );
 
   // What the two start-work buttons would have offered if nothing held the
   // phase — so they can be rendered disabled rather than disappearing.
@@ -608,6 +611,16 @@ function PhaseRows({
                   {r.preflight.map((warning, i) => <li key={i}>{warning}</li>)}
                 </ul>
               </details>
+            ) : null}
+            {r?.mcpDegraded?.length ? (
+              // Not a `<details>`: a phase that quietly did without half its
+              // tools and a phase that had all of them look identical in the
+              // handoff afterwards, so this one stays open. The errand is the
+              // operator's, and it is the same errand every time.
+              <p className="mt-1 text-2xs text-gated">
+                Ran without {r.mcpDegraded.map((d) => `${d.id} (${d.detail ?? MCP_REASON[d.reason]})`).join(', ')}
+                {' — '}the session was told to record what it could not do.
+              </p>
             ) : null}
             {can.diagnose && (
               <PhaseDiagnosis slug={slug} phase={p.phase} allowRun={allowRun} onAct={onAct} />

@@ -24,7 +24,7 @@ import { tailscaleStatus } from '../tailscale.ts';
 import { ACCOUNT_ID_RE, DEFAULT_ACCOUNT_ID } from '../accounts/index.ts';
 import { searchCatalog } from '../mcp/index.ts';
 import { MCP_ID_RE } from '../mcp/store.ts';
-import { isOnLimitPolicy, type PhaseOptions } from '../runner/state.ts';
+import { isMcpPolicy, isOnLimitPolicy, type PhaseOptions } from '../runner/state.ts';
 
 export type ApiContext = { service: Service };
 
@@ -307,6 +307,11 @@ function phaseOptions(value: unknown, service: Service): Record<string, PhaseOpt
     // Only ever written when true, exactly as `skillsOff` is and for the same
     // reason: a stored `false` would claim the operator chose something.
     if (item.mcpOff === true) option.mcpOff = true;
+    // Both values are stored here, unlike `mcpOff` — because this is the ONE
+    // level that can overrule the plan, and "the operator said continue for
+    // this phase" has to be distinguishable from "nobody said anything", which
+    // would fall through to a plan that says require.
+    if (isMcpPolicy(item.mcpPolicy)) option.mcpPolicy = item.mcpPolicy;
     if (Object.keys(option).length) out[String(phase)] = option;
   }
   return out;
@@ -1299,6 +1304,11 @@ export async function handleApi(
               phaseOptions: phaseOptions(body.phaseOptions, service),
               skills: skillList(body.skills),
               mcpServers: mcpList(body.mcpServers, service),
+              // Absent lets the stored preference (fresh run) or the run's own
+              // sticky choice (resume) decide, like `autoRecover` below. A typo
+              // reads as absent rather than as `require`: the fail-safe here is
+              // the side that keeps plans moving.
+              mcpPolicy: isMcpPolicy(body.mcpPolicy) ? body.mcpPolicy : undefined,
               // Anything unrecognised is `guarded`. A typo must not be the
               // reason a run takes the guard rails off.
               permissionProfile: isPermissionProfile(body.permissionProfile)
@@ -1423,6 +1433,18 @@ export async function handleApi(
           }
           case 'skip': json(res, 200, { run: service.skipPhase(slug, Number(body.phase)) }); return true;
           case 'retry': json(res, 200, { run: await service.retryPhase(slug, Number(body.phase)) }); return true;
+          // One verb rather than "set the policy, then retry these three
+          // phases": the two halves are useless apart, and a browser that
+          // managed only the first would leave the run parked under a setting
+          // saying it should not be.
+          case 'mcp-continue': {
+            try {
+              json(res, 200, { run: await service.continueWithoutMcp(slug) });
+            } catch (error) {
+              json(res, 409, { error: (error as Error)?.message ?? 'the run could not be continued' });
+            }
+            return true;
+          }
           // The middle ground between Retry and Skip: re-check what is on disk,
           // or ask the phase's own session to finish what it started. Every one
           // of these ends in the same three checks, so none of them can mark a
@@ -1456,6 +1478,7 @@ export async function handleApi(
               ...('phaseOptions' in body ? { phaseOptions: phaseOptions(body.phaseOptions, service) ?? null } : {}),
               ...('skills' in body ? { skills: skillList(body.skills) ?? null } : {}),
               ...('mcpServers' in body ? { mcpServers: mcpList(body.mcpServers, service) ?? null } : {}),
+              ...(isMcpPolicy(body.mcpPolicy) ? { mcpPolicy: body.mcpPolicy } : {}),
               ...(isPermissionProfile(body.permissionProfile)
                 ? { permissionProfile: body.permissionProfile } : {}),
               ...(body.gitMode === 'new-branch' || body.gitMode === 'default-branch'

@@ -28,7 +28,7 @@ plain language at plan time, or edit the file yourself afterwards.
 
 ## Console automation defaults
 
-The console keeps five preferences (Settings ▸ Automation, stored in
+The console keeps six preferences (Settings ▸ Automation, stored in
 `~/.config/phase-console/config.json`) that are the **opening values for every launch surface** —
 the run form, the phase launcher, the recovery and QA dialogs. Each launch can override them for
 itself; the preferences are where "for all plans" is said once.
@@ -40,6 +40,7 @@ itself; the preferences are where "for all plans" is said once.
 | Branch | current branch | `Work branch per run` puts every console-minted session of a run on one plan-wide branch, `pe/<slug>` — created from the default branch if missing, reused by later phases. |
 | Open a PR at completion | on | Work-branch runs only: the plan's **last** phase is told to push `pe/<slug>` and open a PR per scoped repo. For that run — and only that run — bare `git push` moves from the deny wall to an approval card, and `gh pr create` stays a card even under the `trusted` profile; force-pushes and `--delete` stay denied outright. |
 | Repository guard | on | The scheduler queues runs whose repository scopes overlap. Off: overlapping runs may start together, and a work-branch run sharing a repo with a live one is told to work in a linked `git worktree` instead of switching the shared checkout. |
+| When an MCP server is unavailable | Continue and warn | The phase boards without the servers that would not answer, its prompt names them and tells it to record the gap under **Outstanding** as an errand, and you are told once per run per server. `Park the phase` is the older behaviour — use it when the work genuinely cannot proceed, remembering that a run whose ready phases have all parked has nothing left to start. Settable per run in the launch dialog and per phase in the run's phase matrix; a plan's own `**MCP policy:** require` outranks both the run choice and this preference. |
 
 Beside the preferences, every launch surface offers two per-run choices when accounts are
 registered (`--allow-accounts`): **Account** — which Claude login the run's sessions spend,

@@ -107,6 +107,11 @@ export function McpPicker({
                 <code className="ml-1.5 text-2xs text-ink-faint">{server.id}</code>
                 {fromPlan && <Chip className="ml-1.5">from the plan</Chip>}
                 {!ok && <span className="ml-1.5 text-2xs text-stuck">{whyNot(server)}</span>}
+                {/* Tickable, but do not let it read as verified: nobody has
+                    asked this one whether it works. */}
+                {ok && unchecked(server) && (
+                  <span className="ml-1.5 text-2xs text-ink-muted">not checked yet</span>
+                )}
                 {server.toolCount ? (
                   <span className="ml-1.5 text-2xs text-ink-faint">{server.toolCount} tools</span>
                 ) : null}
@@ -114,18 +119,50 @@ export function McpPicker({
             </label>
           );
         })}
+
+        {ordered.some(unchecked) && (
+          <p className="text-2xs text-ink-faint">
+            A server nobody has probed can still be ticked — its status simply is not known yet.
+            Check them from the MCP page if it matters; a phase that boards with one it cannot reach
+            runs without it and says so, unless the plan requires it.
+          </p>
+        )}
       </div>
     </details>
   );
 }
 
-/** Could a phase actually board with this? `pending` can — it connects on first use. */
+/**
+ * Could a phase actually board with this? `pending` can — it connects on first
+ * use — and a server nobody has probed yet might, so neither is refused here.
+ *
+ * A registration nobody finished is refused: an unfilled `${VAR}` in the
+ * command will never connect, however many times it is probed, so offering it
+ * as a choice is offering something that cannot work.
+ */
 function usable(server: McpServerView): boolean {
-  return server.enabled && server.status !== 'needs-auth' && server.status !== 'failed';
+  return server.enabled
+    && !server.needsConfig?.length
+    && server.status !== 'needs-auth'
+    && server.status !== 'failed';
+}
+
+/**
+ * Has anybody actually asked this server whether it works?
+ *
+ * `unknown` is what a server reports before its first probe, and this control
+ * used to treat it as fine — so an operator ticking six servers in the launch
+ * dialog saw six tickable rows and learned the truth at boarding, after the
+ * queue and the lock. That is exactly the failure this picker's own header says
+ * it exists to prevent, arriving through the one status it did not check.
+ */
+function unchecked(server: McpServerView): boolean {
+  return server.enabled && !server.needsConfig?.length && server.status === 'unknown';
 }
 
 function whyNot(server: McpServerView): string {
   if (!server.enabled) return 'switched off';
+  if (server.needsConfig?.length) return `needs ${server.needsConfig.join(', ')}`;
   if (server.status === 'needs-auth') return 'needs signing in';
   return 'will not connect';
 }

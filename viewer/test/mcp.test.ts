@@ -396,6 +396,73 @@ test('preflight refuses a plan naming a server this machine does not have', asyn
   assert.deepEqual(result.unknown, ['nope']);
 });
 
+test('an unresolvable id no longer hides a signed-out one behind it', async () => {
+  // This used to short-circuit before the probe, so a phase naming one ghost
+  // and one signed-out server reported the ghost, and only learned about the
+  // sign-in after somebody had fixed the first — one whole boarding per
+  // problem. One answer now, naming everything wrong with the set.
+  const mcp = facade();
+  await mcp.add({ label: 'ctx7', id: 'ctx7', transport: 'http', url: 'https://mcp.context7.com/mcp' });
+  await mcp.add({ label: 'gh', id: 'gh', transport: 'http', url: 'https://api.githubcopilot.com/mcp/' });
+  await mcp.add({ label: 'Off', id: 'off', transport: 'stdio', command: 'npx' });
+  mcp.setEnabled('off', false);
+
+  const result = await mcp.preflight(['ctx7', 'gh', 'off', 'ghost']);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.unknown, ['ghost']);
+  assert.deepEqual(result.disabled, ['off']);
+  assert.deepEqual(result.blocking.map((row) => row.id), ['gh'], 'the probe still ran');
+
+  await mcp.remove('ctx7');
+  await mcp.remove('gh');
+  await mcp.remove('off');
+});
+
+test('a server whose ${VAR} was never filled in says so, instead of "will not connect"', async () => {
+  // The catalog's filesystem entry ships as `… server-filesystem ${MCP_FS_ROOT}`
+  // with an authNote asking for a value, and nothing ever collected one. The
+  // CLI expands the unset variable to nothing, the server starts without a
+  // root, and it probes `failed` forever — which reads as a flaky remote rather
+  // than as the unfinished registration it is. One was attached to a real run
+  // and blocked three phases at boarding.
+  const mcp = facade([JSON.stringify({
+    type: 'system', subtype: 'init', mcp_servers: [{ name: 'fs', status: 'failed' }],
+  })]);
+  await mcp.add({
+    label: 'Filesystem', id: 'fs', transport: 'stdio',
+    command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '${MCP_FS_ROOT}'],
+  });
+
+  const view = (await mcp.list()).find((s) => s.id === 'fs');
+  assert.deepEqual(view?.needsConfig, ['MCP_FS_ROOT'], 'the view names the outstanding variable');
+
+  const result = await mcp.preflight(['fs']);
+  assert.equal(result.blocking[0]?.error?.type, 'unconfigured');
+  assert.match(result.blocking[0]?.error?.message ?? '', /MCP_FS_ROOT is not set/);
+
+  await mcp.remove('fs');
+});
+
+test('a ${VAR} something actually supplies is not an outstanding errand', async () => {
+  const mcp = facade();
+  await mcp.add({
+    label: 'Rooted', id: 'rooted', transport: 'stdio',
+    command: 'npx', args: ['-y', 'server', '${ROOT_DIR}'], env: { ROOT_DIR: '/srv' },
+  });
+  // A default in the reference supplies its own value, so it is settled too.
+  await mcp.add({
+    label: 'Defaulted', id: 'defaulted', transport: 'stdio',
+    command: 'npx', args: ['-y', 'server', '${OPT_DIR:-/tmp}'],
+  });
+
+  const views = await mcp.list();
+  assert.equal(views.find((s) => s.id === 'rooted')?.needsConfig, undefined);
+  assert.equal(views.find((s) => s.id === 'defaulted')?.needsConfig, undefined);
+
+  await mcp.remove('rooted');
+  await mcp.remove('defaulted');
+});
+
 test('preflight lets a run board when the probe itself could not run', async () => {
   // Could not check ≠ they are down. A flaky probe must not become a stopped plan.
   const mcp = facade([]);

@@ -128,6 +128,28 @@ export function AutomationCard() {
 
         <div className={row}>
           <span className="min-w-0">
+            <label htmlFor="automation-mcp-policy" className="text-sm text-ink">
+              When an MCP server is unavailable
+            </label>
+            <span className="mt-0.5 block text-2xs text-ink-muted">
+              A plan or a single phase can still demand its servers — this is only where every run
+              starts.
+            </span>
+          </span>
+          <select
+            id="automation-mcp-policy"
+            value={prefs.mcpPolicy}
+            disabled={busy}
+            onChange={(event) => save.mutate({ mcpPolicy: event.target.value })}
+            className="min-h-(--tap-min) rounded border border-rule bg-ground px-2 text-sm text-ink"
+          >
+            <option value="continue">Continue and warn</option>
+            <option value="require">Park the phase</option>
+          </select>
+        </div>
+
+        <div className={row}>
+          <span className="min-w-0">
             <span className="text-sm text-ink">Repository guard</span>
             <span className="mt-0.5 block text-2xs text-ink-muted">
               Queue runs whose repositories overlap. Off: overlapping runs may start at once, and

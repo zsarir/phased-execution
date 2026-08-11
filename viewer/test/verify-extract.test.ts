@@ -210,6 +210,32 @@ test('an environment prefix no longer stands in for the command', () => {
   assert.deepEqual(runs('./scripts/check-parity.sh'), ['./scripts/check-parity.sh']);
 });
 
+test('an `export` line is a preamble, not a check and not a chore for a person', () => {
+  // Observed live: a plan whose §Session budget says every node command is
+  // prefixed `export PATH="$HOME/.nvm/.../bin:$PATH"` wrote that line above the
+  // commands in every phase's §Verification. `export` is not in VERBS and
+  // `headOf` only walks past a bare `FOO=bar cmd`, so each phase reported "a
+  // person will be asked: export PATH=… — `export` is not a recognised
+  // command" — three phases at a time, about a line that runs nothing.
+  assert.deepEqual(runs('export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:$PATH"'), []);
+  assert.deepEqual(held('export PATH="$HOME/bin:$PATH"'), [], 'and nobody is asked about it');
+  assert.deepEqual(runs('set -euo pipefail'), []);
+  assert.deepEqual(held('set -euo pipefail'), []);
+
+  // It must not swallow the command it was written to support.
+  assert.deepEqual(
+    runs('export PATH="/x/bin:$PATH" && npm test'),
+    ['export PATH="/x/bin:$PATH" && npm test'],
+  );
+
+  // And the carve-out is narrow. A bare `export` runs nothing and says nothing,
+  // and a verb that merely starts with the word is a different command.
+  assert.match(held('export')[0].reason, /not a recognised command/);
+  assert.match(held('exportfoo bar')[0].reason, /not a recognised command/);
+  // `source` deliberately keeps refusing: it executes a file this cannot see.
+  assert.ok(held('source ./env.sh').length, 'sourcing a file is not a preamble');
+});
+
 test('wrappers are seen through to the command they run', () => {
   assert.deepEqual(runs('timeout 30 npm test'), ['timeout 30 npm test']);
   assert.deepEqual(runs('timeout -k 5 30 npm test'), ['timeout -k 5 30 npm test']);

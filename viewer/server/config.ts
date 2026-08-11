@@ -20,6 +20,10 @@ import {
   stateHome, unitName,
 } from '../shared/instances.mjs';
 import { sanitiseCategories, type CategoryId } from './push/catalogue.ts';
+// Type-only, and it must stay that way: `runner/state.ts` imports `STATE_DIR`
+// from here at runtime, so a value import would close the cycle. Node erases
+// `import type` before it ever resolves the specifier.
+import type { McpPolicy } from './runner/state.ts';
 
 export const VIEWER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 export const SKILL_DIR = dirname(VIEWER_DIR);
@@ -696,6 +700,10 @@ export type Prefs = {
    * - `autoContinueRecovery`: when a recovery session ends and the board reads
    *   fixed, the run resumes by itself instead of waiting for Continue. Governs
    *   manual recoveries too — a fixed run is a run to carry on.
+   * - `mcpPolicy`: what a phase does when one of its MCP servers cannot be
+   *   reached. `continue` runs it anyway without that server and says so;
+   *   `require` parks at boarding. A plan or a phase can still demand `require`
+   *   for itself — this is only where every run starts.
    */
   attachDefaultSkills?: boolean;
   qaByDefault?: boolean;
@@ -704,6 +712,7 @@ export type Prefs = {
   repoGuard?: boolean;
   autoRecoverByDefault?: boolean;
   autoContinueRecovery?: boolean;
+  mcpPolicy?: McpPolicy;
   /**
    * Which categories the console is allowed to announce **at all** — the switch
    * an operator actually means when they turn a notification off.
@@ -730,7 +739,7 @@ const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const DEFAULT_PREFS: Prefs = {
   recentRoots: [], theme: 'system', density: 'comfortable', sort: 'activity',
   attachDefaultSkills: false, qaByDefault: false, gitMode: 'default-branch', openPrOnComplete: true, repoGuard: true,
-  autoRecoverByDefault: true, autoContinueRecovery: true,
+  autoRecoverByDefault: true, autoContinueRecovery: true, mcpPolicy: 'continue',
   notify: sanitiseCategories(undefined),
 };
 
@@ -738,11 +747,12 @@ const DEFAULT_PREFS: Prefs = {
  * Coerce the automation keys to values the rest of the app can trust: booleans
  * stay booleans (anything else takes the default), and `gitMode` is
  * 'new-branch' only when it says exactly that — a typo in config.json must
- * never mint branches.
+ * never mint branches. `mcpPolicy` follows the same rule from the other
+ * direction: only the exact word `require` may stop a run.
  */
 export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
   'attachDefaultSkills' | 'qaByDefault' | 'gitMode' | 'openPrOnComplete' | 'repoGuard'
-  | 'autoRecoverByDefault' | 'autoContinueRecovery'> {
+  | 'autoRecoverByDefault' | 'autoContinueRecovery' | 'mcpPolicy'> {
   const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback);
   return {
     attachDefaultSkills: bool(parsed.attachDefaultSkills, false),
@@ -752,6 +762,7 @@ export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
     repoGuard: bool(parsed.repoGuard, true),
     autoRecoverByDefault: bool(parsed.autoRecoverByDefault, true),
     autoContinueRecovery: bool(parsed.autoContinueRecovery, true),
+    mcpPolicy: parsed.mcpPolicy === 'require' ? 'require' : 'continue',
   };
 }
 

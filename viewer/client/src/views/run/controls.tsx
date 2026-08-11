@@ -31,7 +31,7 @@ import {
   AlertDialog, AlertDialogContent, AlertDialogTrigger,
   Button, Card, CardBody, CardHeader, CardTitle, toast,
 } from '@/components/ui';
-import { api, type AccountView, type PhaseOptions, type PhaseView, type RunSettings, type RunState, type SkillInfo }
+import { api, type AccountView, type McpPolicy, type PhaseOptions, type PhaseView, type RunSettings, type RunState, type SkillInfo }
   from '@/lib/api';
 import { keys, useAccounts, useMcp } from '@/lib/queries';
 import { cn } from '@/lib/cn';
@@ -125,6 +125,7 @@ export function Controls({
   automation?: {
     attachDefaultSkills: boolean; qaByDefault: boolean;
     gitMode: 'default-branch' | 'new-branch'; openPrOnComplete: boolean;
+    mcpPolicy: McpPolicy;
   };
   /** The plan's qa-mode; `off` offers the launch-time QA toggle. */
   qaMode?: string;
@@ -145,6 +146,7 @@ export function Controls({
   const [runSkills, setRunSkills] = useState<string[]>(() => seedSkills(run, defaultSkills));
   const { data: mcp } = useMcp();
   const [runMcp, setRunMcp] = useState<string[]>(() => run?.mcpServers ?? []);
+  const [mcpChoice, setMcpChoice] = useState<McpPolicy | null>(null);
   const [profile, setProfile] = useState<PermissionProfile>(
     run?.permissionProfile ?? (run ? 'guarded' : DEFAULTS.permissionProfile),
   );
@@ -166,6 +168,12 @@ export function Controls({
     ?? (run ? 'default-branch' : automation?.gitMode ?? 'default-branch');
   const [prChoice, setPrChoice] = useState<boolean | null>(null);
   const openPr = prChoice ?? run?.openPr ?? (run ? true : automation?.openPrOnComplete ?? true);
+  // Same shape again, and the fallback matters: an EXISTING run with no
+  // `mcpPolicy` on it is `continue` (absent means that on disk, including on
+  // runs written before the key existed), so a resume must not silently pick up
+  // a `require` preference the run never had.
+  const mcpPolicy: McpPolicy = mcpChoice ?? run?.mcpPolicy
+    ?? (run ? 'continue' : automation?.mcpPolicy ?? 'continue');
 
   // Follow the run when it changes underneath us. Note the fallbacks differ from
   // the ones above on purpose: an EXISTING run with no `permissionProfile` on it
@@ -180,6 +188,7 @@ export function Controls({
     setOverrides(run?.phaseOptions ?? {});
     setRunSkills(seedSkills(run, defaultSkills));
     setProfile(run?.permissionProfile ?? (run ? 'guarded' : DEFAULTS.permissionProfile));
+    setMcpChoice(null);
   }, [run?.id, run?.model, run?.effort, run?.autonomy, run?.phaseBudgetUsd, run?.runBudgetUsd,
     run?.permissionProfile, run, defaultKey]);
 
@@ -207,6 +216,7 @@ export function Controls({
     phaseOptions: overrides,
     skills: runSkills,
     mcpServers: runMcp,
+    mcpPolicy,
     // Sent explicitly rather than omitted: `routes.ts` reads an unrecognised or
     // missing profile as `guarded`, which is the right safety rule and the reason
     // the client must say what it means.
@@ -228,6 +238,7 @@ export function Controls({
     || JSON.stringify(overrides) !== JSON.stringify(run?.phaseOptions ?? {})
     || JSON.stringify(runSkills) !== JSON.stringify(run?.skills ?? [])
     || JSON.stringify(runMcp) !== JSON.stringify(run?.mcpServers ?? [])
+    || mcpPolicy !== (run?.mcpPolicy ?? 'continue')
   );
 
   const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
@@ -373,8 +384,29 @@ export function Controls({
 
         <McpPicker servers={mcp?.servers ?? []} chosen={runMcp} planServers={planMcp}
           onChange={setRunMcp}
-          note="Checked before each phase boards. A server that cannot connect parks the phase
-                instead of letting it run without." />
+          note="Checked before each phase boards, so a wall costs a probe rather than an hour." />
+
+        {(runMcp.length > 0 || planMcp.length > 0) && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label htmlFor="run-mcp-policy" className="min-w-0 text-sm text-ink">
+              If one will not connect
+              <span className="mt-0.5 block text-2xs text-ink-muted">
+                A phase whose plan says it requires its servers still parks — this cannot overrule
+                that.
+              </span>
+            </label>
+            <select
+              id="run-mcp-policy"
+              value={mcpPolicy}
+              disabled={disabled}
+              onChange={(event) => setMcpChoice(event.target.value as McpPolicy)}
+              className="min-h-(--tap-min) rounded border border-rule bg-ground px-2 text-sm text-ink"
+            >
+              <option value="continue">Run the phase without it</option>
+              <option value="require">Park the phase</option>
+            </select>
+          </div>
+        )}
 
         <PhaseMatrix planPhases={planPhases} overrides={overrides} runModel={model}
           runEffort={effort} skills={skills} runSkills={runSkills} disabled={disabled}

@@ -654,9 +654,19 @@ mcp_advisories() {
     done
     printf '%s' "$acc"
   }
+  # The consequence named here has to match what the console will ACTUALLY do,
+  # and that now depends on the policy. Under the default the phase runs without
+  # the server and reports it; only `require` still parks. Saying "will park" to
+  # everyone would be the same lie in the other direction as saying nothing.
+  local consequence
+  if [ "$(plan_mcp_policy)" = require ]; then
+    consequence='every phase will park at boarding'
+  else
+    consequence='phases will run without them and report it (set **MCP policy:** require to park instead)'
+  fi
   missing="$(_unknown "$(plan_mcp)")"
   if [ -n "$missing" ]; then
-    printf 'F15 plan: MCP server(s) not registered on this machine: %s — every phase will park at boarding; register them in Phase Console → MCP, or drop them from §Session budget\n' "$missing"
+    printf 'F15 plan: MCP server(s) not registered on this machine: %s — %s; register them in Phase Console → MCP, or drop them from §Session budget\n' "$missing" "$consequence"
     # Said once, at the level it was written. A phase that merely repeats the
     # plan-wide line would otherwise re-report it on every row.
     known="${known}$(printf '%s' "$missing" | tr ',' ' ' | tr -s ' ') "
@@ -666,8 +676,13 @@ mcp_advisories() {
     named="$(mcp_directive "$p")"
     [ -z "$named" ] && continue
     t="$(_unknown "$named")"
-    [ -n "$t" ] && \
-      printf 'F15 phase %s: MCP server(s) not registered on this machine: %s — the autopilot will park it at boarding; register them in Phase Console → MCP, or drop them from the phase\n' "$p" "$t"
+    if [ -n "$t" ]; then
+      if [ "$(mcp_policy_for_phase "$p")" = require ]; then
+        printf 'F15 phase %s: MCP server(s) not registered on this machine: %s — the autopilot will park it at boarding; register them in Phase Console → MCP, or drop them from the phase\n' "$p" "$t"
+      else
+        printf 'F15 phase %s: MCP server(s) not registered on this machine: %s — it will run without them and report it; register them in Phase Console → MCP, drop them from the phase, or add "- **MCP policy:** require" to park instead\n' "$p" "$t"
+      fi
+    fi
   done
   return 0
 }
@@ -727,6 +742,46 @@ mcp_for_phase() {  # mcp_for_phase <phase>
     out="${out:+$out, }$t"
   done
   printf '%s' "$out"
+}
+
+# What a phase does when one of its MCP servers will not connect: "continue"
+# (run without it and say so) or "require" (park at boarding before spending).
+#
+# Two shapes, the phase's own OVERRIDING the plan-wide one — note that this is
+# the opposite of how `--mcp` composes, where a phase's servers union with the
+# plan's. Servers are additive because a phase needing one more is not a
+# disagreement; a policy is a single answer, and the more specific statement has
+# to win or a plan could never say "these servers matter, except in the one
+# phase that touches none of it".
+#
+# Both words are recognised, and everything else is silence. Three states, not
+# two, and the third is load-bearing: an explicit `continue` on a phase is what
+# lets it carve itself out of a plan-wide `require`, while "the plan said
+# nothing" has to stay distinguishable so the console's own setting can answer.
+# Collapsing silence into `continue` would make a run-level choice unreachable
+# on every plan ever written; collapsing it into `require` would stop plans over
+# a typo. So a word that is neither prints nothing and falls through, which is
+# the same fail-safe direction gitMode takes in the console's preferences.
+plan_mcp_policy() {
+  awk 'tolower($0) ~ /^##[[:space:]]+session budget/{f=1;next} /^##[[:space:]]/{f=0} f' "$plan_file" \
+    | grep -i 'mcp policy' | head -1 \
+    | sed -E 's/.*[Mm][Cc][Pp][[:space:]]*[Pp]olicy[^:]*:[[:space:]]*//; s/[*`]//g; s/^[[:space:]]*//; s/[[:space:]]*$//' \
+    | tr '[:upper:]' '[:lower:]' | awk '$1=="require"{print "require"} $1=="continue"{print "continue"}' || true
+}
+
+mcp_policy_directive() {  # mcp_policy_directive <phase>
+  phase_block "$1" \
+    | grep -iE '^[[:space:]]*[-*][[:space:]]*\*{0,2}MCP[[:space:]]+policy\*{0,2}[[:space:]]*:' \
+    | head -1 \
+    | sed -E 's/.*[Mm][Cc][Pp][[:space:]]*[Pp]olicy\*{0,2}[[:space:]]*:[[:space:]]*//; s/[*`]//g; s/^[[:space:]]*//; s/[[:space:]]*$//' \
+    | tr '[:upper:]' '[:lower:]' | awk '$1=="require"{print "require"} $1=="continue"{print "continue"}' || true
+}
+
+mcp_policy_for_phase() {  # mcp_policy_for_phase <phase>
+  local own
+  own="$(mcp_policy_directive "$1")"
+  [ -n "$own" ] && { printf '%s' "$own"; return 0; }
+  printf '%s' "$(plan_mcp_policy)"
 }
 
 # done-set override hook: --ready-after N treats N as already done.
@@ -966,6 +1021,16 @@ case "$mode" in
     # With no argument: the plan-wide line alone. With one: that phase's full set
     # (plan line ∪ its own bullet). Always a csv, empty when the plan names none.
     if [ -n "$arg" ]; then mcp_for_phase "$arg"; else printf '%s' "$(plan_mcp)"; fi
+    printf '\n'
+    exit 0
+    ;;
+  --mcp-policy)
+    # What the PLAN says to do when one of those servers will not connect.
+    # With no argument: the §Session budget line alone. With one: that phase's
+    # answer (its own bullet, else the plan's). Empty means the plan has no
+    # opinion, which the console reads as "the run's setting decides" — NOT as
+    # `continue`, because those two are different facts.
+    if [ -n "$arg" ]; then mcp_policy_for_phase "$arg"; else printf '%s' "$(plan_mcp_policy)"; fi
     printf '\n'
     exit 0
     ;;

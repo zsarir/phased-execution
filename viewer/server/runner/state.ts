@@ -128,6 +128,29 @@ export type VerifySummary = {
   notRun: { text: string; reason: string }[];
 };
 
+/**
+ * One MCP server a phase asked for and did not get.
+ *
+ * `reason` is the machine-readable half — it decides which remedy the console
+ * offers, since "sign this in" and "this is not registered here" are different
+ * errands — and `detail` carries whatever the CLI said, when it said anything.
+ */
+export type McpDegradation = {
+  id: string;
+  reason: 'needs-auth' | 'failed' | 'unregistered' | 'switched-off';
+  detail?: string;
+};
+
+/** The one place the four reasons become the sentence a person reads. */
+export function mcpReasonText(reason: McpDegradation['reason']): string {
+  switch (reason) {
+    case 'needs-auth': return 'needs authentication';
+    case 'unregistered': return 'is not registered on this console';
+    case 'switched-off': return 'is switched off here';
+    default: return 'will not connect';
+  }
+}
+
 export type PhaseRecord = {
   phase: number;
   status: PhaseStatus;
@@ -187,6 +210,16 @@ export type PhaseRecord = {
    * when clean, cleared on retry.
    */
   preflight?: string[];
+  /**
+   * MCP servers this phase asked for and boarded WITHOUT, under `continue`.
+   *
+   * The receipt for a degraded run. A phase that quietly did without half its
+   * tools and a phase that had all of them look identical in the handoff
+   * afterwards, so the fact is recorded where the run page and the operator's
+   * notification both read it. Overwritten each boarding, absent when every
+   * server connected, cleared on retry — exactly like `preflight`.
+   */
+  mcpDegraded?: McpDegradation[];
   verification?: VerifySummary;
   /**
    * Where the verification commands actually ran, relative to the run's root
@@ -312,6 +345,28 @@ export function childrenOf(state: RunState): ChildRef[] {
 export type Autonomy = 'halt-on-everything' | 'keep-going';
 
 /**
+ * What a phase does when one of its MCP servers cannot be reached.
+ *
+ * `continue` — the shipped default — drops the unreachable servers from the
+ * `--mcp-config`, tells the session which ones are missing and why, warns the
+ * operator, and runs the phase anyway. `require` is the older, unconditional
+ * behaviour: park at boarding before a token is spent.
+ *
+ * The default moved because the park was answering the wrong question. It was
+ * built for the phase that genuinely cannot work without its server, but it
+ * fires for every phase that merely has one attached — and a run whose ready
+ * phases all park has nothing left to do, so one signed-out server stopped an
+ * eleven-phase plan that named no MCP servers at all (observed live, 0 phases
+ * done). `require` is still exactly right, per phase, when the plan says so.
+ */
+export const MCP_POLICIES = ['continue', 'require'] as const;
+export type McpPolicy = (typeof MCP_POLICIES)[number];
+
+export function isMcpPolicy(value: unknown): value is McpPolicy {
+  return typeof value === 'string' && (MCP_POLICIES as readonly string[]).includes(value);
+}
+
+/**
  * What the operator chose for one phase, before it runs.
  *
  * Every field is optional and an absent field means "inherit". Three sources
@@ -353,6 +408,14 @@ export type PhaseOptions = {
    * for on every turn.
    */
   mcpOff?: boolean;
+  /**
+   * What this phase does when one of its servers cannot be reached.
+   *
+   * The most specific answer there is, and the only one that can overrule the
+   * plan: an operator looking at a parked phase knows something the versioned
+   * document cannot, which is whether THIS attempt can proceed without it.
+   */
+  mcpPolicy?: McpPolicy;
 };
 
 export type RunState = {
@@ -468,9 +531,18 @@ export type RunState = {
    *
    * Registry ids, checked against the live registry when the run starts —
    * they become a child process's configuration, so an id that no longer
-   * resolves parks the phase rather than silently running without it.
+   * resolves is reported to the session rather than silently dropped.
    */
   mcpServers?: string[];
+  /**
+   * This run's answer to an unreachable MCP server, seeded from the console
+   * preference at launch. Absent means the shipped default, `continue`.
+   *
+   * The plan outranks it, deliberately: a run-wide "carry on regardless" is an
+   * operator's convenience for one launch, while a phase that says it requires
+   * its server is a versioned statement about the work.
+   */
+  mcpPolicy?: McpPolicy;
   /**
    * How many phases of THIS run may be in flight at once.
    *
@@ -609,6 +681,7 @@ export type NewRunOptions = {
   phaseOptions?: Record<string, PhaseOptions>;
   skills?: string[];
   mcpServers?: string[];
+  mcpPolicy?: McpPolicy;
   permissionProfile?: PermissionProfile;
   maxParallel?: number;
   gitMode?: 'default-branch' | 'new-branch';
@@ -669,6 +742,9 @@ export function newRun(opts: NewRunOptions): RunState {
     ...(opts.phaseOptions ? { phaseOptions: { ...opts.phaseOptions } } : {}),
     ...(opts.skills?.length ? { skills: [...opts.skills] } : {}),
     ...(opts.mcpServers?.length ? { mcpServers: [...opts.mcpServers] } : {}),
+    // `continue` is the absent state, so a run file written before the policy
+    // existed reads as the shipped default rather than as the old park.
+    ...(opts.mcpPolicy && opts.mcpPolicy !== 'continue' ? { mcpPolicy: opts.mcpPolicy } : {}),
     ...(opts.maxParallel && opts.maxParallel > 0 ? { maxParallel: opts.maxParallel } : {}),
     // **Absent still means `guarded` when reading**, and that does not change:
     // a run file written before profiles existed must not become trusted because

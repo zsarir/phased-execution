@@ -24,6 +24,7 @@ import { basename, join } from 'node:path';
 
 import { log } from './log.ts';
 import { parseFrontMatter, scalar } from './parse/frontmatter.ts';
+import { mcpReasonText, type McpDegradation } from './runner/state.ts';
 
 export type SkillSource = 'personal' | 'project' | 'plugin';
 
@@ -295,14 +296,45 @@ export function skillDirective(skills: string[]): string {
  * server to the MODEL, and a model that treats it as a hint improvises for an
  * hour and hands back work that used none of what was chosen for it.
  */
-export function mcpDirective(servers: string[]): string {
+export function mcpDirective(servers: string[], degraded: McpDegradation[] = []): string {
   const named = [...new Set(servers.filter(Boolean))];
-  if (!named.length) return '';
-  const list = named.map((name) => `\`${name}\``).join(', ');
-  return `\nThe following MCP server${named.length === 1 ? ' is' : 's are'} attached to this session `
-    + `and verified connected before it started: ${list}. `
-    + `Prefer ${named.length === 1 ? 'its' : 'their'} tools over improvising the same information by hand.\n`
-    + `If one turns out to be unavailable mid-phase, say so plainly in your handoff rather than working `
-    + 'around it silently — an unattended session cannot sign a server in, and a phase that quietly did '
-    + 'without is worse than one that stopped and said why.\n';
+  const attached = named.length
+    ? `\nThe following MCP server${named.length === 1 ? ' is' : 's are'} attached to this session `
+      + `and verified connected before it started: ${named.map((name) => `\`${name}\``).join(', ')}. `
+      + `Prefer ${named.length === 1 ? 'its' : 'their'} tools over improvising the same information by hand.\n`
+      + `If one turns out to be unavailable mid-phase, say so plainly in your handoff rather than working `
+      + 'around it silently — an unattended session cannot sign a server in, and a phase that quietly did '
+      + 'without is worse than one that stopped and said why.\n'
+    : '';
+  return attached + degradedDirective(degraded);
+}
+
+/**
+ * The servers this phase asked for and did not get.
+ *
+ * Said out loud, and said HERE, because the alternative is what the CLI does on
+ * its own: it drops the tools and leaves the model to notice. A model that
+ * notices mid-phase either improvises a substitute — the exact failure the
+ * preflight was built to stop — or treats it as a blocker and stops a phase
+ * that had plenty of work it could do.
+ *
+ * So the instruction is deliberately two-sided. Do not invent a replacement,
+ * and do not down tools either: do what can be done, and leave a named errand
+ * behind. That errand is the whole reason `continue` is safe as a default — the
+ * degradation ends up in a handoff a person reads, not only in a journal.
+ */
+function degradedDirective(degraded: McpDegradation[]): string {
+  if (!degraded.length) return '';
+  const named = degraded
+    .map((row) => `\`${row.id}\` (${row.detail ?? mcpReasonText(row.reason)})`)
+    .join(', ');
+  const one = degraded.length === 1;
+  return `\nThe following MCP server${one ? ' was' : 's were'} requested for this phase and ${one ? 'is' : 'are'} `
+    + `**UNAVAILABLE**: ${named}. ${one ? 'It has' : 'They have'} been left out of this session — `
+    + `${one ? 'its' : 'their'} tools do not exist here and cannot be signed in from an unattended run.\n`
+    + 'Do two things about that, and neither of them silently: do NOT improvise a substitute for what '
+    + `${one ? 'that server' : 'those servers'} would have told you, and do NOT treat ${one ? 'it' : 'them'} `
+    + 'as a blocker either. Do the work that does not depend on '
+    + `${one ? 'it' : 'them'}, and record what you could not do — naming the server — under **Outstanding** `
+    + 'in your handoff, as an errand for the operator.\n';
 }

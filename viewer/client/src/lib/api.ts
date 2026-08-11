@@ -357,6 +357,13 @@ export interface McpServerView {
   interactiveTools?: string[];
   /** The advertised tools changed since we last looked — the rug-pull flag. */
   toolsChanged?: { added: string[]; removed: string[]; seenAt: string };
+  /**
+   * Environment variables this server's command still refers to and nothing
+   * supplies. A registration nobody finished — it will never connect, however
+   * many times it is probed, and it must never be attached in the belief that
+   * it might.
+   */
+  needsConfig?: string[];
   source?: string;
   lastUsed?: string;
 }
@@ -512,6 +519,7 @@ export interface ConsoleState {
     repoGuard?: boolean;
     autoRecoverByDefault?: boolean;
     autoContinueRecovery?: boolean;
+    mcpPolicy?: McpPolicy;
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -531,6 +539,7 @@ export function automationPrefs(state: ConsoleState | undefined): {
   repoGuard: boolean;
   autoRecoverByDefault: boolean;
   autoContinueRecovery: boolean;
+  mcpPolicy: McpPolicy;
 } {
   const prefs = state?.prefs ?? {};
   return {
@@ -541,6 +550,10 @@ export function automationPrefs(state: ConsoleState | undefined): {
     repoGuard: prefs.repoGuard ?? true,
     autoRecoverByDefault: prefs.autoRecoverByDefault ?? true,
     autoContinueRecovery: prefs.autoContinueRecovery ?? true,
+    // Only the exact word may stop a plan, matching the server's own coercion.
+    // A console running an older server has never written the key, and reads
+    // as the shipped default rather than as the behaviour it used to have.
+    mcpPolicy: prefs.mcpPolicy === 'require' ? 'require' : 'continue',
   };
 }
 
@@ -948,10 +961,29 @@ export interface PhaseRecord {
   note?: string;
   /** Boarding-preflight warnings on the §Verification — advisory, absent when clean. */
   preflight?: string[];
+  /** Servers this phase asked for and boarded without. Absent when all connected. */
+  mcpDegraded?: McpDegradation[];
   verification?: VerifySummary;
   lint?: { ok: boolean; summary: string };
   closeout?: { at: string; ok: boolean; sessionId?: string; note?: string };
   said?: string;
+}
+
+/**
+ * What a phase does when one of its MCP servers cannot be reached.
+ *
+ * `continue` (the shipped default) runs it without that server and says so, in
+ * the session's prompt and in the phase record. `require` parks at boarding,
+ * which is what every phase used to do — one signed-out server halted a real
+ * eleven-phase plan that named no MCP servers of its own.
+ */
+export type McpPolicy = 'continue' | 'require';
+
+/** One server a phase asked for and did not get, with the errand it implies. */
+export interface McpDegradation {
+  id: string;
+  reason: 'needs-auth' | 'failed' | 'unregistered' | 'switched-off';
+  detail?: string;
 }
 
 export interface PhaseOptions {
@@ -970,6 +1002,11 @@ export interface PhaseOptions {
    * not somebody's preference for one run.
    */
   mcpOff?: boolean;
+  /**
+   * This phase's answer to an unreachable server. The most specific there is,
+   * and the only one that outranks the plan.
+   */
+  mcpPolicy?: McpPolicy;
 }
 
 /** One live `claude -p` process: which phase it is on, and the session it holds. */
@@ -1028,6 +1065,8 @@ export interface RunState {
   skills?: string[];
   /** MCP servers every phase of this run attaches, on top of the plan's own. */
   mcpServers?: string[];
+  /** This run's answer to an unreachable server. Absent = `continue`. */
+  mcpPolicy?: McpPolicy;
   permissionProfile?: PermissionProfile;
   /** The Claude account this run spawns as. Absent = the machine login. */
   accountId?: string;
@@ -1204,6 +1243,8 @@ export interface RunSettings {
   skills?: string[];
   /** MCP servers every phase of this run attaches, on top of the plan's own. */
   mcpServers?: string[];
+  /** What a phase does when one of those will not connect. Absent = the preference. */
+  mcpPolicy?: McpPolicy;
   permissionProfile?: PermissionProfile;
   onlyPhases?: number[];
   resumeRunId?: string;
@@ -1610,6 +1651,8 @@ export const api = {
   runRetry: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/retry`, { phase }),
   runRecheck: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/recheck`, { phase }),
   runCloseout: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/closeout`, { phase }),
+  /** Set the run to `continue` and retry every phase the MCP preflight parked. */
+  runMcpContinue: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/mcp-continue`, {}),
   runResumePhase: (slug: string, phase: number, instruction?: string) =>
     post<RunEnvelope>(`/api/run/${q(slug)}/resume-phase`, { phase, instruction }),
   phaseDiagnosis: (slug: string, phase: number | string) =>

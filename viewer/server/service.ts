@@ -58,7 +58,8 @@ import { Journal } from './runner/journal.ts';
 import {
   autoResolveRun, childrenOf, latestRun, listRuns, loadRun, phaseRecord, pidAlive,
   reconcileRecordsAgainstBoard, resolveRunsAgainst, saveRun,
-  slugsNeedingBoard, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, type RunState, type VerifySummary,
+  slugsNeedingBoard, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, isMcpPolicy, mcpReasonText,
+  type McpPolicy, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import { outcomeFileFor, readOutcome } from './runner/outcome.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
@@ -611,6 +612,13 @@ export class Service {
    * `RunState` it drove, which is what the console reads between runs.
    */
   private runners = new Map<string, Runner>();
+  /**
+   * `<runId>:<serverId>` pairs already announced as degraded. See
+   * `announceMcpDegraded` — the fact is worth saying once and not once per
+   * phase. Process-lifetime only, deliberately: a console restart is a fair
+   * moment to be told again about a server that is still missing.
+   */
+  private degradedAnnounced = new Set<string>();
   /** Admission control shared by every runner in the pool. See `scheduler.ts`. */
   readonly scheduler: Scheduler;
   readonly approvals: Approvals;
@@ -746,16 +754,30 @@ export class Service {
           tag: tagFor('limits', 'mcp-drift', view.id),
         });
       },
-      // A server went from working to needing attention. Transitions only —
-      // the poller has already tried; this is the point at which a person must.
+      // A server changed state in a way somebody would want to know about.
+      // Transitions only — the poller has already tried; this is the point at
+      // which a person could act.
       onStatusChange: (view, status) => {
+        if (status === 'connected') {
+          this.announce('limits', {
+            title: `MCP server back — ${view.label}`,
+            body: `${view.label} is connected again and available to runs on this console.`,
+            tag: tagFor('limits', 'mcp', view.id, status),
+          });
+          // Whatever parked on it can go. This is the trigger that was missing:
+          // a sign-in through the console's own terminal already called this,
+          // but a server that recovered any other way did not.
+          void this.healMcpParks(view.id);
+          return;
+        }
         this.announce('limits', {
           title: `MCP server unavailable — ${view.label}`,
           body: status === 'needs-auth'
-            ? `${view.label} needs signing in. An unattended run cannot do it, so any phase that `
-              + 'names this server will park until someone does — Settings → MCP has the button.'
-            : `${view.label} will not connect${view.issue ? `: ${view.issue}` : ''}. Phases that name `
-              + 'it will park at boarding.',
+            ? `${view.label} needs signing in, and an unattended run cannot do it. Phases that name this `
+              + 'server will run without it and say so, unless the plan requires it — Settings ▸ MCP has '
+              + 'the button.'
+            : `${view.label} will not connect${view.issue ? `: ${view.issue}` : ''}. Phases that name it `
+              + 'will run without it and say so, unless the plan requires it.',
           tag: tagFor('limits', 'mcp', view.id, status),
         });
       },
@@ -980,10 +1002,23 @@ export class Service {
         if (!plan) return [];
         return [...new Set([...(plan.sessionBudget.mcpServers ?? []), ...(plan.phases[phase]?.mcpServers ?? [])])];
       },
+      // What the PLAN says to do when one of them will not connect — the
+      // phase's own bullet first, then the §Session budget line. Absent means
+      // the plan has no opinion and the run's setting answers; it is the ONE
+      // resolution where the plan outranks the run, because a phase that says
+      // it requires a server is describing the work rather than a preference.
+      planMcpPolicy: (slug, phase) => {
+        const plan = this.store?.get(slug)?.plan;
+        return plan?.phases[phase]?.mcpPolicy ?? plan?.sessionBudget.mcpPolicy;
+      },
+      // A phase boarded without servers it asked for. The runner has no
+      // notification vocabulary; this is where the fact becomes something an
+      // operator hears, once per run per server rather than once per phase.
+      onMcpDegraded: (state, phase, degraded) => this.announceMcpDegraded(state, phase, degraded),
       // Absent when the flag is off: a console that may not REGISTER servers
       // still resolves plans that name them, because reading is not the gated
-      // act — but with an empty registry every such name parks, which is the
-      // honest outcome and exactly what the preflight message explains.
+      // act — but with an empty registry every such name is unreachable, which
+      // is the honest outcome and exactly what the session is told.
       mcp: {
         preflight: (ids, cwd) => this.mcp.preflight(ids, { cwd }),
         configFor: (runId, ids) => this.mcp.configFor(runId, ids),
@@ -2947,9 +2982,17 @@ export class Service {
     const autoRecover = options.autoRecover
       ?? (options.resumeRunId ? undefined : this.prefs.autoRecoverByDefault !== false);
 
+    // And the MCP policy the same way again: the preference is where a fresh
+    // run starts, a resume keeps whatever the run already decided (including a
+    // `continue` set from a halt card, which must not be undone by a restart),
+    // and an explicit choice in the dialog beats both.
+    const mcpPolicy = options.mcpPolicy
+      ?? (options.resumeRunId ? undefined : this.prefs.mcpPolicy ?? 'continue');
+
     const state = await this.runnerFor(slug).start({
       ...options,
       autoRecover,
+      mcpPolicy,
       skills,
       slug,
       root: this.root.path,
@@ -3444,6 +3487,47 @@ export class Service {
       : { ok: false, reason: 'no run of that plan to move — start one with the account instead' };
   }
 
+  /**
+   * "Continue without these servers" — the door out of an MCP park.
+   *
+   * The park says an unattended session cannot sign a server in, which is true
+   * and was the whole of the advice. But it is not the only remedy: the other
+   * one is deciding the phase does not need that server after all, and until
+   * now the only way to say that was to edit the plan or the run's settings and
+   * then retry every parked phase by hand.
+   *
+   * Sets the run to `continue` and retries exactly the phases the MCP preflight
+   * parked — not `failed` phases, not gated ones, not a phase parked for an
+   * unrunnable §Verification. A button that says it is about MCP has to do only
+   * that; the phases it releases will re-board through the same preflight and
+   * simply be told to run without what they cannot reach.
+   *
+   * Note this cannot beat a plan that says `require`: `mcpPolicyFor` reads the
+   * plan ahead of the run, deliberately. Such a phase re-parks, which is the
+   * correct answer — the escape hatch for it is per-phase, where an operator
+   * is overruling a versioned statement knowingly rather than in bulk.
+   */
+  async continueWithoutMcp(slug: string): Promise<RunState | null> {
+    const state = this.liveRunner(slug)?.current()
+      ?? (this.root ? latestRun(this.root.path, slug, this.liveRunIds()) : null);
+    if (!state) throw new Error(`no run of ${slug} to continue`);
+    const parked = Object.values(state.phases ?? {})
+      .filter((record) => record.status === 'parked' && MCP_PARK_NOTE.test(record.note ?? ''))
+      .map((record) => record.phase)
+      .sort((a, b) => a - b);
+    if (!parked.length) throw new Error('no phase of this run is parked on an MCP server');
+
+    this.configureRun(slug, { mcpPolicy: 'continue' }, 'console');
+    this.runners.get(slug)?.note('run.mcp-continue', { phases: parked });
+    let run: RunState | null = null;
+    // Sequential, not `Promise.all`: the FIRST retry is what restarts a stopped
+    // run, and the rest have to land on the loop it started rather than racing
+    // three `startRun` calls at one plan (which the pool answers 409 to).
+    for (const phase of parked) run = await this.retryPhase(slug, phase);
+    log.info('mcp.continue-without', { slug, phases: parked });
+    return run ?? this.liveRunner(slug)?.current() ?? null;
+  }
+
   async retryPhase(slug: string, phase: number): Promise<RunState | null> {
     // Named phase, so the claim is the whole answer — and checked before the
     // live-runner branch too, since `runner.retry` queues work the boarding
@@ -3462,6 +3546,10 @@ export class Service {
       record.note = undefined;
       record.endedAt = undefined;
       delete record.preflight;
+      delete record.mcpDegraded;
+      // See `Runner.retry`: a lock-cap park keeps its clock otherwise, and the
+      // retry re-parks on the same expired arithmetic.
+      record.lockWaitSince = undefined;
       state.consecutiveFailures = 0;
       state.halt = null;
     });
@@ -4022,6 +4110,7 @@ export class Service {
           record.note = undefined;
           record.endedAt = undefined;
           delete record.preflight;
+          delete record.mcpDegraded;
         }
         slot.fixed = true;
         delete slot.lastReason;
@@ -4833,6 +4922,10 @@ export class Service {
     this.assertMcpAllowed();
     if (typeof body.enabled === 'boolean') {
       if (!this.mcp.setEnabled(id, body.enabled)) return undefined;
+      // Switching a server OFF is an answer to the phases parked on it, and it
+      // used to be treated as unrelated. The operator has said this run does
+      // not get that server; the run should stop waiting to be told again.
+      if (!body.enabled) void this.healMcpParks(id);
     }
     if (typeof body.secret === 'string' && body.secretRef && typeof body.secretRef === 'object') {
       await this.mcp.setSecret(id, body.secretRef as never, body.secret);
@@ -4843,7 +4936,11 @@ export class Service {
 
   async removeMcpServer(id: string): Promise<boolean> {
     this.assertMcpAllowed();
-    return this.mcp.remove(id);
+    const removed = this.mcp.remove(id);
+    // Same reasoning as disabling, more so: the thing the phase was waiting for
+    // no longer exists on this console, so waiting is the one wrong answer.
+    if (removed) void this.healMcpParks(id);
+    return removed;
   }
 
   /**
@@ -4902,9 +4999,24 @@ export class Service {
    * moment somebody signs that server in the run can simply carry on. Nobody
    * has to remember which of six plans was blocked on the thing they just fixed.
    *
-   * Deliberately narrow: only records parked by the MCP preflight, only when
-   * the note names THIS server, and only for runs that are still live. A phase
-   * parked for any other reason is left exactly where it is.
+   * Deliberately narrow in WHAT it touches: only records parked by the MCP
+   * preflight, and only when the note names THIS server. A phase parked for any
+   * other reason is left exactly where it is.
+   *
+   * Deliberately WIDE in when it fires, which it was not. It used to run on one
+   * trigger — a `claude mcp login` terminal exiting for that id — and that
+   * misses the shapes people actually hit. A server that reports `failed`
+   * because its command holds an unfilled `${VAR}` has no login to complete, so
+   * it never fired. A server the operator gives up on and switches off or
+   * removes stops blocking anything, and it never fired for that either. It is
+   * called now on any transition INTO `connected`, and on disable and removal,
+   * because in all three cases the reason the phase parked has gone.
+   *
+   * A halted run is still healable and that is not an accident: `drive()`'s
+   * teardown leaves `this.state` in place, the runner stays in the pool, and
+   * `retryPhase` restarts a stopped run rather than only resetting a record.
+   * Which matters most in exactly the case that motivated all of this — where
+   * the MCP park was what halted the run in the first place.
    */
   private async healMcpParks(serverId: string): Promise<void> {
     for (const runner of this.runners.values()) {
@@ -4932,6 +5044,34 @@ export class Service {
         }
       }
     }
+  }
+
+  /**
+   * A phase ran without servers it asked for. Say so, once.
+   *
+   * Once per run per SERVER, not per phase: a plan with three unreachable
+   * servers and seven phases would otherwise be twenty-one notifications for
+   * one fact the operator can act on exactly once. The `health` category is
+   * right for it — this is the console reporting on its own equipment, not the
+   * run asking for anything, and the run is not stopping.
+   */
+  private announceMcpDegraded(state: RunState, phase: number, degraded: McpDegradation[]): void {
+    const fresh = degraded.filter((row) => {
+      const key = `${state.id}:${row.id}`;
+      if (this.degradedAnnounced.has(key)) return false;
+      this.degradedAnnounced.add(key);
+      return true;
+    });
+    if (!fresh.length) return;
+    const named = fresh.map((row) => `${row.id} (${row.detail ?? mcpReasonText(row.reason)})`).join(', ');
+    const one = fresh.length === 1;
+    this.announce('health', {
+      title: `${state.slug} is running without ${one ? 'an MCP server' : 'some MCP servers'}`,
+      body: `Phase ${phase} started without ${named}. The run is carrying on and the session was told `
+        + `to record what it could not do. Sign ${one ? 'it' : 'them'} in from Settings ▸ MCP, or drop `
+        + `${one ? 'the name' : 'the names'} from the plan.`,
+      tag: tagFor('run', 'mcp-degraded', state.slug),
+    });
   }
 
   private emitMcp(): void {
@@ -5201,6 +5341,7 @@ export class Service {
     if (typeof patch.repoGuard === 'boolean') picked.repoGuard = patch.repoGuard;
     if (typeof patch.autoRecoverByDefault === 'boolean') picked.autoRecoverByDefault = patch.autoRecoverByDefault;
     if (typeof patch.autoContinueRecovery === 'boolean') picked.autoContinueRecovery = patch.autoContinueRecovery;
+    if (isMcpPolicy(patch.mcpPolicy)) picked.mcpPolicy = patch.mcpPolicy;
     // `notify` is a map inside a patch, so a shallow spread alone would let a
     // client sending one toggle reset every other category to its default.
     // Merged off the *current* map (captured before the spread overwrites it),

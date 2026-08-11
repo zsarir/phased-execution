@@ -63,6 +63,21 @@ export type McpServerView = {
   interactiveTools?: string[];
   /** Set when the advertised tools changed since we last looked. */
   toolsChanged?: { added: string[]; removed: string[]; seenAt: string };
+  /**
+   * Environment variables this server's own configuration still refers to and
+   * nothing supplies — `MCP_FS_ROOT` in the catalog's filesystem entry, which
+   * ships as `npx … @modelcontextprotocol/server-filesystem ${MCP_FS_ROOT}`.
+   *
+   * `${VAR}` is passed to the CLI unexpanded on purpose (`config.ts`), so an
+   * unset one is not an error anybody sees: the CLI expands it to nothing, the
+   * server starts without a root, and it probes `failed` forever. It looked
+   * like a flaky server rather than an unfinished registration — one was
+   * attached to a real run and blocked three phases at boarding.
+   *
+   * Absent when there is nothing outstanding. A server with entries here can be
+   * shown, but never silently attached.
+   */
+  needsConfig?: string[];
   source?: string;
   lastUsed?: string;
 };
@@ -281,10 +296,14 @@ export class Mcp {
     probeError?: string;
   }> {
     const { servers, unknown, disabled } = this.resolve(ids);
-    if (unknown.length || disabled.length) {
-      return { ok: false, rows: [], blocking: [], unknown, disabled };
+    // The resolvable ones are probed even when some ids did not resolve. This
+    // used to short-circuit, which cost a whole extra boarding per problem: a
+    // phase naming one unregistered server and one signed-out one reported the
+    // first, and only learned about the second after somebody fixed it. One
+    // answer, naming everything wrong with the set.
+    if (!servers.length) {
+      return { ok: !unknown.length && !disabled.length, rows: [], blocking: [], unknown, disabled };
     }
-    if (!servers.length) return { ok: true, rows: [], blocking: [], unknown: [], disabled: [] };
 
     const doc = await buildMcpConfig(servers, this.creds);
     const probe = await this.probe(doc, opts.cwd ? { cwd: opts.cwd } : {});
@@ -292,11 +311,32 @@ export class Mcp {
     if (probe.probeError) {
       // Could not check ≠ they are down. Boarding proceeds: the run's own
       // failure handling is still there, and refusing to start a phase because
-      // a probe timed out would turn a flaky check into a stopped plan.
-      return { ok: true, rows: [], blocking: [], unknown: [], disabled: [], probeError: probe.probeError };
+      // a probe timed out would turn a flaky check into a stopped plan. The
+      // ids that never resolved are still reported — that verdict needed no
+      // probe and is not in doubt.
+      return {
+        ok: !unknown.length && !disabled.length,
+        rows: [], blocking: [], unknown, disabled, probeError: probe.probeError,
+      };
     }
-    const blocking = probe.servers.filter((row) => blocksBoarding(row.status));
-    return { ok: blocking.length === 0, rows: probe.servers, blocking, unknown: [], disabled: [] };
+    const blocking = probe.servers.filter((row) => blocksBoarding(row.status)).map((row) => {
+      // "will not connect" is what a server whose `${VAR}` was never filled in
+      // reports, and it reads as a flaky remote rather than as the unfinished
+      // registration it is. Name the variable instead — it is the errand.
+      const missing = unresolvedVars(this.store.get(row.id) ?? ({} as McpServerMeta));
+      if (!missing.length || row.error) return row;
+      return {
+        ...row,
+        error: {
+          type: 'unconfigured',
+          message: `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set`,
+        },
+      };
+    });
+    return {
+      ok: blocking.length === 0 && !unknown.length && !disabled.length,
+      rows: probe.servers, blocking, unknown, disabled,
+    };
   }
 
   /**
@@ -364,7 +404,15 @@ export class Mcp {
       // Only the transition INTO a problem is worth telling somebody about; a
       // first observation of a server that has always needed signing in is not
       // news, it is the state the operator is looking at the page to fix.
-      if (previous && previous !== row.status && blocksBoarding(row.status)) {
+      //
+      // The recovery is worth telling too, and used to be silent. A phase
+      // parked on a server is unparked by that server coming back, and the only
+      // trigger for that was a `claude mcp login` terminal exiting — so a
+      // server that recovered any other way (a credential refreshed, a stdio
+      // command that started working, an operator fixing it outside the
+      // console) left the run parked on a problem that no longer existed.
+      const notable = blocksBoarding(row.status) || row.status === 'connected';
+      if (previous && previous !== row.status && notable) {
         const meta = this.store.get(row.id);
         if (meta && this.opts.onStatusChange) this.opts.onStatusChange(await this.view(meta), row.status);
       }
@@ -396,6 +444,7 @@ export class Mcp {
       ...(held?.row.tools.length ? { toolCount: held.row.tools.length } : {}),
       ...(interactive.length ? { interactiveTools: interactive } : {}),
       ...(drift ? { toolsChanged: drift } : {}),
+      ...(unresolvedVars(meta).length ? { needsConfig: unresolvedVars(meta) } : {}),
       ...(meta.source ? { source: meta.source } : {}),
       ...(meta.lastUsed ? { lastUsed: meta.lastUsed } : {}),
     };
@@ -412,6 +461,37 @@ export class Mcp {
  * A remote server with no header we hold falls to `oauth`, because that is what
  * the CLI will try — and `claude mcp login` is the verb the UI should offer.
  */
+/**
+ * `${VAR}` references in this server's own configuration that nothing fills.
+ *
+ * Three places can supply one: the server's `env` map, a stored secret ref, or
+ * the console process's own environment (a server legitimately written against
+ * a variable the operator exports for everything). Anything left over is a
+ * registration somebody did not finish — the catalog's filesystem entry ships
+ * as `… server-filesystem ${MCP_FS_ROOT}` with an `authNote` asking for a value,
+ * and nothing ever collected one.
+ *
+ * `${VAR:-default}` counts as satisfied: it supplies its own.
+ */
+export function unresolvedVars(meta: McpServerMeta): string[] {
+  const supplied = new Set([
+    ...Object.keys(meta.env ?? {}),
+    ...(meta.secretRefs ?? []).filter((ref) => ref.kind === 'env').map((ref) => ref.name),
+  ]);
+  const haystack = [
+    meta.command ?? '', ...(meta.args ?? []), meta.url ?? '',
+    ...Object.values(meta.headers ?? {}), ...Object.values(meta.env ?? {}),
+  ].join('\n');
+  const out: string[] = [];
+  for (const match of haystack.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}/g)) {
+    const [, name, fallback] = match;
+    if (fallback) continue;
+    if (supplied.has(name) || process.env[name]) continue;
+    if (!out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
 function authKind(meta: McpServerMeta): 'none' | 'oauth' | 'header' | 'env' {
   const refs = meta.secretRefs ?? [];
   if (refs.some((ref) => ref.kind === 'header')) return 'header';

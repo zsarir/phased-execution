@@ -3092,6 +3092,13 @@ test('a lock wait that outlives the cap parks honestly, naming the holder and th
     assert.equal(state.phases['1'].status, 'parked');
     assert.match(state.phases['1'].note ?? '', /locked by someone\/else and has waited/);
     assert.ok(journalled(events, 'phase.lock-wait-capped').length);
+    // The clock stops with the wait. It used to survive the park — it is only
+    // cleared after a SUCCESSFUL claim — so the next Retry measured from the
+    // original timestamp, found itself still over the two-hour cap, and parked
+    // again without waiting a second. Retry has to mean the wait starts over.
+    assert.equal(state.phases['1'].lockWaitSince, undefined);
+    // And the halt says so, rather than naming the holder and stopping.
+    assert.match(state.halt?.reason ?? '', /waited out another plan's lock takes Retry/);
   } finally { r.cleanup(); }
 });
 

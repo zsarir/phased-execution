@@ -39,8 +39,9 @@ import { extractCommands, hardenedPath, verifyPhase } from './verify.ts';
 import { failureContext } from './failure-context.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
-  PHASE_IN_FLIGHT, reconcileRecordsAgainstBoard,
-  type Autonomy, type ChildRef, type OnLimitPolicy, type PhaseOptions, type PhaseRecord,
+  PHASE_IN_FLIGHT, reconcileRecordsAgainstBoard, mcpReasonText,
+  type Autonomy, type ChildRef, type McpDegradation, type McpPolicy, type OnLimitPolicy,
+  type PhaseOptions, type PhaseRecord,
   type RunState, type PhaseStatus, type RunStatus, type VerifySummary,
 } from './state.ts';
 import { consumeOutcome, outcomeFileFor, readOutcome, type PhaseOutcome } from './outcome.ts';
@@ -77,6 +78,27 @@ export const VERIFICATION_PARK_NOTE = /§Verification|states no verification/;
 export const MCP_PARK_NOTE = /MCP server/;
 /** The half of those that a person fixes by signing in, rather than by editing. */
 export const MCP_AUTH_PARK_NOTE = /needs authentication/;
+
+/**
+ * Recognises the sentence the two-hour lock-wait cap writes, so the halt can
+ * say that a Retry restarts the wait. Same rule as the two above: it lives
+ * beside the code that writes it.
+ */
+export const LOCK_CAP_PARK_NOTE = /is locked by .* and has waited/;
+
+/**
+ * What one phase's MCP servers came to, decided once at boarding.
+ *
+ * `usable` is the set that gets a `--mcp-config`; `degraded` is what it asked
+ * for and did not get; `park` is non-null only under `require`. `strict` is the
+ * narrow case where every requested server was lost — see `resolveMcp`.
+ */
+export type McpResolution = {
+  usable: string[];
+  degraded: McpDegradation[];
+  park: string | null;
+  strict: boolean;
+};
 
 export type RunnerDeps = {
   scriptsDir: string;
@@ -140,6 +162,23 @@ export type RunnerDeps = {
    * console-side re-derivation would be a second parser to keep in step.
    */
   planMcp?: (slug: string, phase: number) => string[];
+  /**
+   * What the PLAN says a phase should do when one of its servers is
+   * unreachable — its per-phase `**MCP policy:**` bullet, else the
+   * §Session budget line. Read from the store for the same reason `planMcp`
+   * is: the plan is the durable statement about what the work needs.
+   *
+   * Absent (no plan, no bullet) means the plan has no opinion, and the run's
+   * own setting answers. See `mcpPolicyFor`.
+   */
+  planMcpPolicy?: (slug: string, phase: number) => McpPolicy | undefined;
+  /**
+   * A phase boarded without servers it asked for. Told to the service so it
+   * can announce it once — the runner has no notification vocabulary of its
+   * own, and a degraded phase that only reaches the journal is a degraded
+   * phase nobody hears about.
+   */
+  onMcpDegraded?: (state: RunState, phase: number, degraded: McpDegradation[]) => void;
   /**
    * Resolve a phase's server set into a `--mcp-config` file, and check it can
    * actually connect before the phase boards.
@@ -236,6 +275,8 @@ export type StartOptions = {
   skills?: string[];
   /** MCP servers every phase attaches, on top of the plan's own. */
   mcpServers?: string[];
+  /** What a phase does when a server will not connect. Defaults to `continue`. */
+  mcpPolicy?: McpPolicy;
   /** How much this run may do unasked. Defaults to `guarded`. */
   permissionProfile?: PermissionProfile;
   /** Lanes this run may fill. Never above the console's own cap. */
@@ -843,6 +884,7 @@ export class Runner {
       phaseOptions: options.phaseOptions,
       skills: options.skills,
       mcpServers: options.mcpServers,
+      mcpPolicy: options.mcpPolicy,
       permissionProfile: options.permissionProfile,
       gitMode: options.gitMode,
       openPr: options.openPr,
@@ -2199,6 +2241,18 @@ export class Runner {
     const record = phaseRecord(this.state, phase);
     record.status = 'pending';
     record.note = undefined;
+    // Everything the last boarding concluded, cleared — the stored-run Retry in
+    // the service has always done this and the live one had drifted, so a
+    // retried phase kept showing the preflight and the missing servers of an
+    // attempt that is no longer going to happen.
+    delete record.preflight;
+    delete record.mcpDegraded;
+    // The lock clock especially. It is only cleared on a SUCCESSFUL claim
+    // (`lockWaitSince = undefined` after the belt-check), so a phase parked by
+    // the two-hour lock-wait cap kept its original timestamp: the retry
+    // re-derived `waitedMs` from it, found it still over the cap, and parked
+    // again instantly. Retry has to mean the wait starts over.
+    record.lockWaitSince = undefined;
     this.state.consecutiveFailures = 0;
     this.state.halt = null;
     this.record('phase.retry-requested', {}, phase);
@@ -2399,7 +2453,17 @@ export class Runner {
           break;
         }
 
-        if (asked && !candidates.length) {
+        // "Settled" here has to mean settled WELL. `SETTLED` includes `parked`,
+        // `gated` and `failed`, so a scoped run whose one phase parked used to
+        // report itself finished — "this run was scoped to phase 1, and it is
+        // settled" — which is true of the status field and false about the
+        // world, and it hid the park's own explanation entirely. A scoped run
+        // that ends on a phase needing a person falls through to the halt
+        // below, which names the blocker and its remedy like any other run.
+        const unsettled = asked
+          ? [...asked].filter((p) => ['parked', 'gated', 'failed'].includes(phaseRecord(state, p).status))
+          : [];
+        if (asked && !candidates.length && !unsettled.length) {
           state.status = 'finished';
           // The single most-reported "it doesn't go to the next phase". The run
           // was scoped — usually from a per-row "Run only this" control — did
@@ -2462,13 +2526,40 @@ export class Runner {
             if (verificationParked.length) {
               remedies.push('an unrunnable §Verification takes a plan edit or Repair with AI, then Retry');
             }
+            // The MCP park had NO remedy string at all, which is how a run
+            // parked on three signed-out servers ended with a halt sentence
+            // that named the problem and then stopped talking. Two doors,
+            // because there genuinely are two: fix the server, or decide the
+            // phase does not need it. The second is one button.
+            const mcpParked = readyRecords.filter(({ record }) =>
+              record.status === 'parked' && MCP_PARK_NOTE.test(record.note ?? ''));
+            if (mcpParked.length) {
+              const signIn = mcpParked.some(({ record }) => MCP_AUTH_PARK_NOTE.test(record.note ?? ''));
+              remedies.push(signIn
+                ? 'a signed-out MCP server takes Settings ▸ MCP (the parked phase requeues itself once it '
+                  + 'connects), or Continue without these servers'
+                : 'an MCP server this console cannot reach takes Settings ▸ MCP, or Continue without these servers');
+            }
+            // A lock-cap park is the same shape of dead end and had the same
+            // silence: the holder is named in the note, but nothing said the
+            // wait can simply be restarted.
+            if (readyRecords.some(({ record }) =>
+              record.status === 'parked' && LOCK_CAP_PARK_NOTE.test(record.note ?? ''))) {
+              remedies.push('a phase that waited out another plan\'s lock takes Retry once the holder releases');
+            }
             const tail = remedies.length ? ` ${remedies.join('; ')}.` : '';
 
             // When the ONLY thing in the way is verification parks, the halt
             // carries a machine-readable kind (and a phase to anchor on) so
-            // auto-recovery can pick it up instead of a person.
+            // auto-recovery can pick it up instead of a person. MCP parks get
+            // the same treatment for the console's sake rather than a repair
+            // agent's — no agent can sign a server in, but the run page can
+            // offer the one button that releases the run, and it needs to know
+            // that is what it is looking at.
             const allVerification = verificationParked.length > 0
               && verificationParked.length === readyRecords.length && !board.stuck.length;
+            const allMcp = mcpParked.length > 0
+              && mcpParked.length === readyRecords.length && !board.stuck.length;
             state.halt ??= {
               at: new Date().toISOString(),
               reason: held
@@ -2476,7 +2567,9 @@ export class Runner {
                 : `nothing is ready to run: ${outstanding.length} phase(s) are still waiting on a gate or an earlier phase.`,
               ...(allVerification
                 ? { kind: 'verification-preflight', phase: verificationParked[0].p }
-                : {}),
+                : allMcp
+                  ? { kind: 'mcp-preflight', phase: mcpParked[0].p }
+                  : {}),
             };
             state.finishedReason = state.halt.reason;
           }
@@ -2745,6 +2838,12 @@ export class Runner {
             + `${Math.round(waitedMs / 60_000)} minutes for it — ${status.stdout.trim().slice(0, 160)}`;
           this.record('phase.lock-wait-capped', { holder, waitedMs }, phase);
           this.emit('phase', { phase, status: 'parked', note: record.note });
+          // The clock stops with the wait. It used to survive the park — it is
+          // only cleared after a SUCCESSFUL claim, below — so the next Retry
+          // measured from the original timestamp, found itself still over the
+          // cap, and parked again without waiting a second. Retry now means the
+          // two hours start over, which is the only thing it could sensibly mean.
+          record.lockWaitSince = undefined;
           return true;
         }
         record.status = 'queued';
@@ -2784,14 +2883,37 @@ export class Runner {
      * prompt and before the spawn, because a phase whose GitHub server was
      * never signed in will otherwise spend an hour discovering that, and the
      * session cannot fix it — there is no `/mcp` panel in `-p`, and the CLI
-     * says so to the model rather than to anyone who could act. */
-    const mcpProblem = await this.preflightMcp(phase, this.optionsFor(phase));
-    if (mcpProblem) {
+     * says so to the model rather than to anyone who could act.
+     *
+     * What CHANGED is the verdict, not the timing. `require` still parks here.
+     * `continue` — the default — boards without the servers it could not reach
+     * and tells the session exactly which, because the alternative turned out
+     * to be worse than the problem: a run whose ready phases all park has
+     * nothing left to do, so one signed-out server halted an eleven-phase plan
+     * that named no MCP servers at all.
+     *
+     * Resolved ONCE and carried to the spawn: the set that was probed has to be
+     * the set that is passed, or the preflight answered about something else. */
+    const chosenOptions = this.optionsFor(phase);
+    const mcp = await this.resolveMcp(phase, chosenOptions);
+    if (mcp.park) {
       record.status = 'parked';
-      record.note = mcpProblem;
-      this.record('phase.mcp-preflight-parked', { reason: mcpProblem }, phase);
-      this.emit('phase', { phase, status: 'parked', note: mcpProblem });
+      record.note = mcp.park;
+      this.record('phase.mcp-preflight-parked', { reason: mcp.park }, phase);
+      this.emit('phase', { phase, status: 'parked', note: mcp.park });
       return true;
+    }
+    if (mcp.degraded.length) {
+      record.mcpDegraded = mcp.degraded;
+      const summary = mcp.degraded
+        .map((row) => `${row.id} (${row.detail ?? mcpReasonText(row.reason)})`)
+        .join(', ');
+      this.record('phase.mcp-degraded', { degraded: mcp.degraded, attached: mcp.usable }, phase);
+      this.emit('phase', { phase, mcpDegraded: mcp.degraded });
+      this.deps.onMcpDegraded?.(state, phase, mcp.degraded);
+      log.warn('runner.mcp-degraded', { slug: state.slug, phase, summary });
+    } else {
+      delete record.mcpDegraded;
     }
 
     /* ---- prompt ---- */
@@ -2827,9 +2949,16 @@ export class Runner {
     // The MCP directive names only what the CONSOLE added: the engine's own text
     // already names what the plan asked for, and repeating it would read as two
     // authorities saying the same thing slightly differently.
-    const ownMcp = own?.mcpOff
+    //
+    // The degraded ids are subtracted, because the directive's first sentence
+    // says the servers were "verified connected before it started" and that has
+    // to keep being true. They come back in the directive's second half, named
+    // as unavailable — which the plan's own servers need too, so `degraded` is
+    // passed whole rather than filtered to the console's additions.
+    const dropped = new Set(mcp.degraded.map((row) => row.id));
+    const ownMcp = (own?.mcpOff
       ? [...(own.mcpServers ?? [])]
-      : [...(state.mcpServers ?? []), ...(own?.mcpServers ?? [])];
+      : [...(state.mcpServers ?? []), ...(own?.mcpServers ?? [])]).filter((id) => !dropped.has(id));
     // A wait-resume replaces the engine's boot text — the session already has
     // the whole boot context; what it needs is the elapsed-window instruction.
     // Everything appended after (git strategy, directives) applies to both.
@@ -2837,7 +2966,7 @@ export class Runner {
       ? waitResumePrompt(state.slug, phase, record.parkReason, record.watch)
       : engineText;
     const prompt = base + (context ? `\n\n${context}\n` : '') + git
-      + skillDirective(extraSkills) + mcpDirective(ownMcp)
+      + skillDirective(extraSkills) + mcpDirective(ownMcp, mcp.degraded)
       + unattendedDirective(this.deps.scriptsDir, state.slug, phase);
     if (context) this.record('phase.retry-context', { bytes: Buffer.byteLength(context) }, phase);
     if (extraSkills.length) this.record('phase.skills', { skills: [...new Set(extraSkills)] }, phase);
@@ -2896,10 +3025,12 @@ export class Runner {
     this.emit('phase', { phase, status: 'running', model: record.model, effort: record.effort });
 
     /* ---- the session, with the error policy driving retries ---- */
-    const settled = await this.attempt(phase, prompt, record.model!, owner, lane, chosen,
+    const settled = await this.attempt(phase, prompt, record.model!, owner, lane, chosen, {
       // A wait-resume is a continuation, not the phase: capped like a closeout
       // so a session that misreads the ask and starts new work runs out.
-      resuming ? { maxTurns: CLOSEOUT_MAX_TURNS } : {});
+      ...(resuming ? { maxTurns: CLOSEOUT_MAX_TURNS } : {}),
+      mcp,
+    });
     if (!settled.carryOn) { await this.release(phase, owner); return false; }
     if (!settled.completed) { await this.release(phase, owner); return true; }
 
@@ -3082,6 +3213,10 @@ export class Runner {
       skills: chosen.skills,
       mcpServers: chosen.mcpServers,
       mcpOff: chosen.mcpOff,
+      // Passed through rather than resolved here: `mcpPolicyFor` consults the
+      // plan BEFORE the run, which is the opposite of this function's
+      // run-beats-plan rule, and folding it in would hide that reversal.
+      mcpPolicy: chosen.mcpPolicy,
       source,
     };
   }
@@ -3109,7 +3244,7 @@ export class Runner {
    */
   private async attempt(
     phase: number, prompt: string, model: string, owner: string, lane: Lane,
-    chosen: PhaseOptions = {}, opts: { maxTurns?: number } = {},
+    chosen: PhaseOptions = {}, opts: { maxTurns?: number; mcp?: McpResolution } = {},
   ): Promise<{ carryOn: boolean; completed: boolean }> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
@@ -3173,11 +3308,19 @@ export class Runner {
         // A mechanical phase can run with a small tool set and no MCP servers:
         // less blast radius, and a smaller system prompt to pay for every turn.
         tools: chosen.tools?.length ? chosen.tools : undefined,
-        // Resolved per attempt, not per run: a server signed in between attempts
-        // has to be usable by the retry, and the file is rewritten cheaply.
+        // Rewritten per attempt, not per run: a credential changed between
+        // attempts has to reach the retry, and the file costs a JSON write.
         // Absent means "attach nothing", which leaves the machine's own MCP
         // configuration in place — what every run did before this existed.
-        mcpConfig: (await this.armMcp(phase, chosen)) ?? undefined,
+        //
+        // WHICH servers, though, is the boarding's answer and not re-derived
+        // here: the set was probed once, named to the model once, and a second
+        // resolution could silently hand the session a server its prompt says
+        // is unavailable.
+        mcpConfig: (await this.armMcp(phase, chosen, opts.mcp)) ?? undefined,
+        // Only when the phase asked for servers and got none of them. See
+        // `resolveMcp`: an emptied set still has to be a CLOSED set.
+        ...(opts.mcp?.strict ? { strictMcp: true } : {}),
         permissionMode: chosen.permissionMode as never,
         // Read fresh each attempt, so a profile changed mid-run is in force for
         // the next phase rather than for the next run.
@@ -3631,48 +3774,109 @@ export class Runner {
    * down" are different facts, and turning a flaky subprocess into a stopped
    * plan would be the worse of the two failures.
    */
-  private async preflightMcp(phase: number, chosen: PhaseOptions): Promise<string | null> {
+  private async resolveMcp(phase: number, chosen: PhaseOptions): Promise<McpResolution> {
     const state = this.state!;
     const ids = this.mcpFor(phase, chosen);
-    if (!ids.length) return null;
+    const clean = (): McpResolution => ({ usable: ids, degraded: [], park: null, strict: false });
+    if (!ids.length) return { usable: [], degraded: [], park: null, strict: false };
     if (!this.deps.mcp) {
       // No registry wired in (a harness, or a console built before this): the
       // phase runs on whatever MCP configuration the machine already has, which
       // is exactly what every run did before this existed.
       this.record('phase.mcp-unmanaged', { servers: ids }, phase);
-      return null;
+      return clean();
     }
 
     const result = await this.deps.mcp.preflight(ids, state.root);
 
-    if (result.unknown.length) {
-      return `phase ${phase} names MCP server${result.unknown.length === 1 ? '' : 's'} this console has `
-        + `not registered: ${result.unknown.join(', ')}. Register ${result.unknown.length === 1 ? 'it' : 'them'} `
-        + 'in Phase Console → MCP, or drop the name from the plan, then Retry.';
-    }
-    if (result.disabled.length) {
-      return `phase ${phase} needs MCP server${result.disabled.length === 1 ? '' : 's'} that ${result.disabled.length === 1 ? 'is' : 'are'} `
-        + `switched off here: ${result.disabled.join(', ')}. Turn ${result.disabled.length === 1 ? 'it' : 'them'} back on `
-        + 'in Phase Console → MCP, or drop the name from the plan, then Retry.';
-    }
     if (result.probeError) {
+      // Could not check ≠ they are down — for the servers the probe was ABOUT.
+      // Turning a flaky subprocess into a stopped plan, or into a session told
+      // its tools are missing when they are not, is the worse of the two
+      // failures, and that was true before the policy existed.
+      //
+      // An id the registry does not hold is a different fact: nothing was
+      // probed to learn it and the probe failing does not put it back in doubt.
       this.record('phase.mcp-preflight-skipped', { reason: result.probeError, servers: ids }, phase);
-      return null;
-    }
-    if (!result.ok) {
-      const named = result.blocking.map((row) => {
-        const why = row.status === 'needs-auth'
-          ? 'needs authentication'
-          : row.error?.message ?? 'will not connect';
-        return `${row.id} (${why})`;
-      });
-      return `phase ${phase} cannot start: MCP server${named.length === 1 ? '' : 's'} ${named.join(', ')}. `
-        + 'An unattended session cannot sign a server in — do it from Phase Console → MCP '
-        + '(or `claude mcp login <name>`), then Retry.';
+      if (!result.unknown.length && !result.disabled.length) return clean();
     }
 
-    this.record('phase.mcp', { servers: ids }, phase);
-    return null;
+    const degraded: McpDegradation[] = [
+      ...result.unknown.map((id): McpDegradation => ({ id, reason: 'unregistered' })),
+      ...result.disabled.map((id): McpDegradation => ({ id, reason: 'switched-off' })),
+      ...result.blocking.map((row): McpDegradation => ({
+        id: row.id,
+        reason: row.status === 'needs-auth' ? 'needs-auth' : 'failed',
+        ...(row.error?.message ? { detail: row.error.message } : {}),
+      })),
+    ];
+
+    if (!degraded.length) {
+      this.record('phase.mcp', { servers: ids }, phase);
+      return clean();
+    }
+
+    const policy = this.mcpPolicyFor(phase, chosen);
+    if (policy === 'require') return { usable: [], degraded: [], park: this.mcpParkNote(phase, degraded), strict: false };
+
+    const lost = new Set(degraded.map((row) => row.id));
+    const usable = ids.filter((id) => !lost.has(id));
+    // Every server this phase asked for is unreachable, so there is no config
+    // file to pass — but the set must still be closed. `--mcp-config` is what
+    // normally carries `--strict-mcp-config`, and without it the CLI unions in
+    // whatever `~/.claude.json` and the project's `.mcp.json` hold. A degraded
+    // phase silently gaining the machine's own servers is not a degradation
+    // anyone asked for, and determinism here is a safety property.
+    return { usable, degraded, park: null, strict: usable.length === 0 };
+  }
+
+  /**
+   * The park sentence, under `require`. Three shapes, each naming the errand.
+   *
+   * Unchanged wording from when this was the only outcome, because
+   * `MCP_PARK_NOTE` and `MCP_AUTH_PARK_NOTE` match against it and the service's
+   * heal path reads it. Change one, change all three.
+   */
+  private mcpParkNote(phase: number, degraded: McpDegradation[]): string {
+    const only = (reason: McpDegradation['reason']) =>
+      degraded.filter((row) => row.reason === reason).map((row) => row.id);
+
+    const unregistered = only('unregistered');
+    if (unregistered.length === degraded.length) {
+      return `phase ${phase} names MCP server${unregistered.length === 1 ? '' : 's'} this console has `
+        + `not registered: ${unregistered.join(', ')}. Register ${unregistered.length === 1 ? 'it' : 'them'} `
+        + 'in Phase Console → MCP, or drop the name from the plan, then Retry.';
+    }
+    const off = only('switched-off');
+    if (off.length === degraded.length) {
+      return `phase ${phase} needs MCP server${off.length === 1 ? '' : 's'} that ${off.length === 1 ? 'is' : 'are'} `
+        + `switched off here: ${off.join(', ')}. Turn ${off.length === 1 ? 'it' : 'them'} back on `
+        + 'in Phase Console → MCP, or drop the name from the plan, then Retry.';
+    }
+    const named = degraded.map((row) => `${row.id} (${row.detail ?? mcpReasonText(row.reason)})`);
+    return `phase ${phase} cannot start: MCP server${named.length === 1 ? '' : 's'} ${named.join(', ')}. `
+      + 'An unattended session cannot sign a server in — do it from Phase Console → MCP '
+      + '(or `claude mcp login <name>`), then Retry.';
+  }
+
+  /**
+   * What this phase does when a server will not connect, from the four places
+   * that may say — most specific first.
+   *
+   * The plan outranks the RUN on purpose, and this is the one resolution in the
+   * runner where it does. `model` and `effort` let the operator's choice for a
+   * run win because they are preferences about how to spend money. This is not
+   * that: a phase whose plan says `require` is making a claim about the work
+   * itself, and an operator's run-wide "carry on regardless" — usually clicked
+   * for an unrelated reason — must not quietly overrule it. They can still say
+   * so for that ONE phase, which is the level where they know what they mean.
+   */
+  private mcpPolicyFor(phase: number, chosen: PhaseOptions): McpPolicy {
+    const state = this.state!;
+    return chosen.mcpPolicy
+      ?? this.deps.planMcpPolicy?.(state.slug, phase)
+      ?? state.mcpPolicy
+      ?? 'continue';
   }
 
   /**
@@ -3683,10 +3887,14 @@ export class Runner {
    * the file costs a JSON write. It carries secrets, so it is 0600 and passed
    * as a path — argv is world-readable in `ps`.
    */
-  private async armMcp(phase: number, chosen: PhaseOptions): Promise<string | null> {
+  private async armMcp(
+    phase: number, chosen: PhaseOptions, resolved?: McpResolution,
+  ): Promise<string | null> {
     if (!this.deps.mcp) return null;
     const state = this.state!;
-    const ids = this.mcpFor(phase, chosen);
+    // The boarding's answer when there is one — see the call site. The fallback
+    // is for the paths that arm without boarding (and for older tests).
+    const ids = resolved ? resolved.usable : this.mcpFor(phase, chosen);
     if (!ids.length) return null;
     try {
       return await this.deps.mcp.configFor(state.id, ids);
@@ -3710,9 +3918,14 @@ export class Runner {
     if (!commands.length) {
       const specimen = notRun[0];
       if (text?.trim()) {
+        // "0 entries refused" was reachable and read like a bug: a §Verification
+        // holding only an environment preamble refuses nothing and runs nothing,
+        // so it needs the sentence that says exactly that.
         return `phase ${phase}'s §Verification contains nothing the runner can execute — `
-          + `${notRun.length} entr${notRun.length === 1 ? 'y' : 'ies'} refused`
-          + (specimen ? ` (first: ${specimen.reason})` : '')
+          + (notRun.length
+            ? `${notRun.length} entr${notRun.length === 1 ? 'y' : 'ies'} refused`
+              + (specimen ? ` (first: ${specimen.reason})` : '')
+            : 'it sets up an environment but never runs a check')
           + '. Fix the plan bullet into whole, copy-runnable commands, then Retry.';
       }
       // The parser handed over nothing — but a plan that DECLARES the bullet
@@ -4690,6 +4903,13 @@ export type RunSettingsPatch = {
    * file is documented with.
    */
   mcpServers?: string[] | null;
+  /**
+   * The run's answer to an unreachable server, changeable mid-run — which is
+   * the point. The "Continue without these servers" button on a halt card is
+   * this patch plus a Retry, so a run parked at boarding can be released
+   * without editing the plan or signing anything in.
+   */
+  mcpPolicy?: McpPolicy;
   permissionProfile?: PermissionProfile;
   gitMode?: 'default-branch' | 'new-branch';
   openPr?: boolean;
@@ -4739,6 +4959,12 @@ export function applySettings(state: RunState, patch: RunSettingsPatch): RunStat
   if (patch.mcpServers !== undefined) {
     if (patch.mcpServers?.length) state.mcpServers = [...patch.mcpServers];
     else delete state.mcpServers;
+  }
+  // `continue` is stored as an omission, like every other shipped default, so a
+  // run switched back to it reads the same as a run that never left it.
+  if (patch.mcpPolicy !== undefined) {
+    if (patch.mcpPolicy === 'require') state.mcpPolicy = 'require';
+    else delete state.mcpPolicy;
   }
   if (patch.permissionProfile) {
     if (patch.permissionProfile === 'guarded') delete state.permissionProfile;

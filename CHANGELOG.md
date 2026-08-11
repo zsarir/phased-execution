@@ -6,6 +6,81 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [2.1.0] - 2026-08-11
+
+An MCP server that will not connect stops being able to stop a plan. A run of an eleven-phase plan
+was started on autopilot and halted three minutes and forty-two seconds later having run **nothing**,
+0 phases done. Its journal is the whole story: phases 1, 4 and 7 queued correctly behind another
+plan's `scope=all` lock, waited 3m37s, and were admitted the moment the lease expired — the lock
+orchestration worked exactly as designed. Two seconds later all three parked, because `grafana` and
+`sentry` had never been signed in and `filesystem` had been added from the catalog with its
+`${MCP_FS_ROOT}` never filled in. The plan named no MCP servers at all.
+
+The park was right about the phase that genuinely cannot work without its server and wrong about
+every phase that merely has one attached — and since `parked` is a settled status, a run whose ready
+phases have all parked has no candidates left and halts. Worse, the park was a dead end: it set no
+`halt.kind`, so no recovery could reach it, and the remedy list had no MCP entry, so the halt named
+the problem and then stopped talking. The self-heal that was supposed to requeue on sign-in fired on
+exactly one trigger — a `claude mcp login` terminal exiting — which a permanently-misconfigured
+server can never produce.
+
+### Added
+
+- **`mcpPolicy` — `continue` (the new default) or `require`.** Under `continue` a phase boards
+  without the servers that would not answer: they are dropped from its `--mcp-config`, its prompt
+  names them with the reason and instructs it neither to improvise a substitute nor to treat them as
+  a blocker — do the work that does not depend on them, and record the rest under **Outstanding** as
+  an operator errand — the degradation is written to the phase record, and the operator is told once
+  per run per server. `require` is the old park.
+- **Four levels, resolved most-specific-first**: the operator's per-phase choice, then the PLAN (a
+  per-phase `- **MCP policy:**` bullet, then `**MCP policy:**` in §Session budget), then the run,
+  then `continue`. **The plan outranking the run is deliberate and is the one resolution in the
+  runner where that ordering reverses** — `model` and `effort` let a run's choice win because they
+  are preferences about spending; a phase whose plan says it requires a server is making a claim
+  about the work. Settings ▸ Automation, the launch dialog, the run controls and the phase matrix
+  each set their own level; `phase-graph.sh --mcp-policy [N]` and `parse/plan.ts` read the plan's,
+  held together by `engine-parity`. At plan level both words are recognised and anything else is
+  silence — a third state, and load-bearing: an explicit `continue` is how one phase carves itself
+  out of a plan-wide `require`, and silence is what lets the run's own setting answer at all.
+- **A door on every park that stops a run.** An all-MCP park now carries `kind: 'mcp-preflight'` and
+  a remedy naming both ways out, and the halt card grows **Continue without these servers** — one
+  button behind a new `mcp-continue` verb that sets the run to `continue` and retries exactly the
+  phases the MCP preflight parked. The lock-wait cap gets its own remedy line for the same reason.
+- **`needsConfig`** on a server view: `${VAR}` references in a server's own command that nothing
+  supplies. The catalog's filesystem entry ships as `… server-filesystem ${MCP_FS_ROOT}` with a note
+  asking for a value, and an unset one expands to nothing, so the server starts without a root and
+  probes `failed` forever. It reads as a flaky remote; it is an unfinished registration, and it is
+  now named as one, refused by the picker, and reported as `MCP_FS_ROOT is not set` rather than
+  "will not connect".
+
+### Changed
+
+- **The self-heal fires on the events that actually happen.** Any transition into `connected` heals
+  parks waiting on that server — not only a login terminal exiting — and so do disabling and removing
+  one, because in all three cases the reason the phase parked has gone. It reaches runs that have
+  already halted, which is the case that motivated it.
+- **The MCP picker distinguishes "not checked" from "connected".** A server nobody has probed reports
+  `unknown`, and `usable()` refused only `needs-auth` and `failed` — so all six servers looked
+  ordinary in the launch dialog and three turned out to be walls at boarding, which is the exact
+  failure this control's own header says it exists to prevent.
+- **One preflight answer instead of one per problem.** An unresolvable id used to short-circuit
+  before the probe, so a phase naming one ghost and one signed-out server reported the ghost and
+  learned about the sign-in only after somebody fixed the first.
+- **A scoped run whose phase parked no longer reports itself finished.** `SETTLED` includes `parked`,
+  `gated` and `failed`, so "this run was scoped to phase 1, and it is settled" was true of the status
+  field and false about the world — and it hid the park's own explanation entirely.
+- **A lock-cap park stops its own clock.** `lockWaitSince` was cleared only after a successful claim,
+  so a Retry after the two-hour cap re-derived the wait from the original timestamp and re-parked
+  instantly. Retry now means the wait starts over. `Runner.retry` also clears `preflight` and
+  `mcpDegraded`, which the service's stored-run Retry had always done and the live one had not.
+- **`export PATH=…` is a preamble, not a check.** A plan that prefixes its node commands the way its
+  §Session budget says to had every phase report "a person will be asked: export PATH=… — `export` is
+  not a recognised command". It is now handled like the existing `cd` carve-out: dropped from the
+  runnable commands AND from the human-check list, without swallowing a command sharing its line, and
+  a §Verification holding nothing but a preamble still reads as unverified so F14 keeps warning.
+- **F15 names the consequence the resolved policy actually produces**, rather than promising a park
+  that no longer happens by default.
+
 ## [2.0.0] - 2026-08-10
 
 The autopilot learns to wait, to look, and to resume. A live plan's phase 8 did 47 minutes of real

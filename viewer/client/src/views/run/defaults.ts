@@ -28,7 +28,7 @@
  * relying on an omission to mean it.
  */
 
-import type { Autonomy, PermissionProfile } from '@/lib/api';
+import type { Autonomy, McpDegradation, PermissionProfile } from '@/lib/api';
 
 export interface RunDefaults {
   model: string;
@@ -70,6 +70,18 @@ export const PROFILE_LABEL: Record<PermissionProfile, string> = {
   guarded: 'Guarded — ask me about the irreversible',
   trusted: 'Trusted — only the deny list stops it',
   bypass: 'Bypass — the CLI stops asking too',
+};
+
+/**
+ * Why a phase went without a server it asked for — the client half of the
+ * server's `mcpReasonText`, and the reason each maps to a different errand:
+ * "sign this in" and "this is not registered here" are not the same job.
+ */
+export const MCP_REASON: Record<McpDegradation['reason'], string> = {
+  'needs-auth': 'needs signing in',
+  failed: 'would not connect',
+  unregistered: 'is not registered here',
+  'switched-off': 'is switched off',
 };
 
 export const AUTONOMY_LABEL: Record<Autonomy, string> = {

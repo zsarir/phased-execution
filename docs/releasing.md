@@ -44,6 +44,7 @@ pushing `main` is "this is releasable", always; the scrub and CI gates exist to 
 | The Node floor | all five gates: root + viewer `package.json` engines, `viewer/run`, `bin/phase-console.mjs`, `viewer/deploy/agent.sh`, `desktop-launcher.command` (bump `LAUNCHER_REV`) — plus the docs that state it |
 | English docs | the Persian mirror (`README.fa.md`, `USAGE.fa.md`, `viewer/README.fa.md`) |
 | Anything user-visible | a `CHANGELOG.md` line (open an `## [Unreleased]` section if none exists) |
+| Behaviour the **plugin listing** describes | `.claude-plugin/marketplace.json`'s `description` — it is the largest user-facing prose surface here and **no gate checks it**, so a claim that has quietly become false ships to every plugin user until somebody reads it |
 
 Before **every** commit: `bash .github/scripts/scrub.sh` — run it bare, not piped (failures are on
 stderr and a pipe eats the exit code). It scans tracked ∪ staged files, so another workstream's

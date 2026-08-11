@@ -13,7 +13,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 metadata:
-  version: 4.4.0
+  version: 4.5.0
 ---
 
 # Phased Execution
@@ -115,8 +115,13 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    same way on an `**MCP servers (every session):**` line — backticked *registry ids* from Phase
    Console → MCP, three to six at most. A phase that needs one the rest of the plan does not gets its
    own `- **MCP:** \`server\`` bullet, which is UNIONED with the plan-wide line. The console checks
-   them before a phase boards and parks it — before spending anything — if one cannot connect,
-   because an unattended session cannot sign a server in.
+   them before a phase boards, so a wall costs a probe rather than an hour. By default a server that
+   cannot connect does NOT stop the phase: it runs without that server, is told which ones are
+   missing and told to record the gap as an operator errand, and the operator is warned. **If a phase
+   genuinely cannot proceed without its server, say so** — `**MCP policy:** require` in §Session
+   budget, or a per-phase `- **MCP policy:** require` bullet, which overrides the plan-wide one so a
+   single phase can carve itself out either way. Use `require` sparingly: a parked phase with no
+   other ready phase behind it halts the whole plan.
    Also record the **branch** in that note: by default the branch already
    checked out — **don't create a new branch**; only if the user explicitly asked, create ONE feature
    branch for the whole plan (every phase, including concurrent ones, commits to it) and record its name.
@@ -164,9 +169,12 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    they are connected (`/mcp`, or `claude mcp list`) before implementing; if one needs authentication,
    **stop and ask the operator to sign it in** rather than working around it — the plan chose that server
    for a reason, and a phase that quietly did without is worse than one that stopped and said why.
-   (**Unattended** — no operator present: record it instead — `bash scripts/phase-outcome.sh <slug> <N>
-   needs-human --reason "mcp <name> needs sign-in"` — hand off `blocked`, and stop; the supervisor
-   parks the phase for the operator.)
+   (**Unattended** — no operator present: your boot prompt already names any server the console could
+   not reach. Do not improvise a substitute for it and do not treat it as a blocker: do the work that
+   does not depend on it, and record what you could not do — naming the server — under **Outstanding**
+   in the handoff, as an errand for the operator. Only when the phase genuinely cannot proceed at all,
+   record it — `bash scripts/phase-outcome.sh <slug> <N> needs-human --reason "mcp <name> needs
+   sign-in"` — hand off `blocked`, and stop.)
    That must be enough — if it isn't, the previous handoff was
    deficient; note the gap so it gets fixed.
 2. **Confirm readiness, then the budget.** If the board shows this phase as `waiting`, a dependency isn't

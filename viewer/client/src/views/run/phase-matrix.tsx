@@ -238,6 +238,26 @@ export function PhaseMatrix({
                           chosen={own.mcpServers ?? []}
                           onChange={(next) => set(p.phase, 'mcpServers', next)}
                         />
+                        {/* Inside the expansion rather than as a column: this is
+                            the ONE level that can overrule a plan saying
+                            `require`, so it belongs where somebody is already
+                            thinking about this phase's servers — not as a
+                            per-row control easy to change in bulk. */}
+                        <label className="mt-1.5 flex flex-wrap items-center gap-2 text-2xs">
+                          <span className="text-ink-faint">
+                            If one will not connect, in phase {p.phase} only
+                          </span>
+                          <select
+                            value={own.mcpPolicy ?? ''}
+                            disabled={disabled}
+                            onChange={(e) => set(p.phase, 'mcpPolicy', e.target.value)}
+                            className="rounded border border-rule bg-ground px-1.5 py-0.5 text-2xs text-ink"
+                          >
+                            <option value="">inherit (plan, then run)</option>
+                            <option value="continue">run the phase without it</option>
+                            <option value="require">park the phase</option>
+                          </select>
+                        </label>
                       </TD>
                     </TR>
                   ) : null,

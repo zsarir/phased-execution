@@ -48,7 +48,8 @@ terminal, plus a *New plan with AI* wizard that authors a plan from a brief),
 the account with headroom; the usage meters themselves need no flag),
 `--allow-mcp` (register **MCP servers** — a browser, an issue tracker, a docs server — hold their
 credentials, and attach them to a plan, a run or one phase; a phase whose servers cannot connect
-parks *before* it spends anything, and reading the registry and its statuses needs no flag), or
+runs without them and says so — or parks *before* it spends anything, if the plan or the run asks
+for that — and reading the registry and its statuses needs no flag), or
 `--allow-terminal` (a real shell); it never commits or pushes. One-time setup per machine:
 `cd viewer && npm ci && npm run build` — skipped entirely on an npm or Homebrew install, which ships
 the client prebuilt — see `viewer/README.md`.

@@ -499,10 +499,26 @@ wrong thing to hand another.
 
 Before a phase boards, the console probes the exact set it would run with — a one-turn
 `claude -p --strict-mcp-config --mcp-config <set>` whose `system/init` reports each server's real
-status before any model call. A server that is unregistered, switched off or unreachable **parks the
-phase before anything is spent**, with a message naming it; signing it in requeues the parked phase
-on its own. That matters because an unattended session cannot fix it: there is no `/mcp` panel in
-`-p`, and the CLI reports the missing tools to the *model*, which then improvises around them.
+status before any model call. That matters because an unattended session cannot fix a wall itself:
+there is no `/mcp` panel in `-p`, and the CLI reports the missing tools to the *model*, which then
+improvises around them.
+
+**What it does about a wall is a policy, and the default is to carry on.** The phase boards with the
+servers that answered, its prompt names the ones it did not get and instructs it neither to
+improvise a substitute nor to treat them as a blocker — do the work that does not depend on them,
+and record the rest under **Outstanding** as an operator errand — and you are told once per run per
+server. Set **Settings ▸ Automation → When an MCP server is unavailable** to *Park the phase* for the
+old behaviour, per run in the launch dialog, or per phase in the run's phase matrix; a plan can
+demand it for itself with `**MCP policy:** require`, which outranks the run-level choice because a
+plan is a versioned statement about the work rather than one launch's convenience.
+
+The default moved because the park was answering for the phase that genuinely needs its server and
+firing for every phase that merely had one attached. `parked` is a settled status, so a run whose
+ready phases all park has no candidates left and halts: one signed-out server stopped an eleven-phase
+plan that named no MCP servers of its own, 0 phases done. A phase that does park now names both
+doors — sign the server in, or **Continue without these servers**, one button on the halt card — and
+signing a server in still requeues everything parked on it, including on a run that has already
+stopped.
 
 The spawn always pairs `--mcp-config` with `--strict-mcp-config`, so the resolved set is the whole
 set — without it the CLI would union in whatever `~/.claude.json` and the project's `.mcp.json`

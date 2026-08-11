@@ -188,6 +188,30 @@ describe('runNotes — the actions attached to a note', () => {
       .toHaveAttribute('href', '#/agent/sess-9');
   });
 
+  it('an MCP park offers the door the park sentence never mentioned', () => {
+    // The park says an unattended session cannot sign a server in, which is
+    // true and was the whole of the advice — so the card named the problem and
+    // then stopped talking, and a real plan stayed down with 0 phases done.
+    // There is a second remedy, and it is one button.
+    const parked = run({
+      status: 'parked',
+      halt: {
+        at: '2026-08-03T10:00:00Z',
+        reason: 'nothing left to run on its own — phase 1 is parked (phase 1 cannot start: MCP '
+          + 'servers grafana (needs authentication)).',
+        phase: 1,
+        kind: 'mcp-preflight',
+      },
+    });
+    render(<RunStatusStack run={parked} live={false} allowRun />);
+    expect(screen.getByRole('button', { name: /Continue without these servers/i })).toBeEnabled();
+
+    // A console that may not spawn runs cannot offer it — the verb retries
+    // phases, and retrying is running.
+    expect(runNotes({ run: parked, live: false, allowRun: false })
+      .find((n) => n.id === 'halt')?.action).toBeUndefined();
+  });
+
   it('offers to re-guard only a run that is still live', () => {
     const loose = run({ permissionProfile: 'trusted' });
     expect(runNotes({ run: loose, live: true, allowRun: true, onGuard: () => {} })[0].action)

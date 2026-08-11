@@ -236,6 +236,8 @@ export function extractCommands(text: string | undefined): Extraction {
   const refused: { text: string; reason: string; cited: boolean }[] = [];
   for (const candidate of candidates) {
     const reason = refuse(candidate);
+    // Dropped from both lists — see `PREAMBLE`. Not run, and not reported.
+    if (reason === PREAMBLE) continue;
     if (!reason) out.commands.push(candidate);
     else refused.push({ text: condense(candidate), reason, cited: namesAThing(candidate) });
   }
@@ -314,6 +316,21 @@ function fencedCommands(body: string): string[] {
   return out;
 }
 
+/**
+ * Not a refusal — a candidate that is neither a check nor a chore.
+ *
+ * Distinct from `null` (run it) and from a reason string (tell a person about
+ * it), because a plan's environment preamble belongs in NEITHER list: running
+ * `export PATH=…` in its own subprocess accomplishes nothing, and reporting it
+ * as "a check only you can make" is a false alarm about a line that is not a
+ * check at all.
+ *
+ * It stays out of `commands` too, which is what keeps F14 honest: a
+ * §Verification holding nothing but a preamble still has nothing runnable in
+ * it, and must still warn.
+ */
+const PREAMBLE = ' preamble';
+
 /** Why this candidate will not be run, or null when it will be. */
 function refuse(candidate: string): string | null {
   if (!candidate) return 'empty';
@@ -338,11 +355,18 @@ function refuseCommand(command: string, depth: number): string | null {
   }
   if (!parts.length) return 'empty';
 
+  // A preamble segment is skipped rather than returned, so that
+  // `export PATH=… && npm test` stays the runnable command it obviously is —
+  // returning on the first segment would have dropped the suite along with the
+  // export. Only a command that is preamble the whole way down is one.
+  let preambleOnly = true;
   for (const segment of parts) {
     const reason = refuseSegment(segment, depth);
+    if (reason === PREAMBLE) continue;
     if (reason) return reason;
+    preambleOnly = false;
   }
-  return null;
+  return preambleOnly ? PREAMBLE : null;
 }
 
 function refuseSegment(segment: string, depth: number): string | null {
@@ -360,6 +384,28 @@ function refuseSegment(segment: string, depth: number): string | null {
   if (verb === 'cd') {
     if (tokens.length > 2) return '`cd` with more than one argument is not a path this can check';
     return null;
+  }
+
+  // `export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:$PATH"` is not a check
+  // and not a chore for a person: it is the line a plan puts above its commands
+  // so they can find their toolchain. `headOf` already walks past a bare
+  // `FOO=bar cmd`, but an `export` on its own line kept its verb and fell all
+  // the way to "is not a recognised command" — so every phase of a plan that
+  // prefixed its §Verification this way reported a check only a human could
+  // make, three phases at a time, about a line that runs nothing.
+  //
+  // `set -euo pipefail` is here for the same reason. `source`/`.` deliberately
+  // is not: it executes a file whose contents this cannot see.
+  if (verb === 'export' || verb === 'set') {
+    // `export FOO=$(…)` never reaches here — substitution is refused upstream —
+    // so an argument list that is all assignments (or all `set` flags) really
+    // does change nothing but the environment. Anything else is a shape this
+    // did not understand, and unrecognised is the safe answer.
+    const rest = tokens.slice(1);
+    const inert = verb === 'set'
+      ? rest.every((t) => /^[-+][A-Za-z]+$/.test(t) || /^[-+]o$/.test(t) || /^[a-z]+$/.test(t))
+      : rest.length > 0 && rest.every((t) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
+    if (inert) return PREAMBLE;
   }
 
   // `test/agent.test.ts` alone is a file the prose is naming. Handing it to bash

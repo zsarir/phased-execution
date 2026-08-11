@@ -79,11 +79,32 @@ test('sanitiseAutomation is the single coercion table', () => {
     attachDefaultSkills: false, qaByDefault: false, gitMode: 'default-branch',
     openPrOnComplete: true, repoGuard: true,
     autoRecoverByDefault: true, autoContinueRecovery: true,
+    mcpPolicy: 'continue',
   });
   assert.equal(sanitiseAutomation({ gitMode: 'new-branch' }).gitMode, 'new-branch');
   // The recovery automation defaults are ON, and a typo cannot turn them off.
   assert.equal(sanitiseAutomation({ autoRecoverByDefault: 'no' } as never).autoRecoverByDefault, true);
   assert.equal(sanitiseAutomation({ autoContinueRecovery: false }).autoContinueRecovery, false);
+});
+
+test('only the exact word require can make an MCP server able to stop a plan', () => {
+  // The same fail-safe direction as `gitMode`, pointing the other way: there,
+  // only the exact literal may mint a branch; here, only the exact literal may
+  // park a run. A config nobody edited, and a config somebody fat-fingered,
+  // both keep plans moving.
+  assert.equal(sanitiseAutomation({}).mcpPolicy, 'continue');
+  assert.equal(sanitiseAutomation({ mcpPolicy: 'require' }).mcpPolicy, 'require');
+  assert.equal(sanitiseAutomation({ mcpPolicy: 'Require' } as never).mcpPolicy, 'continue');
+  assert.equal(sanitiseAutomation({ mcpPolicy: 'required' } as never).mcpPolicy, 'continue');
+  assert.equal(sanitiseAutomation({ mcpPolicy: true } as never).mcpPolicy, 'continue');
+});
+
+test('a config written before the MCP policy existed reads as continue', () => {
+  // The behaviour change this release is a DEFAULT moving, so the upgrade path
+  // is the thing most worth pinning: an operator who never opens Settings gets
+  // the new behaviour, and gets it without a migration.
+  writeConfig({ theme: 'dark', repoGuard: true });
+  assert.equal(loadPrefs().mcpPolicy, 'continue');
 });
 
 /* ------------------------------------------------------------------ *
@@ -119,6 +140,22 @@ test('savePreferences flips the knobs it knows and drops everything else', () =>
     const onDisk = JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) as Record<string, unknown>;
     assert.ok(!('somethingElse' in onDisk));
     assert.equal(onDisk.gitMode, 'new-branch');
+  } finally {
+    service.close();
+  }
+});
+
+test('mcpPolicy round-trips through savePreferences, and a bad one is dropped', () => {
+  writeConfig({});
+  const service = makeService();
+  try {
+    assert.equal(service.savePreferences({ mcpPolicy: 'require' }).mcpPolicy, 'require');
+    const onDisk = JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) as Record<string, unknown>;
+    assert.equal(onDisk.mcpPolicy, 'require');
+    // Dropped means dropped: the stored choice survives a patch that says
+    // nothing valid, rather than silently reverting to the default.
+    assert.equal(service.savePreferences({ mcpPolicy: 'always' } as never).mcpPolicy, 'require');
+    assert.equal(service.savePreferences({ mcpPolicy: 'continue' }).mcpPolicy, 'continue');
   } finally {
     service.close();
   }

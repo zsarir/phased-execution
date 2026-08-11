@@ -80,10 +80,18 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
    `` **MCP servers (every session):** `github`, `context7` ``). Those are *registry ids* from the
    Phase Console's MCP page — what the phase needs, never how to reach it, because the how is
    per-machine. The engine re-injects them into every boot prompt and the QA brief, the console
-   attaches them to the session with `--mcp-config`, and a phase whose servers cannot connect
-   **parks before it is paid for** rather than improvising around a missing tool for an hour. A
-   plan naming a server this machine has not registered is reported at plan time as an **F15**
-   warning (advisory — it never fails the lint).
+   attaches them to the session with `--mcp-config`, and checks them **before the phase is paid
+   for** rather than letting a session improvise around a missing tool for an hour. A plan naming a
+   server this machine has not registered is reported at plan time as an **F15** warning (advisory —
+   it never fails the lint).
+   **What happens when one cannot connect is a policy, and the default is to carry on.** The phase
+   boards without that server, its prompt names the servers it did not get and instructs it to record
+   the gap under **Outstanding** as an operator errand, and the console warns. Add
+   `` **MCP policy:** require `` to §Session budget when the work genuinely cannot proceed without
+   its servers, and the phase parks at boarding instead. The default moved because the park was
+   answering for the phase that truly needs its server and firing for every phase that merely has one
+   attached: `parked` is a settled status, so a run whose ready phases all park has nothing left to
+   do — one signed-out server stopped an eleven-phase plan that named no MCP servers at all.
    **Keep the set small — three to six.** Every attached server puts its instructions and tool names
    in the system prompt of *every* turn, and attaching one mid-phase busts the prompt cache
    (`references/sizing.md`), which is why attachment happens at a phase boundary and nowhere else.
@@ -175,6 +183,13 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
      registry ids, same as the plan-wide line, and **unioned** with it: a phase gets the plan's
      servers plus its own. An operator can add more for one run from the console; they cannot untick
      what the plan named, because that is a statement about the work rather than a preference.
+     Add `- **MCP policy:** require` (or `continue`) when THIS phase disagrees with the plan-wide
+     line. Unlike `**MCP:**` this **overrides** rather than unions — a policy is one answer, and the
+     more specific statement wins — so a plan-wide `require` can carve out the one phase that
+     touches none of it, and a plan-wide silence can single out the one phase that must not proceed
+     without its server. Anything other than those two words reads as saying nothing, which falls
+     through to the plan and then to the run's own setting; only an operator's per-phase choice in
+     the console outranks this bullet.
    - **Read first:** exact artifacts to load (phase 1: just this plan; later: the prior handoff + this
      plan §Phase N + memory project_<slug>).
    - **Files to create/modify:** concrete paths.

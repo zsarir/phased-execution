@@ -31,7 +31,12 @@ it is in fact committed at sha XXXXXXX. Use `git log` as the source of truth; ig
      so a full session lands near ~60% of the window): 1M-class models → ~200K; Haiku 200K → ~40K. -->
 **Target model:** `claude-opus-5`  ·  **Budget:** ~200K weight/session (≈60% of a 1M window)  ·  **Branch:** current branch (no new branch)
 **Skills (every session):** <!-- optional — backtick each skill to use across ALL phases, e.g. `design-system`, `some-plugin:test-first`; the engine re-injects them into every phase's boot prompt + QA brief. Remove this line if none. -->
-**MCP servers (every session):** <!-- optional — backtick each MCP server id this work needs across ALL phases, e.g. `github`, `context7`. Registered in Phase Console → MCP; a phase whose servers cannot connect parks before it spends a token. Keep it to 3-6. Remove this line if none. -->
+**MCP servers (every session):** <!-- optional — backtick each MCP server id this work needs across ALL phases, e.g. `github`, `context7`. Registered in Phase Console → MCP; checked before a phase spends a token, so a wall costs a probe rather than an hour. Keep it to 3-6. Remove this line if none. -->
+<!-- **MCP policy:** require   <-- optional. By default a server that cannot connect does NOT stop the
+     phase: it runs without that server, is told which are missing, and records the gap as an operator
+     errand. Add the line above only when the work genuinely cannot proceed without its servers — a
+     parked phase with no other ready phase behind it halts the whole plan. A single phase can disagree
+     with `- **MCP policy:** require` (or `continue`) in its own block. -->
 <!-- QA is OFF by default (phase-finish runs each phase's §Verification commands instead). ONLY if the
      user asked for QA on this work, add a line with exactly:  **QA gate:** on
      (every phase-finish then dispatches a fresh-context QA subagent; `**QA gate:** off` records an

@@ -33,6 +33,12 @@ beforeEach(() => {
   savePrefs.mockResolvedValue({});
 });
 
+/** By id, not by position: this card has more than one select in it now. */
+async function branchSelect(): Promise<HTMLSelectElement> {
+  await screen.findByLabelText('Branch');
+  return screen.getByLabelText('Branch') as HTMLSelectElement;
+}
+
 describe('the automation defaults card', () => {
   it('a config from before the keys existed reads as the documented defaults', async () => {
     await mount({});
@@ -42,7 +48,21 @@ describe('the automation defaults card', () => {
     const off = await screen.findAllByRole('button', { name: 'Off' });
     expect(off.length).toBe(2);
     expect(screen.getAllByRole('button', { name: 'On' }).length).toBe(3);
-    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('default-branch');
+    const [branch, mcp] = screen.getAllByRole('combobox') as HTMLSelectElement[];
+    expect(branch.value).toBe('default-branch');
+    // The behaviour change this release is a default moving, so the upgrade
+    // path is what matters most: a console whose config predates the key gets
+    // `continue`, without a migration and without opening this page.
+    expect(mcp.value).toBe('continue');
+  });
+
+  it('the MCP policy is a choice, and sends only its own key', async () => {
+    await mount({ mcpPolicy: 'require' });
+    const selects = (await screen.findAllByRole('combobox')) as HTMLSelectElement[];
+    const mcp = selects[selects.length - 1]!;
+    expect(mcp.value).toBe('require');
+    fireEvent.change(mcp, { target: { value: 'continue' } });
+    await waitFor(() => expect(savePrefs).toHaveBeenCalledWith({ mcpPolicy: 'continue' }));
   });
 
   it('lists the machine default skills as data, never as copy', async () => {
@@ -62,18 +82,17 @@ describe('the automation defaults card', () => {
 
   it('the PR row appears only under the work-branch mode', async () => {
     await mount({});
-    await screen.findByRole('combobox');
+    const branch = await branchSelect();
     expect(screen.queryByText('Open a PR when the plan completes')).toBeNull();
     expect(screen.getByText(/applies to work-branch runs/)).toBeTruthy();
 
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'new-branch' } });
+    fireEvent.change(branch, { target: { value: 'new-branch' } });
     await waitFor(() => expect(savePrefs).toHaveBeenCalledWith({ gitMode: 'new-branch' }));
   });
 
   it('renders the stored choices, not the defaults, when the server has them', async () => {
     await mount({ gitMode: 'new-branch', repoGuard: false, attachDefaultSkills: true });
-    await screen.findByRole('combobox');
-    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('new-branch');
+    expect((await branchSelect()).value).toBe('new-branch');
     expect(await screen.findByText('Open a PR when the plan completes')).toBeTruthy();
   });
 });

@@ -164,6 +164,12 @@ run scripts from the repo root or set `DOCS_ROOT=/path/to/repo` explicitly when 
   token nests segment-wise: `packages` ∩ `packages/cart-api` collide, `api` and `api-gateway` do not.
   Ambiguity always resolves toward colliding — a false conflict costs parallelism, a missed one corrupts a
   tree.
+- **A phase whose scope is `all` serialises the entire docs root while it holds its lock.** That is the
+  rule working as designed, not a bug, but it is worth knowing before you write the cell: every other
+  plan's phases queue behind it — across plans, not just within one — until the lease expires or it
+  releases. Under the console's autopilot they queue rather than fail (the holder is named, with its
+  lease end, and the wait is woken by lock churn, a lease-expiry timer and the idle poll, capped at two
+  hours). Name real repositories where you can; keep `all` for phases that genuinely touch everything.
 - **Two sessions on the same repo still need their own checkouts if you insist on overlapping** — a
   separate clone or a `git worktree`, never one shared directory. The scope rule is what tells you when you
   don't need that at all. The console automates exactly this escape hatch: with its repository guard

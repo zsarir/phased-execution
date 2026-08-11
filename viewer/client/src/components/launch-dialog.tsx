@@ -40,7 +40,7 @@ import {
 } from '@/views/run/defaults';
 import { SkillPicker } from '@/views/run/skill-picker';
 import { McpPicker } from '@/views/run/mcp-picker';
-import type { PermissionProfile } from '@/lib/api';
+import type { McpPolicy, PermissionProfile } from '@/lib/api';
 
 const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
 
@@ -195,6 +195,11 @@ export function LaunchDialog({ request, onClose, onDone }: {
   // run is the single truth once it exists, and re-deriving from a preference
   // would silently re-attach something the operator had unticked.
   const [mcpChosen, setMcpChosen] = useState<string[]>(run?.mcpServers ?? []);
+  // Preference-seeded, like `attach` below — but an EXISTING run answers for
+  // itself first, since absent has always meant `continue` on disk and a resume
+  // must not pick up a `require` the run never had.
+  const [mcpChoice, setMcpChoice] = useState<McpPolicy | null>(null);
+  const mcpPolicy: McpPolicy = mcpChoice ?? run?.mcpPolicy ?? prefs.mcpPolicy;
 
   // The preference-seeded fields derive LIVE until the operator touches them:
   // `/api/state` arrives after the first render, and a useState seed taken
@@ -283,6 +288,9 @@ export function LaunchDialog({ request, onClose, onDone }: {
         // Omitted when empty, like every other "the default is absence" field:
         // a run file that never named servers must keep meaning what it meant.
         ...(mcpChosen.length ? { mcpServers: mcpChosen } : {}),
+        // Always sent, like `autoRecover`: the dialog shows a value, and what
+        // it shows is what the run gets.
+        mcpPolicy,
         ...(attach ? { attachDefaultSkills: true } : {}),
         gitMode,
         ...(gitMode === 'new-branch' ? { openPr } : {}),
@@ -485,9 +493,22 @@ export function LaunchDialog({ request, onClose, onDone }: {
             planServers={planMcp}
             onChange={setMcpChosen}
             label={request.kind === 'qa' ? 'MCP servers for this review' : 'MCP servers for this run'}
-            note="Checked before the phase boards. A server that cannot connect parks the phase
-                  instead of letting it run without."
+            note="Checked before the phase boards, so a wall costs a probe rather than an hour."
           />
+
+          {(mcpChosen.length > 0 || planMcp.length > 0) && (
+            <label className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <span className="min-w-0 text-ink">If one will not connect</span>
+              <select
+                value={mcpPolicy}
+                onChange={(event) => setMcpChoice(event.target.value as McpPolicy)}
+                className={field}
+              >
+                <option value="continue">Run the phase without it</option>
+                <option value="require">Park the phase</option>
+              </select>
+            </label>
+          )}
 
           {(request.kind === 'phase' || request.kind === 'continue') && (
             <>

@@ -17,6 +17,7 @@ import {
   sections, findSection, labelledBullets, bullet, tableAfter, plainCell,
   type Section,
 } from './markdown.ts';
+import type { McpPolicy } from '../runner/state.ts';
 
 export type PhaseRow = {
   phase: number;
@@ -63,10 +64,18 @@ export type PhaseDetail = {
    *
    * What a phase states is WHICH server it needs, never how to reach it: the
    * how is per-machine and belongs to the console's registry, so a plan naming
-   * `github` works on any machine that has one registered and parks honestly on
-   * one that does not (F15 says so at plan time, the preflight at boarding).
+   * `github` works on any machine that has one registered and says so honestly
+   * on one that does not (F15 at plan time, the preflight at boarding).
    */
   mcpServers?: string[];
+  /**
+   * `**MCP policy:**` — what THIS phase does when one of those will not connect.
+   *
+   * Absent means the phase has no opinion and the plan's own line answers;
+   * absent at both levels means the run's setting does. Only the exact word
+   * `require` parks — see `mcpPolicyOf`.
+   */
+  mcpPolicy?: McpPolicy;
   handoffMustRecord?: string;
   /** Every labelled bullet, so nothing in an unusual plan is dropped. */
   bullets: { label: string; body: string }[];
@@ -81,6 +90,13 @@ export type SessionBudget = {
   skills: string[];
   /** `**MCP servers (every session):**` — attached to every phase of this plan. */
   mcpServers: string[];
+  /**
+   * `**MCP policy:**` — the plan's answer for every phase that has no answer of
+   * its own. Absent means the plan has no opinion, which is not the same as
+   * saying `continue`: the console's resolution lets the RUN's setting speak
+   * when the plan is silent, and lets the plan win when it is not.
+   */
+  mcpPolicy?: McpPolicy;
   /** Literal plan directive, if present: `on` | `off`. */
   qaGate?: 'on' | 'off';
 };
@@ -242,6 +258,7 @@ function parseSessionBudget(section?: Section): SessionBudget {
   // prose, which is the regression the skills line already learned the hard way.
   const mcpLine = /\*\*MCP servers \(every session\):\*\*\s*(.+)/i.exec(flat)?.[1] ?? '';
   const mcpServers = [...mcpLine.matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());
+  const mcpPolicy = mcpPolicyOf(/\*\*MCP policy:\*\*\s*(.+)/i.exec(flat)?.[1]);
 
   let qaGate: 'on' | 'off' | undefined;
   for (const line of raw.split('\n')) {
@@ -249,7 +266,27 @@ function parseSessionBudget(section?: Section): SessionBudget {
     if (m) { qaGate = m[1].toLowerCase() as 'on' | 'off'; break; }
   }
 
-  return { raw, targetModel: model, budget, branch, skills, mcpServers, qaGate };
+  return { raw, targetModel: model, budget, branch, skills, mcpServers, mcpPolicy, qaGate };
+}
+
+/**
+ * Read an `**MCP policy:**` value, at either level.
+ *
+ * Three states, not two, and the third is load-bearing. Both words are
+ * recognised, and anything else — a typo, a sentence — is `undefined`, meaning
+ * "said nothing". An explicit `continue` on a phase is what lets it carve
+ * itself out of a plan-wide `require`; silence is what lets the run's own
+ * setting answer at all. Collapsing silence into `continue` would make a
+ * run-level choice unreachable on every plan ever written, and collapsing it
+ * into `require` would stop plans over a typo — so an unrecognised word falls
+ * through, the same fail-safe direction `gitMode` takes.
+ *
+ * Mirrors `plan_mcp_policy` / `mcp_policy_directive` in `phase-graph.sh`;
+ * `engine-parity` holds the two readings together.
+ */
+function mcpPolicyOf(value?: string): McpPolicy | undefined {
+  const word = value?.replace(/[*`]/g, '').trim().toLowerCase().split(/\s+/)[0];
+  return word === 'require' || word === 'continue' ? word : undefined;
 }
 
 /**
@@ -312,6 +349,11 @@ export function parsePlan(text: string, slug: string, path: string): Plan {
       // phase-graph.sh. Absent rather than empty when the bullet says nothing,
       // so "no bullet" and "a bullet naming nothing" read the same downstream.
       mcpServers: mcpBullet(bullets),
+      // Exact label again, for the same parity reason: `mcp_policy_directive()`
+      // matches `MCP policy` and nothing that merely starts with it.
+      mcpPolicy: mcpPolicyOf(
+        bullets.find((b) => b.label.trim().toLowerCase() === 'mcp policy')?.body,
+      ),
       handoffMustRecord: bullet(bullets, 'Handoff must record'),
       bullets,
       raw: block.raw,

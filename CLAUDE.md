@@ -197,18 +197,38 @@ any model call, because that is the only place `needs-auth` is knowable; `catalo
 shipped curated list when the official registry is unreachable; `config.ts` writes the per-run
 `--mcp-config`, 0600, `chmod` after the write.
 
-Three rules the code is built around. **`--mcp-config` is always paired with
-`--strict-mcp-config`** — alone it would UNION the machine's own servers into an unattended run, and
-determinism here is a safety property. **The preflight parks before the spawn, never after**: an
+Four rules the code is built around. **`--mcp-config` is always paired with `--strict-mcp-config`**
+— alone it would UNION the machine's own servers into an unattended run, and determinism here is a
+safety property; a phase degraded to zero reachable servers therefore still passes `strictMcp`, since
+an emptied set must stay a closed one. **The preflight resolves before the spawn, never after**: an
 unattended session cannot sign a server in (no `/mcp` panel in `-p`; the CLI tells the *model* the
 tools are missing), so a wall found at boarding costs a probe and a wall found later costs an hour.
-And **a probe that could not RUN never parks** — "I could not check" and "they are down" are
-different facts, and turning a flaky subprocess into a stopped plan is the worse failure.
+**A probe that could not RUN never degrades anything** — "I could not check" and "they are down" are
+different facts (an id the registry does not hold is a third fact, and needs no probe). And **the
+verdict is a policy, defaulting to `continue`** — since 2026-08-11, on a live failure: `parked` is
+settled, so a run whose ready phases all park has no candidates and halts, and one signed-out server
+stopped an eleven-phase plan that named no MCP servers at all. `continue` boards without the
+unreachable servers, names them in the prompt with the record-an-errand instruction, writes
+`record.mcpDegraded` and announces once per run per server; `require` is the old park, and its halt
+now carries `kind: 'mcp-preflight'` plus the `mcp-continue` verb behind the halt card's button.
+
+Resolution is `phaseOptions.mcpPolicy` → the PLAN (phase bullet, then §Session budget) → the run →
+`continue`. **The plan outranking the run is deliberate and is the one place that ordering reverses**
+— `optionsFor` resolves model and effort run-first, because those are preferences about spending;
+this is a claim about the work. Only an operator's per-phase choice may overrule it. At the plan
+level both words are recognised and everything else is silence, a THIRD state: an explicit `continue`
+is how a phase carves itself out of a plan-wide `require`, and silence is what lets the run's setting
+speak at all.
 
 A phase's servers are the union of what the PLAN says (`--mcp` from the engine), what the run
 attaches, and what the phase attaches; `mcpOff` drops only the run's, because the plan's statement is
-versioned and describes the work. F15 warns at plan time when a plan names a server the registry
-lacks — the engine is TOLD the registry through `PE_MCP_SERVERS` rather than reading JSON in bash 3.2.
+versioned and describes the work. Policies **override** rather than union, for the reason above. F15
+warns at plan time when a plan names a server the registry lacks — and names the consequence the
+resolved policy actually produces, since a lint describing behaviour the console does not have is
+worse than none. The engine is TOLD the registry through `PE_MCP_SERVERS` rather than reading JSON in
+bash 3.2. An unfilled `${VAR}` in a server's own command (the catalog's `${MCP_FS_ROOT}`) surfaces as
+`McpServerView.needsConfig`: it can never connect, so it is never attachable and never merely
+"unchecked".
 
 ### Flags gate capability, one act each
 

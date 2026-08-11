@@ -159,6 +159,13 @@ export function runNotes({
       // The fresh pty agent — which carries none of that — is the secondary,
       // for when the session is beyond resuming.
       action: (() => {
+        // An MCP park has no AI remedy — no agent can sign a server in — but it
+        // does have a second remedy the park sentence never mentioned: deciding
+        // the phase does not need that server. One button, because the two
+        // halves (set the policy, retry the parked phases) are useless apart.
+        if (run.halt.kind === 'mcp-preflight' && allowRun) {
+          return <McpContinueButton slug={run.slug} />;
+        }
         const sessionShaped = run.halt.phase != null && allowRun
           && ['no-handoff', 'verify-failed', 'waiting-external-timeout', 'phase-blocked']
             .includes(run.halt.kind ?? '');
@@ -428,6 +435,35 @@ export function RecoveryButton({
  * and the journal all apply. The primary remedy for a session-shaped halt;
  * the pty agent (which carries none of that) is the fallback beside it.
  */
+/**
+ * "Continue without these servers" — the other half of an MCP park's remedy.
+ *
+ * The park says an unattended session cannot sign a server in, which is true and
+ * was the whole of the advice. This is the sentence it was missing.
+ */
+function McpContinueButton({ slug }: { slug: string }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant="action"
+      disabled={busy}
+      title={'Set this run to run phases without servers it cannot reach, and retry the phases '
+        + 'that parked. A phase whose PLAN says it requires its servers still parks — override '
+        + 'that one from the per-phase controls.'}
+      onClick={() => {
+        setBusy(true);
+        api.runMcpContinue(slug)
+          .then(() => toast('Carrying on without the servers that would not connect.'))
+          .catch((error: unknown) => toast((error as Error).message, 'error'))
+          .finally(() => setBusy(false));
+      }}
+    >
+      {busy ? 'Continuing…' : 'Continue without these servers'}
+    </Button>
+  );
+}
+
 function SessionRecoverButton({ slug, phase }: { slug: string; phase: number }) {
   const [busy, setBusy] = useState(false);
   return (

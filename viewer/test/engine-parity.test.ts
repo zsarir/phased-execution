@@ -18,7 +18,8 @@ import './state-sandbox.ts';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { checkRoot, safeList, SKILL_DIR } from '../server/config.ts';
@@ -242,4 +243,85 @@ test('the store reads every handoff file it should', { skip: !available && 'no s
   }
   const parsed = store.list().reduce((n, r) => n + r.handoffs.length, 0);
   assert.equal(parsed, onDisk);
+});
+
+/* ------------------------------------------------------------------ *
+ * The MCP directives, against the fixture plans
+ * ------------------------------------------------------------------ *
+ * These run everywhere, unlike the tests above: the fixtures ship with the
+ * repo, so a fresh clone still holds the two parsers together. They are the
+ * same fixtures the bats suites use, which is the point — one plan, two
+ * readings, asserted equal, so an edit to either parser that drifts fails here
+ * rather than boarding a phase with the wrong servers months later.
+ */
+
+const FIXTURES = join(SKILL_DIR, 'tests', 'fixtures', 'plans');
+
+/**
+ * The fixtures, laid out the way the engine expects to find plans.
+ *
+ * `phase-graph.sh` reads `<root>/docs/plans/<slug>.md`, so the fixture
+ * directory cannot be handed to it directly — the bats helper does the same
+ * copy for the same reason.
+ */
+function fixtureRoot(): { root: string; slugs: string[] } {
+  const root = mkdtempSync(join(tmpdir(), 'pc-parity-fixtures-'));
+  const plans = join(root, 'docs', 'plans');
+  mkdirSync(plans, { recursive: true });
+  const slugs: string[] = [];
+  for (const file of safeList(FIXTURES)) {
+    // `bad-*` fixtures are deliberately malformed; the lint suites own those.
+    if (!file.endsWith('.md') || file.startsWith('bad-')) continue;
+    copyFileSync(join(FIXTURES, file), join(plans, file));
+    slugs.push(file.replace(/\.md$/, ''));
+  }
+  return { root, slugs };
+}
+
+test('the two parsers agree about a phase\'s MCP servers', async () => {
+  const { parsePlan } = await import('../server/parse/plan.ts');
+  const { root, slugs } = fixtureRoot();
+  try {
+    for (const slug of slugs) {
+      const path = join(root, 'docs', 'plans', `${slug}.md`);
+      const plan = parsePlan(readFileSync(path, 'utf8'), slug, path);
+      for (const row of plan.graph) {
+        const fromEngine = (await run(
+          { scriptsDir: SCRIPTS, root }, 'phase-graph.sh', [slug, '--mcp', String(row.phase)],
+        )).stdout.trim();
+        const fromJs = [...new Set([
+          ...(plan.sessionBudget.mcpServers ?? []),
+          ...(plan.phases[row.phase]?.mcpServers ?? []),
+        ])].join(', ');
+        assert.equal(fromEngine, fromJs, `${slug} phase ${row.phase}: MCP servers`);
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the two parsers agree about a phase\'s MCP policy — including silence', async () => {
+  // Silence is the case worth pinning. Three states (`require`, `continue`,
+  // nothing) collapse to two the moment one parser decides absence means
+  // `continue`, and the console's resolution order depends on being able to
+  // tell "the plan said carry on" from "the plan said nothing" — only the
+  // second lets the run's own setting answer.
+  const { parsePlan } = await import('../server/parse/plan.ts');
+  const { root, slugs } = fixtureRoot();
+  try {
+    for (const slug of slugs) {
+      const path = join(root, 'docs', 'plans', `${slug}.md`);
+      const plan = parsePlan(readFileSync(path, 'utf8'), slug, path);
+      for (const row of plan.graph) {
+        const fromEngine = (await run(
+          { scriptsDir: SCRIPTS, root }, 'phase-graph.sh', [slug, '--mcp-policy', String(row.phase)],
+        )).stdout.trim();
+        const fromJs = plan.phases[row.phase]?.mcpPolicy ?? plan.sessionBudget.mcpPolicy ?? '';
+        assert.equal(fromEngine, fromJs, `${slug} phase ${row.phase}: MCP policy`);
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
