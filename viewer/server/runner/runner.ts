@@ -596,6 +596,8 @@ type Lane = {
    * stopped the moment a refresh discovers a foreign takeover.
    */
   leaseTimer: NodeJS.Timeout | null;
+  /** A refresh is in flight — see `refreshLease` for why overlap is refused. */
+  leaseBusy?: boolean;
 };
 
 export class Runner {
@@ -4568,6 +4570,13 @@ export class Runner {
   private async refreshLease(lane: Lane, owner: string): Promise<void> {
     const state = this.state;
     if (!state || !this.lanes.has(lane.phase)) return;
+    // One tick at a time. A starved event loop delivers interval callbacks
+    // back-to-back, and two overlapping ticks would BOTH pass this point,
+    // both get refused by a foreign takeover, and journal one stand-down
+    // twice. The timer check catches the queued tick that arrives after a
+    // refusal already cleared the interval.
+    if (lane.leaseBusy || !lane.leaseTimer) return;
+    lane.leaseBusy = true;
     try {
       const scope = formatScope(lane.grant?.scope ?? await this.scopeFor(lane.phase));
       const result = await this.script('phase-lock.sh', [
@@ -4582,6 +4591,8 @@ export class Runner {
       }
     } catch (error) {
       log.warn('runner.lease-refresh', { phase: lane.phase, error });
+    } finally {
+      lane.leaseBusy = false;
     }
   }
 

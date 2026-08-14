@@ -107,7 +107,7 @@ describe('PlanPulse', () => {
   });
 
   it('renders nothing for an idle plan', () => {
-    const { container } = render(<PlanPulse slug="demo" run={run({ status: 'done', activePhase: null })} />);
+    const { container } = render(<PlanPulse slug="demo" run={run({ status: 'finished', activePhase: null })} />);
     expect(container.firstChild).toBeNull();
   });
 });
@@ -117,8 +117,8 @@ describe('pulseRuns', () => {
     const fresh = new Date().toISOString();
     const stale = new Date(Date.now() - 48 * 3_600_000).toISOString();
     const rows = pulseRuns([
-      run({ id: 'a-old', slug: 'alpha', status: 'done', updatedAt: stale }),
-      run({ id: 'b', slug: 'beta', status: 'done', updatedAt: fresh }),
+      run({ id: 'a-old', slug: 'alpha', status: 'finished', updatedAt: stale }),
+      run({ id: 'b', slug: 'beta', status: 'finished', updatedAt: fresh }),
       run({ id: 'c', slug: 'gamma', status: 'running', updatedAt: fresh }),
     ]);
     expect(rows.map((r) => r.slug)).toEqual(['gamma', 'beta']);
