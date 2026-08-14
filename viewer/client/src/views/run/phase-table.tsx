@@ -36,6 +36,7 @@ import { canQa, liveQa } from '@/lib/qa';
 import { QaButton, QaVerdict } from '@/components/qa-launcher';
 import { LaunchDialog } from '@/components/launch-dialog';
 import { RecoveryButton } from './status';
+import { RecoveryActions } from '@/components/recovery-actions';
 import { queueEntryFor, waitingLabel } from './session-panes';
 import { phaseHref } from '@shared/routes.js';
 import {
@@ -623,7 +624,7 @@ function PhaseRows({
               </p>
             ) : null}
             {can.diagnose && (
-              <PhaseDiagnosis slug={slug} phase={p.phase} allowRun={allowRun} onAct={onAct} />
+              <PhaseDiagnosis slug={slug} phase={p.phase} run={run} />
             )}
             <details className={cn('group', hasNote && 'mt-1')}>
               <summary className="cursor-pointer text-2xs text-ink-faint hover:text-ink-muted">
@@ -662,32 +663,15 @@ const BLOCKED_ON: Record<string, string> = {
 function PhaseDiagnosis({
   slug,
   phase,
-  allowRun,
-  onAct,
+  run,
 }: {
   slug: string;
   phase: number;
-  allowRun: boolean;
-  onAct: (label: string, fn: () => Promise<unknown>) => Promise<void>;
+  /** Kind-aware ordering: the halt's kind decides which action leads. */
+  run?: RunState | null;
 }) {
   const [open, setOpen] = useState(false);
-  const [instruction, setInstruction] = useState('');
-  const [asking, setAsking] = useState(false);
   const { data, error, isFetching } = useDiagnosis(slug, phase, open);
-
-  const act = (id: string) => {
-    if (id === 'resume') {
-      setAsking(true);
-      return;
-    }
-    const call: Record<string, () => Promise<unknown>> = {
-      recheck: () => api.runRecheck(slug, phase),
-      closeout: () => api.runCloseout(slug, phase),
-      retry: () => api.runRetry(slug, phase),
-      skip: () => api.runSkip(slug, phase),
-    };
-    if (call[id]) void onAct(id, call[id]);
-  };
 
   const failed = (data?.verification?.ran ?? []).filter((x) => !x.ok);
   const pre = 'mt-1 max-h-56 overflow-auto rounded border border-rule bg-ground px-2 py-1.5 font-mono text-2xs whitespace-pre-wrap';
@@ -787,52 +771,19 @@ function PhaseDiagnosis({
             </details>
           )}
 
-          {asking && (
-            <div className="flex flex-col gap-1.5 rounded border border-rule bg-ground p-2">
-              <label className="text-2xs" htmlFor={`fix-${phase}`}>
-                What should it do before closing the phase?
-              </label>
-              <textarea
-                id={`fix-${phase}`}
-                rows={3}
-                className="w-full rounded border border-rule bg-surface px-2 py-1 text-2xs"
-                placeholder="e.g. the scrub grep still matches README.fa.md — fix that first"
-                value={instruction}
-                onChange={(e) => setInstruction(e.target.value)}
-              />
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant="action"
-                  disabled={!instruction.trim()}
-                  onClick={() => {
-                    void onAct('resume', () => api.runResumePhase(slug, phase, instruction.trim()));
-                    setAsking(false);
-                  }}
-                >
-                  Resume with this
-                </Button>
-                <Button size="sm" onClick={() => setAsking(false)}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-1.5">
-            {data.actions.map((a) => (
-              <Button key={a.id} size="sm" title={a.detail} disabled={!allowRun} onClick={() => act(a.id)}>
-                {a.label}
-              </Button>
-            ))}
-          </div>
-
-          {!allowRun && (
-            <div className="text-2xs text-ink-faint">
-              This console was started without <code className="font-mono">--allow-run</code>. The
-              evidence above is readable; every action here would be refused by the server.
-            </div>
-          )}
+          {/* Every way forward, from the one shared model — the agent path
+              included, which this panel never offered before. Blurbs render as
+              visible text: this is the read-the-evidence surface. */}
+          <RecoveryActions
+            target={{ slug, phase, ...(run?.id ? { runId: run.id } : {}) }}
+            ctx={{
+              ...(run ? { run } : {}),
+              record: { status: data.status, resumable: data.resumable },
+            }}
+            max={3}
+            showBlurbs
+            legend
+          />
         </div>
       )}
     </details>

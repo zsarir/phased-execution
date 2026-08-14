@@ -45,7 +45,6 @@ import {
 import { keys } from '@/lib/queries';
 import { useNow } from '@/lib/clock';
 import { elapsed } from '@/lib/format';
-import { classifyRun, liveRecovery } from '@/lib/recovery';
 import { useQueryClient } from '@tanstack/react-query';
 import { isLive } from './defaults';
 import { ApprovalQueue, type Decide } from './approvals';
@@ -108,8 +107,6 @@ export function RunView({ detail }: { detail: PlanDetail }) {
     : undefined;
   const authFailure = Boolean(looksLikeAuthFailure(run, auth, runAccount));
   const haltPhase = run?.halt?.phase ?? run?.activePhase ?? undefined;
-  const haltClass = classifyRun(run, { authFailure });
-  const haltRecovery = liveRecovery(terminals?.sessions, { slug, phase: haltPhase });
 
   /**
    * Run one action, then re-read.
@@ -211,9 +208,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           toast('Back to Guarded — the next call that matters raises a card', 'ok');
         })}
         recovery={{
-          allowAgent,
-          ...(haltClass ? { kind: haltClass } : {}),
-          ...(haltRecovery ? { runningSessionId: haltRecovery.id } : {}),
+          ...(authFailure ? { authFailure: true } : {}),
           target: {
             slug,
             ...(haltPhase != null ? { phase: haltPhase } : {}),
@@ -230,9 +225,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
         run={run}
         live={live}
         allowRun={allowRun}
-        allowAgent={allowAgent}
         authFailure={authFailure}
-        sessions={terminals?.sessions}
         busy={busy}
         onRetry={(phase) => void act('retry', () => api.runRetry(slug, phase))}
       />

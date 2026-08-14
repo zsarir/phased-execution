@@ -9,7 +9,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { queryClientConfig } from '@/lib/queries';
+import { keys, queryClientConfig } from '@/lib/queries';
+import { TooltipProvider } from '@/components/ui';
 import type { PhaseView, RunState } from '@/lib/api';
 import { NextSteps, nextStepRows } from './next-steps';
 
@@ -33,29 +34,29 @@ describe('nextStepRows', () => {
         file: 'phase-05-x.md', status: 'blocked', title: 'x', skillsUsed: [], prompts: 0,
         outstanding: '**One exit criterion is unmet**, and it needs a human.',
       } }),
-    ], null, false);
+    ], null);
 
     expect(rows).toHaveLength(1);
     expect(rows[0].why).toContain('One exit criterion is unmet');
-    expect(rows[0].recoveryClass).toBe('plan-repair');
+    expect(rows[0].stuck).toBe(true);
     expect(rows[0].retry).toBeUndefined();
   });
 
   it('quotes the gate for a gated phase and offers only a re-check, never a bypass', () => {
     const rows = nextStepRows('demo', [
       phase({ phase: 2, state: 'ready', gated: true, gates: 'operator confirms the auth-off rail' }),
-    ], null, false);
+    ], null);
 
     expect(rows).toHaveLength(1);
     expect(rows[0].why).toContain('operator confirms the auth-off rail');
     expect(rows[0].retry).toBe('rechecks-gate');
-    expect(rows[0].recoveryClass).toBeUndefined();
+    expect(rows[0].record).toBeUndefined();
   });
 
   it('an ai gate says the session clears it itself — it is not a person\'s job', () => {
     const rows = nextStepRows('demo', [
       phase({ phase: 2, state: 'ready', gated: true, gateKind: 'ai', gates: 'staging deployed' }),
-    ], null, false);
+    ], null);
 
     expect(rows).toHaveLength(1);
     expect(rows[0].why).toContain('verifies and clears it itself');
@@ -66,7 +67,7 @@ describe('nextStepRows', () => {
     const rows = nextStepRows('demo', [
       phase({ phase: 2, state: 'ready', gated: true }),
     ], run({ phases: { 2: { phase: 2, status: 'gated', attempts: 0, costUsd: 0,
-      note: 'gate not clear: manual — mint the fixture keys' } } } as never), false);
+      note: 'gate not clear: manual — mint the fixture keys' } } } as never));
 
     expect(rows[0].why).toContain('mint the fixture keys');
     expect(rows[0].retry).toBe('rechecks-gate');
@@ -76,7 +77,7 @@ describe('nextStepRows', () => {
     const rows = nextStepRows('demo', [
       phase({ phase: 2, state: 'ready', gated: true }),
     ], run({ phases: { 2: { phase: 2, status: 'parked', attempts: 0, costUsd: 0,
-      note: 'gate not clear: manual — confirm the rollout window' } } } as never), false);
+      note: 'gate not clear: manual — confirm the rollout window' } } } as never));
 
     expect(rows[0].why).toContain('confirm the rollout window');
   });
@@ -87,9 +88,9 @@ describe('nextStepRows', () => {
     ], run({
       halt: { at: '', reason: 'phase 3 did not verify: 1 of 1 command(s) failed — false', phase: 3 },
       phases: { 3: { phase: 3, status: 'failed', attempts: 1, costUsd: 0 } },
-    } as never), false);
+    } as never));
 
-    expect(rows[0].recoveryClass).toBe('halted-verification');
+    expect(rows[0].record).toEqual({ status: 'failed', resumable: false });
     expect(rows[0].retry).toBe('restarts');
     expect(rows[0].why).toContain('did not verify');
   });
@@ -98,15 +99,25 @@ describe('nextStepRows', () => {
     const rows = nextStepRows('demo', [
       phase({ phase: 1, state: 'done' }),
       phase({ phase: 2, state: 'ready' }),
-    ], null, false);
+    ], null);
     expect(rows).toHaveLength(0);
   });
 });
 
 describe('NextSteps', () => {
   function mount(node: React.ReactElement) {
-    const client = new QueryClient(queryClientConfig);
-    return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
+    const client = new QueryClient({
+      ...queryClientConfig,
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    client.setQueryData(keys.state(), {
+      allowRun: true, allowAgent: true, allowWrites: false, autopilot: true,
+      root: { ok: true, path: '/repo' },
+    });
+    client.setQueryData(keys.terminal(), { allowed: false, agentAllowed: true, available: 'yes', sessions: [] });
+    return render(
+      <QueryClientProvider client={client}><TooltipProvider>{node}</TooltipProvider></QueryClientProvider>,
+    );
   }
 
   it('renders a stuck phase with Repair the plan with a new agent, and a gated one with its confirmation chip', () => {
@@ -123,7 +134,6 @@ describe('NextSteps', () => {
       run={null}
       live={false}
       allowRun
-      allowAgent
       authFailure={false}
       onRetry={onRetry}
     />);
@@ -150,7 +160,6 @@ describe('NextSteps', () => {
       run={null}
       live
       allowRun
-      allowAgent
       authFailure={false}
       onRetry={() => {}}
     />);
@@ -163,21 +172,21 @@ describe('failed here, finished elsewhere', () => {
     const rows = nextStepRows('demo', [
       phase({ phase: 1, state: 'done', title: 'Editor truth' }),
     ], run({ phases: { 1: { phase: 1, status: 'failed', attempts: 1, costUsd: 0,
-      note: 'no configuration file provided' } } } as never), false);
+      note: 'no configuration file provided' } } } as never));
 
     expect(rows).toHaveLength(1);
     expect(rows[0].why).toContain("this run's own attempt stopped");
     expect(rows[0].why).toContain('no configuration file provided');
     expect(rows[0].why).toContain('nothing needs fixing');
     expect(rows[0].why).toContain('reconciles to done');
-    expect(rows[0].recoveryClass).toBeUndefined();
+    expect(rows[0].record).toBeUndefined();
     expect(rows[0].retry).toBeUndefined();
   });
 
   it('stays quiet about done phases whose record is clean', () => {
     const rows = nextStepRows('demo', [
       phase({ phase: 1, state: 'done' }),
-    ], run({ phases: { 1: { phase: 1, status: 'done', attempts: 1, costUsd: 0 } } } as never), false);
+    ], run({ phases: { 1: { phase: 1, status: 'done', attempts: 1, costUsd: 0 } } } as never));
     expect(rows).toHaveLength(0);
   });
 });

@@ -371,6 +371,17 @@ function ConsoleCard({
             This server predates the autopilot, so the run and approval endpoints are missing.
           </Banner>
         )}
+        {/* The environment doctor: PATH rot and broken push delivery, with the
+            errand named. The live plist carried a different user's home and six
+            dead directories for weeks with no surface at all. */}
+        {(state?.environment?.issues ?? []).map((issue, index) => (
+          <Banner key={`${issue.kind}-${index}`} severity="warn">
+            <div className="min-w-0">
+              <strong>{issue.detail}</strong>{' '}
+              <span className="text-ink-muted">{issue.fix}</span>
+            </div>
+          </Banner>
+        ))}
 
         <div className="flex flex-wrap gap-1.5">
           {caps.map((cap) => (

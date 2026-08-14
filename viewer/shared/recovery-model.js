@@ -428,6 +428,7 @@ export function classifyBoardPhase(state) {
  * @property {{ recoverySessionId?: string | null }} [live]  A live agent recovery on this exact target.
  * @property {{ holder?: string | null, expired?: boolean }} [lock]
  * @property {boolean} [authFailure]
+ * @property {boolean} [planIssues]  The plan itself fails lint/health — plan-repair's own case.
  */
 
 /**
@@ -442,7 +443,7 @@ export function classifyBoardPhase(state) {
  * @returns {RecoveryActionView[]}
  */
 export function recoveryActionsFor(ctx = {}) {
-  const { boardState, record, run, flags = {}, live = {}, lock, authFailure } = ctx;
+  const { boardState, record, run, flags = {}, live = {}, lock, authFailure, planIssues } = ctx;
   if (boardState === 'done') return [];
   const status = record?.status;
   if (record && (status === 'done' || status === 'skipped')) return [];
@@ -508,6 +509,23 @@ export function recoveryActionsFor(ctx = {}) {
     push('retry', 'overflow', busy);
     push('skip', 'overflow');
     if (lock?.holder) push(lock.expired ? 'release' : 'force-release', 'overflow');
+    return out;
+  }
+
+  /* -- A phase the BOARD calls stuck, with no run record: a blocked or
+        in-progress handoff whose work happened in another session. The board
+        state itself is the fact, and the repair is plan-repair's
+        stale-handoff job — establish what really happened, finish it if
+        finishable, set the status the repository supports. -- */
+
+  if (boardState === 'stuck') {
+    pushAgent('plan-repair', 'primary');
+    return out;
+  }
+
+  /* -- The plan itself fails lint or health checks: plan-repair's own case. -- */
+  if (planIssues) {
+    pushAgent('plan-repair', 'primary');
     return out;
   }
 

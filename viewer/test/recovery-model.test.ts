@@ -231,3 +231,14 @@ test('new kinds stay out of the unattended loop; unknown named kinds answer null
   assert.equal(autoRecoveryClass({ reason: 'a §Verification note' }, 'halted'), null,
     'the loose OFFER regex must not drive the unattended loop');
 });
+
+test('a board-stuck phase with no record gets the plan repair — and a plan failing lint gets its own', () => {
+  const stuck = recoveryActionsFor({ boardState: 'stuck' });
+  assert.equal(stuck.length, 1);
+  assert.equal(stuck[0].id, 'fix-agent');
+  assert.equal(stuck[0].recoveryClass, 'plan-repair');
+  assert.equal(stuck[0].group, 'primary');
+
+  const lint = recoveryActionsFor({ planIssues: true });
+  assert.equal(lint[0]?.recoveryClass, 'plan-repair');
+});

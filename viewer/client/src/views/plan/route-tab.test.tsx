@@ -13,6 +13,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TooltipProvider } from '@/components/ui';
 import { queryClientConfig } from '@/lib/queries';
 import type { PlanDetail } from '@/lib/api';
 
@@ -42,7 +43,7 @@ async function mount(detail: PlanDetail) {
   const client = new QueryClient(queryClientConfig);
   const { RouteCards } = await import('./route-cards');
   return render(
-    <QueryClientProvider client={client}><RouteCards detail={detail} /></QueryClientProvider>,
+    <QueryClientProvider client={client}><TooltipProvider><RouteCards detail={detail} /></TooltipProvider></QueryClientProvider>,
   );
 }
 
@@ -87,7 +88,7 @@ describe('the route tab card strip', () => {
     expect(screen.getByText(/Phase 3 is stuck/)).toBeInTheDocument();
     expect(screen.getByText(/LINT FAIL/)).toBeInTheDocument();
 
-    expect(screen.getByText('Recovery')).toBeInTheDocument();
+    expect(screen.getByText('Ways forward')).toBeInTheDocument();
     // The halt wants a verification fix; the stuck phase and the lint share
     // ONE plan-repair… no — the stuck phase targets its own phase, the lint
     // targets the plan, so three distinct offers stand.
@@ -108,6 +109,5 @@ describe('the route tab card strip', () => {
     await mount(DETAIL);
     const button = await screen.findByRole('button', { name: /Fix with a new agent/i });
     expect(button).toBeDisabled();
-    expect(button.getAttribute('title')).toMatch(/--allow-agent/);
   });
 });

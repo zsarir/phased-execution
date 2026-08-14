@@ -40,6 +40,7 @@ import type { PhaseRecord } from '@/lib/api';
 import { RUN_TONE } from '../run/header';
 import { PROFILE_LABEL } from '../run/defaults';
 import { fleetTotals, groupRows, type RunRow } from './model';
+import { RecoveryActions } from '@/components/recovery-actions';
 
 /**
  * How many rows before the table stops being a table.
@@ -232,6 +233,15 @@ function RunDetail({
                   </p>
                 </AlertDialogContent>
               </AlertDialog>
+            )}
+            {/* The way forward, on the page that lists every stopped run —
+                which offered Freeze/Stop/Dismiss and no recovery of any kind. */}
+            {['halted', 'interrupted', 'parked'].includes(row.status) && !row.resolution && (
+              <RecoveryActions
+                target={{ slug: row.slug, runId: row.id }}
+                ctx={{ run: { status: row.status, halt: row.halt ?? null, resolved: row.resolution } }}
+                max={2}
+              />
             )}
             {/* Only a stopped run has a card to dismiss; a finished or running
                 one was never asking for anything. */}

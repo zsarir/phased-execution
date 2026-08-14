@@ -244,7 +244,11 @@ function InboxRow({
         <p className="mt-0.5 text-sm text-ink-muted">{item.body}</p>
         <div className="mt-1 flex flex-wrap gap-1.5">
           <Chip>{item.category}</Chip>
-          {item.urgent && <Chip tone="warn">urgent</Chip>}
+          {item.resolved ? (
+            <Chip title={`Resolved on its own ${item.resolved.reason ? `— ${item.resolved.reason}` : ''}`}>
+              resolved itself
+            </Chip>
+          ) : item.urgent && <Chip tone="warn">urgent</Chip>}
           <Chip
             tone={summary.failed ? 'bad' : delivered.length ? 'ok' : 'neutral'}
             title={delivered.length

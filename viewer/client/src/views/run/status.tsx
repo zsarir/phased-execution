@@ -57,6 +57,7 @@ import { Banner, Button, Card, CardBody, CardHeader, CardTitle, StatusStack, toa
 import { api, type AccountView, type AuthStatus, type ConsoleState, type RunState } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import { RECOVERY_BLURBS, RECOVERY_LABELS, type RecoveryClass } from '@/lib/recovery';
+import { RecoveryActions } from '@/components/recovery-actions';
 import { LaunchDialog } from '@/components/launch-dialog';
 import { useState } from 'react';
 
@@ -116,11 +117,9 @@ export function runNotes({
    * already running is the sessions list's, and minting is the page's.
    */
   recovery?: {
-    kind?: RecoveryClass;
-    allowAgent: boolean;
-    /** A live recovery for this halt — the button becomes a link to it. */
-    runningSessionId?: string;
-    /** What the recovery is about; the button opens the launch dialog on it. */
+    /** The auth override — every other reading of an auth halt is wrong. */
+    authFailure?: boolean;
+    /** What the recovery is about — the ticket, the verbs and the dedupe key. */
     target?: { slug: string; phase?: number; runId?: string };
   };
 }): RunNote[] {
@@ -151,36 +150,29 @@ export function runNotes({
       // The halt is the one note whose remedy may be a whole session. Rendered
       // here rather than in the controls strip because this is where the reason
       // is — an operator reading "did not verify" should not have to go looking
-      // for the thing that fixes it.
-      //
-      // The PRIMARY remedy for a session-shaped halt is the session API:
-      // resume the phase's OWN session (`claude -p --resume`) to finish the
-      // closeout, with the run's settings, deny rules and hooks all applying.
-      // The fresh pty agent — which carries none of that — is the secondary,
-      // for when the session is beyond resuming.
+      // for the thing that fixes it. The shared recovery model decides WHAT to
+      // offer (closeout leads a session-shaped halt, mcp-continue leads an MCP
+      // park, phase-blocked never gets the closeout that looped on it), and the
+      // one component renders it with the exact what-will-happen blurbs.
       action: (() => {
-        // An MCP park has no AI remedy — no agent can sign a server in — but it
-        // does have a second remedy the park sentence never mentioned: deciding
-        // the phase does not need that server. One button, because the two
-        // halves (set the policy, retry the parked phases) are useless apart.
-        if (run.halt.kind === 'mcp-preflight' && allowRun) {
-          return <McpContinueButton slug={run.slug} />;
-        }
-        const sessionShaped = run.halt.phase != null && allowRun
-          && ['no-handoff', 'verify-failed', 'waiting-external-timeout', 'phase-blocked']
-            .includes(run.halt.kind ?? '');
-        const agent = recovery?.kind && recovery.target
-          ? <RecoveryButton kind={recovery.kind} allowAgent={recovery.allowAgent}
-              {...(recovery.runningSessionId ? { runningSessionId: recovery.runningSessionId } : {})}
-              target={recovery.target}
-              {...(sessionShaped ? { variant: 'default' as const } : {})} />
-          : undefined;
-        if (!sessionShaped) return agent;
+        const phase = run.halt.phase;
+        const record = phase != null ? run.phases?.[String(phase)] : undefined;
         return (
-          <span className="inline-flex flex-wrap items-center gap-2">
-            <SessionRecoverButton slug={run.slug} phase={run.halt.phase!} />
-            {agent}
-          </span>
+          <RecoveryActions
+            target={recovery?.target ?? { slug: run.slug, ...(phase != null ? { phase } : {}) }}
+            ctx={{
+              run,
+              ...(record ? {
+                record: {
+                  status: record.status,
+                  resumable: Boolean(record.sessionId ?? record.resumeSessionId),
+                },
+              } : {}),
+              ...(recovery?.authFailure ? { authFailure: true } : {}),
+            }}
+            max={2}
+            legend
+          />
         );
       })(),
     });
@@ -426,63 +418,6 @@ export function RecoveryButton({
         />
       )}
     </>
-  );
-}
-
-/**
- * Resume the halted phase's own session to finish its closeout — the session
- * API (`claude -p --resume`), through the runner: settings, deny rules, hooks
- * and the journal all apply. The primary remedy for a session-shaped halt;
- * the pty agent (which carries none of that) is the fallback beside it.
- */
-/**
- * "Continue without these servers" — the other half of an MCP park's remedy.
- *
- * The park says an unattended session cannot sign a server in, which is true and
- * was the whole of the advice. This is the sentence it was missing.
- */
-function McpContinueButton({ slug }: { slug: string }) {
-  const [busy, setBusy] = useState(false);
-  return (
-    <Button
-      size="sm"
-      variant="action"
-      disabled={busy}
-      title={'Set this run to run phases without servers it cannot reach, and retry the phases '
-        + 'that parked. A phase whose PLAN says it requires its servers still parks — override '
-        + 'that one from the per-phase controls.'}
-      onClick={() => {
-        setBusy(true);
-        api.runMcpContinue(slug)
-          .then(() => toast('Carrying on without the servers that would not connect.'))
-          .catch((error: unknown) => toast((error as Error).message, 'error'))
-          .finally(() => setBusy(false));
-      }}
-    >
-      {busy ? 'Continuing…' : 'Continue without these servers'}
-    </Button>
-  );
-}
-
-function SessionRecoverButton({ slug, phase }: { slug: string; phase: number }) {
-  const [busy, setBusy] = useState(false);
-  return (
-    <Button
-      size="sm"
-      variant="action"
-      disabled={busy}
-      title={'Resume the phase\'s own session (claude -p --resume) to finish the closeout — '
-        + 'its context is intact, and the run\'s settings, deny rules and hooks all apply.'}
-      onClick={() => {
-        setBusy(true);
-        api.runCloseout(slug, phase)
-          .then(() => toast('Resuming the phase\'s session to finish the closeout.'))
-          .catch((error: unknown) => toast((error as Error).message, 'error'))
-          .finally(() => setBusy(false));
-      }}
-    >
-      {busy ? 'Resuming…' : 'Resume session & finish closeout'}
-    </Button>
   );
 }
 

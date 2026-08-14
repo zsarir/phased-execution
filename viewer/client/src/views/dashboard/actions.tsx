@@ -55,6 +55,12 @@ export function useDemandActions(runs: readonly RunState[]): {
             setLaunch({ kind: 'continue', slug, run });
             break;
           }
+          case 'mcp-continue': {
+            if (!slug) throw new Error('That run is no longer on the board — reload.');
+            await api.runMcpContinue(slug);
+            toast('Carrying on without the servers that would not connect.', 'ok');
+            break;
+          }
           case 'dismiss': {
             if (!slug || !runId) throw new Error('That run is no longer on the board — reload.');
             await api.runResolve(slug, runId);

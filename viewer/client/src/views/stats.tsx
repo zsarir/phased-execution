@@ -9,9 +9,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { Bot } from 'lucide-react';
-import { useConsoleState, usePlans, useSessions, useStats } from '@/lib/queries';
+import { useConsoleState, usePlans, useStats } from '@/lib/queries';
 import { countdown, plural, weight } from '@/lib/format';
 import { isClosed } from '@/lib/closure';
 import { phaseHref, planHref } from '@shared/routes.js';
@@ -20,10 +18,10 @@ import {
 } from '@/components/ui';
 import { BarList, Bars, Calendar, StackBar, type ChartTone } from '@/components/charts';
 import { ReleaseAllStaleButton, ReleaseStaleButton } from '@/components/release-lock';
-import { classifyIssue, liveRecovery } from '@/lib/recovery';
-import { startRecovery } from '@/lib/start-recovery';
-import type { HealthIssue, Portfolio, TerminalSession } from '@/lib/api';
+import { classifyIssue } from '@/lib/recovery';
+import type { HealthIssue, Portfolio } from '@/lib/api';
 import { Page } from './_page';
+import { RecoveryActions } from '@/components/recovery-actions';
 
 const SEVERITY_ORDER: Record<string, number> = { error: 0, warning: 1, info: 2 };
 
@@ -57,10 +55,8 @@ export function recentRate(
 export default function StatsView() {
   const { data: stats, isPending, error } = useStats();
   const { data: state } = useConsoleState();
-  const { data: terminals } = useSessions(state);
   const [severity, setSeverity] = useState<Severity>('all');
   const allowWrites = Boolean(state?.allowWrites);
-  const allowAgent = Boolean(state?.allowAgent);
   // Debris does not count. A lapsed lease on a closed plan blocks nothing —
   // `phase-lock.sh conflicts` skips it — so folding it into this number would
   // put an amber "N leases ran out" band and a Release-all button in front of
@@ -375,7 +371,7 @@ export default function StatsView() {
                       the same one the server would enforce anyway (`plan-repair`
                       409s on a closed plan). A second check here would be dead
                       code that silently diverges the day the issue kinds move. */}
-                  <RepairIssue issue={issue} allowAgent={allowAgent} sessions={terminals?.sessions} />
+                  <RepairIssue issue={issue} />
                 </li>
               ))}
             </ul>
@@ -427,44 +423,14 @@ export default function StatsView() {
  * Scoped to the issue's own phase when it has one, so a repair session is told
  * about the disagreement in front of it rather than every issue in the plan.
  */
-function RepairIssue({
-  issue,
-  allowAgent,
-  sessions,
-}: {
-  issue: HealthIssue;
-  allowAgent: boolean;
-  sessions?: readonly TerminalSession[];
-}) {
-  const client = useQueryClient();
-  const [busy, setBusy] = useState(false);
+function RepairIssue({ issue }: { issue: HealthIssue }) {
   const kind = classifyIssue(issue);
   if (!kind) return null;
-
-  const target = { slug: issue.slug, ...(issue.phase != null ? { phase: issue.phase } : {}) };
-  const running = liveRecovery(sessions, target);
-  if (running) {
-    return (
-      <Button size="sm" variant="default" asChild>
-        <a href={`#/agent/${running.id}`}><Bot size={12} aria-hidden /> Repair running</a>
-      </Button>
-    );
-  }
-
   return (
-    <Button
-      size="sm"
-      disabled={!allowAgent || busy}
-      title={allowAgent
-        ? 'Opens a Claude session that repairs this until validate.sh passes.'
-        : 'Agent sessions are disabled. Restart the console with --allow-agent.'}
-      onClick={() => {
-        setBusy(true);
-        void startRecovery(client, { recoveryClass: kind, ...target })
-          .finally(() => { setBusy(false); });
-      }}
-    >
-      <Bot size={12} aria-hidden /> {busy ? 'Starting…' : 'Repair with AI'}
-    </Button>
+    <RecoveryActions
+      target={{ slug: issue.slug, ...(issue.phase != null ? { phase: issue.phase } : {}) }}
+      ctx={{ planIssues: true }}
+      max={1}
+    />
   );
 }

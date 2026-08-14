@@ -20,15 +20,13 @@ import { Bot } from 'lucide-react';
 import {
   Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip,
 } from '@/components/ui';
-import { useAuth, useConsoleState, useRun, useSessions } from '@/lib/queries';
+import { useAuth, useConsoleState, useRun } from '@/lib/queries';
 import { money } from '@/lib/format';
 import { isClosed } from '@/lib/closure';
 import { looksLikeAuthFailure } from '@/lib/failures';
-import {
-  classifyBoardPhase, classifyRun, liveRecovery, recoveryKey, type RecoveryClass,
-} from '@/lib/recovery';
+import { WAYS_FORWARD, classifyRun, recoveryKey } from '@/lib/recovery';
 import { RUN_STATUS_TONE, runStatusTitle } from '@/lib/status-vocab';
-import { RecoveryButton } from '@/views/run/status';
+import { RecoveryActions, type RecoveryCtx } from '@/components/recovery-actions';
 import { planHref } from '@shared/routes.js';
 import type { PlanDetail, RunState } from '@/lib/api';
 
@@ -38,15 +36,11 @@ function excerpt(text: string | undefined, max = 160): string | undefined {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 
-/** One recovery offer: a class and the target its dialog opens on. */
-type Offer = { kind: RecoveryClass; target: { slug: string; phase?: number; runId?: string } };
-
 export function RouteCards({ detail }: { detail: PlanDetail }) {
   const slug = detail.summary.slug;
   const { data: state } = useConsoleState();
   const { data: detailRun } = useRun(slug, state?.autopilot !== false);
   const { data: auth } = useAuth(Boolean(state?.autopilot));
-  const sessions = useSessions(state);
   const run = (detailRun?.run ?? null) as RunState | null;
 
   const live = ['running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting']
@@ -65,28 +59,39 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
   const lintFailed = Boolean(detail.lint && !detail.lint.ok);
   const authFailure = looksLikeAuthFailure(run, auth);
   const runClass = classifyRun(run, { authFailure });
-  const troubled = Boolean(runClass) || stuck.length > 0 || lintFailed;
+  // Parked counts as troubled even when no agent class fits (an MCP park has a
+  // deterministic remedy, not an agent) — the card used to vanish exactly when
+  // the plan was MCP-parked.
+  const parkedRun = Boolean(run && run.status === 'parked' && !run.resolved);
+  const troubled = Boolean(runClass) || parkedRun || stuck.length > 0 || lintFailed;
 
-  // Recovery offers, deduplicated by target: every stuck phase (and the lint)
-  // wants plan-repair, and one button per identical ask is noise, not help.
+  // Ways forward, deduplicated by target: every stuck phase (and the lint)
+  // wants plan-repair, and one row per identical ask is noise, not help.
+  type Offer = { key: string; target: { slug: string; phase?: number; runId?: string }; ctx: RecoveryCtx };
   const offers: Offer[] = [];
   const seen = new Set<string>();
-  const offer = (kind: RecoveryClass | undefined, target: Offer['target']) => {
-    if (!kind) return;
-    const key = `${kind}:${recoveryKey({ slug: target.slug, ...(target.phase != null ? { phase: target.phase } : {}) })}`;
+  const offer = (key: string, target: Offer['target'], ctx: RecoveryCtx) => {
     if (seen.has(key)) return;
     seen.add(key);
-    offers.push({ kind, target });
+    offers.push({ key, target, ctx });
   };
-  if (runClass && run) {
-    offer(runClass, {
+  if (run && (runClass || parkedRun)) {
+    const phase = run.halt?.phase;
+    const record = phase != null ? run.phases?.[String(phase)] : undefined;
+    offer(`run:${recoveryKey({ slug, ...(phase != null ? { phase } : {}) })}`, {
       slug,
-      ...(run.halt?.phase != null ? { phase: run.halt.phase } : {}),
+      ...(phase != null ? { phase } : {}),
       runId: run.id,
+    }, {
+      run,
+      ...(record ? { record: { status: record.status, resumable: Boolean(record.sessionId ?? record.resumeSessionId) } } : {}),
+      ...(authFailure ? { authFailure: true } : {}),
     });
   }
-  for (const phase of stuck) offer(classifyBoardPhase(phase.state), { slug, phase: phase.phase });
-  if (lintFailed) offer('plan-repair', { slug });
+  for (const phase of stuck) {
+    offer(`stuck:${recoveryKey({ slug, phase: phase.phase })}`, { slug, phase: phase.phase }, { boardState: 'stuck' });
+  }
+  if (lintFailed) offer('lint', { slug }, { planIssues: true } as RecoveryCtx);
 
   const tone = RUN_STATUS_TONE[(run?.status ?? '') as keyof typeof RUN_STATUS_TONE];
 
@@ -128,8 +133,8 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
         <Card>
           <CardHeader><CardTitle>Something's wrong</CardTitle></CardHeader>
           <CardBody className="flex flex-col gap-2">
-            {runClass && run && (
-              <Banner severity="error">
+            {(runClass || parkedRun) && run && (
+              <Banner severity={parkedRun ? 'warn' : 'error'}>
                 Run {run.status}. {excerpt(run.halt?.reason ?? run.finishedReason) ?? ''}
               </Banner>
             )}
@@ -150,23 +155,16 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
 
       {troubled && offers.length > 0 && (
         <Card>
-          <CardHeader><CardTitle>Recovery</CardTitle></CardHeader>
-          <CardBody className="flex flex-wrap items-start gap-1.5">
-            {offers.map(({ kind, target }) => {
-              const running = liveRecovery(sessions.data?.sessions, {
-                slug: target.slug,
-                ...(target.phase != null ? { phase: target.phase } : {}),
-              });
-              return (
-                <RecoveryButton
-                  key={`${kind}:${target.phase ?? 'plan'}`}
-                  kind={kind}
-                  allowAgent={Boolean(state?.allowAgent)}
-                  {...(running ? { runningSessionId: running.id } : {})}
-                  target={target}
-                />
-              );
-            })}
+          <CardHeader><CardTitle>{WAYS_FORWARD}</CardTitle></CardHeader>
+          <CardBody className="flex flex-col gap-3">
+            {offers.map(({ key, target, ctx }) => (
+              <div key={key} className="flex flex-col gap-1">
+                {target.phase != null && (
+                  <span className="font-mono text-2xs text-ink-faint">P{target.phase}</span>
+                )}
+                <RecoveryActions target={target} ctx={ctx} max={2} />
+              </div>
+            ))}
           </CardBody>
         </Card>
       )}

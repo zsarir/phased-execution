@@ -21,10 +21,9 @@
  */
 
 import { Button, Card, CardBody, CardHeader, CardTitle, Chip, StateChip } from '@/components/ui';
-import { classifyBoardPhase, classifyPhase, liveRecovery, type RecoveryClass } from '@/lib/recovery';
 import { phaseHref } from '@shared/routes.js';
-import { RecoveryButton } from './status';
-import type { PhaseView, RunState, TerminalSession } from '@/lib/api';
+import { RecoveryActions } from '@/components/recovery-actions';
+import type { PhaseView, RunState } from '@/lib/api';
 
 /** One stopped phase, with its cause and its way forward. */
 type Row = {
@@ -32,8 +31,10 @@ type Row = {
   title: string;
   state: string;
   why: string;
-  /** Offer a recovery session of this class. */
-  recoveryClass?: RecoveryClass | undefined;
+  /** This run's record of the phase — the shared model computes the offers. */
+  record?: { status: string; resumable: boolean } | undefined;
+  /** The BOARD calls it stuck (blocked handoff, often no record) — plan-repair's job. */
+  stuck?: boolean | undefined;
   /** Offer Retry — with gate rows it re-checks; with records it restarts. */
   retry?: 'restarts' | 'rechecks-gate' | undefined;
   /** Link into the plan, for gates a person has to read before acting. */
@@ -51,7 +52,6 @@ export function nextStepRows(
   slug: string,
   planPhases: readonly PhaseView[],
   run: RunState | null,
-  authFailure: boolean,
 ): Row[] {
   const rows: Row[] = [];
   for (const p of planPhases) {
@@ -85,7 +85,7 @@ export function nextStepRows(
         state: p.state,
         why: excerpt(p.handoff?.outstanding)
           ?? `its handoff is marked ${p.handoff?.status ?? 'blocked'} and records no Outstanding section.`,
-        recoveryClass: classifyBoardPhase(p.state),
+        stuck: true,
         readMore: p.handoff?.file ? phaseHref(slug, p.phase) : undefined,
       });
       continue;
@@ -115,7 +115,7 @@ export function nextStepRows(
         title: p.title,
         state: record.status,
         why: excerpt(record.note ?? haltHere) ?? `this run recorded it ${record.status}, without a note.`,
-        recoveryClass: classifyPhase(record.status, run, { authFailure }),
+        record: { status: record.status, resumable: Boolean(record.sessionId ?? record.resumeSessionId) },
         retry: 'restarts',
       });
     }
@@ -129,9 +129,7 @@ export function NextSteps({
   run,
   live,
   allowRun,
-  allowAgent,
   authFailure,
-  sessions,
   busy,
   onRetry,
 }: {
@@ -140,14 +138,12 @@ export function NextSteps({
   run: RunState | null;
   live: boolean;
   allowRun: boolean;
-  allowAgent: boolean;
   authFailure: boolean;
-  sessions?: TerminalSession[] | undefined;
   busy?: string | null | undefined;
   onRetry: (phase: number) => void;
 }) {
   if (live) return null;
-  const rows = nextStepRows(slug, planPhases, run, authFailure);
+  const rows = nextStepRows(slug, planPhases, run);
   if (!rows.length) return null;
 
   return (
@@ -157,7 +153,6 @@ export function NextSteps({
       </CardHeader>
       <CardBody className="flex flex-col gap-3">
         {rows.map((row) => {
-          const recovering = liveRecovery(sessions, { slug, phase: row.phase });
           return (
             <div key={row.phase} className="flex flex-col gap-1.5 border-b border-rule pb-3 last:border-0 last:pb-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -167,24 +162,27 @@ export function NextSteps({
               </div>
               <p className="max-w-prose text-2xs text-ink-muted">{row.why}</p>
               <div className="flex flex-wrap items-center gap-1.5">
-                {row.recoveryClass && (
-                  <RecoveryButton
-                    kind={row.recoveryClass}
-                    allowAgent={allowAgent}
-                    {...(recovering ? { runningSessionId: recovering.id } : {})}
+                {(row.record || row.stuck) && (
+                  <RecoveryActions
                     target={{ slug, phase: row.phase, ...(run?.id ? { runId: run.id } : {}) }}
+                    ctx={row.record
+                      ? {
+                        ...(run ? { run } : {}),
+                        record: row.record,
+                        ...(authFailure ? { authFailure: true } : {}),
+                      }
+                      : { boardState: 'stuck' }}
+                    max={2}
                   />
                 )}
-                {row.retry && (
+                {row.retry === 'rechecks-gate' && (
                   <Button
                     size="sm"
                     disabled={!allowRun || busy === 'retry'}
-                    title={row.retry === 'rechecks-gate'
-                      ? 'Re-checks the gate and continues if it now holds — confirm the condition first; nothing here bypasses a gate.'
-                      : "Clears this phase's failure and CONTINUES the run from here."}
+                    title="Re-checks the gate and continues if it now holds — confirm the condition first; nothing here bypasses a gate."
                     onClick={() => onRetry(row.phase)}
                   >
-                    {row.retry === 'rechecks-gate' ? 'Retry (re-checks the gate)' : 'Retry'}
+                    Retry (re-checks the gate)
                   </Button>
                 )}
                 {row.readMore && (

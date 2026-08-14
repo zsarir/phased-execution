@@ -440,6 +440,8 @@ export interface ConsoleState {
   instance?: InstanceInfo;
   allowWrites?: boolean;
   allowRun?: boolean;
+  /** The environment doctor's findings (PATH rot, broken push delivery). */
+  environment?: { issues: { kind: string; detail: string; fix: string }[] };
   /** `--allow-terminal`: the shell gate the nav reads on every page. */
   allowTerminal?: boolean;
   /** `--allow-agent`: interactive claude sessions in the browser terminal. */
@@ -923,6 +925,24 @@ export interface VerifySummary {
   reason: string;
   ran: VerifyRun[];
   notRun: { text: string; reason: string }[];
+  /** Commands skipped because their lead binary does not exist here —
+   * neither ran nor failed; "I could not check" made explicit. */
+  skipped?: { command: string; lead: string; reason: string }[];
+}
+
+/** Mirrors `server/runner/state.ts` — the shared KIND_PROFILE covers all of these. */
+export type HaltKind =
+  | 'verify-failed' | 'no-handoff' | 'phase-blocked' | 'waiting-external-timeout'
+  | 'needs-human' | 'plan-lint' | 'phase-crashed' | 'budget' | 'plan-unreadable'
+  | 'failure-streak' | 'models-exhausted' | 'verification-preflight' | 'mcp-preflight'
+  | 'run-preflight' | 'recovery-failed' | 'orphaned-session' | 'runner-crashed';
+
+/** One structured boarding-preflight finding (`preflight` is the frozen string twin). */
+export interface PreflightWarning {
+  kind: 'human-check' | 'missing-lead' | 'cwd-unpinned' | 'nothing-runnable';
+  message: string;
+  lead?: string;
+  command?: string;
 }
 
 export interface PhaseRecord {
@@ -961,6 +981,8 @@ export interface PhaseRecord {
   note?: string;
   /** Boarding-preflight warnings on the §Verification — advisory, absent when clean. */
   preflight?: string[];
+  /** The same findings, structured — what a page filters and badges by. */
+  preflightDetail?: PreflightWarning[];
   /** Servers this phase asked for and boarded without. Absent when all connected. */
   mcpDegraded?: McpDegradation[];
   verification?: VerifySummary;
@@ -1056,7 +1078,10 @@ export interface RunState {
   maxParallel?: number;
   waitUntil: string | null;
   /** `kind` is the halt's machine-readable class; absent on older records. */
-  halt: { at: string; reason: string; phase?: number; kind?: string } | null;
+  /** `kind` mirrors `server/runner/state.ts`'s HaltKind (open-ended for
+   * records written by other versions); readers go through the shared
+   * KIND_PROFILE, never string literals. */
+  halt: { at: string; reason: string; phase?: number; kind?: HaltKind | (string & {}) } | null;
   pause: { requestedAt: string; afterPhase: number | null; by: string } | null;
   freeze: { at: string; phase: number | null; pid: number; by: string; escalateAt: string } | null;
   finishedReason?: string;
@@ -1089,8 +1114,14 @@ export interface RunState {
   resolved?: RunResolution | null;
   /** A person put the card back; the board resolver leaves it alone from then on. */
   reopenedAt?: string | null;
-  /** Recovery bookkeeping, keyed by phase (`plan` for a plan-wide repair). */
-  recoveries?: Record<string, { attempts: number; lastAt: string; lastReason?: string; fixed?: boolean }>;
+  /** Recovery bookkeeping, keyed by phase (`plan` for a plan-wide repair).
+   * `lastOutcome` is the verdict the server has always written and this type
+   * never carried — `no-defect` ("looked, found nothing wrong") was invisible
+   * and toasted as a failure. */
+  recoveries?: Record<string, {
+    attempts: number; lastAt: string; lastReason?: string; fixed?: boolean;
+    lastOutcome?: 'fixed' | 'no-defect' | 'superseded' | 'failed';
+  }>;
   /** Present when the run heals its own auto-recoverable halts. */
   autoRecover?: { attempts: number };
   phases: Record<string, PhaseRecord>;
@@ -1180,9 +1211,16 @@ export interface DecideResult {
 }
 
 export interface RecoveryAction {
-  id: 'recheck' | 'closeout' | 'resume' | 'retry' | 'skip';
+  id: 'recheck' | 'closeout' | 'resume' | 'retry' | 'skip' | 'fix-agent'
+    | 'mcp-continue' | 'continue-run' | 'release' | 'force-release' | 'dismiss';
   label: string;
   detail: string;
+  /** How it acts: check | own-session | new-agent | run-control | claim | mcp. */
+  mechanism?: string;
+  /** Which console capability gates it (run | agent | writes), when one does. */
+  flag?: string | null;
+  /** Set on `fix-agent`: which agent briefing to launch. */
+  recoveryClass?: string;
 }
 
 export interface PhaseDiagnosis {
@@ -1405,6 +1443,8 @@ export interface NotificationRecord {
   urgent: boolean;
   read: boolean;
   delivery: DeliveryRecord[];
+  /** Its subject dissolved on its own (the board moved past the halt). */
+  resolved?: { at: string; reason: string };
 }
 
 /**

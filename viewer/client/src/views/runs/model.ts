@@ -33,6 +33,8 @@ import type { PhaseRecord, RunResolution, RunState } from '@/lib/api';
 export { OUTCOMES, type OutcomeId };
 
 export interface RunRow {
+  /** The raw halt — kind included, for the shared recovery model. */
+  halt?: RunState['halt'] | null;
   id: string;
   slug: string;
   status: string;
@@ -168,6 +170,7 @@ export function toRows(runs: readonly RunState[]): RunRow[] {
 
       reason: stopReason(run),
       resolution: run.resolved ?? null,
+      halt: run.halt ?? null,
     };
   });
 }

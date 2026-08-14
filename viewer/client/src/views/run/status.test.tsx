@@ -9,9 +9,35 @@
  */
 
 import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
+import type { ReactNode } from 'react';
 import { NOTE_ORDER, RunStatusStack, looksLikeAuthFailure, runNotes } from './status';
+import { TooltipProvider } from '@/components/ui';
+import { keys } from '@/lib/queries';
 import type { RunState } from '@/lib/api';
+
+/**
+ * A halted note's action is now the shared <RecoveryActions>, which reads the
+ * console flags and the sessions list off the query cache — so any render of
+ * a halted run mounts providers with the cache seeded (never fetched:
+ * staleTime Infinity, retry off).
+ */
+function mount(node: ReactNode, opts: {
+  allowRun?: boolean; allowAgent?: boolean; sessions?: unknown[];
+} = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  client.setQueryData(keys.state(), {
+    allowRun: opts.allowRun ?? true, allowAgent: opts.allowAgent ?? true, allowWrites: false,
+    autopilot: true, root: { ok: true, path: '/repo' },
+  });
+  client.setQueryData(keys.terminal(), {
+    allowed: false, agentAllowed: true, available: 'yes', sessions: opts.sessions ?? [],
+  });
+  return render(
+    <QueryClientProvider client={client}><TooltipProvider>{node}</TooltipProvider></QueryClientProvider>,
+  );
+}
 
 const RUN: RunState = {
   id: 'abc1234',
@@ -154,38 +180,39 @@ describe('runNotes — the actions attached to a note', () => {
     expect(readOnly.find((n) => n.id === 'scoped')?.action).toBeUndefined();
   });
 
-  it('PIN: a halted verification always offers the AI a way in', () => {
-    // The capability #19 asks for — "the app can spawn a session to fix this" —
-    // is this button, and nothing else on the page leads to it. A halt card
-    // without it is the dead end the recovery work existed to remove, so the
-    // three states are pinned rather than left to the component.
+  it('PIN: a halted phase always offers the AI a way in — mechanisms named, never absent', () => {
+    // The capability the recovery work exists for. The shared model now
+    // decides the offers: the phase's own session leads when one survives, the
+    // fresh agent follows with a label that SAYS it is a new agent, and a
+    // console without the flag shows the button disabled with the flag named.
     const halted = run({
       status: 'halted',
-      halt: { at: '2026-08-03T10:00:00Z', reason: 'phase 2 did not verify: npm test', phase: 2 },
+      halt: { at: '2026-08-03T10:00:00Z', reason: 'phase 2 did not verify: npm test', phase: 2, kind: 'verify-failed' },
+      phases: { 2: { phase: 2, status: 'failed', sessionId: 's-2' } as never },
     });
-    const recovery = { kind: 'halted-verification' as const, allowAgent: true, target: { slug: 'demo', phase: 2 } };
+    const recovery = { target: { slug: 'demo', phase: 2 } };
 
-    render(<RunStatusStack run={halted} live={false} allowRun recovery={recovery} />);
-    expect(screen.getByRole('button', { name: /fix/i })).toBeEnabled();
+    mount(<RunStatusStack run={halted} live={false} allowRun recovery={recovery} />);
+    expect(screen.getByRole('button', { name: 'Finish in its own session' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Fix with a new agent' })).toBeEnabled();
+    // The rest are folded, not gone.
+    expect(screen.getByText(/More ways forward/)).toBeInTheDocument();
 
-    // A console without --allow-agent says which flag turns it on. Never absent:
-    // a remedy that exists and is unavailable has to say so.
-    const off = runNotes({
-      run: halted, live: false, allowRun: true, recovery: { ...recovery, allowAgent: false },
+    // A console without --allow-agent DISABLES the agent path — never absent.
+    mount(<RunStatusStack run={halted} live={false} allowRun recovery={recovery} />, { allowAgent: false });
+    expect(screen.getAllByRole('button', { name: 'Fix with a new agent' }).at(-1)).toBeDisabled();
+
+    // And a recovery already running is a link to it, not a second one — with
+    // BOTH AI families standing down, by name.
+    mount(<RunStatusStack run={halted} live={false} allowRun recovery={recovery} />, {
+      sessions: [{
+        id: 'sess-9', exited: null,
+        meta: { recovery: { kind: 'halted-verification', slug: 'demo', phase: 2 } },
+      }],
     });
-    expect(off.find((n) => n.id === 'halt')?.action).toBeTruthy();
-
-    // And a recovery already running is a link to it, not a second one.
-    render(
-      <RunStatusStack
-        run={halted}
-        live={false}
-        allowRun
-        recovery={{ ...recovery, runningSessionId: 'sess-9' }}
-      />,
-    );
-    expect(screen.getByRole('link', { name: /recovery running/i }))
+    expect(screen.getByRole('link', { name: /Fix the failing verification — running/i }))
       .toHaveAttribute('href', '#/agent/sess-9');
+    expect(screen.getAllByRole('button', { name: 'Finish in its own session' }).at(-1)).toBeDisabled();
   });
 
   it('an MCP park offers the door the park sentence never mentioned', () => {
@@ -203,13 +230,14 @@ describe('runNotes — the actions attached to a note', () => {
         kind: 'mcp-preflight',
       },
     });
-    render(<RunStatusStack run={parked} live={false} allowRun />);
+    mount(<RunStatusStack run={parked} live={false} allowRun />);
     expect(screen.getByRole('button', { name: /Continue without these servers/i })).toBeEnabled();
 
-    // A console that may not spawn runs cannot offer it — the verb retries
-    // phases, and retrying is running.
-    expect(runNotes({ run: parked, live: false, allowRun: false })
-      .find((n) => n.id === 'halt')?.action).toBeUndefined();
+    // A console that may not spawn runs shows it DISABLED with the flag named —
+    // the verb retries phases, and retrying is running. Never absent.
+    mount(<RunStatusStack run={parked} live={false} allowRun={false} />, { allowRun: false });
+    expect(screen.getAllByRole('button', { name: /Continue without these servers/i }).at(-1))
+      .toBeDisabled();
   });
 
   it('offers to re-guard only a run that is still live', () => {
@@ -234,8 +262,9 @@ describe('RunStatusStack — one stack, in the declared order', () => {
       onlyPhases: [1],
       permissionProfile: 'trusted',
     });
-    const { container } = render(
+    const { container } = mount(
       <RunStatusStack run={state} live={false} allowRun={false} />,
+      { allowRun: false },
     );
 
     const banners = [...container.querySelectorAll('[role="status"]')];
@@ -288,38 +317,41 @@ describe('looksLikeAuthFailure', () => {
   });
 });
 
-describe('the halt card action — the session API leads, the pty agent follows', () => {
+describe('the halt card action — the shared model decides who leads', () => {
   const halted = (kind?: string) => run({
     status: 'halted',
     slug: 'demo',
     halt: { at: '2026-08-03T10:00:00Z', reason: 'no handoff was written', phase: 2, ...(kind ? { kind } : {}) },
+    phases: { 2: { phase: 2, status: 'failed', sessionId: 's-2' } as never },
   });
-  const withRecovery = (state: RunState) => runNotes({
+  const noteFor = (state: RunState) => runNotes({
     run: state, live: false, allowRun: true,
-    recovery: { kind: 'halted-missing-handoff', allowAgent: true, target: { slug: 'demo', phase: 2 } },
+    recovery: { target: { slug: 'demo', phase: 2 } },
   }).find((n) => n.id === 'halt');
 
-  it('a session-shaped halt leads with "Resume session & finish closeout"', () => {
-    const note = withRecovery(halted('no-handoff'));
-    render(<>{note?.action}</>);
-    const resume = screen.getByRole('button', { name: /Resume session & finish closeout/ });
-    expect(resume).toBeTruthy();
-    // The pty agent is still there — demoted, not removed: two buttons.
-    expect(screen.getAllByRole('button')).toHaveLength(2);
+  it('a session-shaped halt leads with the phase\'s own session', () => {
+    mount(<>{noteFor(halted('no-handoff'))?.action}</>);
+    const buttons = screen.getAllByRole('button').map((b) => b.textContent ?? '');
+    expect(buttons[0]).toContain('Finish in its own session');
+    expect(buttons.some((b) => b.includes('Close out with a new agent'))).toBe(true);
   });
 
-  it('a plan-shaped halt keeps the agent button as the only remedy', () => {
-    const note = withRecovery(halted('plan-lint'));
-    render(<>{note?.action}</>);
-    expect(screen.queryByRole('button', { name: /Resume session & finish closeout/ })).toBeNull();
+  it('phase-blocked NEVER offers the closeout that looped on it', () => {
+    mount(<>{noteFor(halted('phase-blocked'))?.action}</>);
+    expect(screen.queryByRole('button', { name: 'Finish in its own session' })).toBeNull();
+    const buttons = screen.getAllByRole('button').map((b) => b.textContent ?? '');
+    expect(buttons[0]).toContain('Resume with an instruction');
   });
 
-  it('without --allow-run the session remedy is not offered', () => {
-    const note = runNotes({
-      run: halted('no-handoff'), live: false, allowRun: false,
-      recovery: { kind: 'halted-missing-handoff', allowAgent: true, target: { slug: 'demo', phase: 2 } },
-    }).find((n) => n.id === 'halt');
-    render(<>{note?.action}</>);
-    expect(screen.queryByRole('button', { name: /Resume session & finish closeout/ })).toBeNull();
+  it('a plan-shaped halt offers the plan repair, not a phase resume', () => {
+    mount(<>{noteFor(halted('plan-lint'))?.action}</>);
+    expect(screen.queryByRole('button', { name: 'Finish in its own session' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Repair the plan with a new agent' })).toBeEnabled();
+  });
+
+  it('without --allow-run the session remedy is disabled and names the flag', () => {
+    mount(<>{noteFor(halted('no-handoff'))?.action}</>, { allowRun: false });
+    const closeout = screen.getByRole('button', { name: 'Finish in its own session' });
+    expect(closeout).toBeDisabled();
   });
 });

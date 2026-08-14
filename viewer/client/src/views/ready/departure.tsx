@@ -27,6 +27,7 @@ import { countdown, pad2, plural, weight as fmtWeight } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { phaseHref, planHref } from '@shared/routes.js';
 import { isClaimed, load, type Departure } from './model';
+import { ForceReleaseButton, ReleaseStaleButton } from '@/components/release-lock';
 
 /** Fetch-then-copy, so a prompt costs an engine run only when it is wanted. */
 function usePromptText(slug: string, phase: number) {
@@ -121,7 +122,14 @@ export function NextDeparture({ d, allowRun }: { d: Departure; allowRun: boolean
             <h2 id="next-departure" className="text-2xs font-medium uppercase tracking-[0.14em] text-state">
               {claimed ? 'Next departure — held' : 'Next departure'}
             </h2>
-            <StateChip state={claimed ? 'blocked' : 'ready'} board className="shrink-0" />
+            <div className="flex shrink-0 items-center gap-2">
+              {claimed && (
+                d.lock?.expired
+                  ? <ReleaseStaleButton slug={d.slug} phase={d.phase} label="Release the claim" />
+                  : <ForceReleaseButton slug={d.slug} phase={d.phase} lock={d.lock!} />
+              )}
+              <StateChip state={claimed ? 'blocked' : 'ready'} board />
+            </div>
           </div>
 
           <div className="mt-2 flex items-start gap-3">

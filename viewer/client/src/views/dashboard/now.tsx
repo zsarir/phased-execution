@@ -118,6 +118,8 @@ export type DemandActionId =
   | 'login' | 'recheck'
   | 'release' | 'release-all'
   | 'mark-read'
+  /** The MCP park's one-button remedy: policy → continue, retry the parked phases. */
+  | 'mcp-continue'
   /** Phase 4: hand what no rule can settle to a Claude session. */
   | 'start-recovery';
 
@@ -298,6 +300,46 @@ export function demands({
         ),
         // Never gated: dismissing a card is a judgement about what deserves
         // attention, and a console that cannot even do that is the dead end.
+        { id: 'dismiss', label: 'Dismiss', target },
+      ],
+    });
+  }
+
+  // A PARKED run raised no card at all — which is how an MCP-parked plan sat
+  // 85 minutes with its one-button remedy unreachable from here. Kind-aware:
+  // the MCP park leads with continue-without-servers, a verification park
+  // with the plan repair, anything else with Continue.
+  const parked = runs.filter((r) => r.status === 'parked' && !r.resolved);
+  for (const run of parked) {
+    const target = { slug: run.slug, runId: run.id };
+    const mcp = run.halt?.kind === 'mcp-preflight';
+    out.push({
+      id: `parked-${run.id}`,
+      icon: <AlertTriangle size={15} aria-hidden />,
+      label: `${run.slug} parked`,
+      detail: run.halt?.reason ?? run.finishedReason ?? 'Every remaining phase needs a person.',
+      href: planHref(run.slug, 'run'),
+      tone: 'bad',
+      actions: [
+        ...(mcp
+          ? [{
+            id: 'mcp-continue',
+            label: 'Continue without these servers',
+            kind: 'action',
+            disabled: allowRun ? undefined : NEEDS_RUN,
+            target,
+          } as DemandAction]
+          : [{
+            id: 'continue',
+            label: 'Continue',
+            kind: 'action',
+            disabled: allowRun ? undefined : NEEDS_RUN,
+            target,
+          } as DemandAction]),
+        ...recovery(
+          classifyRun(run),
+          { slug: run.slug, runId: run.id, ...(haltPhase(run) != null ? { phase: haltPhase(run)! } : {}) },
+        ),
         { id: 'dismiss', label: 'Dismiss', target },
       ],
     });

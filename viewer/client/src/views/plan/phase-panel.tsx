@@ -14,6 +14,7 @@ import { canQa, liveQa } from '@/lib/qa';
 import { countdown, pad2, plural, weight } from '@/lib/format';
 import { handoffHref, phaseHref } from '@shared/routes.js';
 import type { GateStatus, PhaseView, PlanDetail } from '@/lib/api';
+import { RecoveryActions } from '@/components/recovery-actions';
 
 /** One labelled block of the plan's own prose. Absent fields render nothing. */
 function Field({ label, text }: { label: string; text?: string }) {
@@ -131,9 +132,13 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
               {view.handoff.outstanding.slice(0, 900)}
               {view.handoff.outstanding.length > 900 ? '…' : ''}
             </p>
-            <p className="mt-1.5 text-2xs text-ink-faint">
-              The run page&rsquo;s <em>Why this is stopped</em> card offers Repair with AI for it.
-            </p>
+            <div className="mt-2">
+              <RecoveryActions
+                target={{ slug, phase: view.phase }}
+                ctx={{ boardState: 'stuck' }}
+                max={1}
+              />
+            </div>
           </div>
         )}
         {/* Every state, not just the two that can start. The prompt was hidden
@@ -387,6 +392,9 @@ function GateCard({ slug, view, gate, allowWrites }: {
                   size="sm"
                   variant={confirming ? 'action' : 'default'}
                   disabled={mutation.isPending}
+                  title={'Records your approval in docs/handoffs/<slug>/gate-status.md with your note — '
+                    + 'the runner re-checks the gate and boards the phase on its next pass. '
+                    + 'Nothing bypasses the gate; this IS the gate being answered.'}
                   onClick={() => { if (confirming) mutation.mutate(true); else setConfirming(true); }}
                 >
                   {confirming ? 'Press again to approve' : 'Approve gate'}
