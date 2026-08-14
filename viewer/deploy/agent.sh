@@ -160,6 +160,26 @@ Until then, run the console directly: phase-console --root <dir> (tmux keeps it 
 # real fix.
 current_path="$PATH"
 
+# Audit a PATH for entries that cannot serve: directories that do not exist,
+# and directories under a DIFFERENT user's home — a live plist carried
+# /Users/<someone-else>/… from a migrated shell profile for weeks, and nothing
+# ever said so. Warnings only (a thin PATH is degraded, not fatal; the
+# verifier appends the standard dirs defensively): one finding per line on
+# stdout, nothing when clean. bash 3.2.
+audit_path() {  # audit_path <path>
+  local IFS=':' d me
+  me="$HOME"
+  for d in $1; do
+    [ -z "$d" ] && continue
+    case "$d" in
+      "$me"|"$me"/*) : ;;
+      /Users/*|/home/*)
+        printf "PATH entry under a different user's home: %s\n" "$d"; continue ;;
+    esac
+    [ -d "$d" ] || printf 'PATH entry does not exist: %s\n' "$d"
+  done
+}
+
 xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 # systemd's own quoting: double quotes around each word, backslash-escaped
@@ -173,6 +193,15 @@ cmd_install() {
   # socket. Empty means "ask the instance", which answers 4123 for the default
   # and a derived slot for everyone else.
   local node_bin root="" port="" selector="" notify="" notify_given=0
+  # The PATH this install bakes is the PATH every verification runs with —
+  # name its defects NOW, while the person who can fix them is at a keyboard.
+  local path_audit
+  path_audit="$(audit_path "$current_path")"
+  if [ -n "$path_audit" ]; then
+    printf 'warning: the PATH this install will bake into the unit has issues:\n' >&2
+    printf '%s\n' "$path_audit" | sed 's/^/  - /' >&2
+    printf '  (install from a full shell of this account if that is unexpected)\n' >&2
+  fi
   local default_skills="" skills_given=0 extra=()
   node_bin="$(command -v node)" || die "node is not on PATH"
   # The found node gets baked into the plist/unit — an old one would crash-loop
@@ -546,6 +575,32 @@ cmd_status() {
     systemctl --user show "$UNIT" --property=ActiveState,SubState,MainPID --no-pager 2>/dev/null \
       | sed -e 's/^ActiveState=/state    /' -e 's/^SubState=/sub      /' -e 's/^MainPID=/pid      /'
   fi
+  # The PATH the unit actually runs with, audited — dead directories and
+  # foreign homes are exactly the defects nothing else ever reports.
+  local unit_path="" path_audit
+  if [ "$OS" = "Darwin" ]; then
+    # The writer puts key and string on ONE line; older hand-edited plists may
+    # break them across two. Try same-line first, then the next-line shape.
+    unit_path="$(sed -n 's/.*<key>PATH<\/key><string>\(.*\)<\/string>.*/\1/p' "$PLIST" 2>/dev/null | head -1)"
+    [ -n "$unit_path" ] || \
+      unit_path="$(sed -n '/<key>PATH<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' "$PLIST" 2>/dev/null | head -1)"
+  else
+    unit_path="$(grep -o 'Environment="PATH=[^"]*"' "$UNIT_FILE" 2>/dev/null | head -1 \
+      | sed 's/^Environment="PATH=//; s/"$//')"
+  fi
+  if [ -n "$unit_path" ]; then
+    path_audit="$(audit_path "$unit_path")"
+    if [ -n "$path_audit" ]; then
+      echo "path     the unit's baked PATH has issues:"
+      printf '%s\n' "$path_audit" | sed 's/^/           - /'
+      echo "           fix: re-run deploy/agent.sh install from a full shell"
+    else
+      echo "path     ok (no dead or foreign entries)"
+    fi
+  fi
+  [ -z "${PE_MCP_SERVERS+set}" ] && \
+    echo "note     PE_MCP_SERVERS is not set in this shell — scripts/validate.sh run by hand skips the F15 MCP advisory (console-spawned sessions carry it)"
+  return 0
 }
 
 # Only the ID is read out of `list`; everything else comes from resolving that

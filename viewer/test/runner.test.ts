@@ -3147,3 +3147,41 @@ test('the lease keepalive refreshes the lock under the shared owner, and stands 
     assert.equal(claims(r2).length, 1, 'no second claim was attempted');
   } finally { r2.cleanup(); }
 });
+
+test('sessions carry PE_MCP_SERVERS from the registry — and nothing when no registry is wired', async () => {
+  // F15's MCP advisory was silently dead inside every unattended session:
+  // sessions run validate.sh themselves, and launchd's env carries no
+  // registry. Resolved per spawn; set-but-empty is a real answer.
+  const r = repo();
+  const envs: (string | undefined)[] = [];
+  const spy: SpawnFn = async (request) => {
+    envs.push(request.env?.PE_MCP_SERVERS);
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  };
+  const { instance } = runner(r, spy, '`true`', undefined, {
+    mcpIds: () => ['context7', 'sentry'],
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+  assert.deepEqual(envs, ['context7 sentry', 'context7 sentry', 'context7 sentry']);
+  r.cleanup();
+
+  const bare = repo();
+  const bareEnvs: (string | undefined)[] = [];
+  const bareSpy: SpawnFn = async (request) => {
+    bareEnvs.push(request.env?.PE_MCP_SERVERS);
+    bare.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  };
+  const plain = runner(bare, bareSpy);
+  const hadEnv = process.env.PE_MCP_SERVERS;
+  delete process.env.PE_MCP_SERVERS;
+  try {
+    await plain.instance.start({ slug: 'demo', root: bare.root, autonomy: 'keep-going' });
+    await plain.instance.wait();
+  } finally { if (hadEnv !== undefined) process.env.PE_MCP_SERVERS = hadEnv; }
+  assert.deepEqual(bareEnvs, [undefined, undefined, undefined],
+    'no registry wired means the advisory stays off — absent, not empty');
+  bare.cleanup();
+});

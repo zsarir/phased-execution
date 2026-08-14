@@ -53,3 +53,51 @@ test('a verification survives a PATH that forgot the standard dirs', async () =>
   assert.equal(summary.ran.length, 1);
   assert.equal(summary.ran[0].ok, true, summary.ran[0].output);
 });
+
+/* ------------------------------------------------------------------ *
+ * scripts/verify.env — one vocabulary, three readers, zero drift
+ * ------------------------------------------------------------------ */
+
+test('the TS loader, the TS fallbacks and scripts/verify.env agree exactly', async () => {
+  const { loadVerifyEnv, VERIFY_ENV_FALLBACK } = await import('../server/runner/verify-env.ts');
+  const { DEFAULT_PREFLIGHT_SKIP } = await import('../server/runner/verify.ts');
+  const { SKILL_DIR } = await import('../server/config.ts');
+  const scripts = join(SKILL_DIR, 'scripts');
+
+  const loaded = loadVerifyEnv(scripts);
+  // The loader read the real file; the fallbacks must say the same thing —
+  // they are what an older scripts dir gets, and drift there is invisible.
+  assert.deepEqual([...loaded.cwdSensitive].sort(), [...VERIFY_ENV_FALLBACK.cwdSensitive].sort());
+  assert.deepEqual([...loaded.preflightSkip].sort(), [...VERIFY_ENV_FALLBACK.preflightSkip].sort());
+  // verify.ts's own default (used when no caller passes a set) is the same list.
+  assert.deepEqual([...DEFAULT_PREFLIGHT_SKIP].sort(), [...loaded.preflightSkip].sort());
+});
+
+test('a scripts dir without the file falls back rather than failing', async () => {
+  const { loadVerifyEnv, VERIFY_ENV_FALLBACK } = await import('../server/runner/verify-env.ts');
+  const empty = mkdtempSync(join(tmpdir(), 'pc-verify-env-'));
+  const loaded = loadVerifyEnv(empty);
+  assert.equal(loaded.cwdSensitive, VERIFY_ENV_FALLBACK.cwdSensitive);
+});
+
+/* ------------------------------------------------------------------ *
+ * The environment doctor
+ * ------------------------------------------------------------------ */
+
+test('the doctor names foreign homes and dead directories, and blesses a clean PATH', async () => {
+  const { environmentReport } = await import('../server/env-doctor.ts');
+  const home = '/Users/me';
+  const report = environmentReport(
+    { PATH: `/Users/mobin-mac/.antigravity/antigravity/bin:/usr/bin:/definitely/absent-xyz:${home}/bin` },
+    home,
+  );
+  const kinds = report.map((issue) => issue.kind).sort();
+  // /usr/bin exists and is not under any home; ${home}/bin does not exist but
+  // IS the user's own — reported as missing, never as foreign.
+  assert.deepEqual(kinds, ['path-foreign-home', 'path-missing-dir', 'path-missing-dir']);
+  const foreign = report.find((issue) => issue.kind === 'path-foreign-home')!;
+  assert.match(foreign.detail, /mobin-mac/);
+  assert.match(foreign.fix, /agent\.sh install/);
+
+  assert.deepEqual(environmentReport({ PATH: '/usr/bin:/bin' }, home), []);
+});

@@ -56,6 +56,7 @@ import { formatScope, scopeOfRow, scopesIntersect } from '../shared/scope.js';
 import {
   KIND_PROFILE, NO_HANDOFF_AUTO_RE, VERIFICATION_AUTO_RE, recoveryActionsFor,
 } from '../shared/recovery-model.js';
+import { environmentReport, type EnvIssue } from './env-doctor.ts';
 import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
 import {
@@ -566,6 +567,8 @@ export function autoRecoveryClass(
 export class Service {
   readonly flags: Flags;
   prefs: Prefs;
+  /** The environment doctor's findings; G10 appends push-broken at runtime. */
+  readonly environment: { issues: EnvIssue[] };
   root: RootCheck | null = null;
   store: Store | null = null;
   readonly search = new SearchIndex();
@@ -655,10 +658,34 @@ export class Service {
       // accounts flag is that permission without opening free-form sessions.
       loginAllowed: flags.allowAccounts,
       cwd: () => this.root?.path,
+      // Every pty session — agent, QA, plan wizard, a plain shell — learns the
+      // MCP registry, so `validate.sh` run by hand fires F15 instead of
+      // silently skipping it (the advisory was dead in production because
+      // launchd's env never carried it).
+      baseEnv: () => ({ PE_MCP_SERVERS: this.mcp.enabledIds().join(' ') }),
       onSession: (event) => this.onSessionEvent(event),
     });
     this.push = new Push(flags.remoteUsers);
     this.notifications = new Notifications();
+    // The environment doctor: computed once (this process's env cannot
+    // change), carried on state(), and — for the one finding that means the
+    // unit was installed as somebody else — announced on the health channel.
+    this.environment = { issues: environmentReport() };
+    if (this.environment.issues.length) log.warn('env.doctor', { issues: this.environment.issues });
+    const foreign = this.environment.issues.find((issue) => issue.kind === 'path-foreign-home');
+    // The announce is suppressed under a test runner: the doctor reads the
+    // AMBIENT machine env, and a developer whose own shell PATH carries the
+    // defect would otherwise leak a health notification into every suite that
+    // pins exact announcement sets. The report itself still computes — tests
+    // assert on state().environment, not on the ambient push.
+    const testing = process.env.NODE_TEST_CONTEXT || process.env.VITEST;
+    if (foreign && !testing) {
+      this.announce('health', {
+        title: 'Console environment needs attention',
+        body: `${foreign.detail}. ${foreign.fix}`,
+        tag: tagFor('health', 'env-doctor'),
+      });
+    }
     this.watcher = new DocsWatcher((paths) => this.onChange(paths));
     this.approvals = new Approvals({
       notify: (approval) => {
@@ -2772,6 +2799,10 @@ export class Service {
     return {
       root: this.root,
       prefs: this.prefs,
+      // What the doctor found about this process's own environment (PATH rot,
+      // and — appended at runtime — broken push delivery). Additive; the
+      // client renders it on the dashboard's console-health block.
+      environment: this.environment,
       // Which console this is. The client needs all three: the name for the tab
       // title (two consoles are indistinguishable in a tab strip otherwise),
       // `pinned` to know whether the source picker can do anything, and the id

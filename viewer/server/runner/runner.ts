@@ -36,6 +36,7 @@ import { mcpDirective, skillDirective } from '../skills.ts';
 import { classify, fallbackChain, limitBucket, nextModel, type Disposition } from './errors.ts';
 import { markFor, spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
 import { extractCommands, resolveLead, unresolvableLeads, verifyPhase } from './verify.ts';
+import { loadVerifyEnv, type VerifyEnv } from './verify-env.ts';
 import { failureContext } from './failure-context.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
@@ -1309,7 +1310,18 @@ export class Runner {
         this.record('run.account-env-failed', { accountId, error: (error as Error).message });
       }
     }
-    return { ...process.env, ...account, ...extra };
+    return {
+      ...process.env,
+      // Sessions run `validate.sh`/`phase-graph.sh` themselves per the skill's
+      // protocol; under launchd the parent env has no registry, so F15's MCP
+      // advisory was silently dead inside every unattended session. Resolved
+      // per spawn — a registry change lands on the next session. Set-but-empty
+      // is a real answer (a console with nothing registered); ABSENT deps mean
+      // no registry is wired at all, and the advisory stays off.
+      ...(this.deps.mcpIds ? { PE_MCP_SERVERS: this.deps.mcpIds().join(' ') } : {}),
+      ...account,
+      ...extra,
+    };
   }
 
   /**
@@ -3626,7 +3638,7 @@ export class Runner {
     const cwd = await this.verifyCwd(phase);
     const verification = await verify(text, {
       cwd,
-      preflightSkip: Runner.PREFLIGHT_SKIP,
+      preflightSkip: this.verifyEnv().preflightSkip,
       // Explicit, and longer than the 15-minute default: a real phase's
       // verification is a full suite, sometimes a container build, and the
       // default turned a slow-but-passing check into a red one that proved
@@ -3722,17 +3734,12 @@ export class Runner {
     return true;
   }
 
-  /** Leads whose meaning depends on the working directory. */
-  private static readonly CWD_SENSITIVE = new Set([
-    'docker', 'docker-compose', 'pnpm', 'npm', 'yarn', 'task', 'make', 'just',
-    'pytest', 'go', 'cargo', 'alembic', 'vitest', 'jest', 'tsc', 'node',
-  ]);
-
-  /** Builtins and always-present names not worth a resolution warning. */
-  private static readonly PREFLIGHT_SKIP = new Set([
-    'cd', 'true', 'false', 'echo', 'printf', 'test', 'pwd', 'env', 'which',
-    'bash', 'sh', 'command', 'export',
-  ]);
+  /** The verification-command vocabulary — scripts/verify.env, the same file
+   * the bash engine sources (F5 single-source discipline), with a hardcoded
+   * fallback for older scripts dirs. Cached by the loader. */
+  private verifyEnv(): VerifyEnv {
+    return loadVerifyEnv(this.deps.scriptsDir);
+  }
 
   private static readonly VERIFICATION_PARK = VERIFICATION_PARK_NOTE;
 
@@ -3960,7 +3967,7 @@ export class Runner {
       const sensitive = commands.filter((command) => {
         if (/^cd\s/.test(command.trim())) return false; // names its own directory
         const lead = this.leadToken(command);
-        return lead ? Runner.CWD_SENSITIVE.has(lead) : false;
+        return lead ? this.verifyEnv().cwdSensitive.has(lead) : false;
       });
       if (sensitive.length) {
         warnings.push(`${sensitive.length} command(s) are cwd-sensitive and the plan declares no `
@@ -3968,7 +3975,7 @@ export class Runner {
       }
     }
 
-    const missing = unresolvableLeads(commands, process.env.PATH, Runner.PREFLIGHT_SKIP);
+    const missing = unresolvableLeads(commands, process.env.PATH, this.verifyEnv().preflightSkip);
     for (const lead of missing.keys()) {
       // The consequence named matches what the runner will actually DO now:
       // skip and record, never run to a 127 halt. `python` gets its errand.

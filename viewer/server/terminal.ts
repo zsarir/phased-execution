@@ -373,6 +373,13 @@ export interface TerminalOptions {
   loginAllowed?: boolean;
   /** Where a new session starts — the open source directory, when there is one. */
   cwd?: () => string | undefined;
+  /**
+   * Environment every session gets under the shell's own, resolved per spawn.
+   * The one current use is `PE_MCP_SERVERS` — the registry's enabled ids — so
+   * a session (or an operator's shell) running `validate.sh` by hand gets the
+   * F15 MCP advisory that was silently dead under launchd's bare env.
+   */
+  baseEnv?: () => Record<string, string>;
   /** Tests inject a fake; production takes the lazily-imported real one. */
   spawn?: PtySpawn;
   /**
@@ -832,7 +839,10 @@ export class Terminals {
       // in the home this console did (which is also the home `/api/skills`
       // enumerated); a server-composed `launch.env` — an account's
       // CLAUDE_CONFIG_DIR or token — layers between the two so TERM still wins.
-      env: { ...process.env, ...launch?.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+      env: {
+        ...process.env, ...this.options.baseEnv?.(), ...launch?.env,
+        TERM: 'xterm-256color', COLORTERM: 'truecolor',
+      },
     });
 
     const id = randomBytes(6).toString('hex');

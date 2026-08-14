@@ -708,8 +708,9 @@ export type VerifyOptions = {
   canExecute?: (lead: string) => boolean;
 };
 
-/** Fallback when the caller passes no skip set (mirrors scripts/verify.env). */
-const DEFAULT_PREFLIGHT_SKIP: ReadonlySet<string> = new Set([
+/** Fallback when the caller passes no skip set (mirrors scripts/verify.env;
+ * the drift test pins it against the file). */
+export const DEFAULT_PREFLIGHT_SKIP: ReadonlySet<string> = new Set([
   'cd', 'true', 'false', 'echo', 'printf', 'test', 'pwd', 'env', 'which',
   'bash', 'sh', 'command', 'export', 'set', 'time',
   'if', 'then', 'fi', 'elif', 'else', 'for', 'while', 'until', 'do', 'done', 'case', 'esac',
