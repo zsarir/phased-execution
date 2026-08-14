@@ -88,7 +88,7 @@ export function AskBox({
             ? 'An instruction the phase should act on'
             : 'A question that must not change what the phase is doing'}
           onChange={(e) => setMode(e.target.value as 'ask' | 'steer')}
-          className="h-8 shrink-0 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
+          className="h-8 [@media(hover:none)]:min-h-(--tap-min) shrink-0 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
         >
           <option value="ask">Ask</option>
           <option value="steer">Steer</option>
@@ -113,7 +113,7 @@ export function AskBox({
               void send();
             }
           }}
-          className="h-8 min-w-0 flex-1 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
+          className="h-8 [@media(hover:none)]:min-h-(--tap-min) min-w-0 flex-1 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
         />
         <Button size="sm" disabled={!enabled || sending || !text.trim()} onClick={() => void send()}>
           {sending ? 'Sending…' : steering ? 'Steer' : 'Ask'}

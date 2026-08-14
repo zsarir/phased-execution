@@ -41,8 +41,7 @@ import {
 import { SkillPicker } from '@/views/run/skill-picker';
 import { McpPicker } from '@/views/run/mcp-picker';
 import type { McpPolicy, PermissionProfile } from '@/lib/api';
-
-const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
+import { field } from '@/components/ui/field';
 
 /** What the phase itself asks for, when the plan says. Mirrors the runner's resolution. */
 export interface QaTarget {

@@ -12,6 +12,10 @@ import { cn } from '@/lib/cn';
 export function TableWrap({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
+      // Never give this wrapper a max-height: `overflow-x` makes computed
+      // `overflow-y` auto, so a height-capped wrapper becomes a second
+      // vertical scroller that captures touch flicks meant for the page.
+      // Height always fits content here, so no vertical gesture is consumed.
       className={cn('w-full max-w-full overflow-x-auto overscroll-x-contain rounded-lg border border-rule', className)}
       {...props}
     />
@@ -24,9 +28,12 @@ export function Table({ className, ...props }: HTMLAttributes<HTMLTableElement>)
 
 export function THead({ className, ...props }: HTMLAttributes<HTMLTableSectionElement>) {
   return (
+    // Not sticky: inside an overflow-x wrapper, sticky can only stick to the
+    // wrapper — which never scrolls vertically — so it was pure paint cost
+    // that also promoted a layer on every table.
     <thead
       className={cn(
-        'sticky top-0 z-(--z-base) bg-surface-raised text-left text-2xs uppercase tracking-wide text-ink-muted',
+        'bg-surface-raised text-left text-2xs uppercase tracking-wide text-ink-muted',
         className,
       )}
       {...props}

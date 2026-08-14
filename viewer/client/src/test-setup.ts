@@ -46,3 +46,45 @@ if (!('EventSource' in globalThis)) {
   }
   Object.defineProperty(globalThis, 'EventSource', { value: FakeEventSource, writable: true });
 }
+
+// Nor visualViewport. lib/viewport.ts mirrors its height into --app-height;
+// tests that exercise the mirror swap in their own mutable fake.
+if (!('visualViewport' in window) || !window.visualViewport) {
+  Object.defineProperty(window, 'visualViewport', {
+    configurable: true,
+    writable: true,
+    value: {
+      height: window.innerHeight,
+      width: window.innerWidth,
+      offsetTop: 0,
+      offsetLeft: 0,
+      scale: 1,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    },
+  });
+}
+
+// Nor Element.scrollTo — the shell's one scroller resets on navigation, and a
+// test asserts the reset RAN. The recorder keeps the calls inspectable.
+if (!Element.prototype.scrollTo) {
+  Object.defineProperty(Element.prototype, 'scrollTo', {
+    configurable: true,
+    writable: true,
+    value: function scrollTo(this: Element & { __scrollToCalls?: unknown[] }, ...args: unknown[]) {
+      (this.__scrollToCalls ??= []).push(args);
+    },
+  });
+}
+
+// Nor ResizeObserver, which Radix measures open tooltip content with — the
+// hover path never opens in jsdom, so this only surfaced when InfoTip's tap
+// path actually rendered a Content.
+if (!('ResizeObserver' in globalThis)) {
+  class FakeResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  Object.defineProperty(globalThis, 'ResizeObserver', { value: FakeResizeObserver, writable: true });
+}

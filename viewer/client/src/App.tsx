@@ -9,6 +9,7 @@ import {
   shellCounts, useApprovals, useConsoleState, useLiveData, useMcp, usePlans, useSessions,
 } from '@/lib/queries';
 import { Banner, Spinner, Toaster, TooltipProvider, toast } from '@/components/ui';
+import { installAppHeight, useKeyboardOpen } from '@/lib/viewport';
 import { CHROMELESS_HEADS, navigate, resolveView, useRoute } from '@/router';
 import { Disconnected } from '@/shell/disconnected';
 import { Rail } from '@/shell/rail';
@@ -33,10 +34,20 @@ function useRecoveryOutcomeToasts(): void {
       recovery?: { fixed?: boolean; headline?: string; detail?: string; synced?: boolean };
     };
     if (record.type !== 'recovery-outcome' || !record.recovery) return;
-    const { fixed, headline, detail, synced } = record.recovery;
+    const { fixed, noDefect, headline, detail, synced } = record.recovery as {
+      fixed?: boolean; noDefect?: boolean; headline?: string; detail?: string; synced?: boolean;
+    };
     if (fixed) {
       toast(
         `${headline ?? 'Recovery finished'}${synced ? ' — the run record moved with it' : ''}`,
+        'ok',
+      );
+    } else if (noDefect) {
+      // The recovery LOOKED and found nothing wrong — a verdict, not a
+      // failure. This used to toast as a warning ("ended without moving the
+      // board"), the exact inversion of what happened.
+      toast(
+        `${headline ?? 'Recovery verified'} — nothing was wrong; the halt is stood down and the board is unchanged.`,
         'ok',
       );
     } else {
@@ -55,10 +66,21 @@ export function App() {
   const sse = useSseStatus();
   const online = useOnline();
   const stopped = useConsoleStopped();
+  const keyboardOpen = useKeyboardOpen();
   const [moreOpen, setMoreOpen] = useState(false);
+  const main = useRef<HTMLElement>(null);
 
   // Every server event, wired to what it makes stale. Mounted once, here.
   useLiveData();
+  // `--app-height` follows the visual viewport (the keyboard, mostly) — the
+  // shell's height token. Once, for the app's life.
+  useEffect(() => installAppHeight(), []);
+  // The one scroller is a PERSISTENT node — React swaps its children, so its
+  // scrollTop survived every route change: scroll a 65-plan list, tap Ready,
+  // land mid-page. Reset on the PATH (never the query — typing in `#/search?q=`
+  // must not jump); the guide's `?card=` anchor runs after Suspense resolves,
+  // i.e. after this.
+  useEffect(() => { main.current?.scrollTo(0, 0); }, [route.path]);
   // Registers the worker and offers an update when one is waiting. Also once.
   useServiceWorker();
   // The recovery verdict, said where the person is looking. The notification
@@ -170,7 +192,9 @@ export function App() {
         // `.is-phone` is the shell contract: the class the layout, the tests and
         // the browser checks all agree means "top bar + tab bar, no rail".
         className={cn(
-          'grid h-dvh overflow-hidden bg-ground',
+          // h-(--app-height), not h-dvh: dvh ignores the software keyboard on
+          // iOS. The token falls back to 100dvh where visualViewport is absent.
+          'grid h-(--app-height) overflow-hidden bg-ground',
           phone
             // rows: top bar · the only scrolling region · tab bar
             ? 'is-phone grid-rows-[auto_minmax(0,1fr)_auto]'
@@ -187,7 +211,7 @@ export function App() {
             *chaining* to the document but leaves the rubber band, so a flick
             past the last card still bounces a strip of empty ground into view
             above the tab bar. */}
-        <main className="min-w-0 overflow-y-auto overscroll-none">
+        <main ref={main} className="min-w-0 overflow-y-auto overscroll-none">
           {(state.serverStale || stopped || !online || sse !== 'live') && (
             <div className="flex flex-col gap-2 px-3 pt-3 md:px-5">
               {state.serverStale && (
@@ -239,7 +263,10 @@ export function App() {
           </Suspense>
         </main>
 
-        {phone && (
+        {/* Hidden while a text field has focus on touch: typing is never a
+            navigation moment, and those 60px keep the terminal's prompt and
+            KeyBar visible above the software keyboard. */}
+        {phone && !keyboardOpen && (
           <TabBar
             counts={counts}
             head={head}

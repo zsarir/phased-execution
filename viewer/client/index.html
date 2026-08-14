@@ -4,7 +4,11 @@
     <meta charset="utf-8" />
     <!-- viewport-fit=cover pairs with the safe-area padding in theme.css: installed
          on a phone the app draws under the status bar, and the insets put it back. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- interactive-widget makes Android Chrome resize the LAYOUT viewport for
+         the software keyboard (its default resizes only the visual one, which
+         h-dvh never sees); iOS ignores the key and is covered by the
+         visualViewport → --app-height mirror in lib/viewport.ts. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="color-scheme" content="dark light" />
     <title>Phase Console</title>
 

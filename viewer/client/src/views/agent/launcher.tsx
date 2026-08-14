@@ -13,6 +13,7 @@ import { Play } from 'lucide-react';
 import { useAccounts, useSkills } from '@/lib/queries';
 import { Button } from '@/components/ui';
 import { SkillPicker } from '../run/skill-picker';
+import { field } from '@/components/ui/field';
 import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS } from '../run/defaults';
 // The wizard offers the same list and the tab chip reads it back, so it lives
 // in its own module — see the note there.
@@ -28,8 +29,6 @@ export interface LaunchBody {
   /** Which registered account the session spends. Absent = the machine login. */
   accountId?: string;
 }
-
-const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
 
 export function Launcher({ root, disabled, skillsEnabled, onLaunch }: {
   /** Where the session will run — the open source directory, when there is one. */

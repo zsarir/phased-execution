@@ -166,7 +166,7 @@ export function SkillPicker({
             value={query}
             disabled={disabled}
             onChange={(e) => setQuery(e.target.value)}
-            className="h-8 w-full rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
+            className="h-8 [@media(hover:none)]:min-h-(--tap-min) w-full rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
           />
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by source">
             <FilterChip pressed={source === ''} disabled={disabled} onClick={() => setSource('')}>
@@ -185,7 +185,7 @@ export function SkillPicker({
           </div>
         </div>
 
-        <div className="mt-2 max-h-72 overflow-y-auto overscroll-contain">
+        <div className="mt-2 max-h-72 overflow-y-auto">
           {groups.length ? (
             groups.map(([group, list]) => (
               <div key={group}>

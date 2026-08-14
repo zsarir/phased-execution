@@ -14,7 +14,8 @@ export {
 } from './dialog';
 export { AlertDialog, AlertDialogTrigger, AlertDialogContent } from './alert-dialog';
 export { Tabs, TabsList, TabsTrigger, TabsContent } from './tabs';
-export { Tooltip, TooltipProvider } from './tooltip';
+export { InfoTip, Tooltip, TooltipProvider } from './tooltip';
+export { field } from './field';
 export { Toaster, toast, copy, dismissToast, useToasts, type ToastKind, type ToastRecord } from './toast';
 export { Skeleton, Empty, Spinner } from './feedback';
 export { Progress } from './progress';

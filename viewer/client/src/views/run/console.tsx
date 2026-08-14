@@ -284,7 +284,7 @@ export function LiveConsole({
         role="log"
         aria-live="polite"
         aria-label={title}
-        className="live-body h-[min(380px,50dvh)] overflow-y-auto overscroll-contain px-3 py-2 font-mono text-2xs leading-relaxed"
+        className="live-body h-[min(380px,50dvh)] overflow-y-auto px-3 py-2 font-mono text-2xs leading-relaxed"
         onScroll={(event) => {
           const el = event.currentTarget;
           setFollow(el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK);

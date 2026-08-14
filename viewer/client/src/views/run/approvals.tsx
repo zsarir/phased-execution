@@ -185,7 +185,7 @@ function ApprovalCard({
               </label>
               <input
                 id={`rule-${approval.id}`}
-                className="h-8 w-full rounded border border-rule bg-surface px-2 font-mono text-2xs"
+                className="h-8 [@media(hover:none)]:min-h-(--tap-min) w-full rounded border border-rule bg-surface px-2 font-mono text-2xs"
                 value={rule}
                 spellCheck={false}
                 onChange={(e) => setRule(e.target.value)}

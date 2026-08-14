@@ -136,6 +136,10 @@
      zooms the whole viewport to meet it and leaves it there. */
   --tap-min: 44px;
   --text-input: 16px;
+  /* The shell's height. lib/viewport.ts overwrites it with the visual
+     viewport's real height while the software keyboard is up (iOS never
+     shrinks dvh for it); this is the no-visualViewport fallback. */
+  --app-height: 100dvh;
 
   /* ---- Breakpoints, as documentation ----
      A custom property cannot be interpolated into a media query, so these
@@ -370,4 +374,18 @@
 .px-safe {
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* ------------------------------------------------------------------ *
+ * The input floor, where it can actually win.
+ *
+ * The @layer base rule above states the same floor — and LOSES to any
+ * text-sm/text-xs utility, because Tailwind's utilities layer outranks base
+ * (verified in the shipped bundle; the ask-box's 12px input zoomed iOS and
+ * left it zoomed). This unlayered twin beats every layered rule. Scoped to
+ * coarse pointers so desktop density is untouched: the zoom-on-focus defect
+ * only exists where a finger does.
+ * ------------------------------------------------------------------ */
+@media (pointer: coarse) {
+  input, textarea, select { font-size: max(var(--text-input), 1em); }
 }

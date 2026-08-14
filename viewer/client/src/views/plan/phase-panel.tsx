@@ -381,7 +381,7 @@ function GateCard({ slug, view, gate, allowWrites }: {
                   placeholder="note — what was done or verified"
                   spellCheck={false}
                   onChange={(event) => setNote(event.target.value)}
-                  className="min-w-0 flex-1 basis-48 rounded border border-rule bg-ground px-2 py-1 font-mono text-2xs text-ink placeholder:text-ink-faint"
+                  className="[@media(hover:none)]:min-h-(--tap-min) min-w-0 flex-1 basis-48 rounded border border-rule bg-ground px-2 py-1 font-mono text-2xs text-ink placeholder:text-ink-faint"
                 />
                 <Button
                   size="sm"

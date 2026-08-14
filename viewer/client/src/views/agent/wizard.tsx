@@ -26,8 +26,7 @@ import {
 } from '@/components/ui';
 import { SkillPicker } from '../run/skill-picker';
 import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS } from '../run/defaults';
-
-const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
+import { field } from '@/components/ui/field';
 
 /**
  * Gated on the AGENT capability, deliberately not on `allowWrites`: the

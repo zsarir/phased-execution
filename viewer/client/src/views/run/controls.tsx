@@ -42,6 +42,7 @@ import { PhaseMatrix } from './phase-matrix';
 import { McpPicker } from './mcp-picker';
 import { SkillPicker } from './skill-picker';
 import type { Autonomy, PermissionProfile } from '@/lib/api';
+import { field } from '@/components/ui/field';
 
 /** What each profile costs, read while choosing it. */
 function ProfileNote({ profile }: { profile: PermissionProfile }) {
@@ -240,8 +241,6 @@ export function Controls({
     || JSON.stringify(runMcp) !== JSON.stringify(run?.mcpServers ?? [])
     || mcpPolicy !== (run?.mcpPolicy ?? 'continue')
   );
-
-  const field = 'h-9 rounded border border-rule bg-ground px-2 text-sm disabled:opacity-50';
 
   return (
     <Card>
@@ -595,7 +594,7 @@ export function SwitchAccountRow({ slug, run, disabled }: {
         Account: <span className="normal-case text-ink-muted">{currentLabel}</span>
       </span>
       <select
-        className="h-8 max-w-72 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
+        className="h-8 [@media(hover:none)]:min-h-(--tap-min) max-w-72 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
         value={value}
         disabled={disabled || busy}
         onChange={(event) => setChoice(event.target.value)}
