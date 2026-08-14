@@ -672,3 +672,43 @@ test('a toggle survives a restart, with no push device in the picture', async ()
   assert.equal(reloaded.notify.changed, true, 'preferences live in config.json, not in a device record');
   assert.equal(reloaded.notify.approval, false);
 });
+
+/* ------------------------------------------------------------------ *
+ * resolveWhere — a subject that dissolved stands its records down
+ * ------------------------------------------------------------------ */
+
+test('resolveWhere annotates the scoped records, marks them read, and survives a reload', async () => {
+  const { Notifications } = await import('../server/notifications.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-notif-resolve-'));
+  const store = new Notifications(dir);
+  const halted = store.record({
+    category: 'halted', title: 'demo halted', body: 'phase 2 did not verify',
+    runId: 'run-1', slug: 'demo',
+  });
+  store.record({
+    category: 'halted', title: 'other halted', body: 'x', runId: 'run-2', slug: 'other',
+  });
+  store.record({
+    category: 'finished', title: 'demo finished', body: 'y', runId: 'run-1', slug: 'demo',
+  });
+
+  const changed = store.resolveWhere({ runId: 'run-1', category: 'halted' }, 'the board moved past the halt');
+  assert.equal(changed.length, 1);
+  assert.equal(changed[0].id, halted.id);
+  assert.equal(changed[0].read, true);
+  assert.match(changed[0].resolved!.reason, /moved past/);
+
+  // Scoped: the other run's card and the finished card are untouched.
+  assert.equal(store.list({}).items.filter((row) => row.resolved).length, 1);
+  // Idempotent: an already-resolved record is not changed twice.
+  assert.equal(store.resolveWhere({ runId: 'run-1', category: 'halted' }, 'again').length, 0);
+  // An empty scope matches nothing — same discipline as markReadWhere.
+  assert.equal(store.resolveWhere({}, 'nothing').length, 0);
+
+  // The annotation is JSONL-durable (flush past the debounce first).
+  store.flush();
+  const reloaded = new Notifications(dir);
+  assert.equal(
+    reloaded.list({}).items.find((row) => row.id === halted.id)?.resolved?.reason,
+    'the board moved past the halt');
+});

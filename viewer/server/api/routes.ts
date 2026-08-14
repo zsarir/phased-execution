@@ -1093,6 +1093,15 @@ export async function handleApi(
       }
       if (sub === 'qa-prompt' && arg) { text(res, 200, await service.qaPrompt(slug, Number(arg))); return true; }
       if (sub === 'memory-block') { text(res, 200, await service.memoryBlock(slug)); return true; }
+      // Read-only: what boarding will find before any money is spent —
+      // missing leads, cwd-unpinned commands, human-only fragments, phases
+      // that would park. The plan page badges from this.
+      if (sub === 'verify-preflight') {
+        const report = await service.verifyPreflightReport(slug);
+        if (!report) { json(res, 404, { error: `No phased plan named ${slug}` }); return true; }
+        json(res, 200, report);
+        return true;
+      }
       if (sub === 'board') { text(res, 200, await service.boardText(slug)); return true; }
       if (sub === 'gate' && arg) {
         if (req.method === 'POST') {

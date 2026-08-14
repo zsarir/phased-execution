@@ -99,6 +99,14 @@ export type NotificationRecord = {
   urgent: boolean;
   read: boolean;
   delivery: DeliveryRecord[];
+  /**
+   * Set when the thing this notification demanded resolved ITSELF — the board
+   * reconciled past the halt, a continue overtook it. An urgent card that
+   * stays urgent after its subject dissolved trains the operator to ignore
+   * urgent; 5 of 9 real halted announcements were superseded within 60
+   * seconds. Additive JSONL like the context fields.
+   */
+  resolved?: { at: string; reason: string };
 };
 
 export type NotificationInput = {
@@ -270,6 +278,35 @@ export class Notifications {
       changed++;
     }
     if (changed) this.touch();
+    return changed;
+  }
+
+  /**
+   * Mark every unresolved match RESOLVED (and read): its subject dissolved on
+   * its own. Same matching discipline as `markReadWhere` — an empty scope
+   * matches nothing, absent context fields never match. Returns the records
+   * it changed so the caller can decide about a corrective push.
+   */
+  resolveWhere(scope: {
+    slug?: string; category?: string; runId?: string; phase?: number;
+  }, reason: string): NotificationRecord[] {
+    const tests: ((item: NotificationRecord) => boolean)[] = [];
+    if (scope.slug) tests.push((item) => item.slug === scope.slug);
+    if (scope.category) tests.push((item) => item.category === scope.category);
+    if (scope.runId) tests.push((item) => item.runId === scope.runId);
+    if (typeof scope.phase === 'number') tests.push((item) => item.phase === scope.phase);
+    if (!tests.length) return [];
+
+    const changed: NotificationRecord[] = [];
+    const at = new Date().toISOString();
+    for (const item of this.items) {
+      if (item.resolved) continue;
+      if (!tests.every((matches) => matches(item))) continue;
+      item.resolved = { at, reason };
+      item.read = true;
+      changed.push(item);
+    }
+    if (changed.length) this.touch();
     return changed;
   }
 

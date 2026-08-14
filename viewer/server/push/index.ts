@@ -65,6 +65,9 @@ export type Device = {
   createdAt: string;
   lastOkAt: string | null;
   failures: number;
+  /** The most recent rejection, classified — what Settings shows beside a
+   * device whose pushes stopped landing. Additive JSON. */
+  lastReject?: { at: string; status: number; reason: string | null };
 };
 
 export type PublicDevice = Omit<Device, 'endpoint' | 'keys'> & { service: string };
@@ -72,6 +75,14 @@ export type PublicDevice = Omit<Device, 'endpoint' | 'keys'> & { service: string
 export class Push {
   private devices: Device[] = [];
   private vapid: Vapid;
+  /** Consecutive classified rejections per `service|reason`, reset by any success. */
+  private readonly rejectStreaks = new Map<string, number>();
+  /** Fired when a service|reason streak crosses 3 (and again at 10). The
+   * service wires this to its environment issues — assigned after
+   * construction, deliberately optional. */
+  onPersistentReject?: (info: {
+    service: string; reason: string; streak: number; devices: string[];
+  }) => void;
   /** Same notification, same device, twice in a row: send it once. */
   private recent = new Map<string, number>();
 
@@ -170,11 +181,17 @@ export class Push {
     message: Omit<PushMessage, 'category'>,
     now = Date.now(),
     onDelivery?: (report: DeliveryReport) => void,
+    opts?: {
+      /** Overrides the category's urgency — the retraction push rides the
+       * halted category (same tag, so the SW replaces the displayed card)
+       * but must arrive QUIET: it is the all-clear, not a second alarm. */
+      urgent?: boolean;
+    },
   ): void {
     const targets = this.devices.filter((d) => d.categories[category]);
     if (!targets.length) return;
 
-    const urgent = categoryOf(category).urgent;
+    const urgent = opts?.urgent ?? categoryOf(category).urgent;
     for (const device of targets) {
       // The same tag to the same device inside a few seconds is a re-render, not
       // a second event. The push service would collapse it by topic anyway; not
@@ -219,10 +236,17 @@ export class Push {
 
   private async sendOne(device: Device, message: PushMessage, urgent: boolean) {
     const result = await deliver(this.vapid, device, message, { urgent });
+    const service = origin(device.endpoint);
     switch (result.kind) {
       case 'sent':
         device.lastOkAt = new Date().toISOString();
         device.failures = 0;
+        delete device.lastReject;
+        // A success ends every rejection streak for this service — the outage
+        // (if there was one) is over.
+        for (const key of this.rejectStreaks.keys()) {
+          if (key.startsWith(`${service}|`)) this.rejectStreaks.delete(key);
+        }
         break;
       case 'gone':
         // Its normal end of life: the app was deleted, or permission revoked.
@@ -232,13 +256,33 @@ export class Push {
       case 'throttled':
         log.warn('push.throttled', { id: device.id, retryAfter: result.retryAfter });
         break;
-      default:
+      default: {
         device.failures++;
+        device.lastReject = {
+          at: new Date().toISOString(), status: result.status, reason: result.reason ?? null,
+        };
+        // Classified streak per service|cause: 29 real sends died on
+        // BadJwtToken/BadWebPushTopic with no surface but log lines — the
+        // console's own alarm channel was broken and nothing said so. Fired at
+        // 3 (and again at 10), never per send.
+        const cause = result.reason ?? String(result.status || 'unreachable');
+        const key = `${service}|${cause}`;
+        const streak = (this.rejectStreaks.get(key) ?? 0) + 1;
+        this.rejectStreaks.set(key, streak);
+        if ((streak === 3 || streak === 10) && this.onPersistentReject) {
+          try {
+            this.onPersistentReject({
+              service, reason: cause, streak,
+              devices: this.devices.filter((d) => origin(d.endpoint) === service).map((d) => d.label),
+            });
+          } catch { /* a health report must never affect delivery */ }
+        }
         if (device.failures >= MAX_FAILURES) {
           log.warn('push.dropped', { id: device.id, label: device.label, failures: device.failures });
           this.unsubscribe(device.id);
           return result;
         }
+      }
     }
     this.persist();
     return result;

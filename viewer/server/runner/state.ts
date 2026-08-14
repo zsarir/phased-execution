@@ -129,6 +129,21 @@ export type VerifyRun = {
  */
 export type VerifySkip = { command: string; lead: string; reason: string };
 
+/**
+ * One boarding-preflight finding about a phase's §Verification, structured.
+ * `human-check`: a fragment only a person can confirm; `missing-lead`: a
+ * command whose binary this machine lacks (it will be SKIPPED at verify
+ * time); `cwd-unpinned`: cwd-sensitive commands with no **Verify in:**;
+ * `nothing-runnable`: the whole bullet yields no executable command (the
+ * phase will park at boarding).
+ */
+export type PreflightWarning = {
+  kind: 'human-check' | 'missing-lead' | 'cwd-unpinned' | 'nothing-runnable';
+  message: string;
+  lead?: string;
+  command?: string;
+};
+
 export type VerifySummary = {
   ok: boolean;
   reason: string;
@@ -222,6 +237,13 @@ export type PhaseRecord = {
    * when clean, cleared on retry.
    */
   preflight?: string[];
+  /**
+   * The same findings, structured for the UI — `preflight`'s string shape is
+   * frozen for old readers; this is what a page filters and badges by. The 44
+   * journal-only warnings that predicted the dominant halt class had no
+   * surface at all before this field existed.
+   */
+  preflightDetail?: PreflightWarning[];
   /**
    * MCP servers this phase asked for and boarded WITHOUT, under `continue`.
    *

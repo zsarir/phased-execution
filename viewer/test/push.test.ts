@@ -396,3 +396,25 @@ test('the state a client is given carries the key and the catalogue', () => {
   assert.equal(Buffer.from(state.publicKey, 'base64url').length, 65);
   assert.equal(state.categories.length, catalogue.CATEGORIES.length);
 });
+
+test('a rejection body naming its reason is classified, for the health streak', async () => {
+  // Apple's real shape for the measured outage: 403 with {"reason":"BadJwtToken"}.
+  // 29 sends died on it with nothing but log lines; the classification is what
+  // lets a streak become an environment issue instead of silence.
+  const browser = makeBrowser();
+  const vapid = vapidMod.loadVapid('mailto:you@example.com');
+  const impl = (async () => new Response('{"reason":"BadJwtToken"}', { status: 403 })) as unknown as typeof fetch;
+  const result = await send.deliver(vapid, browser.subscription, {
+    title: 't', body: 'b', tag: 'a', url: '/', category: 'halted',
+  }, { fetchImpl: impl });
+  assert.equal(result.kind, 'failed');
+  assert.equal((result as { reason?: string }).reason, 'BadJwtToken');
+
+  // A body with no reason stays classifiable by status alone.
+  const bare = (async () => new Response('nope', { status: 500 })) as unknown as typeof fetch;
+  const plain = await send.deliver(vapid, browser.subscription, {
+    title: 't', body: 'b', tag: 'a', url: '/', category: 'halted',
+  }, { fetchImpl: bare });
+  assert.equal(plain.kind, 'failed');
+  assert.equal((plain as { reason?: string }).reason, undefined);
+});

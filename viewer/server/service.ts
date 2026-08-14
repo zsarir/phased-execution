@@ -63,11 +63,12 @@ import {
   autoResolveRun, childrenOf, latestRun, listRuns, loadRun, phaseRecord, pidAlive,
   reconcileRecordsAgainstBoard, resolveRunsAgainst, saveRun,
   slugsNeedingBoard, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, isMcpPolicy, mcpReasonText,
-  type McpPolicy, type RunState, type VerifySummary,
+  type McpPolicy, type PreflightWarning, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import { outcomeFileFor, readOutcome } from './runner/outcome.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
-import { extractCommands, verifyPhase } from './runner/verify.ts';
+import { extractCommands, resolveLead, unresolvableLeads, verifyPhase } from './runner/verify.ts';
+import { loadVerifyEnv } from './runner/verify-env.ts';
 import { checkAuth, checkAuthFor, forgetAuth, openLoginTerminal, openCommandTerminal, shellQuote, type AuthStatus } from './runner/auth.ts';
 import { Accounts, DEFAULT_ACCOUNT_ID, profileConfigDir, type AccountView } from './accounts/index.ts';
 import { Mcp, type McpServerView } from './mcp/index.ts';
@@ -567,8 +568,10 @@ export function autoRecoveryClass(
 export class Service {
   readonly flags: Flags;
   prefs: Prefs;
-  /** The environment doctor's findings; G10 appends push-broken at runtime. */
+  /** The environment doctor's findings; push health appends at runtime. */
   readonly environment: { issues: EnvIssue[] };
+  /** Push-health announcements already made this process, per service|reason. */
+  private readonly pushHealthAnnounced = new Set<string>();
   root: RootCheck | null = null;
   store: Store | null = null;
   readonly search = new SearchIndex();
@@ -666,6 +669,31 @@ export class Service {
       onSession: (event) => this.onSessionEvent(event),
     });
     this.push = new Push(flags.remoteUsers);
+    // The console's own alarm channel must not fail silently: 29 real sends
+    // died on BadJwtToken/BadWebPushTopic with nothing but log lines. A
+    // classified streak lands on the environment card and the out-of-band leg
+    // — never on push itself (the channel under suspicion cannot carry its
+    // own obituary). Once per service|reason per process.
+    this.push.onPersistentReject = ({ service: pushService, reason, streak, devices }) => {
+      const key = `${pushService}|${reason}`;
+      if (this.pushHealthAnnounced.has(key)) return;
+      this.pushHealthAnnounced.add(key);
+      const fix = reason === 'BadJwtToken'
+        ? 'Usual causes: the machine clock is skewed, or the device subscribed under a different '
+          + 'VAPID key. Fix the clock, or remove and re-subscribe the device in Settings → Notifications.'
+        : reason === 'BadWebPushTopic'
+          ? 'Subscriptions predating the hashed-topic fix keep failing — remove and re-subscribe the device.'
+          : 'Remove and re-subscribe the device in Settings → Notifications, and check the network.';
+      this.environment.issues.push({
+        kind: 'push-broken',
+        detail: `${pushService} is rejecting this console's pushes (${reason}, ${streak} in a row, `
+          + `${devices.length} device${devices.length === 1 ? '' : 's'})`,
+        fix,
+      });
+      log.warn('push.health', { service: pushService, reason, streak, devices });
+      notifyOutOfBand('Phase Console: push delivery is broken',
+        `${pushService} rejects with ${reason} — see Settings → Notifications`);
+    };
     this.notifications = new Notifications();
     // The environment doctor: computed once (this process's env cannot
     // change), carried on state(), and — for the one finding that means the
@@ -1941,6 +1969,14 @@ export class Service {
 
     const state = (data as { state?: RunState } | undefined)?.state;
     if (!state) return;
+    // A halt that DISSOLVED retracts its urgent card. Reconcile closing the
+    // records, a continue, a recovery — whatever moved the run past the halt
+    // makes the earlier "halted" notification stale, and 5 of 9 real urgent
+    // halts were superseded within 60 seconds. Before the dedupe check on
+    // purpose: the retraction must fire exactly when the status changes.
+    if (!state.halt && this.notifiedRun.get(state.id) === 'halted') {
+      this.retractHalt(state, 'the board moved past the halt', { push: false });
+    }
     // A halt is also the auto-recovery trigger — scheduled and debounced here,
     // decided entirely by `maybeAutoRecover` when the timer fires: the run may
     // have been continued, fixed by hand, or opted out by then. The
@@ -1999,6 +2035,34 @@ export class Service {
       default:
         break;
     }
+  }
+
+  /**
+   * Stand a stale "halted" notification down: its subject dissolved.
+   *
+   * The inbox half annotates (`resolved` + read) — never deletes. The push
+   * half sends ONE quiet corrective riding the SAME tag, so the service
+   * worker replaces the displayed alarm and an undelivered pending push is
+   * superseded by web-push topic — and only when a changed record is younger
+   * than 30 minutes (older history must not buzz anew). No new inbox record:
+   * a correction annotates, it does not add. `notifiedRun` is cleared so the
+   * next REAL halt announces fresh.
+   */
+  private retractHalt(state: RunState, reason: string, opts: { push: boolean }): void {
+    const changed = this.notifications.resolveWhere({ runId: state.id, category: 'halted' }, reason);
+    this.notifiedRun.delete(state.id);
+    if (!changed.length) return;
+    for (const record of changed) this.emit('notification', record);
+    const young = changed.some((record) => Date.now() - Date.parse(record.at) < 30 * 60_000);
+    if (opts.push && young) {
+      this.push.announce('halted', {
+        title: `${state.slug}: resolved on its own`,
+        body: reason,
+        tag: tagFor('run', state.id, 'halted'),
+        url: routeFor('halted', { slug: state.slug, runId: state.id }),
+      }, Date.now(), undefined, { urgent: false });
+    }
+    log.info('run.halt-retracted', { slug: state.slug, runId: state.id, reason, records: changed.length });
   }
 
   /**
@@ -2945,6 +3009,69 @@ export class Service {
         : `phase ${row.phase} has no §Verification — it will park at boarding`);
     }
     return out;
+  }
+
+  /**
+   * The boarding preflight's findings for every open phase, STRUCTURED — the
+   * same predicates boarding uses (one extractor, one lead resolver, one
+   * verify.env), computed on demand so a plan page can badge "N commands
+   * cannot run here" BEFORE any money is spent. The journal-only string twin
+   * of this data predicted the dominant halt class 44 times and was rendered
+   * by nothing.
+   */
+  async verifyPreflightReport(slug: string): Promise<
+    { phases: { phase: number; warnings: PreflightWarning[] }[]; computedAt: string } | null
+  > {
+    const record = this.store?.get(slug);
+    if (!record?.plan?.phased) return null;
+    const board = await this.board(slug).catch(() => null);
+    const done = new Set(board?.done ?? []);
+    const verifyEnv = loadVerifyEnv(this.flags.scriptsDir);
+    const phases: { phase: number; warnings: PreflightWarning[] }[] = [];
+    for (const row of record.plan.graph) {
+      if (done.has(row.phase)) continue;
+      const detail = record.plan.phases[row.phase];
+      const { commands, notRun } = extractCommands(detail?.verification);
+      const warnings: PreflightWarning[] = [];
+      if (!commands.length) {
+        const declared = /\*\*\s*Verification\b/i.test(detail?.raw ?? '');
+        warnings.push({
+          kind: 'nothing-runnable',
+          message: declared
+            ? 'its §Verification yields nothing the runner can execute — it will park at boarding'
+            : 'it has no §Verification — it will park at boarding',
+        });
+      } else {
+        for (const held of notRun) {
+          warnings.push({
+            kind: 'human-check', command: held.text,
+            message: `a person will be asked: ${held.text} — ${held.reason}`,
+          });
+        }
+        for (const lead of unresolvableLeads(commands, process.env.PATH, verifyEnv.preflightSkip).keys()) {
+          warnings.push({
+            kind: 'missing-lead', lead,
+            message: `\`${lead}\` is not installed here — its command will be SKIPPED at verification`,
+          });
+        }
+        if (!/\*\*\s*Verify in:?\*\*/i.test(detail?.raw ?? '')) {
+          const sensitive = commands.filter((command) => {
+            if (/^cd\s/.test(command.trim())) return false;
+            const lead = resolveLead(command);
+            return lead ? verifyEnv.cwdSensitive.has(lead) : false;
+          });
+          if (sensitive.length) {
+            warnings.push({
+              kind: 'cwd-unpinned',
+              message: `${sensitive.length} command(s) are cwd-sensitive and the phase declares no `
+                + '**Verify in:** — they run at the repository root',
+            });
+          }
+        }
+      }
+      if (warnings.length) phases.push({ phase: row.phase, warnings });
+    }
+    return { phases, computedAt: new Date().toISOString() };
   }
 
   /**
@@ -3981,6 +4108,9 @@ export class Service {
         if (!state.resolved) autoResolveRun(state, board);
         try { saveRun(state); } catch { /* as above */ }
         this.emit('run:state', { state });
+        // The urgent card this halt raised is now about nothing — stand it
+        // down, with the quiet corrective push (same tag replaces the alarm).
+        this.retractHalt(state, `the board already shows phase ${phase} done — records reconciled`, { push: true });
         return 'superseded';
       }
     }

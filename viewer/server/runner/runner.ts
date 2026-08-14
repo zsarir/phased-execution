@@ -42,7 +42,7 @@ import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
   PHASE_IN_FLIGHT, reconcileRecordsAgainstBoard, mcpReasonText,
   type Autonomy, type ChildRef, type HaltKind, type McpDegradation, type McpPolicy,
-  type OnLimitPolicy, type PhaseOptions, type PhaseRecord,
+  type OnLimitPolicy, type PhaseOptions, type PhaseRecord, type PreflightWarning,
   type RunState, type PhaseStatus, type RunStatus, type VerifySummary,
 } from './state.ts';
 import { consumeOutcome, outcomeFileFor, readOutcome, type PhaseOutcome } from './outcome.ts';
@@ -3960,7 +3960,11 @@ export class Runner {
     }
 
     const warnings: string[] = [];
-    for (const held of notRun) warnings.push(`a person will be asked: ${held.text} — ${held.reason}`);
+    const detail: PreflightWarning[] = [];
+    for (const held of notRun) {
+      warnings.push(`a person will be asked: ${held.text} — ${held.reason}`);
+      detail.push({ kind: 'human-check', command: held.text, message: `a person will be asked: ${held.text} — ${held.reason}` });
+    }
 
     const declared = (await this.deps.verifyIn?.(state.slug, phase))?.trim();
     if (!declared) {
@@ -3970,8 +3974,10 @@ export class Runner {
         return lead ? this.verifyEnv().cwdSensitive.has(lead) : false;
       });
       if (sensitive.length) {
-        warnings.push(`${sensitive.length} command(s) are cwd-sensitive and the plan declares no `
-          + '**Verify in:** — they will run at the repository root');
+        const message = `${sensitive.length} command(s) are cwd-sensitive and the plan declares no `
+          + '**Verify in:** — they will run at the repository root';
+        warnings.push(message);
+        detail.push({ kind: 'cwd-unpinned', message });
       }
     }
 
@@ -3981,8 +3987,10 @@ export class Runner {
       // skip and record, never run to a 127 halt. `python` gets its errand.
       const hint = lead === 'python' && !missing.has('python3')
         ? ' — this machine has python3; write python3' : '';
-      warnings.push(`\`${lead}\` is not on the verification PATH — its command will be `
-        + `SKIPPED at verification (recorded, not failed)${hint}`);
+      const message = `\`${lead}\` is not on the verification PATH — its command will be `
+        + `SKIPPED at verification (recorded, not failed)${hint}`;
+      warnings.push(message);
+      detail.push({ kind: 'missing-lead', lead, message });
     }
     if (missing.size) {
       // When EVERY command's lead is missing, boarding would buy a session
@@ -4005,10 +4013,12 @@ export class Runner {
     const record = phaseRecord(state, phase);
     if (warnings.length) {
       record.preflight = warnings;
-      this.record('phase.verify-preflight', { warnings }, phase);
-      this.emit('phase', { phase, preflight: warnings });
+      record.preflightDetail = detail;
+      this.record('phase.verify-preflight', { warnings, detail }, phase);
+      this.emit('phase', { phase, preflight: warnings, preflightDetail: detail });
     } else {
       delete record.preflight;
+      delete record.preflightDetail;
     }
     return null;
   }

@@ -39,8 +39,10 @@ export type Delivery =
   | { kind: 'gone'; status: number }
   /** Too many, too fast. Keep the subscription; try again later. */
   | { kind: 'throttled'; status: number; retryAfter: number | null }
-  /** Anything else: a bad payload, a service having a bad day, a dead network. */
-  | { kind: 'failed'; status: number; detail: string };
+  /** Anything else: a bad payload, a service having a bad day, a dead network.
+   * `reason` is the service's own name for the cause when the body carried one
+   * (`BadJwtToken`, `BadWebPushTopic`) — what the health streak classifies by. */
+  | { kind: 'failed'; status: number; detail: string; reason?: string };
 
 export type PushMessage = {
   title: string;
@@ -172,8 +174,15 @@ export async function deliver(
 
   let detail = '';
   try { detail = (await response.text()).slice(0, 200); } catch { /* a body is a courtesy */ }
-  log.warn('push.rejected', { status: response.status, detail, endpoint: origin(subscription.endpoint) });
-  return { kind: 'failed', status: response.status, detail };
+  // Apple/FCM name the cause in the body (`BadJwtToken`, `BadWebPushTopic`) —
+  // parsed here so a rejection STREAK can be classified upstream instead of
+  // 29 silent sends (the measured outage) leaving only log lines behind.
+  const reason = /"reason"\s*:\s*"([A-Za-z]+)"/.exec(detail)?.[1] ?? null;
+  log.warn('push.rejected', {
+    status: response.status, detail, ...(reason ? { reason } : {}),
+    endpoint: origin(subscription.endpoint),
+  });
+  return { kind: 'failed', status: response.status, detail, ...(reason ? { reason } : {}) };
 }
 
 /** Endpoints carry a device-identifying token; the origin is the useful half for a log. */
