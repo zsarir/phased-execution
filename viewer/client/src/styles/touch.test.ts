@@ -87,4 +87,13 @@ describe('per-page mobile fixes stay fixed', () => {
     const css = readFileSync(join(SRC, 'views', 'terminal', 'terminal.css'), 'utf8');
     expect(css).toMatch(/\.xterm-viewport\s*\{\s*overscroll-behavior:\s*contain/);
   });
+
+  it('the tab strip never calls scrollIntoView — it scrolls every ancestor, and live SSE renders made the run page crawl', () => {
+    const tabs = readFileSync(join(SRC, 'components', 'ui', 'tabs.tsx'), 'utf8');
+    // Invocations only — the file's own comment names the API to explain the ban.
+    expect(tabs).not.toMatch(/\.scrollIntoView\(/);
+    // The once-per-change guard: an every-render effect may only scroll when
+    // the ACTIVE tab actually moved.
+    expect(tabs).toMatch(/lastActive/);
+  });
 });

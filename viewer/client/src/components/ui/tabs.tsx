@@ -14,15 +14,33 @@ export const Tabs = TabsPrimitive.Root;
 
 export function TabsList({ className, ...props }: ComponentProps<typeof TabsPrimitive.List>) {
   const list = useRef<HTMLDivElement>(null);
+  const lastActive = useRef<string | null>(null);
   // The strip hides its scrollbar, so tabs 5–7 were invisible AND undiscoverable
-  // on a phone. Two affordances: the active trigger scrolls itself into view
-  // (the guide's own idiom), and a fade on the trailing edge says "there is
-  // more" — via mask-image so it works on both themes without a painted cap.
+  // on a phone. Two affordances: the active trigger scrolls itself into view,
+  // and a fade on the trailing edge says "there is more" — via mask-image so it
+  // works on both themes without a painted cap.
+  //
+  // Two hard-won rules in this effect. It runs after every render (no dep
+  // array — the active trigger is DOM state Radix owns, not a prop), so it
+  // must SCROLL only when the active tab actually changed: the run tab
+  // re-renders on every SSE event, and an unconditional scroll made the page
+  // crawl back up to the strip while you were reading below it. And it moves
+  // `scrollLeft` by hand rather than calling `scrollIntoView`, because that
+  // scrolls every ancestor too — even `block: 'nearest'` yanks the PAGE when
+  // the strip is above the viewport. The strip is the only thing this
+  // affordance is allowed to move.
   useEffect(() => {
     const node = list.current;
     if (!node) return;
     const active = node.querySelector<HTMLElement>('[data-state="active"]');
-    active?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    if (!active) return;
+    const key = active.id || active.textContent || '';
+    if (key === lastActive.current) return;
+    lastActive.current = key;
+    const left = active.offsetLeft;
+    const right = left + active.offsetWidth;
+    if (left < node.scrollLeft) node.scrollLeft = left;
+    else if (right > node.scrollLeft + node.clientWidth) node.scrollLeft = right - node.clientWidth;
   });
   return (
     <TabsPrimitive.List
