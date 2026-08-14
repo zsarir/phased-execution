@@ -355,3 +355,22 @@ describe('the halt card action — the shared model decides who leads', () => {
     expect(closeout).toBeDisabled();
   });
 });
+
+
+describe('a resolved stop', () => {
+  it('says "resolved on its own" instead of re-crying the dead halt', () => {
+    // The observed contradiction: status 'halted' as history, halt dissolved,
+    // phases done — and the banner still quoting the dead blocker.
+    const settled = run({
+      status: 'halted',
+      halt: null,
+      finishedReason: 'halted on phase 7; the board has since closed it — nothing is left of the halt',
+      resolved: { at: '2026-08-14T22:00:00Z', auto: true, reason: 'superseded — the board shows phase 7 done' } as never,
+    });
+    const notes = runNotes({ run: settled, live: false, allowRun: true });
+    const ended = notes.find((n) => n.id === 'ended')!;
+    expect(ended.severity).toBe('info');
+    expect(ended.title).toBe('Stopped — resolved on its own.');
+    expect(String(ended.body)).toContain('superseded');
+  });
+});

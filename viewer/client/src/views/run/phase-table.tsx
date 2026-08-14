@@ -18,7 +18,7 @@
 import { useState } from 'react';
 import {
   Button, Card, CardBody, CardHeader, CardTitle, Chip, Empty, StateChip,
-  TBody, TD, TH, THead, TR, Table, TableWrap,
+  TBody, TD, TH, THead, TR, Table, TableWrap, toast,
 } from '@/components/ui';
 import {
   api, type PhaseEta, type PhaseLock, type PhaseRecord, type PhaseScope, type PhaseView,
@@ -28,7 +28,8 @@ import { countdown, duration, elapsed, money, pad2, relativeTime } from '@/lib/f
 import { DepsCell, LockCell, PhaseDetails, SizeCell } from '@/views/plan/phase-cells';
 import { ForceReleaseButton } from '@/components/release-lock';
 import { useNow } from '@/lib/clock';
-import { useDiagnosis } from '@/lib/queries';
+import { useConsoleState, useDiagnosis } from '@/lib/queries';
+import { navigate } from '@/router';
 import { phaseProgress } from './header';
 import { MCP_REASON } from './defaults';
 import { classifyBoardPhase, classifyPhase, liveRecovery } from '@/lib/recovery';
@@ -42,7 +43,7 @@ import { phaseHref } from '@shared/routes.js';
 import {
   BOARD_ORDER, boardCounts, fellOverToAnotherModel, mergePhases, phaseActions,
 } from '@shared/phase-model.js';
-import { Bot, Gauge } from 'lucide-react';
+import { Bot, Gauge, TerminalSquare } from 'lucide-react';
 
 import { scopeOfRow } from '@shared/scope.js';
 import { ScopeChips } from '@/components/scope-chips';
@@ -660,6 +661,42 @@ const BLOCKED_ON: Record<string, string> = {
  * Fetched when opened rather than with the row: it costs a `git status` and two
  * script runs, and most rows are never opened.
  */
+/**
+ * One click: this exact recorded command, in YOUR shell (aliases and all — the
+ * rg-is-a-function case is why the runner could not run it), in the phase's
+ * own directory, in the integrated terminal. The exit code reflects back onto
+ * the phase record the moment the session ends — green settles the phase via
+ * the normal re-check, red lands as evidence with its output.
+ */
+function VerifyInTerminalButton({ slug, phase, command }: {
+  slug: string; phase: number; command: string;
+}) {
+  const { data: state } = useConsoleState();
+  const [busy, setBusy] = useState(false);
+  const allowed = Boolean(state?.allowTerminal);
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      disabled={!allowed || busy}
+      title={allowed
+        ? 'Runs exactly this recorded command in the integrated terminal — your shell, the '
+          + "phase's own directory. The exit code is written back onto this phase when it ends; "
+          + 'if everything reads green, the phase re-checks itself.'
+        : 'The terminal is disabled. Restart the console with --allow-terminal.'}
+      onClick={() => {
+        setBusy(true);
+        void api.runVerifyCommand(slug, phase, command)
+          .then((minted) => navigate(`terminal/${minted.sessionId}`))
+          .catch((error: unknown) => toast((error as Error).message, 'error'))
+          .finally(() => setBusy(false));
+      }}
+    >
+      <TerminalSquare size={12} aria-hidden /> {busy ? 'Opening…' : 'Run in terminal'}
+    </Button>
+  );
+}
+
 function PhaseDiagnosis({
   slug,
   phase,
@@ -736,10 +773,32 @@ function PhaseDiagnosis({
               </div>
               {failed.map((x, i) => (
                 <div key={i} className="mt-1">
-                  <div className="text-2xs">
-                    <code className="font-mono">{x.command}</code> — exited {x.code}
+                  <div className="flex flex-wrap items-center gap-2 text-2xs">
+                    <code className="min-w-0 font-mono">{x.command}</code>
+                    <span className="text-ink-faint">exited {x.code}</span>
+                    {x.via === 'terminal' && (
+                      <Chip title="This result came from you running it in the integrated terminal.">
+                        ran in your terminal
+                      </Chip>
+                    )}
+                    <VerifyInTerminalButton slug={slug} phase={phase} command={x.command} />
                   </div>
                   <pre className={pre}>{x.output || '(no output)'}</pre>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(data.verification?.skipped?.length ?? 0) > 0 && (
+            <div>
+              <div className="text-2xs">
+                <b>Skipped — this machine cannot run them:</b>
+              </div>
+              {data.verification!.skipped!.map((x, i) => (
+                <div key={i} className="mt-1 flex flex-wrap items-center gap-2 text-2xs">
+                  <code className="min-w-0 font-mono">{x.command}</code>
+                  <span className="text-ink-faint">{x.reason}</span>
+                  <VerifyInTerminalButton slug={slug} phase={phase} command={x.command} />
                 </div>
               ))}
             </div>

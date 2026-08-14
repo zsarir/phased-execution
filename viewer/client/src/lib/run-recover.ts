@@ -13,9 +13,11 @@ import { ApiError, api } from './api';
 import { navigate } from '../router';
 import { toast } from '../components/ui';
 
-export type RunRecoverVerb = 'recheck' | 'closeout' | 'resume' | 'retry' | 'skip' | 'mcp-continue';
+export type RunRecoverVerb =
+  'recheck' | 'closeout' | 'resume' | 'retry' | 'skip' | 'mcp-continue' | 'auto-recover';
 
 const CONFIRMATIONS: Record<RunRecoverVerb, string> = {
+  'auto-recover': '', // recoverPlan answers with its own steps — toasted below.
   'recheck': 'Re-checking — board, verification and validate.sh.',
   'closeout': "Resuming the phase's session to finish the closeout.",
   'resume': "Resuming the phase's session with your instruction.",
@@ -31,6 +33,14 @@ export async function runRecoverVerb(
 ): Promise<boolean> {
   try {
     const { slug, phase } = target;
+    if (verb === 'auto-recover') {
+      // The one verb that reports its own story: every step the server took,
+      // then the outcome in its own tone.
+      const report = await api.runRecover(slug);
+      for (const step of report.steps) toast(step, 'ok');
+      toast(report.detail, report.outcome === 'needs-you' ? 'warn' : 'ok');
+      return report.outcome !== 'needs-you';
+    }
     if (verb === 'mcp-continue') await api.runMcpContinue(slug);
     else if (phase == null) throw new Error('this action needs a phase');
     else if (verb === 'recheck') await api.runRecheck(slug, phase);

@@ -6,6 +6,44 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [2.2.1] - 2026-08-15
+
+2.2.0's release run died at the gates on a machine-dependent test (an F17 assertion that only held
+where `pnpm` happened to be installed), so nothing reached npm or Homebrew — this release carries
+everything 2.2.0 promised, plus the day's second wave:
+
+- **Pulse** — a live heartbeat panel. The plan's route tab now leads with which phases are being
+  worked on *this second*, in what vehicle (autopilot lane, frozen lane), on what model, with a
+  ticking elapsed clock and cost per lane; below it, what is queued behind a lock (and since when),
+  what is parked waiting on the outside world (reason, wake-up countdown, watch refs), and what the
+  board says is up next behind which dependency. The new **`#/pulse`** page shows the same panel for
+  every plan at once, live-first — the whole console's "is anything moving, is anything stuck
+  waiting for me" on one phone-sized page.
+- **Recover & continue** — one button per stopped plan. Three honest steps, reported by name: re-read
+  the board and stand down whatever it has already settled (the observed phase-7 shape: halted on
+  the banner, done on the list), continue a run that has nothing wrong, and for a real halt arm
+  bounded auto-recovery through the SAME healer the unattended path uses — never a second
+  orchestration. What only a person can settle comes back named instead of blindly retried.
+- **A resolved stop stops shouting.** A run the board has overtaken now says "Stopped — resolved on
+  its own" (info, with the resolution's words) instead of re-crying a dead halt, and offers no
+  recovery buttons — settled questions are not relitigated.
+- **Failed verification commands run from the page.** Each failed or skipped §Verification command
+  on the run page grew a "run in your terminal" button: the exact recorded command (nothing else is
+  accepted — a page must never become a shell) opens in the integrated terminal, in the phase's own
+  directory, in *your* login shell with your aliases; the exit lands back on the phase record,
+  journalled and announced, and an all-green result triggers the normal re-check that closes the
+  phase.
+- **The phone terminal actually works.** The key bar's Esc/Tab/Ctrl/arrows were dead under a finger
+  (the same `preventDefault` that keeps the iOS keyboard up also cancels the synthetic click — keys
+  now fire from `touchend`); vertical swipes scroll the scrollback (xterm's viewport is a scroll
+  proxy a finger can never reach, so the pane converts vertical drags to `scrollLines` itself); and
+  the terminal keeps a minimum of 80 columns on a phone with the host scrolling sideways, instead of
+  wrapping every TUI into confetti.
+- Launchd PATH hygiene: `agent.sh install` now drops dead directories and other users' homes before
+  baking the unit, `status` audits the installed plist, and a re-install from a fresh terminal no
+  longer loses `PHASE_CONSOLE_DEFAULT_SKILLS`/`PHASE_CONSOLE_NOTIFY` previously set only in the
+  unit's environment.
+
 ## [2.2.0] - 2026-08-15
 
 Recovery grew organically into two systems both called "recovery" — a fresh briefed agent

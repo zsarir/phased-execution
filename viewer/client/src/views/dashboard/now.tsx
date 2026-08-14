@@ -118,6 +118,8 @@ export type DemandActionId =
   | 'login' | 'recheck'
   | 'release' | 'release-all'
   | 'mark-read'
+  /** The one-press plan recovery: confirm → stand down stale → recover → continue. */
+  | 'auto-recover'
   /** The MCP park's one-button remedy: policy → continue, retry the parked phases. */
   | 'mcp-continue'
   /** Phase 4: hand what no rule can settle to a Claude session. */
@@ -283,10 +285,19 @@ export function demands({
             { id: 'recheck', label: 'Check again', target } as DemandAction,
           ]
           : []),
+        // The honest first press: confirm the stop against the board, stand
+        // down what it settled, recover or continue what is real.
+        ...(auth ? [] : [{
+          id: 'auto-recover',
+          label: 'Recover & continue',
+          kind: 'action',
+          disabled: allowRun ? undefined : NEEDS_RUN,
+          target,
+        } as DemandAction]),
         {
           id: 'continue',
           label: 'Continue',
-          kind: auth ? 'default' : 'action',
+          kind: 'default',
           disabled: allowRun ? undefined : NEEDS_RUN,
           target,
         },

@@ -63,6 +63,8 @@ export const VIEWS: Record<string, View> = {
   // lazy pane-* chunk xterm lives in — see vite.config.ts globIgnores) and
   // stays off every other route.
   agent: lazy(() => import('./views/agent')),
+  // The heartbeat page: every plan's live lanes, queues and waits at once.
+  pulse: lazy(() => import('./views/pulse')),
 };
 
 /** `''` and anything unregistered land on the dashboard rather than nowhere. */

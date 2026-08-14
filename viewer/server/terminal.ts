@@ -262,6 +262,12 @@ export type SessionMeta = {
   recovery?: RecoveryLink;
   /** Set on a session minted to QA one phase; absent on every other session. */
   qa?: QaLink;
+  /**
+   * Set on a session minted to re-run ONE recorded §Verification command in
+   * the operator's own shell. Its exit code is reflected back onto the run
+   * record — the whole point of the mint.
+   */
+  verify?: { slug: string; phase: number; runId?: string; command: string };
 };
 
 /**
@@ -283,6 +289,12 @@ export type LaunchSpec = {
    * `CLAUDE_CODE_OAUTH_TOKEN` for a token.
    */
   env?: Record<string, string>;
+  /**
+   * Where the child starts, overriding the open root. Server-composed only —
+   * the verify mint runs a command in the phase's own `Verify in:` directory,
+   * and a browser never supplies paths any more than it supplies argv.
+   */
+  cwd?: string;
 };
 
 export interface SessionInfo {
@@ -430,6 +442,14 @@ export class Terminals {
    */
   availability(): Availability {
     return this.probed;
+  }
+
+  /** The tail of a session's scrollback — what a verify reflection records
+   * as the command's output. Empty for an unknown id. */
+  outputTail(sessionId: string, bytes = 8_000): string {
+    const session = this.sessions.get(sessionId);
+    if (!session) return '';
+    return session.scrollback.text().slice(-bytes);
   }
 
   /** What `/api/terminal` reports. Never includes a token. */
@@ -823,7 +843,7 @@ export class Terminals {
     const kind: SessionKind = launch?.kind ?? 'shell';
     const file = launch?.file ?? (process.env.SHELL || '/bin/sh');
     const args = launch?.args ?? ['-l'];
-    const cwd = firstDir([this.options.cwd?.(), process.env.HOME, homedir()]);
+    const cwd = firstDir([launch?.cwd, this.options.cwd?.(), process.env.HOME, homedir()]);
     const cols = clampSize(size?.cols, 20, 500) ?? 80;
     const rows = clampSize(size?.rows, 5, 200) ?? 24;
 

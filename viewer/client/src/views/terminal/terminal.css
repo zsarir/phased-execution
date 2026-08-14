@@ -37,7 +37,22 @@
 }
 
 /* Mid-scrollback flicks stay in the terminal: on this route the shell does
-   not scroll, and an escaped gesture rubber-bands the document on iOS. */
+   not scroll, and an escaped gesture rubber-bands the document on iOS.
+   `pan-x` only — the viewport is a scroll PROXY under the screen canvas, so
+   native vertical panning can never reach it anyway; the pane's own touch
+   handler turns vertical drags into `scrollLines`, and declaring pan-y here
+   would let the browser start a native pan whose touchmove is no longer
+   cancelable, fighting that handler mid-gesture. Horizontal stays native:
+   the host scrolls sideways past the phone's 80-column floor. */
 .phase-term .xterm .xterm-viewport {
   overscroll-behavior: contain;
+  touch-action: pan-x;
+}
+
+/* Size the terminal to its own columns rather than the host: past the phone's
+   80-column floor the content is WIDER than the screen, and this is what the
+   host's horizontal scroller measures. */
+.phase-term .xterm {
+  width: max-content;
+  min-width: 100%;
 }

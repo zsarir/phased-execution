@@ -28,8 +28,8 @@ export type EnvIssue = {
 };
 
 const REINSTALL =
-  'Re-run `viewer/deploy/agent.sh install` from a full shell of the right account — '
-  + 'the unit bakes the PATH it was installed with.';
+  'Re-run `viewer/deploy/agent.sh install` — it now drops dead and foreign PATH '
+  + 'entries before baking the unit (and consider removing the entry from your shell profile).';
 
 export function environmentReport(
   env: NodeJS.ProcessEnv = process.env,

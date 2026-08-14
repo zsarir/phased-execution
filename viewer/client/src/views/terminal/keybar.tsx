@@ -55,6 +55,19 @@ export function KeyBar({ onSend, ctrl, onCtrl, onPaste }: KeyBarProps) {
     return () => element.removeEventListener('touchstart', hold);
   }, []);
 
+  /**
+   * The other half of that bargain: a prevented `touchstart` also cancels the
+   * synthetic `click` iOS would have made, so `onClick` alone leaves every key
+   * DEAD under a finger while working fine with a mouse. Each key therefore
+   * fires from `touchend` on touch (preventing default again, so no browser
+   * double-fires a late click) and from `onClick` for pointers.
+   */
+  const tap = (act: () => void) => ({
+    onClick: act,
+    onTouchEnd: (event: React.TouchEvent) => { event.preventDefault(); act(); },
+    onMouseDown: (event: React.MouseEvent) => event.preventDefault(),
+  });
+
   return (
     <div
       ref={bar}
@@ -68,8 +81,7 @@ export function KeyBar({ onSend, ctrl, onCtrl, onPaste }: KeyBarProps) {
         type="button"
         aria-pressed={ctrl}
         title="Ctrl — the next key you type becomes its control code"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => onCtrl(!ctrl)}
+        {...tap(() => onCtrl(!ctrl))}
         className={cn(
           'min-h-(--tap-min) shrink-0 rounded border px-3 font-mono text-sm',
           ctrl
@@ -87,10 +99,9 @@ export function KeyBar({ onSend, ctrl, onCtrl, onPaste }: KeyBarProps) {
           title={key.title}
           aria-label={key.title}
           // mousedown is NOT one of React's passive root listeners, so the
-          // prop is enough here — this is what keeps focus on the terminal
-          // when the bar is used with a mouse or a trackpad.
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => onSend(key.data)}
+          // prop is enough there — that half keeps focus on the terminal when
+          // the bar is used with a mouse or a trackpad.
+          {...tap(() => onSend(key.data))}
           className="min-h-(--tap-min) shrink-0 rounded border border-rule bg-surface px-3 font-mono text-sm text-ink-muted hover:text-ink"
         >
           {key.icon ? <key.icon size={16} aria-hidden /> : key.label}
@@ -101,8 +112,7 @@ export function KeyBar({ onSend, ctrl, onCtrl, onPaste }: KeyBarProps) {
         type="button"
         title="Paste from the clipboard"
         aria-label="Paste"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={onPaste}
+        {...tap(onPaste)}
         className="ml-auto flex min-h-(--tap-min) shrink-0 items-center gap-1.5 rounded border border-rule bg-surface px-3 text-sm text-ink-muted hover:text-ink"
       >
         <ClipboardPaste size={16} aria-hidden />

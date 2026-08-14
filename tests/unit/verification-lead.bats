@@ -41,7 +41,11 @@ load ../helpers/test_helper
   write_handoff ml 2 missing complete
   run pg ml --lint
   [ "$status" -eq 0 ]
-  [[ "$output" != *"F17"* ]]
+  # Phase-SPECIFIC on purpose: phases 4–6 verify with `pnpm`, and whether F17
+  # fires for them depends on what the machine running this test has installed
+  # (CI runners have no pnpm; a laptop might). Phase 2's lead exists nowhere,
+  # so its silence is the machine-independent fact this test owns.
+  [[ "$output" != *"F17 phase 2"* ]]
 }
 
 @test "F17: validate.sh inherits the advisory without failing" {

@@ -1446,6 +1446,27 @@ export async function handleApi(
           // phases": the two halves are useless apart, and a browser that
           // managed only the first would leave the run parked under a setting
           // saying it should not be.
+          // One press, three honest steps — confirm against the board, stand
+          // down what it settled, recover or continue what is real. See
+          // Service.recoverPlan for why this cannot corrupt the orchestration.
+          case 'recover': {
+            try {
+              json(res, 200, await service.recoverPlan(slug));
+            } catch (error) {
+              json(res, 409, { error: (error as Error)?.message ?? 'the plan could not be recovered' });
+            }
+            return true;
+          }
+          // Re-run ONE recorded verification command in the operator's own
+          // shell; the exit reflects back onto the record on session exit.
+          case 'verify-command': {
+            const result = await service.verifyInTerminal(
+              slug, Number(body.phase),
+              typeof body.command === 'string' ? body.command.slice(0, 2_000) : '');
+            if (!result.ok) { json(res, result.status, { error: result.error }); return true; }
+            json(res, 200, result);
+            return true;
+          }
           case 'mcp-continue': {
             try {
               json(res, 200, { run: await service.continueWithoutMcp(slug) });

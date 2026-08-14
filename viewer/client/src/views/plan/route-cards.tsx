@@ -26,6 +26,7 @@ import { isClosed } from '@/lib/closure';
 import { looksLikeAuthFailure } from '@/lib/failures';
 import { WAYS_FORWARD, classifyRun, recoveryKey } from '@/lib/recovery';
 import { RUN_STATUS_TONE, runStatusTitle } from '@/lib/status-vocab';
+import { PlanPulse } from '@/components/pulse';
 import { RecoveryActions, type RecoveryCtx } from '@/components/recovery-actions';
 import { planHref } from '@shared/routes.js';
 import type { PlanDetail, RunState } from '@/lib/api';
@@ -97,6 +98,22 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
 
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {/* The heartbeat first: while anything is live, queued or parked, the
+          route tab leads with WHICH phases, in WHAT vehicle, for HOW LONG —
+          the panel renders nothing when the plan is idle. */}
+      {run && (
+        <PlanPulse
+          className="sm:col-span-2 lg:col-span-3"
+          slug={slug}
+          run={run}
+          board={detail.phases.map((p) => ({
+            phase: p.phase,
+            title: p.title,
+            state: p.state,
+            ...(p.row?.dependsOn ? { dependsOn: p.row.dependsOn } : {}),
+          }))}
+        />
+      )}
       <Card className={!troubled ? 'sm:col-span-2 lg:col-span-3' : undefined}>
         <CardHeader>
           <CardTitle>Autopilot</CardTitle>
@@ -120,6 +137,12 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
             <Button size="sm" asChild>
               <a href={planHref(slug, 'run')}><Bot size={13} aria-hidden /> Open autopilot</a>
             </Button>
+            {/* The one-press plan recovery, on the plan itself: confirm against
+                the board, stand down what it settled, recover or continue what
+                is real. Renders only for a stopped, unresolved run. */}
+            {run && !live && (
+              <RecoveryActions target={{ slug, runId: run.id }} ctx={{ run }} max={1} />
+            )}
             {run?.gitMode === 'new-branch' && (
               <Chip title="This run works on its own branch and, unless turned off, opens a PR when the plan completes.">
                 work branch{run.openPr === false ? '' : ' · PR'}

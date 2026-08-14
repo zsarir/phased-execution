@@ -55,6 +55,13 @@ export function useDemandActions(runs: readonly RunState[]): {
             setLaunch({ kind: 'continue', slug, run });
             break;
           }
+          case 'auto-recover': {
+            if (!slug) throw new Error('That run is no longer on the board — reload.');
+            const report = await api.runRecover(slug);
+            for (const step of report.steps) toast(step, 'ok');
+            toast(report.detail, report.outcome === 'needs-you' ? 'warn' : 'ok');
+            break;
+          }
           case 'mcp-continue': {
             if (!slug) throw new Error('That run is no longer on the board — reload.');
             await api.runMcpContinue(slug);

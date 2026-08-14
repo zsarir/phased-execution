@@ -46,6 +46,7 @@ export const ROUTE_HEADS = Object.freeze([
   'guide',
   'terminal',
   'agent',
+  'pulse',
 ]);
 
 /**

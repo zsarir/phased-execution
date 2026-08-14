@@ -918,6 +918,8 @@ export interface VerifyRun {
   code: number;
   ms: number;
   output: string;
+  /** `terminal` when a person re-ran it in the integrated terminal. */
+  via?: 'terminal';
 }
 
 export interface VerifySummary {
@@ -1693,6 +1695,13 @@ export const api = {
   runCloseout: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/closeout`, { phase }),
   /** Set the run to `continue` and retry every phase the MCP preflight parked. */
   runMcpContinue: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/mcp-continue`, {}),
+  runRecover: (slug: string) => post<{
+    outcome: 'running' | 'resumed' | 'recovering' | 'needs-you' | 'nothing-to-do';
+    detail: string; steps: string[]; run: RunState | null;
+  }>(`/api/run/${q(slug)}/recover`, {}),
+  runVerifyCommand: (slug: string, phase: number, command: string) =>
+    post<{ ok: true; sessionId: string; token: string; expiresAt: number }>(
+      `/api/run/${q(slug)}/verify-command`, { phase, command }),
   runResumePhase: (slug: string, phase: number, instruction?: string) =>
     post<RunEnvelope>(`/api/run/${q(slug)}/resume-phase`, { phase, instruction }),
   phaseDiagnosis: (slug: string, phase: number | string) =>

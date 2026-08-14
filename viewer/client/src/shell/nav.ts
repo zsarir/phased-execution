@@ -1,5 +1,5 @@
 import {
-  Bell, Bot, Compass, LayoutGrid, LineChart, ListChecks, Plug, Search, Settings, FileText,
+  Activity, Bell, Bot, Compass, LayoutGrid, LineChart, ListChecks, Plug, Search, Settings, FileText,
   TerminalSquare, Zap,
   type LucideIcon,
 } from 'lucide-react';
@@ -47,6 +47,7 @@ export const NAV: readonly NavItem[] = [
   { id: 'ready', label: 'Ready now', icon: Zap, note: 'Every phase that could start', badge: 'ready', tab: true, primary: true },
   { id: 'plans', label: 'Plans', icon: FileText, note: 'Every plan in this source', tab: true, primary: true },
   { id: 'runs', label: 'Runs', icon: LineChart, note: 'Autopilot — what is running now', badge: 'approvals', tab: true, primary: true },
+  { id: 'pulse', label: 'Pulse', icon: Activity, note: 'Every plan\'s live lanes, queues and waits, on one page', primary: true },
   { id: 'notifications', label: 'Notifications', icon: Bell, note: 'Everything the console has announced', badge: 'unread', primary: true },
   { id: 'stats', label: 'Statistics', icon: ListChecks, note: 'Throughput, cost and the shape of the portfolio', primary: true },
   { id: 'search', label: 'Search', icon: Search, note: 'Every plan, handoff and phase at once', primary: true },

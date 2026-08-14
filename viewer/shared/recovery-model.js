@@ -315,6 +315,17 @@ export const ACTION_VOCAB = {
     blurb: 'Deletes a LIVE claim held by someone else. Only do this if you know that session is dead — '
       + 'two sessions on one phase overwrite each other\'s work.',
   },
+  'auto-recover': {
+    label: 'Recover & continue',
+    mechanism: 'run-control',
+    flag: 'run',
+    blurb: 'One press, three honest steps: re-reads the board and stands down any halt it has '
+      + 'already moved past (retracting the stale alarm); if a REAL halt remains, arms bounded '
+      + 'auto-recovery and launches the right vehicle — the phase\'s own session for paperwork '
+      + 'and verification, a fresh briefed agent for the rest (that leg costs a session); and '
+      + 'continues the run when the board reads clean. Anything only a person can settle is '
+      + 'reported back by name instead of being retried blindly.',
+  },
   'dismiss': {
     label: 'Dismiss',
     mechanism: 'run-control',
@@ -354,6 +365,11 @@ export const RECOVERY_BUSY =
  */
 export function classifyRun(run, opts = {}) {
   if (!run) return undefined;
+  // A RESOLVED stop is settled: somebody (or the board resolver) already
+  // answered it. Offering an agent for it re-litigates a closed question —
+  // the observed shape was a halted-status run whose halt had dissolved and
+  // whose phases all read done, still wearing a "Fix with AI" banner.
+  if (run.resolved) return undefined;
   if (run.status === 'parked') {
     const profile = run.halt?.kind ? KIND_PROFILE[run.halt.kind] : undefined;
     return profile?.park ? profile.humanClass ?? undefined : undefined;
@@ -532,8 +548,10 @@ export function recoveryActionsFor(ctx = {}) {
   /* -- Run-only surfaces (fleet rows, dashboard cards) -- */
 
   if (run) {
+    if (run.resolved) return out; // settled — nothing to relitigate
     if (run.status === 'halted' || run.status === 'interrupted' || run.status === 'parked') {
-      push('continue-run', 'primary');
+      push('auto-recover', 'primary');
+      push('continue-run', 'secondary');
       pushAgent(classifyRun(run, { authFailure }), 'secondary');
       push('dismiss', 'overflow');
     }

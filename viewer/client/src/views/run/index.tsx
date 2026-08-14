@@ -58,6 +58,7 @@ import { LaneControls, laneFrozen } from './lane-controls';
 import { WaitingPane, waitingOf } from './waiting-pane';
 import { AuthCard, RunStatusStack, StaleServerNote, looksLikeAuthFailure } from './status';
 import { RunHistory } from './history';
+import { RecoveryActions } from '@/components/recovery-actions';
 
 export function RunView({ detail }: { detail: PlanDetail }) {
   const slug = detail.summary.slug;
@@ -216,6 +217,14 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           },
         }}
       />
+
+      {/* The plan-level recovery, one press: confirm the stop against the
+          board, stand down what it settled, recover or continue what is real.
+          The phase-level offers live on the halt banner and each row. */}
+      {run && !live && !run.resolved
+        && ['halted', 'interrupted', 'parked'].includes(run.status) && (
+        <RecoveryActions target={{ slug, runId: run.id }} ctx={{ run }} max={2} legend />
+      )}
 
       {/* Every stopped phase's cause in its own words, with the action that
           moves it — a status word alone was a dead end (reported twice). */}

@@ -180,6 +180,49 @@ audit_path() {  # audit_path <path>
   done
 }
 
+# The value the CURRENT unit bakes for an env key, if any — the third source
+# for a setting on re-install (--flag beats the shell env beats this), so a
+# re-install from a fresh terminal never silently loses --default-skills or
+# --notify. Same-line and next-line plist shapes both read.
+existing_env_value() {  # existing_env_value <KEY>
+  local key="$1" file value=""
+  if [ "$OS" = "Darwin" ]; then
+    file="$HOME/Library/LaunchAgents/$(agent_name).plist"
+    [ -f "$file" ] || return 0
+    value="$(sed -n "s/.*<key>$key<\/key><string>\(.*\)<\/string>.*/\1/p" "$file" | head -1)"
+    [ -n "$value" ] || value="$(sed -n "/<key>$key<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}" "$file" | head -1)"
+    # Undo xml_escape for the three it touches.
+    printf '%s' "$value" | sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'
+  else
+    file="$UNIT_FILE"
+    [ -f "$file" ] || return 0
+    grep -o "Environment=\"$key=[^\"]*\"" "$file" 2>/dev/null | head -1 \
+      | sed "s/^Environment=\"$key=//; s/\"\$//"
+  fi
+  return 0
+}
+
+# What install BAKES is the sanitized PATH: entries that cannot serve — dirs
+# that do not exist, homes belonging to somebody else — are dropped rather
+# than fossilised into the unit. The live plist carried both kinds for weeks,
+# and "re-run install from a full shell" only helped if that shell was clean,
+# which the one that wrote the defect was not. Order kept, duplicates dropped.
+sanitize_path() {  # sanitize_path <path> → the entries worth baking
+  local IFS=':' d me out=""
+  me="$HOME"
+  for d in $1; do
+    [ -z "$d" ] && continue
+    case ":$out:" in *":$d:"*) continue ;; esac
+    case "$d" in
+      "/Use""rs/"*|/home/*)
+        case "$d" in "$me"|"$me"/*) : ;; *) continue ;; esac ;;
+    esac
+    [ -d "$d" ] || continue
+    out="${out:+$out:}$d"
+  done
+  printf '%s' "$out"
+}
+
 xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 # systemd's own quoting: double quotes around each word, backslash-escaped
@@ -194,13 +237,14 @@ cmd_install() {
   # and a derived slot for everyone else.
   local node_bin root="" port="" selector="" notify="" notify_given=0
   # The PATH this install bakes is the PATH every verification runs with —
-  # name its defects NOW, while the person who can fix them is at a keyboard.
+  # sanitize it (dead dirs, other users\' homes, duplicates dropped) and say
+  # what was dropped, while the person who can fix the source is at a keyboard.
   local path_audit
   path_audit="$(audit_path "$current_path")"
+  current_path="$(sanitize_path "$current_path")"
   if [ -n "$path_audit" ]; then
-    printf 'warning: the PATH this install will bake into the unit has issues:\n' >&2
+    printf 'note: dropping PATH entries that cannot serve — the unit bakes what remains:\n' >&2
     printf '%s\n' "$path_audit" | sed 's/^/  - /' >&2
-    printf '  (install from a full shell of this account if that is unexpected)\n' >&2
   fi
   local default_skills="" skills_given=0 extra=()
   node_bin="$(command -v node)" || die "node is not on PATH"
@@ -257,6 +301,17 @@ process.exit(maj >= 24 || (maj === 23 && min >= 6) || (maj === 22 && min >= 18) 
   # Naming the path is exact: this instance, never a registered parent of it.
   TARGET_SELECTOR=""; TARGET_ROOT="$root"; resolve_target
   [ -n "$port" ] || port="$I_PORT"
+
+  # Third source for the sticky settings: what the existing unit already
+  # bakes. A re-install from a fresh terminal used to silently drop
+  # --default-skills and --notify (the shell env only carries them inside a
+  # console-started process).
+  if [ "$skills_given" -eq 0 ] && [ -z "$default_skills" ]; then
+    default_skills="$(existing_env_value PHASE_CONSOLE_DEFAULT_SKILLS)"
+  fi
+  if [ "$notify_given" -eq 0 ] && [ -z "$notify" ]; then
+    notify="$(existing_env_value PHASE_CONSOLE_NOTIFY)"
+  fi
 
   build_client
 

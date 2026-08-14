@@ -185,11 +185,20 @@ export function runNotes({
   // read as finished-ish to exactly the operator who needed to act.
   if (!live && !run?.halt && run?.finishedReason) {
     const parked = run.status === 'parked';
+    // A RESOLVED stop is settled — the board moved past it or a person
+    // dismissed it — and must never wear the alarm of the halt it no longer
+    // has. The observed shape: status 'halted' as history, halt dissolved,
+    // every phase done, and a banner still crying wolf.
+    const resolved = Boolean(run.resolved) && run.status !== 'finished';
     notes.push({
       id: 'ended',
-      severity: run.status === 'finished' ? 'ok' : parked ? 'warn' : 'info',
-      title: run.status === 'finished' ? 'Run finished.' : parked ? 'Parked — needs you.' : 'Run stopped.',
-      body: run.finishedReason,
+      severity: run.status === 'finished' ? 'ok' : resolved ? 'info' : parked ? 'warn' : 'info',
+      title: run.status === 'finished' ? 'Run finished.'
+        : resolved ? 'Stopped — resolved on its own.'
+          : parked ? 'Parked — needs you.' : 'Run stopped.',
+      body: resolved
+        ? (run.resolved?.reason ?? run.finishedReason)
+        : run.finishedReason,
     });
   }
 

@@ -337,6 +337,25 @@ describe('the key bar', () => {
   });
 });
 
+describe('the key bar under a finger', () => {
+  // The bar's native touchstart preventDefault (which keeps the iOS keyboard
+  // up) also cancels the synthetic click — so activation must ride touchend,
+  // or every key is dead on the very device the bar exists for.
+  it('fires from touchend, not only from click', () => {
+    const sent: string[] = [];
+    render(<KeyBar onSend={(d) => sent.push(d)} ctrl={false} onCtrl={() => {}} onPaste={() => {}} />);
+    fireEvent.touchEnd(screen.getByRole('button', { name: 'Escape' }));
+    expect(sent).toEqual(['\x1b']);
+  });
+
+  it('arms Ctrl from touchend too', () => {
+    const armed: boolean[] = [];
+    render(<KeyBar onSend={() => {}} ctrl={false} onCtrl={(next) => armed.push(next)} onPaste={() => {}} />);
+    fireEvent.touchEnd(screen.getByRole('button', { name: 'Ctrl' }));
+    expect(armed).toEqual([true]);
+  });
+});
+
 describe('applyCtrl', () => {
   it('maps a letter to its control code', () => {
     expect(applyCtrl('c')).toBe('\x03');
@@ -383,13 +402,13 @@ describe('the nav entry', () => {
 
   it('hides nothing else', () => {
     expect(visibleNav({ ...BASE_STATE, allowTerminal: false }).map((i) => i.id)).toEqual([
-      'dashboard', 'ready', 'plans', 'runs', 'notifications', 'stats', 'search', 'mcp', 'guide',
-      'settings',
+      'dashboard', 'ready', 'plans', 'runs', 'pulse', 'notifications', 'stats', 'search', 'mcp',
+      'guide', 'settings',
     ]);
     // With both capabilities on, the two gated entries appear in NAV order —
     // Agent, then Terminal — and everything else stays put.
     expect(visibleNav({ ...BASE_STATE, allowTerminal: true, allowAgent: true }).map((i) => i.id)).toEqual([
-      'dashboard', 'ready', 'plans', 'runs', 'notifications', 'stats', 'search',
+      'dashboard', 'ready', 'plans', 'runs', 'pulse', 'notifications', 'stats', 'search',
       'agent', 'terminal', 'mcp', 'guide', 'settings',
     ]);
   });

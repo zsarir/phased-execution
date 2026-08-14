@@ -32,6 +32,21 @@ export interface TerminalPaneProps {
   onEnded?(): void;
 }
 
+/**
+ * A phone is ~40 columns at 16px, and everything a session actually shows —
+ * a claude TUI, a test table, a diff — is written for 80. Rather than let it
+ * wrap into confetti, the terminal keeps at least 80 columns and the HOST
+ * scrolls sideways: rows stay fitted to the height, width pans under a finger.
+ */
+const PHONE_MIN_COLS = 80;
+
+function fitWithFloor(terminal: Terminal, fitAddon: FitAddon, phone: boolean): void {
+  const proposal = fitAddon.proposeDimensions();
+  if (!proposal || !Number.isFinite(proposal.cols) || !Number.isFinite(proposal.rows)) return;
+  const cols = phone ? Math.max(proposal.cols, PHONE_MIN_COLS) : proposal.cols;
+  terminal.resize(Math.max(2, cols), Math.max(2, proposal.rows));
+}
+
 export function TerminalPane({ sessionId, onSession, onSize, onEnded }: TerminalPaneProps) {
   const host = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
@@ -40,6 +55,10 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
   const ctrlArmed = useRef(false);
 
   const phone = usePhone();
+  // The mount effect's resize closure outlives breakpoint flips; it reads the
+  // CURRENT answer through this ref rather than the one captured at mount.
+  const phoneLive = useRef(phone);
+  phoneLive.current = phone;
   const [status, setStatus] = useState<LinkStatus>('connecting');
   const [detail, setDetail] = useState<string>();
   const [ctrl, setCtrl] = useState(false);
@@ -120,7 +139,7 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         if (!element.clientWidth || !element.clientHeight) return;
-        try { fitAddon.fit(); } catch { /* a detached node mid-teardown */ }
+        try { fitWithFloor(terminal, fitAddon, phoneLive.current); } catch { /* a detached node mid-teardown */ }
         connection.resize(terminal.cols, terminal.rows);
         // Reported rather than read back off the session list: that list is
         // fetched, so it carries whatever size the last fetch saw — which after
@@ -131,6 +150,45 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     window.addEventListener('orientationchange', resize);
+
+    /**
+     * Touch scrolling for the scrollback, done by hand.
+     *
+     * xterm's `.xterm-viewport` is a scroll PROXY that sits *under* the screen
+     * canvas — a finger never reaches it, so native panning either does nothing
+     * or rubber-bands the page: the terminal cannot be touch-scrolled at all
+     * out of the box. The first move picks an axis: horizontal pans stay native
+     * (the host scrolls sideways past the 80-column floor); vertical pans are
+     * claimed here and turned into `scrollLines`. Only the NORMAL buffer
+     * scrolls — a full-screen TUI (claude, vim) owns its own viewport, and
+     * guessing its arrow-key encoding corrupts more than it helps.
+     */
+    let touchX = 0; let touchY = 0; let axis: 'x' | 'y' | null = null; let carry = 0;
+    const touchBegin = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch || event.touches.length > 1) { axis = 'x'; return; }
+      touchX = touch.clientX; touchY = touch.clientY; axis = null; carry = 0;
+    };
+    const touchScroll = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch || event.touches.length > 1) return;
+      const dx = touchX - touch.clientX;
+      const dy = touchY - touch.clientY;
+      if (axis === null) {
+        if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+        axis = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x';
+      }
+      if (axis === 'x') return;
+      if (terminal.buffer.active.type === 'alternate') return;
+      if (event.cancelable) event.preventDefault();
+      touchX = touch.clientX; touchY = touch.clientY;
+      carry += dy;
+      const cell = (terminal.options.fontSize ?? 14) * (terminal.options.lineHeight ?? 1.15);
+      const lines = Math.trunc(carry / cell);
+      if (lines) { terminal.scrollLines(lines); carry -= lines * cell; }
+    };
+    element.addEventListener('touchstart', touchBegin, { passive: true });
+    element.addEventListener('touchmove', touchScroll, { passive: false });
 
     /**
      * Repaint on a theme change. `theme.css` resolves `light-dark()` at paint
@@ -149,6 +207,8 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
 
     return () => {
       cancelAnimationFrame(frame);
+      element.removeEventListener('touchstart', touchBegin);
+      element.removeEventListener('touchmove', touchScroll);
       observer.disconnect();
       themeAttribute.disconnect();
       scheme.removeEventListener('change', repaint);
@@ -174,7 +234,7 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
     if (!terminal) return;
     if (terminal.options.fontSize === (phone ? 16 : 14)) return;
     terminal.options.fontSize = phone ? 16 : 14;
-    try { fit.current?.fit(); } catch { /* mid-teardown */ }
+    try { if (fit.current) fitWithFloor(terminal, fit.current, phone); } catch { /* mid-teardown */ }
     if (link.current && terminal.cols && terminal.rows) {
       link.current.resize(terminal.cols, terminal.rows);
     }
@@ -232,7 +292,17 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
           className={cn(
             // `phase-term` is the hook `terminal.css` needs to out-specify
             // xterm's own `.xterm .xterm-viewport { background: #000 }`.
-            'phase-term h-full overflow-hidden bg-ground-deep px-1 py-1',
+            'phase-term h-full bg-ground-deep px-1 py-1',
+            // The 80-column floor makes the content wider than the phone; the
+            // host is the horizontal scroller, and `touch-action` says so out
+            // loud — vertical pans go to xterm's viewport, horizontal to here,
+            // and nothing is left for the browser to guess (and rubber-band).
+            // `pan-x` ONLY: vertical is owned by the touch scroller above, and
+            // declaring pan-y would let the browser promote a vertical drag to
+            // a native pan whose touchmove is no longer cancelable.
+            phone
+              ? 'overflow-x-auto overflow-y-hidden overscroll-x-contain [touch-action:pan-x]'
+              : 'overflow-hidden',
             status !== 'live' && 'opacity-70',
           )}
         />

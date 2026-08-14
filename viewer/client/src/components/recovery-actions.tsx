@@ -50,7 +50,7 @@ type ActionView = {
   disabledReason?: string;
 };
 
-const RUN_VERBS = new Set<string>(['recheck', 'closeout', 'resume', 'retry', 'skip', 'mcp-continue']);
+const RUN_VERBS = new Set<string>(['recheck', 'closeout', 'resume', 'retry', 'skip', 'mcp-continue', 'auto-recover']);
 
 export function RecoveryActions({
   target,

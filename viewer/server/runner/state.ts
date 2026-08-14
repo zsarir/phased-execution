@@ -118,6 +118,9 @@ export type VerifyRun = {
   ms: number;
   /** Tail only — a full test-suite log does not belong in a checkpoint. */
   output: string;
+  /** `terminal` when a person re-ran it in the integrated terminal and the
+   * exit was reflected here — evidence with its provenance named. */
+  via?: 'terminal';
 };
 
 /**
@@ -1093,6 +1096,12 @@ export function reconcileRecordsAgainstBoard(
     closed.push(record.phase);
   }
   if (closed.length && state.halt?.phase != null && closed.includes(state.halt.phase)) {
+    // The story moves with the halt: `finishedReason` kept quoting the dead
+    // blocker ("phase 7 declared itself blocked…") while the phase list read
+    // done — the exact contradiction an operator reported. History lives in
+    // the journal; the headline tells the truth as of now.
+    state.finishedReason = `halted on phase ${state.halt.phase}; the board has since closed it — `
+      + 'nothing is left of the halt';
     state.halt = null;
     state.consecutiveFailures = 0;
   }

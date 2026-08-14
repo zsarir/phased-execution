@@ -13,10 +13,16 @@ vi.mock('@/lib/media', () => ({
   useTouch: () => true,
 }));
 
-const { recheck } = vi.hoisted(() => ({ recheck: vi.fn(async () => ({ run: null })) }));
+const { recheck, recover } = vi.hoisted(() => ({
+  recheck: vi.fn(async () => ({ run: null })),
+  recover: vi.fn(async () => ({
+    outcome: 'resumed', detail: 'The board had moved past the stop — the run continues from here.',
+    steps: ['the board had moved past phase 2 — stale record closed'], run: null,
+  })),
+}));
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
-  return { ...actual, api: { ...actual.api, runRecheck: recheck } };
+  return { ...actual, api: { ...actual.api, runRecheck: recheck, runRecover: recover } };
 });
 
 import { RecoveryActions } from './recovery-actions';
@@ -111,5 +117,30 @@ describe('<RecoveryActions>', () => {
     />);
     fireEvent.click(screen.getByRole('button', { name: 'Re-check' }));
     await waitFor(() => expect(recheck).toHaveBeenCalledWith('demo', 2));
+  });
+});
+
+
+describe('the plan-level Recover & continue', () => {
+  it('leads the run-only offers, says exactly what it will do, and reports its steps', async () => {
+    mount(<RecoveryActions
+      target={{ slug: 'demo', runId: 'r1' }}
+      ctx={{ run: { status: 'halted', halt: { reason: 'x', kind: 'verify-failed', phase: 2 } } }}
+    />);
+    const first = screen.getAllByRole('button')[0];
+    expect(first.textContent).toContain('Recover & continue');
+    fireEvent.click(first);
+    await waitFor(() => expect(recover).toHaveBeenCalledWith('demo'));
+  });
+
+  it('offers NOTHING for a resolved stop — settled questions are not relitigated', () => {
+    const { container } = mount(<RecoveryActions
+      target={{ slug: 'demo', runId: 'r1' }}
+      ctx={{ run: {
+        status: 'halted', halt: null,
+        resolved: { at: 'x', reason: 'superseded — the board shows phase 7 done' },
+      } }}
+    />);
+    expect(container.querySelector('button')).toBeNull();
   });
 });

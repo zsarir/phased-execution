@@ -47,13 +47,13 @@ const act = (actions: DemandAction[], id: string) => actions.find((a) => a.id ==
  * ------------------------------------------------------------------ */
 
 describe('a stopped run', () => {
-  it('offers Continue, an AI repair and Dismiss', () => {
+  it('offers Recover & continue first, then Continue, the AI repair and Dismiss', () => {
     const [card] = demands({
       approvals: 0, runs: [halted()], unread: 0, expiredLocks: [], allowRun: true, allowAgent: true,
     });
     // Continue re-runs the phase as it was; the recovery reads why it broke.
     // Dismiss stays last — it resolves the card without resolving the run.
-    expect(ids(card.actions)).toEqual(['continue', 'start-recovery', 'dismiss']);
+    expect(ids(card.actions)).toEqual(['auto-recover', 'continue', 'start-recovery', 'dismiss']);
     expect(act(card.actions, 'continue').disabled).toBeUndefined();
     // All of them name the run they act on — a plan that has run since has more
     // than one, and "the latest" is not the one whose card you pressed.

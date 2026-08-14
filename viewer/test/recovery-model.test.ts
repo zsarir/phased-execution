@@ -164,11 +164,25 @@ test('a live recovery disables BOTH AI families with the same sentence', () => {
   assert.equal(agent?.disabledReason, RECOVERY_BUSY);
 });
 
-test('run-only surfaces get continue + the classified agent + dismiss', () => {
+test('run-only surfaces lead with Recover & continue, then the rest', () => {
   const actions = recoveryActionsFor({
     run: { status: 'halted', halt: { reason: 'x', kind: 'verify-failed', phase: 1 } },
   });
-  assert.deepEqual(actions.map((a) => a.id), ['continue-run', 'fix-agent', 'dismiss']);
+  assert.deepEqual(actions.map((a) => a.id), ['auto-recover', 'continue-run', 'fix-agent', 'dismiss']);
+  assert.equal(actions[0].group, 'primary');
+  assert.match(actions[0].blurb, /stands down any halt/);
+  assert.match(actions[0].blurb, /reported back by name/);
+});
+
+test('a RESOLVED stop is settled — nothing to relitigate, no stale Fix banner', () => {
+  // The observed shape: run.status 'halted' as history, halt dissolved, every
+  // phase done, resolved set — and a surface still wearing a repair button.
+  const resolved = {
+    status: 'halted', halt: null,
+    resolved: { at: 'x', auto: true, reason: 'superseded — the board shows phase 7 done' },
+  };
+  assert.deepEqual(recoveryActionsFor({ run: resolved }), []);
+  assert.equal(classifyRun(resolved), undefined);
 });
 
 test('a bare expired lock offers release then takeover; a live one only force-release', () => {

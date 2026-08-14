@@ -1284,6 +1284,13 @@ export class Service {
     const code = session.exited?.code ?? 0;
     const failed = code !== 0 || session.exited?.signal != null;
 
+    // A verify-command terminal's exit is the whole point of the mint: the
+    // code lands back on the run record, and green settles via recheck.
+    if (session.meta?.verify) {
+      this.reflectVerifyCommand(session.meta.verify, code, this.terminals.outputTail(session.id));
+      return;
+    }
+
     // A login session's exit is answered by reading back who the profile
     // became — email, plan — never by announcing that a process ended. The
     // probe also covers "they closed it without finishing": completeLogin
@@ -3805,6 +3812,244 @@ export class Service {
       instruction: opts.instruction,
       by: opts.by ?? 'console',
     });
+  }
+
+  /**
+   * One press, the whole honest sequence — the plan-level "Recover & continue".
+   *
+   * Step 1 CONFIRMS the root issue instead of trusting the record: the board
+   * is re-read and anything it has moved past is stood down (records closed,
+   * halt dissolved, the stale alarm retracted). Step 2: nothing actually
+   * wrong → the run simply continues under normal admission. Step 3: a REAL
+   * halt → bounded auto-recovery is armed on the run and the healer runs NOW
+   * — the same `maybeAutoRecover` the unattended path uses, budget, vehicle
+   * choice, resolve-first gate and announcements included, so this button
+   * cannot corrupt the orchestration it rides. Anything only a person can
+   * settle comes back named, never blindly retried.
+   */
+  async recoverPlan(slug: string): Promise<{
+    outcome: 'running' | 'resumed' | 'recovering' | 'needs-you' | 'nothing-to-do';
+    detail: string;
+    steps: string[];
+    run: RunState | null;
+  }> {
+    const steps: string[] = [];
+    const root = this.root?.path;
+    if (!root) throw new Error('No source directory is open.');
+    const live = this.liveRunner(slug);
+    if (live) {
+      return {
+        outcome: 'running', steps,
+        detail: `${slug} is already running — nothing to recover.`,
+        run: live.current(),
+      };
+    }
+    const state = latestRun(root, slug, this.liveRunIds());
+    if (!state) {
+      return {
+        outcome: 'nothing-to-do', steps,
+        detail: 'No run of this plan exists yet — Start is the verb you want.',
+        run: null,
+      };
+    }
+
+    /* 1. Confirm against the board — the root issue must be real. */
+    const board = await this.boardStates(slug);
+    const journal = new Journal(root, slug, state.id);
+    const result = reconcileRecordsAgainstBoard(state, board);
+    if (result.changed) {
+      steps.push(`the board had moved past phase${result.closed.length === 1 ? '' : 's'} `
+        + `${result.closed.join(', ')} — stale record${result.closed.length === 1 ? '' : 's'} closed`);
+      journal.append('run.plan-recover', { step: 'reconciled', closed: result.closed });
+    }
+    if (!state.resolved) autoResolveRun(state, board);
+    if (result.changed || state.resolved) {
+      try { saveRun(state); } catch { /* the verdict matters more than the write */ }
+      this.emit('run:state', { state });
+      this.retractHalt(state, 'Recover pressed — the board shows the stop settled', { push: false });
+    }
+
+    /* 2. Nothing wrong any more → continue, or say it is finished. */
+    if (!state.halt) {
+      const remaining = Object.entries(board).filter(([, phaseState]) => phaseState !== 'done');
+      if (!remaining.length) {
+        journal.append('run.plan-recover', { step: 'clean', note: 'every phase reads done' });
+        return {
+          outcome: 'nothing-to-do', steps,
+          detail: 'Every phase reads done on the board — nothing to recover or continue.',
+          run: state,
+        };
+      }
+      steps.push(`continuing the run — ${remaining.length} phase(s) remain`);
+      journal.append('run.plan-recover', { step: 'resume', remaining: remaining.length });
+      const run = await this.startRun(slug, {
+        resumeRunId: state.id,
+        ...(state.onlyPhases?.length ? { onlyPhases: state.onlyPhases } : {}),
+        skills: state.skills ?? [],
+      });
+      return {
+        outcome: 'resumed', steps,
+        detail: 'The board had moved past the stop — the run continues from here.',
+        run,
+      };
+    }
+
+    /* 3. A real halt: arm bounded auto-recovery and run the healer once, now. */
+    if (!state.autoRecover) {
+      this.editStoredRun(slug, (stored) => { stored.autoRecover = { attempts: 2 }; });
+      steps.push('armed auto-recovery on this run (2 bounded attempts per phase)');
+      journal.append('run.plan-recover', { step: 'armed', attempts: 2 });
+    }
+    const attempt = await this.maybeAutoRecover(slug);
+    const after = latestRun(root, slug, this.liveRunIds()) ?? state;
+    if (attempt.launched) {
+      steps.push('launched the recovery — the run continues by itself when the board reads fixed');
+      journal.append('run.plan-recover', { step: 'launched' });
+      return {
+        outcome: 'recovering', steps,
+        detail: 'A bounded recovery is running. You will be notified with the verdict either way.',
+        run: after,
+      };
+    }
+    journal.append('run.plan-recover', { step: 'needs-you', reason: attempt.reason ?? null });
+    return {
+      outcome: 'needs-you', steps,
+      detail: attempt.reason ?? 'This stop needs a person.',
+      run: after,
+    };
+  }
+
+  /**
+   * Re-run ONE recorded §Verification command in the operator's own shell —
+   * the integrated terminal, in the phase's own directory — and reflect the
+   * exit back onto the record (`reflectVerifyCommand`, below, on session
+   * exit). Only commands the record itself holds may run: the browser names
+   * a command, the server checks it against what the runner recorded, and
+   * anything else is refused — a page must never become a shell.
+   */
+  async verifyInTerminal(slug: string, phase: number, command: string): Promise<
+    { ok: true; sessionId: string; token: string; expiresAt: number }
+    | { ok: false; status: number; error: string }
+  > {
+    const root = this.root?.path;
+    if (!root) return { ok: false, status: 409, error: 'No source directory is open.' };
+    const state = this.runners.get(slug)?.current()
+      ?? listRuns(root, slug).find((run) => run.phases[String(phase)]);
+    const record = state?.phases[String(phase)];
+    const verification = record?.verification;
+    if (!state || !record || !verification) {
+      return { ok: false, status: 404, error: `No run of ${slug} has a verification record for phase ${phase}.` };
+    }
+    const recorded = [
+      ...verification.ran.map((entry) => entry.command),
+      ...(verification.skipped ?? []).map((entry) => entry.command),
+    ];
+    if (!recorded.includes(command)) {
+      return {
+        ok: false, status: 400,
+        error: 'That command is not one this phase recorded — only recorded §Verification commands can be re-run here.',
+      };
+    }
+    const cwd = record.verifiedIn && record.verifiedIn !== '.'
+      ? join(root, record.verifiedIn)
+      : root;
+    const shell = process.env.SHELL || '/bin/bash';
+    const mint = await this.terminals.mint(undefined, undefined, {
+      kind: 'shell',
+      file: shell,
+      // -i loads the operator's interactive config (aliases, functions — the
+      // `rg`-is-a-shell-function case is exactly why the runner could not run
+      // this and the person can); -l the login PATH; -c runs and exits with
+      // the command's own code, which is what the reflection reads.
+      args: ['-ilc', command],
+      label: `Verify P${phase} · ${command.slice(0, 48)}`,
+      cwd,
+      meta: { verify: { slug, phase, runId: state.id, command } },
+    });
+    if (!mint.ok) return mint;
+    log.info('verify.terminal', { slug, phase, command: command.slice(0, 120), sessionId: mint.sessionId });
+    return { ok: true, sessionId: mint.sessionId, token: mint.token, expiresAt: mint.expiresAt };
+  }
+
+  /**
+   * The exit of a verify-command terminal, written back where it belongs.
+   *
+   * The record's entry gains the code, the tail of the session's own output
+   * and `via: 'terminal'`; a skipped-lead entry that ran moves into `ran`
+   * (the machine could not check it — the person just did). All green with
+   * no live runner → the existing `recheck` fires so the board, the lint and
+   * the halt machinery settle it the honest way. A live run is never edited
+   * under its driver — the exit is announced and the run re-verifies itself.
+   */
+  private reflectVerifyCommand(
+    verify: { slug: string; phase: number; runId?: string; command: string },
+    code: number,
+    output: string,
+  ): void {
+    const root = this.root?.path;
+    if (!root) return;
+    const { slug, phase, command } = verify;
+    if (this.liveRunner(slug)) {
+      this.announce('phase', {
+        title: `P${phase} check ran in the terminal · exit ${code}`,
+        body: `${slug} is live — the run re-verifies the phase itself. (${command.slice(0, 80)})`,
+        tag: tagFor('phase', slug, `verify-terminal-${phase}`),
+      }, { slug, phase });
+      return;
+    }
+    const state = (verify.runId ? loadRun(root, slug, verify.runId, this.liveRunIds()) : null)
+      ?? latestRun(root, slug, this.liveRunIds());
+    const record = state?.phases[String(phase)];
+    const verification = record?.verification;
+    if (!state || !record || !verification) return;
+
+    const ok = code === 0;
+    const tail = output.slice(-8_000);
+    const hit = verification.ran.find((entry) => entry.command === command);
+    if (hit) {
+      hit.ok = ok; hit.code = code; hit.output = tail; hit.via = 'terminal';
+    } else {
+      verification.ran.push({ command, ok, code, ms: 0, output: tail, via: 'terminal' });
+      if (verification.skipped) {
+        verification.skipped = verification.skipped.filter((entry) => entry.command !== command);
+        if (!verification.skipped.length) delete verification.skipped;
+      }
+    }
+    const red = verification.ran.filter((entry) => !entry.ok).length;
+    verification.ok = red === 0;
+    verification.reason = ok
+      ? `\`${command.slice(0, 80)}\` confirmed in the terminal (exit 0)`
+        + (red ? ` — ${red} command(s) still red` : '')
+      : `\`${command.slice(0, 80)}\` still fails in the terminal (exit ${code})`;
+    try { saveRun(state); } catch { /* reflected next read */ }
+    new Journal(root, slug, state.id).append('phase.verify-command', {
+      command: command.slice(0, 240), code, ok, via: 'terminal',
+    }, phase);
+    this.emit('run:state', { state });
+
+    if (ok && verification.ok && record.status !== 'done') {
+      this.announce('phase', {
+        title: `P${phase} verification green in the terminal — re-checking`,
+        body: 'Every recorded command now reads green; the board, verification and validate.sh run again to settle it.',
+        tag: tagFor('phase', slug, `verify-terminal-${phase}`),
+      }, { slug, phase, runId: state.id });
+      void this.recoverPhase(slug, phase, 'recheck', { by: 'verify-terminal' })
+        .catch((error) => {
+          this.announce('phase', {
+            title: `P${phase} confirmed in the terminal — press Re-check to settle it`,
+            body: String((error as Error).message ?? error),
+            tag: tagFor('phase', slug, `verify-terminal-${phase}`),
+          }, { slug, phase, runId: state.id });
+        });
+    } else {
+      this.announce('phase', {
+        title: ok
+          ? `P${phase} check green in the terminal — ${red} still red`
+          : `P${phase} check still failing in the terminal (exit ${code})`,
+        body: `${command.slice(0, 100)} — the phase record now carries this result.`,
+        tag: tagFor('phase', slug, `verify-terminal-${phase}`),
+      }, { slug, phase, runId: state.id });
+    }
   }
 
   /**
