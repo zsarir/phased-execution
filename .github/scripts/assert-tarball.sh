@@ -61,6 +61,7 @@ for p in \
   "scripts/sizing.env" \
   "scripts/mcp.env" \
   "scripts/gates.env" \
+  "scripts/verify.env" \
   "templates/plan.md" \
   "templates/handoff.md" \
   "templates/INDEX.md" \

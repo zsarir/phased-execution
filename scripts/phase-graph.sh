@@ -55,6 +55,14 @@ MCP_SURCHARGE=1500; MCP_SURCHARGE_MAX=12000
 # shellcheck source=/dev/null
 [ -f "$SCRIPT_DIR/mcp.env" ] && . "$SCRIPT_DIR/mcp.env"
 
+# F5, same shape: the verification-command vocabulary (cwd-sensitive leads,
+# names never worth a resolution warning). Canonical values live in
+# scripts/verify.env; the console's runner parses the same file.
+CWD_SENSITIVE="docker docker-compose pnpm npm yarn task make just pytest go cargo alembic vitest jest tsc node"
+PREFLIGHT_SKIP="cd true false echo printf test pwd env which bash sh command export set time if then fi elif else for while until do done case esac"
+# shellcheck source=/dev/null
+[ -f "$SCRIPT_DIR/verify.env" ] && . "$SCRIPT_DIR/verify.env"
+
 # ---------------------------------------------------------------------------
 # Resolve DOCS_ROOT (superproject-aware: handles submodule cwd).
 # ---------------------------------------------------------------------------
@@ -566,6 +574,63 @@ gate_issues() {
   return 0
 }
 
+# Shared extractors for the verification advisories (F14/F16/F17/F18).
+# _verification_reach prints the command-shaped lines inside a phase's
+# §Verification reach: fenced lines and backtick-carrying lines from the
+# Verification bullet to the end of the phase block. One awk, four consumers.
+_verification_reach() {  # _verification_reach <phase>
+  awk -v p="$1" '
+    /^###[[:space:]]+[Pp]hase[[:space:]]/ {
+      if (inblock) exit
+      if ($0 ~ ("^###[[:space:]]+[Pp]hase[[:space:]]+" p "([^0-9]|$)")) inblock = 1
+      next
+    }
+    /^##[[:space:]]/ { if (inblock) exit }
+    inblock && /^[[:space:]]*[-*][[:space:]]+\*\*Verification/ { seen = 1 }
+    seen && /^[[:space:]]*(~~~|```)/ { fence = !fence; next }
+    seen && (fence || /`/) { print }
+  ' "$plan_file"
+}
+
+# The whole ### Phase N block, heading included (for bullet detection).
+_phase_block() {  # _phase_block <phase>
+  awk -v p="$1" '
+    /^###[[:space:]]+[Pp]hase[[:space:]]/ {
+      if (inblock) exit
+      if ($0 ~ ("^###[[:space:]]+[Pp]hase[[:space:]]+" p "([^0-9]|$)")) { inblock = 1; print; next }
+      next
+    }
+    /^##[[:space:]]/ { if (inblock) exit }
+    inblock { print }
+  ' "$plan_file"
+}
+
+# The program a command starts with, past a "$ " prompt and FOO=bar prefixes —
+# mirrors the runner's leadToken. Prints nothing when the candidate has no
+# command-shaped lead: paths (judged elsewhere), bare numbers and exit-code
+# table cells, flags, punctuation. Keeping the shape strict is what stops
+# `1` and `128 112 3 12 124` from reading as commands.
+_verification_lead() {  # _verification_lead <candidate>
+  local c="$1" w
+  c="${c#"${c%%[![:space:]]*}"}"
+  c="${c#\$ }"
+  while :; do
+    w="${c%%[[:space:]]*}"
+    case "$w" in
+      [A-Za-z_]*=*) [ "$w" = "$c" ] && return 0
+                    c="${c#*[[:space:]]}"; c="${c#"${c%%[![:space:]]*}"}" ;;
+      *) break ;;
+    esac
+  done
+  w="${c%%[[:space:]]*}"
+  case "$w" in
+    ''|*/*) return 0 ;;
+    *[!A-Za-z0-9_.+-]*) return 0 ;;
+  esac
+  case "$w" in [A-Za-z_]*) printf '%s' "$w" ;; esac
+  return 0
+}
+
 # F14: a phase without a runnable §Verification — ADVISORY, never a gate.
 # The autopilot boards a phase only to park it when its Verification bullet
 # yields nothing executable ("nothing would prove the work"), hours after the
@@ -573,9 +638,12 @@ gate_issues() {
 # and the console's lint panel inherit the lines — but exit codes never move:
 # a done phase's proof is its handoff, and history should not nag. "Runnable"
 # here is the cheap tell the extractor and this script can agree on: a
-# backtick or a fence somewhere in the bullet's reach (same line or below,
-# inside the phase block). Nested 2-space sub-bullets count — the console's
-# parser keeps them since the same run that taught it parked on that shape.
+# backtick span CONTAINING A LETTER, or a fence, somewhere in the bullet's
+# reach (same line or below, inside the phase block) — the letter requirement
+# keeps backticked exit-code tables (`1`, `128 112 3`) from passing for
+# commands, the shape that made a real phase board and park. Nested 2-space
+# sub-bullets count — the console's parser keeps them since the same run that
+# taught it parked on that shape.
 verification_advisories() {
   local p
   for p in "${PHASES[@]}"; do
@@ -588,7 +656,17 @@ verification_advisories() {
       }
       /^##[[:space:]]/ { if (inblock) exit }
       inblock && /^[[:space:]]*[-*][[:space:]]+\*\*Verification/ { seen = 1 }
-      seen && (/`/ || /^[[:space:]]*~~~/) { ok = 1; exit }
+      seen && /^[[:space:]]*(~~~|```)/ { ok = 1; exit }
+      seen && /`/ {
+        # Per-span, not one regex across the line: `1` and `128 112` must not
+        # borrow letters from the prose between them.
+        s = $0
+        while (match(s, /`[^`]+`/)) {
+          span = substr(s, RSTART + 1, RLENGTH - 2)
+          if (span ~ /[A-Za-z]/) { ok = 1; exit }
+          s = substr(s, RSTART + RLENGTH)
+        }
+      }
       END { exit (ok ? 0 : 1) }
     ' "$plan_file" || \
       printf 'F14 phase %s: no runnable §Verification — the autopilot will park it at boarding; add the commands that prove the exit criteria\n' "$p"
@@ -609,17 +687,7 @@ verification_unbounded_advisories() {
   local p hit
   for p in "${PHASES[@]}"; do
     _is_done "$p" && continue
-    hit="$(awk -v p="$p" '
-      /^###[[:space:]]+[Pp]hase[[:space:]]/ {
-        if (inblock) exit
-        if ($0 ~ ("^###[[:space:]]+[Pp]hase[[:space:]]+" p "([^0-9]|$)")) inblock = 1
-        next
-      }
-      /^##[[:space:]]/ { if (inblock) exit }
-      inblock && /^[[:space:]]*[-*][[:space:]]+\*\*Verification/ { seen = 1 }
-      seen && /^[[:space:]]*(~~~|```)/ { fence = !fence; next }
-      seen && (fence || /`/) { print }
-    ' "$plan_file" \
+    hit="$(_verification_reach "$p" \
       | grep -oE 'gh run watch|gh pr checks[^`]*--watch|[[:space:]]--watch|task deploy|sleep [0-9]{3,}|until [^`]+; *do|aws [a-z0-9-]+ wait |kubectl rollout status|docker[ -]compose logs -f|tail -f' \
       | head -1 || true)"
     hit="$(printf '%s' "$hit" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
@@ -683,6 +751,105 @@ mcp_advisories() {
         printf 'F15 phase %s: MCP server(s) not registered on this machine: %s — it will run without them and report it; register them in Phase Console → MCP, drop them from the phase, or add "- **MCP policy:** require" to park instead\n' "$p" "$t"
       fi
     fi
+  done
+  return 0
+}
+
+# F17: a §Verification lead that is not installed on this machine — ADVISORY,
+# never a gate. Same arm as F14/F15/F16, born from a measured incident class:
+# 16 verify-failed halts, 15 of them spurious, because `rg` was a shell
+# function inside the authoring session and nothing on the runner's PATH, and
+# `python` meant python3. The runner's preflight predicted every one by name
+# at boarding and the halt still cost the run — so the author hears it at
+# PLAN time instead. The consequence named matches what the console actually
+# does: such a command is SKIPPED at verification and recorded; a phase whose
+# every check is skipped parks. `command -v` runs on THIS machine — the same
+# machine whose console will run the plan — so "installed" means installed.
+_f17_report() {  # _f17_report <candidate> — uses/updates p, f17_seen (dynamic scope)
+  local lead hint
+  case "$1" in
+    *[[:space:]]*) : ;;
+    *.*) return 0 ;;   # a lone token with a dot is a filename citation, not a command
+  esac
+  lead="$(_verification_lead "$1")"
+  [ -z "$lead" ] && return 0
+  case " $PREFLIGHT_SKIP " in *" $lead "*) return 0 ;; esac
+  case "$f17_seen" in *" $lead "*) return 0 ;; esac
+  f17_seen="$f17_seen$lead "
+  command -v "$lead" >/dev/null 2>&1 && return 0
+  hint=""
+  case "$lead" in
+    python) command -v python3 >/dev/null 2>&1 && hint=' (this machine has python3 — write python3)' ;;
+    rg)     hint=' (rg is often a shell alias, not a binary — use grep -R, or install ripgrep)' ;;
+  esac
+  printf 'F17 phase %s: §Verification lead `%s` is not installed on this machine — the autopilot will SKIP that command at verification (a phase whose every check is skipped parks); install it or rewrite the check%s\n' "$p" "$lead" "$hint"
+  return 0
+}
+
+verification_lead_advisories() {
+  local p line span f17_seen
+  for p in "${PHASES[@]}"; do
+    _is_done "$p" && continue
+    f17_seen=" "
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      case "$line" in
+        *\`*)
+          while IFS= read -r span; do
+            [ -z "$span" ] && continue
+            # A single-token span is a citation (`success`, `tree_sha`, a field
+            # name in prose) — a command worth checking carries arguments. Fenced
+            # lines below are commands by construction and skip this filter.
+            case "$span" in *[[:space:]]*) _f17_report "$span" ;; esac
+          done < <(printf '%s\n' "$line" | grep -oE '`[^`]+`' | sed 's/^`//; s/`$//')
+          ;;
+        *) _f17_report "$line" ;;
+      esac
+    done < <(_verification_reach "$p")
+  done
+  return 0
+}
+
+# F18: a cwd-sensitive §Verification lead with no **Verify in:** — ADVISORY,
+# never a gate. `pnpm test` means a different thing in every directory; the
+# runner executes §Verification at the repository root unless the phase pins
+# **Verify in:**, and the measured failure is a green session followed by a
+# spurious red halt (`git -C aws` exited 128, pnpm found no package.json)
+# because the commands were authored against a different cwd. A `cd `-prefixed
+# command settles the question itself (its lead is `cd`); a declared
+# **Verify in:** anywhere in the phase block — top-level bullet or nested
+# under Verification — settles it for the whole phase.
+verification_cwd_advisories() {
+  local p line span lead hit
+  for p in "${PHASES[@]}"; do
+    _is_done "$p" && continue
+    _phase_block "$p" | grep -qiE '\*\*Verify in:?\*\*' && continue
+    hit=""
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      case "$line" in
+        *\`*)
+          while IFS= read -r span; do
+            [ -z "$span" ] && continue
+            [ -n "$hit" ] && break
+            # Same citation filter as F17: a lone token in backticks is prose.
+            case "$span" in *[[:space:]]*) : ;; *) continue ;; esac
+            lead="$(_verification_lead "$span")"
+            [ -z "$lead" ] && continue
+            case " $CWD_SENSITIVE " in *" $lead "*) hit="$lead" ;; esac
+          done < <(printf '%s\n' "$line" | grep -oE '`[^`]+`' | sed 's/^`//; s/`$//')
+          ;;
+        *)
+          lead="$(_verification_lead "$line")"
+          if [ -n "$lead" ]; then
+            case " $CWD_SENSITIVE " in *" $lead "*) hit="$lead" ;; esac
+          fi
+          ;;
+      esac
+      [ -n "$hit" ] && break
+    done < <(_verification_reach "$p")
+    [ -n "$hit" ] && \
+      printf 'F18 phase %s: `%s` is cwd-sensitive and the phase declares no **Verify in:** — the autopilot runs §Verification at the repository root, where it may test the wrong tree; add "- **Verify in:** <dir>" to §Phase %s\n' "$p" "$hit" "$p"
   done
   return 0
 }
@@ -987,14 +1154,18 @@ case "$mode" in
       issues="${issues}"$'\n'"phase count mismatch: frontmatter says ${declared} but the table parses ${#PHASES[@]} rows"
     fi
     issues="$(printf '%s' "$issues" | sed '/^[[:space:]]*$/d')"
-    # F14/F15/F16 advisories ride stderr beside the issues but never gate the
-    # exit — a closed plan is not even scanned (nothing left to board there).
+    # F14/F15/F16/F17/F18 advisories ride stderr beside the issues but never
+    # gate the exit — a closed plan is not even scanned (nothing to board there).
     if ! plan_is_closed; then
       advisories="$(verification_advisories)"
       [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
       advisories="$(verification_unbounded_advisories)"
       [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
       advisories="$(mcp_advisories)"
+      [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
+      advisories="$(verification_lead_advisories)"
+      [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
+      advisories="$(verification_cwd_advisories)"
       [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
     fi
     if [ -n "$issues" ]; then

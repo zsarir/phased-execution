@@ -65,3 +65,20 @@ load ../helpers/test_helper
   assert_contains "$output" "disagrees with plan graph"
   assert_contains "$output" "VALIDATE FAIL"
 }
+
+@test "G13: a closed plan's garbage handoff status warns but stays exit 0" {
+  setup_docs closed closedp
+  write_handoff closedp 1 pasted "complete + write the closeout handoff. Verify every step"
+  run pe_validate closedp
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "VALIDATE SKIPPED"
+  assert_contains "$output" "is not one of complete|in-progress|blocked|pending"
+}
+
+@test "G13: a closed plan with clean handoffs stays quiet" {
+  setup_docs closed closedp
+  write_handoff closedp 1 clean complete
+  run pe_validate closedp
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"is not one of"* ]]
+}

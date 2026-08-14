@@ -20,6 +20,23 @@ BASH_BIN="${BASH:-bash}"
 # forever and there is no way to make it stop short of finishing what was abandoned.
 # Ask the engine rather than re-reading frontmatter — closure is defined in one place.
 if closed="$("$BASH_BIN" "$SCRIPT_DIR/phase-graph.sh" "$slug" --closed 2>/dev/null)"; then
+  # G13: even a closed plan gets a frontmatter SHAPE check, warning tier only.
+  # A pasted-over `status:` line (a prompt fragment where the value should be)
+  # makes the board silently read the phase as not-started forever — and a
+  # closed plan is exactly where nobody would otherwise look again. Warnings
+  # go to stderr; the exit code stays 0 (closure means no gate).
+  ho_dir="$DOCS_ROOT/docs/handoffs/$slug"
+  if [ -d "$ho_dir" ]; then
+    for f in "$ho_dir"/phase-*.md; do
+      [ -e "$f" ] || continue
+      st="$(grep -m1 '^status:' "$f" | sed 's/^status:[[:space:]]*//; s/[[:space:]]*#.*$//' || true)"
+      case "$st" in
+        complete|in-progress|blocked|pending) : ;;
+        *) printf '  ⚠ %s: status "%.60s" is not one of complete|in-progress|blocked|pending — the board reads this phase as not-started\n' \
+             "$(basename "$f")" "${st:-(none)}" >&2 ;;
+      esac
+    done
+  fi
   echo "VALIDATE SKIPPED (${closed#closed }): $slug is closed — reopen it to validate again"
   exit 0
 fi
