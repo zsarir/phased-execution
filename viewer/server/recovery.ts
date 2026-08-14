@@ -19,10 +19,13 @@
  *
  * ## Why this file is a leaf
  *
- * `recovery.ts` imports nothing. Every fact reaches it as an argument, which is
- * what lets `agent.ts` import it without a cycle (`agent.ts` → `recovery.ts`,
- * never back) and what lets the prompts be unit-tested with no server, no repo
- * and no board — the same reason `push/catalogue.ts` is a leaf.
+ * `recovery.ts` imports only `shared/recovery-model.js`, which imports
+ * nothing — so no cycle is possible. Every fact reaches it as an argument,
+ * which is what lets `agent.ts` import it without a cycle (`agent.ts` →
+ * `recovery.ts`, never back) and what lets the prompts be unit-tested with no
+ * server, no repo and no board — the same reason `push/catalogue.ts` is a
+ * leaf. The class ids and titles live in the shared model so the client, the
+ * service and this file can never drift apart.
  *
  * ## Why the prompts name scripts rather than describing them
  *
@@ -39,6 +42,12 @@
  * patterns as the guide.
  */
 
+import {
+  RECOVERY_CLASSES as SHARED_RECOVERY_CLASSES,
+  RECOVERY_TITLES as SHARED_RECOVERY_TITLES,
+  recoveryKey as sharedRecoveryKey,
+} from '../shared/recovery-model.js';
+
 /** A recovery prompt is a briefing, not a document — and it must fit the agent cap. */
 export const MAX_RECOVERY_PROMPT_BYTES = 16 * 1024;
 
@@ -50,36 +59,30 @@ export const MAX_RECOVERY_PROMPT_BYTES = 16 * 1024;
  * remedy has been tried. Each one gets its own prompt because each one wants a
  * different first move — diagnose, close out, resume, take over, repair.
  */
-export const RECOVERY_CLASSES = [
+export type RecoveryClass =
   /** The phase ran, and its §Verification commands came back red. */
-  'halted-verification',
+  | 'halted-verification'
   /** The work looks done but the phase never wrote its handoff. */
-  'halted-missing-handoff',
+  | 'halted-missing-handoff'
   /** The console or the run died mid-phase; the working tree is where it stopped. */
-  'interrupted-resume',
+  | 'interrupted-resume'
   /** The run halted on authentication. Minting is refused while signed out. */
-  'auth-interrupted',
+  | 'auth-interrupted'
   /** A lease expired: the phase reads as taken and nobody is in it. */
-  'stale-claim-takeover',
+  | 'stale-claim-takeover'
   /** The plan, its handoffs or its INDEX disagree — including a recorded QA fail. */
-  'plan-repair',
-] as const;
+  | 'plan-repair';
 
-export type RecoveryClass = (typeof RECOVERY_CLASSES)[number];
+/** The ids come from the shared model; the union above narrows them for TS.
+ * `test/recovery-model.test.ts` pins the two identical. */
+export const RECOVERY_CLASSES = SHARED_RECOVERY_CLASSES as readonly RecoveryClass[];
 
 export function isRecoveryClass(value: unknown): value is RecoveryClass {
   return typeof value === 'string' && (RECOVERY_CLASSES as readonly string[]).includes(value);
 }
 
-/** What the button says, and what the session's notification calls it. */
-export const RECOVERY_TITLES: Record<RecoveryClass, string> = {
-  'halted-verification': 'Fix the failing verification',
-  'halted-missing-handoff': 'Finish the closeout',
-  'interrupted-resume': 'Resume where it stopped',
-  'auth-interrupted': 'Continue after signing in',
-  'stale-claim-takeover': 'Take over the claim',
-  'plan-repair': 'Repair the plan',
-};
+/** What a notification and a card heading call each class — the shared table. */
+export const RECOVERY_TITLES = SHARED_RECOVERY_TITLES as Record<RecoveryClass, string>;
 
 /** What the browser may ask for. Everything else on `RecoveryFacts` is server-resolved. */
 export type RecoveryRequest = {
@@ -230,7 +233,7 @@ export function recoveryLabel(request: RecoveryRequest): string {
 
 /** The identity a duplicate guard compares. A plan-wide repair has no phase. */
 export function recoveryKey(link: { slug?: string; phase?: number }): string {
-  return `${link.slug ?? ''}#${link.phase ?? ''}`;
+  return sharedRecoveryKey(link);
 }
 
 /* ------------------------------------------------------------------ *

@@ -58,7 +58,7 @@ describe('the field matrix', () => {
     expect(screen.getByText('Effort')).toBeTruthy();
     expect(screen.queryByText('Permissions')).toBeNull();
     expect(screen.queryByText('Branch')).toBeNull();
-    expect(screen.getByRole('button', { name: /Repair with AI/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Repair the plan with a new agent/ })).toBeTruthy();
   });
 
   it('a phase launch carries the git section, and the PR box follows the branch mode', async () => {
@@ -162,7 +162,7 @@ describe('the submits', () => {
     await mount({ kind: 'recovery', recoveryClass: 'plan-repair', slug: 'alpha' },
       { attachDefaultSkills: true });
     await screen.findByText('Model');
-    fireEvent.click(screen.getByRole('button', { name: /Repair with AI/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Repair the plan with a new agent/ }));
     await waitFor(() => expect(agentTicket).toHaveBeenCalled());
     const body = agentTicket.mock.calls[0]![0] as Record<string, unknown>;
     expect(body.intent).toBe('recovery');

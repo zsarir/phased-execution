@@ -40,8 +40,8 @@ import { failureContext } from './failure-context.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
   PHASE_IN_FLIGHT, reconcileRecordsAgainstBoard, mcpReasonText,
-  type Autonomy, type ChildRef, type McpDegradation, type McpPolicy, type OnLimitPolicy,
-  type PhaseOptions, type PhaseRecord,
+  type Autonomy, type ChildRef, type HaltKind, type McpDegradation, type McpPolicy,
+  type OnLimitPolicy, type PhaseOptions, type PhaseRecord,
   type RunState, type PhaseStatus, type RunStatus, type VerifySummary,
 } from './state.ts';
 import { consumeOutcome, outcomeFileFor, readOutcome, type PhaseOutcome } from './outcome.ts';
@@ -996,7 +996,7 @@ export class Runner {
     const refusal = preflight(this.state.root) ?? (auth.loggedIn ? null : authRefusal(auth.detail));
     if (refusal) {
       this.state.status = 'parked';
-      this.state.halt = { at: new Date().toISOString(), reason: refusal };
+      this.state.halt = { at: new Date().toISOString(), reason: refusal, kind: 'run-preflight' };
       this.record('run.preflight-refused', { reason: refusal });
       this.persist();
       log.warn('runner.preflight', { root: this.state.root, reason: refusal });
@@ -1154,7 +1154,7 @@ export class Runner {
       if (options.mode === 'resume') {
         const said = await this.resumeWithInstruction(
           options.phase, options.instruction ?? '', options.haltedWith);
-        if (said) { this.halt(said, options.phase); return; }
+        if (said) { this.halt(said, options.phase, 'recovery-failed'); return; }
       }
 
       const ok = await this.confirm(options.phase);
@@ -1187,7 +1187,7 @@ export class Runner {
       this.record('run.recovered', { phase: options.phase, mode: options.mode }, options.phase);
     } catch (error) {
       log.error('runner.recover.crashed', { error });
-      this.halt(`the recovery of phase ${options.phase} failed: ${(error as Error)?.message ?? error}`, options.phase);
+      this.halt(`the recovery of phase ${options.phase} failed: ${(error as Error)?.message ?? error}`, options.phase, 'recovery-failed');
     } finally {
       this.clearLeaseTimer(lane);
       await this.release(options.phase, owner);
@@ -1539,6 +1539,7 @@ export class Runner {
             + `${alive.map((child) => `pid ${child.pid}, phase ${child.phase}`).join('; ')}). `
             + 'Let them finish or stop them, then start this run again.',
         phase: first.phase,
+        kind: 'orphaned-session',
       };
       for (const child of alive) phaseRecord(state, child.phase).status = 'running';
       this.record('run.adopt.alive', {
@@ -2596,7 +2597,7 @@ export class Runner {
       // A throw in here would otherwise be an unhandled rejection, which is one
       // of the ways this console used to disappear.
       log.error('runner.crashed', { error });
-      this.halt(`the runner itself failed: ${(error as Error)?.message ?? error}`);
+      this.halt(`the runner itself failed: ${(error as Error)?.message ?? error}`, undefined, 'runner-crashed');
     } finally {
       // A drain the loop never finished — a `break` that bypassed the loop top,
       // or the `catch` above halting with lanes still recorded — must still
@@ -2920,7 +2921,7 @@ export class Runner {
     const engineText = readText(await this.engine(['--boot-prompt', String(phase)]));
     if (!engineText.trim()) {
       await this.release(phase, owner);
-      this.halt(`the engine produced no boot prompt for phase ${phase}`, phase);
+      this.halt(`the engine produced no boot prompt for phase ${phase}`, phase, 'plan-unreadable');
       return false;
     }
     // Appended, never woven in: `phase-graph.sh` stays the only thing that
@@ -3523,7 +3524,7 @@ export class Runner {
         }
 
         case 'resume': {
-          if (!record.sessionId) { this.halt('the session hit a cap but reported no session id to resume', phase); return { carryOn: false, completed: false }; }
+          if (!record.sessionId) { this.halt('the session hit a cap but reported no session id to resume', phase, 'phase-crashed'); return { carryOn: false, completed: false }; }
           resume = record.sessionId;
           if (disposition.raise === 'budget') budget = Math.max(1, (budget ?? 5) * 2);
           else maxTurns = (maxTurns ?? 60) * 2;
@@ -4118,6 +4119,26 @@ export class Runner {
     if (declared) {
       const routed = this.routeOutcome(phase, declared);
       if (routed) return routed;
+    }
+
+    // A board that reads `stuck` is a handoff that EXISTS and says `blocked` —
+    // a fact, not missing paperwork. Twelve real halts called this "no handoff
+    // was written" while sessions wrote three-paragraph rebuttals into the
+    // reason, and four closeout resumes looped on phases whose brief forbade
+    // the work that would unblock them. Name it what it is and spawn nothing.
+    if (board.states[phase] === 'stuck') {
+      record.status = 'failed';
+      record.note = record.said ? condenseSaid(record.said) : 'the handoff declares this phase blocked';
+      state.consecutiveFailures++;
+      this.halt(
+        `phase ${phase}'s handoff declares it blocked`
+        + (record.said ? ` — it signed off: "${condenseSaid(record.said)}"` : '')
+        + '. Its Outstanding section says what is missing; clear that, then Retry '
+        + '(or resume the session with an instruction once the blocker is gone).',
+        phase,
+        'phase-blocked',
+      );
+      return 'halted';
     }
 
     const attempt = await this.closeout(phase, board.states[phase] ?? 'unknown');
@@ -4783,7 +4804,7 @@ export class Runner {
     return null;
   }
 
-  private halt(reason: string, phase?: number, kind?: string): void {
+  private halt(reason: string, phase?: number, kind?: HaltKind): void {
     const state = this.state!;
     // With lanes still live the run is DRAINING, not stopped: `halting` keeps
     // it in IN_FLIGHT (a dead console mid-drain must still pid-check those

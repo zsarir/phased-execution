@@ -1,72 +1,85 @@
 /**
- * Which failure a recovery session is for, decided from what a page already
- * holds.
+ * The client half of the recovery vocabulary — now a re-export.
  *
- * The server owns the prompt; this owns the *offer*. A card knows it is looking
- * at a halted run, a failed phase row or a plan error — this turns that into the
- * one class whose briefing actually fits, so a button never launches a session
- * told the wrong story.
- *
- * Pure, and deliberately free of React and of `api.ts`: the choosing rules are
- * the part worth testing without a network, and `test/recovery-sessions.test.ts`
- * imports this file directly to hold `RECOVERY_CLASSES` equal to the server's.
+ * Every word (labels, blurbs, titles), every classifier and the pure
+ * action function live in `shared/recovery-model.js`, imported by this
+ * client, by `server/recovery.ts` and by `server/service.ts` alike — so a
+ * button, a tooltip, a notification and the unattended healer can never
+ * drift apart again. What stays here is the client-only glue: the live
+ * session lookup that turns a button into a chip, typed against the shapes
+ * a page already holds.
  */
 
-/**
- * Mirrors `server/recovery.ts` — the server is the source of truth and refuses
- * anything off this list by name. A test asserts the two arrays are identical,
- * so drift fails the suite rather than a click.
- */
-export const RECOVERY_CLASSES = [
-  'halted-verification',
-  'halted-missing-handoff',
-  'interrupted-resume',
-  'auth-interrupted',
-  'stale-claim-takeover',
-  'plan-repair',
-] as const;
+// Relative, not `@shared/…`: the node test suite imports THIS file directly
+// (`test/recovery-sessions.test.ts` precedent) and node resolves no Vite alias.
+export {
+  MECHANISMS,
+  MECHANISM_LEGEND,
+  WAYS_FORWARD,
+  HALT_KINDS,
+  KIND_PROFILE,
+  RECOVERY_CLASSES,
+  RECOVERY_TITLES,
+  RECOVERY_LABELS,
+  RECOVERY_BLURBS,
+  ACTION_VOCAB,
+  FLAG_OFF,
+  RECOVERY_BUSY,
+  NO_HANDOFF_OFFER_RE,
+  VERIFICATION_OFFER_RE,
+  recoveryActionsFor,
+  recoveryKey,
+} from '../../../shared/recovery-model.js';
 
-export type RecoveryClass = (typeof RECOVERY_CLASSES)[number];
+import {
+  classifyRun as classifyRunShared,
+  classifyPhase as classifyPhaseShared,
+  classifyIssue as classifyIssueShared,
+  classifyBoardPhase as classifyBoardPhaseShared,
+  recoveryKey as keyOf,
+} from '../../../shared/recovery-model.js';
 
-/** What the button says. Short enough to sit beside Continue and Dismiss. */
-export const RECOVERY_LABELS: Record<RecoveryClass, string> = {
-  'halted-verification': 'Fix with AI',
-  'halted-missing-handoff': 'Finish with AI',
-  'interrupted-resume': 'Resume with AI',
-  'auth-interrupted': 'Resume with AI',
-  'stale-claim-takeover': 'Take over with AI',
-  'plan-repair': 'Repair with AI',
+/** The run shape the classifiers read — matches what every page holds. */
+export type RunLike = {
+  status: string;
+  halt?: { reason?: string; kind?: string; phase?: number } | null;
+  resolved?: unknown;
 };
 
-/** What it will actually do, for the title attribute and the confirm copy. */
-export const RECOVERY_BLURBS: Record<RecoveryClass, string> = {
-  'halted-verification':
-    'Opens a Claude session that diagnoses the failing verification, fixes the cause and finishes the phase.',
-  'halted-missing-handoff':
-    'Opens a Claude session that checks the phase against the repository and writes the handoff it never wrote.',
-  'interrupted-resume':
-    'Opens a Claude session that reads the working tree, claims the phase and carries it to its exit criteria.',
-  'auth-interrupted':
-    'Opens a Claude session that picks the phase up now that the CLI is signed in again.',
-  'stale-claim-takeover':
-    'Opens a Claude session that takes the expired claim and finishes the phase.',
-  'plan-repair':
-    'Opens a Claude session that repairs the plan, its handoffs or its INDEX until validate.sh passes.',
-};
+/* The shared classifiers are JSDoc-typed as `string | undefined`; these
+ * wrappers narrow the answers to the class union the components expect. */
+
+export function classifyRun(
+  run: RunLike | null | undefined, opts: { authFailure?: boolean } = {},
+): RecoveryClass | undefined {
+  return classifyRunShared(run, opts) as RecoveryClass | undefined;
+}
+
+export function classifyPhase(
+  status: string, run?: RunLike | null, opts: { authFailure?: boolean } = {},
+): RecoveryClass | undefined {
+  return classifyPhaseShared(status, run, opts) as RecoveryClass | undefined;
+}
+
+export function classifyIssue(issue: { severity?: string }): RecoveryClass | undefined {
+  return classifyIssueShared(issue) as RecoveryClass | undefined;
+}
+
+export function classifyBoardPhase(state: string): RecoveryClass | undefined {
+  return classifyBoardPhaseShared(state) as RecoveryClass | undefined;
+}
+
+/** Mirrors `server/recovery.ts` — narrowed here for TS; the runtime array is shared. */
+export type RecoveryClass =
+  | 'halted-verification'
+  | 'halted-missing-handoff'
+  | 'interrupted-resume'
+  | 'auth-interrupted'
+  | 'stale-claim-takeover'
+  | 'plan-repair';
 
 /** What a recovery session is attached to. Two of these match when both agree. */
 export type RecoveryTarget = { slug?: string; phase?: number };
-
-/**
- * The identity a duplicate is judged by — `(slug, phase)`, not the class.
- *
- * Two sessions repairing one phase from different angles edit the same files,
- * and the second one is never what anyone meant to press. Mirrors
- * `recoveryKey` on the server, which enforces it.
- */
-export function recoveryKey(target: RecoveryTarget): string {
-  return `${target.slug ?? ''}#${target.phase ?? ''}`;
-}
 
 /** A minimal session shape, so this file need not import the API types. */
 type SessionLike = {
@@ -87,110 +100,7 @@ export function liveRecovery<T extends SessionLike>(
   target: RecoveryTarget,
 ): T | undefined {
   if (!sessions?.length) return undefined;
-  const key = recoveryKey(target);
+  const key = keyOf(target);
   return sessions.find((session) =>
-    !session.exited && session.meta?.recovery && recoveryKey(session.meta.recovery) === key);
-}
-
-/* ------------------------------------------------------------------ *
- * Choosing the class
- * ------------------------------------------------------------------ */
-
-/**
- * The runner's own words, matched rather than guessed at.
- *
- * `runner.ts` writes exactly two shapes of halt worth a distinct briefing: a
- * phase whose verification commands came back red, and a session that ended
- * cleanly having never written a handoff (`closed()`'s "the board still
- * reads…"). Matching the reason text is what lets a card offer the right one
- * without a second request for the diagnosis.
- */
-const NO_HANDOFF = /no handoff was written|not marked complete|ended cleanly but the board/i;
-const VERIFICATION = /did not verify|failing validate\.sh|verification/i;
-
-type RunLike = {
-  status: string;
-  halt?: { reason: string; kind?: string } | null;
-  resolved?: unknown;
-};
-
-/**
- * Which recovery a stopped run wants — or `undefined` when none does.
- *
- * Order matters and is the whole content of this function. Authentication
- * first, because every other reading of an auth halt is wrong and the fix is
- * not an AI session at all (the server refuses to mint one while signed out).
- * Then the two halts the runner names precisely. An interruption, or a halt
- * whose reason matches nothing, falls to the generic resume: assess the tree,
- * claim, carry on — which is true of any run that stopped mid-phase.
- */
-export function classifyRun(
-  run: RunLike | null | undefined,
-  opts: { authFailure?: boolean } = {},
-): RecoveryClass | undefined {
-  if (!run) return undefined;
-  // A parked run is a person's to unstick — except the one park the server
-  // names as machine-repairable: every ready phase held by an unrunnable
-  // §Verification. Kind-gated so a lock park or a live-orphan park (which
-  // write no kind) never grows a repair button they cannot honour.
-  if (run.status === 'parked') {
-    return run.halt?.kind === 'verification-preflight' ? 'plan-repair' : undefined;
-  }
-  if (run.status !== 'halted' && run.status !== 'interrupted') return undefined;
-  if (opts.authFailure) return 'auth-interrupted';
-
-  const reason = run.halt?.reason ?? '';
-  if (NO_HANDOFF.test(reason)) return 'halted-missing-handoff';
-  if (VERIFICATION.test(reason)) return 'halted-verification';
-  return 'interrupted-resume';
-}
-
-/**
- * Which recovery a phase row wants.
- *
- * A phase table knows its own record's status, which is more specific than the
- * run's: a `failed` phase failed a check, an `interrupted` one never got to
- * finish. `done` and `skipped` want nothing — the invariant is that a recovery
- * is only ever offered for a phase that is genuinely stuck.
- */
-export function classifyPhase(
-  status: string,
-  run?: RunLike | null,
-  opts: { authFailure?: boolean } = {},
-): RecoveryClass | undefined {
-  if (opts.authFailure) return 'auth-interrupted';
-  switch (status) {
-    case 'failed':
-      // The run's halt reason is the only thing that distinguishes "verification
-      // went red" from "nothing was ever written down", and both land here.
-      return NO_HANDOFF.test(run?.halt?.reason ?? '') ? 'halted-missing-handoff' : 'halted-verification';
-    case 'interrupted':
-    case 'running':
-    case 'verifying':
-    case 'pending':
-      return 'interrupted-resume';
-    case 'parked':
-      // Only the server-named verification park is repairable; a lock park or
-      // a gate park stays a person's call (and gets Retry alone, as before).
-      return run?.halt?.kind === 'verification-preflight' ? 'plan-repair' : undefined;
-    default:
-      return undefined;
-  }
-}
-
-/** Every health issue is repaired by the same class; the prompt branches by kind. */
-export function classifyIssue(issue: { severity?: string }): RecoveryClass | undefined {
-  return issue.severity === 'error' || issue.severity === 'warning' ? 'plan-repair' : undefined;
-}
-
-/**
- * Classification for a phase the BOARD calls stuck — a handoff whose
- * frontmatter reads blocked/in-progress. Such a phase often has no run record
- * at all (the work happened in another session), so `classifyPhase` has
- * nothing to read; the board state itself is the fact. The repair is
- * plan-repair's stale-handoff job: establish what really happened, finish it
- * if finishable, and set the status the repository supports.
- */
-export function classifyBoardPhase(state: string): RecoveryClass | undefined {
-  return state === 'stuck' ? 'plan-repair' : undefined;
+    !session.exited && session.meta?.recovery && keyOf(session.meta.recovery) === key);
 }

@@ -418,6 +418,32 @@ export type PhaseOptions = {
   mcpPolicy?: McpPolicy;
 };
 
+/**
+ * Every kind a halt can carry, written at the halt site. The runtime list —
+ * and the profile that decides how each kind is treated — lives in
+ * `shared/recovery-model.js` (`HALT_KINDS`); this union mirrors it for TS and
+ * `test/recovery-model.test.ts` pins the two identical. `halt.kind` stays
+ * `HaltKind | (string & {})` so records written by other versions still load.
+ */
+export type HaltKind =
+  | 'verify-failed'
+  | 'no-handoff'
+  | 'phase-blocked'
+  | 'waiting-external-timeout'
+  | 'needs-human'
+  | 'plan-lint'
+  | 'phase-crashed'
+  | 'budget'
+  | 'plan-unreadable'
+  | 'failure-streak'
+  | 'models-exhausted'
+  | 'verification-preflight'
+  | 'mcp-preflight'
+  | 'run-preflight'
+  | 'recovery-failed'
+  | 'orphaned-session'
+  | 'runner-crashed';
+
 export type RunState = {
   id: string;
   slug: string;
@@ -488,7 +514,7 @@ export type RunState = {
    * a sentence; absent on records written before kinds existed, which is why
    * every reader keeps a fallback on the words.
    */
-  halt: { at: string; reason: string; phase?: number; kind?: string } | null;
+  halt: { at: string; reason: string; phase?: number; kind?: HaltKind | (string & {}) } | null;
   /**
    * A pause that has been asked for but not yet reached.
    *

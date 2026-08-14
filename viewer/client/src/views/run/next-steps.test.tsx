@@ -109,7 +109,7 @@ describe('NextSteps', () => {
     return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
   }
 
-  it('renders a stuck phase with Repair with AI, and a gated one with its confirmation chip', () => {
+  it('renders a stuck phase with Repair the plan with a new agent, and a gated one with its confirmation chip', () => {
     const onRetry = vi.fn();
     mount(<NextSteps
       slug="demo"
@@ -132,9 +132,9 @@ describe('NextSteps', () => {
     expect(screen.getByText(/shutdown acceptance test needs a human/)).toBeInTheDocument();
     // The button now opens the launch dialog rather than firing on one click —
     // the operator gets to shape the session before it exists.
-    fireEvent.click(screen.getByRole('button', { name: /Repair with AI/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Repair the plan with a new agent/i }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    expect(screen.getAllByText(/Repair with AI/i).length).toBeGreaterThan(1);
+    expect(screen.getAllByText(/Repair the plan with a new agent/i).length).toBeGreaterThan(1);
     fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
 
     expect(screen.getByText(/confirm the window/)).toBeInTheDocument();

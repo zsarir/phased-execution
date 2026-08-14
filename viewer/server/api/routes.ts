@@ -9,7 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { PhaseClaimedError, type Service } from '../service.ts';
+import { PhaseClaimedError, RecoveryBusyError, type Service } from '../service.ts';
 import { agentEnabled, checkRoot, listDirs } from '../config.ts';
 import { buildAgentLaunch } from '../agent.ts';
 import { parseRecoveryRequest, type RecoveryFacts } from '../recovery.ts';
@@ -1460,7 +1460,10 @@ export async function handleApi(
               });
               json(res, 200, { run });
             } catch (error) {
-              json(res, 409, { error: (error as Error)?.message ?? 'the phase could not be recovered' });
+              json(res, 409, {
+                error: (error as Error)?.message ?? 'the phase could not be recovered',
+                ...(error instanceof RecoveryBusyError ? { sessionId: error.sessionId } : {}),
+              });
             }
             return true;
           }
@@ -1530,7 +1533,7 @@ export async function handleApi(
     // 409 for a claimed phase: the request is well formed and the caller did
     // nothing wrong — somebody else is simply working that phase. 500 would
     // read as a console fault and send the operator looking for the wrong bug.
-    const status = error instanceof PhaseClaimedError ? 409
+    const status = error instanceof PhaseClaimedError || error instanceof RecoveryBusyError ? 409
       : error instanceof WriteError ? 400
         : 500;
     json(res, status, {
@@ -1538,6 +1541,9 @@ export async function handleApi(
       ...(error instanceof PhaseClaimedError
         ? { claimed: { slug: error.slug, phase: error.phase, ...error.lock } }
         : {}),
+      // The same 409-with-sessionId shape `resolveRecovery` refusals use, so
+      // the client navigates to the live session instead of erroring.
+      ...(error instanceof RecoveryBusyError ? { sessionId: error.sessionId } : {}),
     });
     return true;
   }

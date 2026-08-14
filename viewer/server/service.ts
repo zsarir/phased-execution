@@ -53,6 +53,9 @@ import {
 } from './runner/runner.ts';
 import { Scheduler, type LockView } from './runner/scheduler.ts';
 import { formatScope, scopeOfRow, scopesIntersect } from '../shared/scope.js';
+import {
+  KIND_PROFILE, NO_HANDOFF_AUTO_RE, VERIFICATION_AUTO_RE, recoveryActionsFor,
+} from '../shared/recovery-model.js';
 import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
 import {
@@ -296,11 +299,33 @@ export type ControlResult =
 
 /** A forward action the console can offer on a phase that is not done. */
 export type RecoveryAction = {
-  id: 'recheck' | 'closeout' | 'resume' | 'retry' | 'skip';
+  id: 'recheck' | 'closeout' | 'resume' | 'retry' | 'skip' | 'fix-agent'
+    | 'mcp-continue' | 'continue-run' | 'release' | 'force-release' | 'dismiss';
   label: string;
   /** What it costs — the thing that was never stated on the old Retry button. */
   detail: string;
+  /** How it acts: check | own-session | new-agent | run-control | claim | mcp. */
+  mechanism?: string;
+  /** Which console capability gates it (run | agent | writes), when one does. */
+  flag?: string | null;
+  /** Set on `fix-agent`: which agent briefing to launch. */
+  recoveryClass?: string;
 };
+
+/**
+ * Thrown when a run-verb targets a phase a live agent recovery session is
+ * already editing. Routes answer it as the same 409-with-sessionId shape
+ * `resolveRecovery` refusals use, so the client navigates to the session
+ * instead of erroring.
+ */
+export class RecoveryBusyError extends Error {
+  readonly sessionId: string;
+  constructor(message: string, sessionId: string) {
+    super(message);
+    this.name = 'RecoveryBusyError';
+    this.sessionId = sessionId;
+  }
+}
 
 export type PhaseDiagnosis = {
   runId: string;
@@ -366,39 +391,18 @@ function recoveryOwner(request: RecoveryRequest): string {
  * empty.
  */
 export function recoveryActions(status: string, resumable: boolean): RecoveryAction[] {
-  if (status === 'done' || status === 'skipped') return [];
-
-  const actions: RecoveryAction[] = [{
-    id: 'recheck',
-    label: 'Re-check',
-    detail: 'Runs the board, verification and validate.sh again. Starts no session and costs nothing.',
-  }];
-
-  if (resumable) {
-    actions.push({
-      id: 'closeout',
-      label: 'Finish this phase',
-      detail: 'Resumes this phase\'s own session and asks it to verify, commit and write the handoff.',
-    }, {
-      id: 'resume',
-      label: 'Resume with an instruction',
-      detail: 'The same, carrying words you type — for when it needs to fix something first.',
-    });
-  }
-
-  actions.push({
-    id: 'retry',
-    label: 'Retry from the start',
-    detail: resumable
-      ? 'Runs the phase again from its boot prompt. Discards the session above and whatever it had done.'
-      : 'Runs the phase again from its boot prompt.',
-  }, {
-    id: 'skip',
-    label: 'Skip',
-    detail: 'Marks the phase abandoned and moves on. The plan will read it as not done.',
-  });
-
-  return actions;
+  // The words, the mechanisms and the ordering all come from the shared model
+  // — this wrapper only keeps the wire shape the diagnosis payload has always
+  // had (`detail`, not `blurb`). Flag gating is deliberately absent here: the
+  // client holds the console's flags and computes its own disabled states.
+  return recoveryActionsFor({ record: { status, resumable } }).map((action) => ({
+    id: action.id as RecoveryAction['id'],
+    label: action.label,
+    detail: action.blurb,
+    mechanism: action.mechanism,
+    flag: action.flag,
+    ...(action.recoveryClass ? { recoveryClass: action.recoveryClass } : {}),
+  }));
 }
 
 /** `git status --porcelain`, or empty when it cannot be read. */
@@ -519,6 +523,7 @@ export function seedSkills(chosen: string[] | undefined, defaults: string[]): st
 export function autoRecoveryClass(
   halt: { reason: string; kind?: string } | null,
   status: string,
+  record?: { verification?: { ok: boolean } | null } | null,
 ): RecoveryClass | null {
   // An interrupted run is the crash this console is booting back from — the
   // one case where the status alone is the whole diagnosis.
@@ -533,24 +538,28 @@ export function autoRecoveryClass(
   }
   if (status !== 'halted' || !halt) return null;
 
-  switch (halt.kind) {
-    case 'verify-failed': return 'halted-verification';
-    // A phase that left validate.sh red is the same repair posture: diagnose,
-    // fix minimally, re-verify. The plan-wide `plan-repair` class stays a
-    // person's (it has no phase to anchor the session on).
-    case 'plan-lint': return 'halted-verification';
-    case 'no-handoff': return 'halted-missing-handoff';
-    // A spent wait budget is the same closeout posture as a missing handoff:
-    // resume the phase's own session, check the external clock, finish the
-    // paperwork or re-file the wait.
-    case 'waiting-external-timeout': return 'halted-missing-handoff';
-    case 'phase-crashed': return 'interrupted-resume';
-    case undefined: break;
-    default: return null; // a named kind that is not on this list is not healable
+  // The named kind through the ONE profile table (shared/recovery-model.js) —
+  // the same table the halt banner and the human classifiers read, so the
+  // three can never disagree about a kind again.
+  if (halt.kind) {
+    const profile = (KIND_PROFILE as Record<string, { autoClass: string | null; park?: boolean }>)[halt.kind];
+    if (!profile) return null; // a named kind not in the table is not healable
+    // A park kind on a HALTED run is a contradiction — the drive loop writes
+    // these on parks only, so meeting one here means something else is wrong.
+    if (profile.park) return null;
+    // A no-handoff halt whose record shows RED verification is a verification
+    // failure wearing paperwork clothes — the closeout brief forbids the work
+    // that would fix it (the observed four-session loop on one phase).
+    if (halt.kind === 'no-handoff' && record?.verification && !record.verification.ok) {
+      return 'halted-verification';
+    }
+    return profile.autoClass as RecoveryClass | null;
   }
 
-  if (/did not verify|failing validate\.sh/i.test(halt.reason)) return 'halted-verification';
-  if (/no handoff was written|not marked complete/i.test(halt.reason)) return 'halted-missing-handoff';
+  // Records written before kinds existed: only the runner's own unmistakable
+  // sentences, and only the two an unattended loop may act on.
+  if (VERIFICATION_AUTO_RE.test(halt.reason)) return 'halted-verification';
+  if (NO_HANDOFF_AUTO_RE.test(halt.reason)) return 'halted-missing-handoff';
   return null;
 }
 
@@ -3533,6 +3542,15 @@ export class Service {
     // live-runner branch too, since `runner.retry` queues work the boarding
     // check would only refuse much later, after the button had said yes.
     this.assertNotClaimed(slug, [phase]);
+    // Same both-directions guard as `recoverPhase`: a retry restarts the run
+    // on a phase a live agent recovery may be mid-edit on.
+    const busyOn = this.liveRecoveryFor({ slug, phase });
+    if (busyOn) {
+      throw new RecoveryBusyError(
+        `A recovery session is already working on ${slug} phase ${phase} — a retry would start a `
+        + 'second session on the same tree. Open it, or stop it first.',
+        busyOn.id);
+    }
     const runner = this.liveRunner(slug);
     if (runner) { runner.retry(phase); return runner.current(); }
     // No loop behind it: resetting the record used to be the WHOLE action —
@@ -3598,6 +3616,16 @@ export class Service {
     // A recovery spawns a session on this exact phase — the same collision a
     // second run would be, so the same refusal.
     this.assertNotClaimed(slug, [phase]);
+    // The mirror of `resolveRecovery`'s guard 3, in the OTHER direction: an
+    // agent recovery holds no runner, so `liveRunner` above cannot see it —
+    // without this, "Fix with a new agent" plus "Finish in its own session"
+    // was two sessions editing one tree at once.
+    const busyOn = this.liveRecoveryFor({ slug, phase });
+    if (busyOn) {
+      throw new RecoveryBusyError(
+        `A recovery session is already working on ${slug} phase ${phase} — open it instead.`,
+        busyOn.id);
+    }
     const root = this.root?.path;
     if (!root) throw new Error('No repository is open.');
 
@@ -3606,6 +3634,13 @@ export class Service {
     const target = listRuns(root, slug)
       .find((run) => run.phases[String(phase)]);
     if (!target) throw new Error(`No run of ${slug} has a record for phase ${phase}.`);
+
+    // Resolve-first, the same gate the unattended path runs: when the board
+    // already reads this phase done, reconcile and answer with the records
+    // closed — never spawn a session to "finish" finished work. A standing
+    // `resolved` does NOT refuse here: an explicit click is a new instruction.
+    const gate = await this.preRecoveryGate(slug, target, phase);
+    if (gate === 'superseded') return target;
 
     return this.runnerFor(slug).recover({
       slug, root, runId: target.id, phase, mode,
@@ -4214,11 +4249,13 @@ export class Service {
     if (!state) return no('no run of that plan');
     if (!state.autoRecover) return no('the run opted out of auto-recovery');
 
-    const cls = autoRecoveryClass(state.halt, state.status);
-    if (!cls) return no('the halt is not auto-recoverable');
-
     const phase = state.halt?.phase ?? state.activePhase ?? childrenOf(state)[0]?.phase;
     if (phase == null) return no('no phase to anchor a recovery on');
+
+    // The record rides along so a no-handoff halt with red verification is
+    // classed as the verification failure it is, not as missing paperwork.
+    const cls = autoRecoveryClass(state.halt, state.status, phase != null ? state.phases[String(phase)] : null);
+    if (!cls) return no('the halt is not auto-recoverable');
 
     /* The pre-recovery gate: reconcile against the board FIRST, and respect a
      * standing resolution. This kills the observed class of recoveries

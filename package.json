@@ -45,6 +45,7 @@
     "viewer/server/",
     "viewer/shared/scope.js",
     "viewer/shared/instances.mjs",
+    "viewer/shared/recovery-model.js",
     "viewer/scripts/check-stamp.mjs",
     "viewer/client/dist/",
     "viewer/deploy/"

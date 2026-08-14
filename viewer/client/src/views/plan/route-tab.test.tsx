@@ -91,8 +91,8 @@ describe('the route tab card strip', () => {
     // The halt wants a verification fix; the stuck phase and the lint share
     // ONE plan-repair… no — the stuck phase targets its own phase, the lint
     // targets the plan, so three distinct offers stand.
-    expect(screen.getByRole('button', { name: /Fix the failing verification|Fix with AI/i })).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: /Repair with AI/i }).length).toBe(2);
+    expect(screen.getByRole('button', { name: /Fix the failing verification|Fix with a new agent/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Repair the plan with a new agent/i }).length).toBe(2);
   });
 
   it('without --allow-agent the remedy is disabled and names the flag — never absent', async () => {
@@ -106,7 +106,7 @@ describe('the route tab card strip', () => {
       history: [], eta: null,
     });
     await mount(DETAIL);
-    const button = await screen.findByRole('button', { name: /Fix with AI/i });
+    const button = await screen.findByRole('button', { name: /Fix with a new agent/i });
     expect(button).toBeDisabled();
     expect(button.getAttribute('title')).toMatch(/--allow-agent/);
   });

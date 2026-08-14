@@ -41,6 +41,7 @@ for p in \
   "viewer/server/launcher.js" \
   "viewer/shared/scope.js" \
   "viewer/shared/instances.mjs" \
+  "viewer/shared/recovery-model.js" \
   "viewer/scripts/check-stamp.mjs" \
   "viewer/run" \
   "viewer/package.json" \
