@@ -23,7 +23,7 @@
       radial-gradient(circle at 1px 1px, color-mix(in oklab, var(--rule) 70%, transparent) 1px, transparent 0)
       0 0 / 24px 24px;
     overflow: hidden;
-    block-size: clamp(300px, 56vh, 640px);
+    block-size: clamp(300px, 56dvh, 640px);
     /* Locked (the resting state): the map is a picture. Every gesture belongs
        to the page — scroll, swipe, pinch-the-page all behave exactly as they
        do over any other card — because the wheel listener is not even attached

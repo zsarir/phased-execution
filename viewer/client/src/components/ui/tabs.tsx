@@ -1,4 +1,5 @@
 import * as TabsPrimitive from '@radix-ui/react-tabs';
+import { useEffect, useRef } from 'react';
 import type { ComponentProps } from 'react';
 import { cn } from '@/lib/cn';
 
@@ -12,11 +13,24 @@ import { cn } from '@/lib/cn';
 export const Tabs = TabsPrimitive.Root;
 
 export function TabsList({ className, ...props }: ComponentProps<typeof TabsPrimitive.List>) {
+  const list = useRef<HTMLDivElement>(null);
+  // The strip hides its scrollbar, so tabs 5–7 were invisible AND undiscoverable
+  // on a phone. Two affordances: the active trigger scrolls itself into view
+  // (the guide's own idiom), and a fade on the trailing edge says "there is
+  // more" — via mask-image so it works on both themes without a painted cap.
+  useEffect(() => {
+    const node = list.current;
+    if (!node) return;
+    const active = node.querySelector<HTMLElement>('[data-state="active"]');
+    active?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  });
   return (
     <TabsPrimitive.List
+      ref={list}
       className={cn(
         'flex items-stretch gap-1 overflow-x-auto border-b border-rule',
         '[scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+        'max-md:[mask-image:linear-gradient(90deg,black_88%,transparent)]',
         className,
       )}
       {...props}

@@ -12,6 +12,8 @@ import { pad2, weight } from '@/lib/format';
 import { navigate, phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
 import { DepsCell, FlagsCell, LockCell, ScopeCell, SizeCell, TitleCell } from './phase-cells';
+import { usePhone } from '@/lib/media';
+import { PhasesTab as PhonePhaseList } from './phases-tab';
 
 /** The estimate for one phase, or nothing on a source with no plan detail. */
 const etaFor = (detail: PlanDetail, phase: number) => detail.eta?.perPhase.find((e) => e.phase === phase);
@@ -86,6 +88,7 @@ function DeparturesBoard({ detail }: { detail: PlanDetail }) {
 }
 
 export function RouteTab({ detail }: { detail: PlanDetail }) {
+  const phone = usePhone();
   const slug = detail.summary.slug;
   const closed = isClosed(detail.summary);
   const ready = detail.summary.ready;
@@ -145,7 +148,10 @@ export function RouteTab({ detail }: { detail: PlanDetail }) {
         </Card>
       ) : null}
 
-      <DeparturesBoard detail={detail} />
+      {/* The 8-column nowrap table cannot be true on a phone; the phases-tab
+          card list is the same facts, one thumb wide. The DAG above stays —
+          its touch stack is the good part. */}
+      {phone ? <PhonePhaseList detail={detail} /> : <DeparturesBoard detail={detail} />}
 
       {/* `--boot-prompt` has no closure guard of its own — it will happily write
           a full prompt for an abandoned plan's phase — so the gate has to be

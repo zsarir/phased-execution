@@ -41,6 +41,7 @@ import { RUN_TONE } from '../run/header';
 import { PROFILE_LABEL } from '../run/defaults';
 import { fleetTotals, groupRows, type RunRow } from './model';
 import { RecoveryActions } from '@/components/recovery-actions';
+import { usePhone } from '@/lib/media';
 
 /**
  * How many rows before the table stops being a table.
@@ -331,7 +332,7 @@ function FleetRows({
                 onClick={() => onToggle(row.id)}
                 aria-expanded={expanded}
                 aria-label={`${expanded ? 'Hide' : 'Show'} the phases of run ${row.id}`}
-                className="grid size-6 place-items-center rounded text-ink-faint hover:text-ink [@media(hover:none)]:min-h-(--tap-min)"
+                className="grid size-6 place-items-center rounded text-ink-faint hover:text-ink [@media(hover:none)]:min-h-(--tap-min) [@media(hover:none)]:min-w-(--tap-min)"
               >
                 <ChevronRight
                   size={14}
@@ -439,6 +440,84 @@ function FleetRows({
   );
 }
 
+
+/**
+ * The fleet, one thumb wide. Nine columns cannot all be true on a phone; a
+ * card carries the same facts in reading order — who, state, why, cost — and
+ * the way forward inline. The desktop table is untouched (`FleetRows`).
+ */
+function FleetCards({
+  rows,
+  onWatch,
+  watchingId,
+  onResolve,
+  onLifecycle,
+  allowRun,
+  busyId,
+}: {
+  rows: RunRow[];
+  onWatch: (row: RunRow) => void;
+  watchingId?: string | null;
+  onResolve?: (row: RunRow, resolve: boolean) => void;
+  onLifecycle?: (row: RunRow, verb: 'freeze' | 'thaw' | 'stop') => void;
+  allowRun: boolean;
+  busyId?: string | null;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.map((row) => {
+        const busy = busyId === row.id;
+        return (
+          <div key={row.id} className="flex flex-col gap-2 rounded-lg border border-rule bg-surface p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <a href={planHref(row.slug, 'run')} className="min-w-0 truncate font-medium text-ink hover:text-action">
+                {row.slug}
+              </a>
+              <code className="font-mono text-2xs text-ink-faint">{row.id.slice(0, 8)}</code>
+              <Chip tone={RUN_TONE[row.status as keyof typeof RUN_TONE]} title={runStatusTitle(row.status)} className="ml-auto">
+                {row.status}
+              </Chip>
+            </div>
+            {row.reason && <p className="max-w-prose text-2xs text-ink-muted">{row.reason}</p>}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-2xs tabular-nums text-ink-faint">
+              <span>{row.phasesDone}/{row.phases.length} phases</span>
+              <span>{money(row.spentUsd)}</span>
+              <span>{row.workedMs ? duration(row.workedMs) : '—'}</span>
+              <span>{relativeTime(row.updatedAt)}</span>
+            </div>
+            {['halted', 'interrupted', 'parked'].includes(row.status) && !row.resolution && (
+              <RecoveryActions
+                target={{ slug: row.slug, runId: row.id }}
+                ctx={{ run: { status: row.status, halt: row.halt ?? null, resolved: row.resolution } }}
+                max={2}
+              />
+            )}
+            <div className="flex flex-wrap gap-1.5">
+              {onLifecycle && row.live && (
+                <Button
+                  size="sm"
+                  disabled={!allowRun || busy}
+                  onClick={() => onLifecycle(row, row.frozen ? 'thaw' : 'freeze')}
+                >
+                  {row.frozen ? 'Continue' : 'Freeze'}
+                </Button>
+              )}
+              {onResolve && ['halted', 'interrupted'].includes(row.status) && (
+                <Button size="sm" disabled={!allowRun || busy} onClick={() => onResolve(row, !row.resolution)}>
+                  {row.resolution ? 'Put the card back' : 'Dismiss'}
+                </Button>
+              )}
+              <Button size="sm" onClick={() => onWatch(row)} aria-pressed={watchingId === row.id}>
+                <Radio size={13} aria-hidden /> {watchingId === row.id ? 'Watching' : 'Watch'}
+              </Button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Fleet({
   rows,
   grouped,
@@ -461,6 +540,7 @@ export function Fleet({
   /** Plan slug → the repos its phases touch, for the group header + row hint. */
   reposBySlug?: Record<string, string[]>;
 }) {
+  const phone = usePhone();
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [all, setAll] = useState(false);
 
@@ -517,23 +597,35 @@ export function Fleet({
               )}
             </h3>
           )}
-          <TableWrap>
-            <Table>
-              {head}
-              <FleetRows
-                rows={group.rows}
-                open={open}
-                onToggle={toggle}
-                onWatch={onWatch}
-                watchingId={watchingId}
-                onResolve={onResolve}
-                onLifecycle={onLifecycle}
-                allowRun={allowRun}
-                busyId={busyId}
-                reposBySlug={reposBySlug}
-              />
-            </Table>
-          </TableWrap>
+          {phone ? (
+            <FleetCards
+              rows={group.rows}
+              onWatch={onWatch}
+              watchingId={watchingId}
+              onResolve={onResolve}
+              onLifecycle={onLifecycle}
+              allowRun={allowRun}
+              busyId={busyId}
+            />
+          ) : (
+            <TableWrap>
+              <Table>
+                {head}
+                <FleetRows
+                  rows={group.rows}
+                  open={open}
+                  onToggle={toggle}
+                  onWatch={onWatch}
+                  watchingId={watchingId}
+                  onResolve={onResolve}
+                  onLifecycle={onLifecycle}
+                  allowRun={allowRun}
+                  busyId={busyId}
+                  reposBySlug={reposBySlug}
+                />
+              </Table>
+            </TableWrap>
+          )}
         </div>
       ))}
 

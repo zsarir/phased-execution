@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { Plug, RotateCw } from 'lucide-react';
+import { ArrowDown, Plug, RotateCw } from 'lucide-react';
 import '@xterm/xterm/css/xterm.css';
 // After xterm's own sheet on purpose — see the file for what it takes back.
 import './terminal.css';
@@ -44,6 +44,7 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
   const [detail, setDetail] = useState<string>();
   const [ctrl, setCtrl] = useState(false);
   const [exited, setExited] = useState<TerminalSession['exited']>();
+  const [scrolledUp, setScrolledUp] = useState(false);
 
   const send = useCallback((data: string) => {
     link.current?.send(data);
@@ -91,6 +92,16 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
 
     // Typing. A `\r` from xterm is Enter; everything else is bytes, including
     // the escape sequences the key bar sends through the same path.
+    // "Scrolled up" as a TRANSITION, not per output line: onScroll fires for
+    // every write while following, and a setState each time would re-render
+    // the pane at output speed.
+    let wasUp = false;
+    const scrolled = terminal.onScroll(() => {
+      const buffer = terminal.buffer.active;
+      const up = buffer.viewportY < buffer.baseY;
+      if (up !== wasUp) { wasUp = up; setScrolledUp(up); }
+    });
+
     const typed = terminal.onData((data) => {
       if (ctrlArmed.current) {
         const control = applyCtrl(data);
@@ -143,6 +154,7 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
       scheme.removeEventListener('change', repaint);
       window.removeEventListener('orientationchange', resize);
       typed.dispose();
+      scrolled.dispose();
       connection.close();
       terminal.dispose();
       term.current = null;
@@ -153,6 +165,20 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
     // tear down a live shell. The rest is keyed by `sessionId` from the parent.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  // Live, not mount-captured: crossing the shell breakpoint (a rotation on a
+  // tablet, a desktop-loaded session opened on a phone) re-sizes the glyphs
+  // without tearing down the live shell.
+  useEffect(() => {
+    const terminal = term.current;
+    if (!terminal) return;
+    if (terminal.options.fontSize === (phone ? 16 : 14)) return;
+    terminal.options.fontSize = phone ? 16 : 14;
+    try { fit.current?.fit(); } catch { /* mid-teardown */ }
+    if (link.current && terminal.cols && terminal.rows) {
+      link.current.resize(terminal.cols, terminal.rows);
+    }
+  }, [phone]);
 
   const reconnect = useCallback(() => {
     const terminal = term.current;
@@ -198,17 +224,30 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded }: Terminal
         </div>
       )}
 
-      <div
-        ref={host}
-        // `min-h-0` so the flex child may actually shrink; without it a long
-        // scrollback sets the track height and the shell scrolls sideways.
-        className={cn(
-          // `phase-term` is the hook `terminal.css` needs to out-specify
-          // xterm's own `.xterm .xterm-viewport { background: #000 }`.
-          'phase-term min-h-0 flex-1 overflow-hidden bg-ground-deep px-1 py-1',
-          status !== 'live' && 'opacity-70',
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={host}
+          // `min-h-0` so the flex child may actually shrink; without it a long
+          // scrollback sets the track height and the shell scrolls sideways.
+          className={cn(
+            // `phase-term` is the hook `terminal.css` needs to out-specify
+            // xterm's own `.xterm .xterm-viewport { background: #000 }`.
+            'phase-term h-full overflow-hidden bg-ground-deep px-1 py-1',
+            status !== 'live' && 'opacity-70',
+          )}
+        />
+        {/* A flick through 5,000 lines of scrollback needs a way home — the
+            scrollbar styling is a no-op on touch. */}
+        {scrolledUp && (
+          <Button
+            size="sm"
+            className="absolute bottom-2 right-3 z-(--z-base) shadow-card"
+            onClick={() => { term.current?.scrollToBottom(); term.current?.focus(); }}
+          >
+            <ArrowDown size={13} aria-hidden /> Latest
+          </Button>
         )}
-      />
+      </div>
 
       {phone && <KeyBar onSend={send} ctrl={ctrl} onCtrl={armCtrl} onPaste={paste} />}
     </div>

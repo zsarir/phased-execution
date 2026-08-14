@@ -81,6 +81,15 @@ export function resolveView(head: string | undefined): View {
  */
 export const CHROMELESS_HEADS = new Set(['source']);
 
+/**
+ * Views that own their height: the shell gives them a non-scrolling flex
+ * column (banner + view sum to the viewport) instead of the one page
+ * scroller. A banner used to push a 100%-tall terminal frame down and put
+ * the KeyBar below the fold on every SSE reconnect. Any view rendered under
+ * these heads must be flex-aware (`h-full min-h-0`).
+ */
+export const FULL_HEIGHT_HEADS = new Set(['terminal', 'agent']);
+
 /* ---------------- the hook ---------------- */
 
 function subscribe(notify: () => void): () => void {

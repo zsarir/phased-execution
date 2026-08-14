@@ -10,7 +10,7 @@ import {
 } from '@/lib/queries';
 import { Banner, Spinner, Toaster, TooltipProvider, toast } from '@/components/ui';
 import { installAppHeight, useKeyboardOpen } from '@/lib/viewport';
-import { CHROMELESS_HEADS, navigate, resolveView, useRoute } from '@/router';
+import { CHROMELESS_HEADS, FULL_HEIGHT_HEADS, navigate, resolveView, useRoute } from '@/router';
 import { Disconnected } from '@/shell/disconnected';
 import { Rail } from '@/shell/rail';
 import { MoreSheet, TabBar, TopBar } from '@/shell/phone';
@@ -80,7 +80,10 @@ export function App() {
   // land mid-page. Reset on the PATH (never the query — typing in `#/search?q=`
   // must not jump); the guide's `?card=` anchor runs after Suspense resolves,
   // i.e. after this.
-  useEffect(() => { main.current?.scrollTo(0, 0); }, [route.path]);
+  useEffect(() => {
+    // Full-height routes have no scrollTop to reset — main does not scroll there.
+    if (!FULL_HEIGHT_HEADS.has(route.segments[0] ?? '')) main.current?.scrollTo(0, 0);
+  }, [route.path, route.segments]);
   // Registers the worker and offers an update when one is waiting. Also once.
   useServiceWorker();
   // The recovery verdict, said where the person is looking. The notification
@@ -211,9 +214,16 @@ export function App() {
             *chaining* to the document but leaves the rubber band, so a flick
             past the last card still bounces a strip of empty ground into view
             above the tab bar. */}
-        <main ref={main} className="min-w-0 overflow-y-auto overscroll-none">
+        <main
+          ref={main}
+          className={FULL_HEIGHT_HEADS.has(head ?? '')
+            // Terminal/agent own their height: banners stay in flow and the
+            // frame gets the definite remainder — never a second scroller.
+            ? 'flex min-w-0 flex-col overflow-hidden'
+            : 'min-w-0 overflow-y-auto overscroll-none'}
+        >
           {(state.serverStale || stopped || !online || sse !== 'live') && (
-            <div className="flex flex-col gap-2 px-3 pt-3 md:px-5">
+            <div className="flex shrink-0 flex-col gap-2 px-3 pt-3 md:px-5">
               {state.serverStale && (
                 <Banner severity="warn">
                   <div className="min-w-0">
@@ -259,7 +269,9 @@ export function App() {
           )}
 
           <Suspense fallback={<div className="grid place-items-center py-16"><Spinner /></div>}>
-            <View route={route} />
+            {FULL_HEIGHT_HEADS.has(head ?? '')
+              ? <div className="min-h-0 flex-1"><View route={route} /></div>
+              : <View route={route} />}
           </Suspense>
         </main>
 

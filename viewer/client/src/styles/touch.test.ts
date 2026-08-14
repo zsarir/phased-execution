@@ -68,3 +68,23 @@ describe('scroll traps stay dead', () => {
     expect(table).not.toMatch(/sticky top-0/);
   });
 });
+
+describe('per-page mobile fixes stay fixed', () => {
+  it('the route map sizes by dvh — vh is the iOS large-viewport trap', () => {
+    const map = readFileSync(join(here, 'route-map.css'), 'utf8');
+    expect(map).toMatch(/56dvh/);
+    expect(map).not.toMatch(/56vh/);
+  });
+
+  it('dialogs never size by 100vw (it ignores the scrollbar)', () => {
+    for (const name of ['dialog.tsx', 'alert-dialog.tsx']) {
+      const text = readFileSync(join(SRC, 'components', 'ui', name), 'utf8');
+      expect(text).not.toMatch(/100vw/);
+    }
+  });
+
+  it('the terminal scrollback is contained — a flick must not rubber-band the shell', () => {
+    const css = readFileSync(join(SRC, 'views', 'terminal', 'terminal.css'), 'utf8');
+    expect(css).toMatch(/\.xterm-viewport\s*\{\s*overscroll-behavior:\s*contain/);
+  });
+});

@@ -35,3 +35,9 @@
   background-color: var(--rule-strong);
   border-radius: 5px;
 }
+
+/* Mid-scrollback flicks stay in the terminal: on this route the shell does
+   not scroll, and an escaped gesture rubber-bands the document on iOS. */
+.phase-term .xterm .xterm-viewport {
+  overscroll-behavior: contain;
+}

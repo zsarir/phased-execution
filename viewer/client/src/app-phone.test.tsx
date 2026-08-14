@@ -101,3 +101,19 @@ describe('the phone shell', () => {
     expect(calls.at(-1)).toEqual([0, 0]);
   });
 });
+
+describe('full-height routes', () => {
+  it('terminal gets a non-scrolling flex main; plans keeps the one page scroller', async () => {
+    window.location.hash = '#/terminal';
+    mount();
+    const main = await screen.findByRole('main');
+    expect(main.className).toContain('overflow-hidden');
+    expect(main.className).not.toContain('overflow-y-auto');
+
+    await act(async () => {
+      window.location.hash = '#/plans';
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    expect((await screen.findByRole('main')).className).toContain('overflow-y-auto');
+  });
+});
