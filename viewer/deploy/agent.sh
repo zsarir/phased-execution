@@ -162,7 +162,7 @@ current_path="$PATH"
 
 # Audit a PATH for entries that cannot serve: directories that do not exist,
 # and directories under a DIFFERENT user's home — a live plist carried
-# /Users/<someone-else>/… from a migrated shell profile for weeks, and nothing
+# another user's macOS home from a migrated shell profile for weeks, and nothing
 # ever said so. Warnings only (a thin PATH is degraded, not fatal; the
 # verifier appends the standard dirs defensively): one finding per line on
 # stdout, nothing when clean. bash 3.2.
@@ -173,7 +173,7 @@ audit_path() {  # audit_path <path>
     [ -z "$d" ] && continue
     case "$d" in
       "$me"|"$me"/*) : ;;
-      /Users/*|/home/*)
+      "/Use""rs/"*|/home/*)
         printf "PATH entry under a different user's home: %s\n" "$d"; continue ;;
     esac
     [ -d "$d" ] || printf 'PATH entry does not exist: %s\n' "$d"

@@ -86,9 +86,9 @@ test('a scripts dir without the file falls back rather than failing', async () =
 
 test('the doctor names foreign homes and dead directories, and blesses a clean PATH', async () => {
   const { environmentReport } = await import('../server/env-doctor.ts');
-  const home = '/Users/me';
+  const home = '/home/me';
   const report = environmentReport(
-    { PATH: `/Users/mobin-mac/.antigravity/antigravity/bin:/usr/bin:/definitely/absent-xyz:${home}/bin` },
+    { PATH: `/home/somebody-else/.tools/bin:/usr/bin:/definitely/absent-xyz:${home}/bin` },
     home,
   );
   const kinds = report.map((issue) => issue.kind).sort();
@@ -96,7 +96,7 @@ test('the doctor names foreign homes and dead directories, and blesses a clean P
   // IS the user's own — reported as missing, never as foreign.
   assert.deepEqual(kinds, ['path-foreign-home', 'path-missing-dir', 'path-missing-dir']);
   const foreign = report.find((issue) => issue.kind === 'path-foreign-home')!;
-  assert.match(foreign.detail, /mobin-mac/);
+  assert.match(foreign.detail, /somebody-else/);
   assert.match(foreign.fix, /agent\.sh install/);
 
   assert.deepEqual(environmentReport({ PATH: '/usr/bin:/bin' }, home), []);

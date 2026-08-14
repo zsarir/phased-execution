@@ -3,7 +3,7 @@
  * else ever reports.
  *
  * The measured defect: the live console's launchd plist carried a PATH with a
- * different user's home in it (`/Users/<someone-else>/….bin`) plus five
+ * different user's home in it (a macOS home path belonging to somebody else) plus five
  * directories that do not exist — baked at install time from whatever shell
  * ran the installer, and invisible ever since. A thin or foreign PATH is not
  * fatal (`hardenedPath` rescues the standard dirs at verify time), but it is
