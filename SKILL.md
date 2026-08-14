@@ -291,7 +291,10 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
    elapses. (An interactive session may instead simply keep the turn and wait.) Plans avoid the park
    entirely by splitting build ∥ verify-later behind a Gate-check — `references/plan-format.md`.
 
-5. **Stop & hand off, or batch.** Run the end-of-phase script (it prints the live board, batching advice,
+5. **Stop & hand off, or batch.** If the proof is waiting on an external clock, use the
+   §External-waits protocol above — under a supervisor, `phase-outcome.sh … waiting-external`
+   is the ONLY channel it can read; prose reads as a failed phase. Then run the
+   end-of-phase script (it prints the live board, batching advice,
    and a START COPY / END COPY boot prompt for **every** phase now ready):
    ```bash
    DOCS_ROOT=<hub-root> bash ~/.claude/skills/phased-execution/scripts/next-phase-prompt.sh <slug> <N>

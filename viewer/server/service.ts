@@ -5366,12 +5366,14 @@ export class Service {
         hookEventName: 'Stop',
         decision: 'block',
         reason: `Phase ${phase} of ${state.slug} is not closed: the board does not read done and no `
-          + 'outcome is declared. Finish the closeout now — run the plan\'s §Verification commands, '
-          + 'commit with explicit paths, then run '
+          + 'outcome is declared. If you are WAITING on an external process (a CI build, a deploy '
+          + 'window), declare it now and stop — prose is invisible to the supervisor: '
+          + `\`bash ${this.flags.scriptsDir}/phase-outcome.sh ${state.slug} ${phase} `
+          + 'waiting-external --wait-minutes <M> --reason "<what>" --watch <ref>` '
+          + '(write the handoff `in-progress` first). Otherwise finish the closeout — run the '
+          + 'plan\'s §Verification commands, commit with explicit paths, then run '
           + `\`bash ${this.flags.scriptsDir}/new-handoff.sh ${state.slug} ${phase} <kebab-title> complete\` `
-          + 'and fill it in. If an external process must finish first, write the handoff `in-progress` '
-          + `and declare the wait: \`bash ${this.flags.scriptsDir}/phase-outcome.sh ${state.slug} ${phase} `
-          + 'waiting-external --wait-minutes <M> --reason "<what>" --watch <ref>` — then stop.',
+          + 'and fill it in.',
       },
     };
   }

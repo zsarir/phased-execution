@@ -20,6 +20,12 @@ import { join } from 'node:path';
 // Before the dynamic import below: MAX_BYTES is read once at module load, and
 // a test that rotates megabytes to prove a point is a slow test about nothing.
 process.env.PHASE_CONSOLE_LOG_MAX_BYTES = '2048';
+// Sandbox BOTH homes before anything under ../server resolves them — the
+// belt in shared/instances.mjs throws on a test reaching the real dirs.
+const SANDBOX = mkdtempSync(join(tmpdir(), 'pc-logrot-'));
+process.env.XDG_STATE_HOME = SANDBOX;
+process.env.XDG_CONFIG_HOME = join(SANDBOX, 'config');
+
 const { configureLog, log } = await import('../server/log.ts');
 
 const CAP = 2048;

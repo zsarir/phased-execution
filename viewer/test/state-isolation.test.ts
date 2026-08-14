@@ -24,6 +24,9 @@
  * quietly going back to a bare `spawn()`.
  */
 
+// The guard this suite polices also polices IT: sandbox before ../server loads.
+import './state-sandbox.ts';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -58,8 +61,13 @@ test('no test file touches the console state directory for real', () => {
     if (!consumers.test(source)) continue;
     // Either redirect inline before your own dynamic imports, or import the
     // sandbox module first. Both resolve before `server/config.ts` reads them.
-    const redirects = /XDG_STATE_HOME/.test(source) || /from '\.\/state-sandbox\.ts'|'\.\/state-sandbox\.ts'/.test(source);
-    if (!redirects) offenders.push(file);
+    const serverAt = source.search(consumers);
+    const sandboxAt = source.search(/'\.\/state-sandbox\.ts'/);
+    const inlineAt = source.search(/XDG_STATE_HOME/);
+    const redirectAt = [sandboxAt, inlineAt].filter((at) => at >= 0).sort((a, b) => a - b)[0] ?? -1;
+    // Present AND first: a redirect below a server import runs after the
+    // damage — static imports evaluate in source order.
+    if (redirectAt < 0 || redirectAt > serverAt) offenders.push(file);
   }
 
   assert.deepEqual(offenders, [],
@@ -182,3 +190,26 @@ async function get(port: number, path: string): Promise<string> {
 async function post(port: number, path: string, body: string): Promise<number> {
   return (await call(port, path, { method: 'POST', body })).status;
 }
+
+test('the belt itself: a test that resolves the real state or config dir THROWS', async () => {
+  const { stateHome, configHome } = await import('../shared/instances.mjs');
+  const { homedir } = await import('node:os');
+  const { join: joinPath } = await import('node:path');
+  // This process runs under node --test, so the guard is armed; passing the
+  // real home explicitly must throw with the fix in the message.
+  assert.throws(
+    () => stateHome({ XDG_STATE_HOME: joinPath(homedir(), '.local', 'state') }),
+    /state-sandbox\.ts|XDG_STATE_HOME/,
+  );
+  assert.throws(
+    () => configHome({ XDG_CONFIG_HOME: joinPath(homedir(), '.config') }),
+    /XDG_CONFIG_HOME/,
+  );
+  // The sandboxed resolution this very suite runs under passes.
+  assert.ok(stateHome().includes('phase-console'));
+  // And the escape hatch covers deliberate real reads.
+  process.env.PHASE_CONSOLE_ALLOW_REAL_STATE = '1';
+  try {
+    assert.ok(stateHome({ XDG_STATE_HOME: joinPath(homedir(), '.local', 'state') }));
+  } finally { delete process.env.PHASE_CONSOLE_ALLOW_REAL_STATE; }
+});

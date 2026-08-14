@@ -36,14 +36,22 @@ Every "Waiting on you" card a Claude session could act on carries a button that 
 is not a text box you fill in: **the server composes it**, reading the board, the run, the phase
 diagnosis, the lock and the health issues itself. The browser names only the target.
 
+**Two ways to hand a stuck phase to AI, and every card now says which is which.** *Finish in its own
+session* resumes the phase's OWN session through the runner (`claude -p --resume`) — its context is
+intact and the run's settings, deny rules and hooks all apply; cheap, and the right first move when a
+session stopped one step short. *… with a new agent* opens a FRESH interactive session briefed by the
+console with the evidence — fresh eyes that know the facts, not the conversation; it costs a full
+session, and you watch it in this tab. Every button carries the exact what-will-happen as its
+tooltip (tap the ⓘ on a phone).
+
 | The card says | The button | The session is told to |
 |---|---|---|
-| A phase halted on its verification | **Fix with AI** | Diagnose the failing command, fix the cause, finish the phase. |
-| A phase did the work but wrote no handoff | **Finish with AI** | Close the phase out — commit, handoff, board. |
-| A run was interrupted | **Resume with AI** | Continue from where it stopped. |
-| The session stopped at a sign-in | **Resume with AI** | Continue after you sign in — the card routes you to the login first. |
-| A claim is stale | **Take over with AI** | Take the phase over from a session that is gone. |
-| A plan will not parse | **Repair with AI** | Repair the plan against the format the engine reads. |
+| A phase halted on its verification | **Fix with a new agent** | Diagnose the failing command, fix the cause, finish the phase. |
+| A phase did the work but wrote no handoff | **Close out with a new agent** | Close the phase out — commit, handoff, board. |
+| A run was interrupted | **Pick up with a new agent** | Continue from where it stopped. |
+| The session stopped at a sign-in | **Pick up with a new agent** | Continue after you sign in — the card routes you to the login first. |
+| A claim is stale | **Take over with a new agent** | Take the phase over from a session that is gone. |
+| A plan will not parse | **Repair the plan with a new agent** | Repair the plan against the format the engine reads. |
 
 **The outcome is checked, not assumed.** When the session exits, the board is re-read from disk and
 the notification says which it was — the phase is done, or it is still waiting and wants your eyes.

@@ -126,7 +126,9 @@ export function instanceUrl(port, host = '127.0.0.1') {
  * `env` that explicitly names `XDG_CONFIG_HOME` moves it.
  */
 export function configHome(env = process.env) {
-  return env.XDG_CONFIG_HOME ?? process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config');
+  const home = env.XDG_CONFIG_HOME ?? process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config');
+  guardTestState(home, join(homedir(), '.config'), 'XDG_CONFIG_HOME');
+  return home;
 }
 
 export function configDir(env = process.env) {
@@ -144,7 +146,31 @@ export function configDir(env = process.env) {
  */
 export function stateHome(env = process.env) {
   const home = env.XDG_STATE_HOME ?? process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state');
+  guardTestState(home, join(homedir(), '.local', 'state'), 'XDG_STATE_HOME');
   return join(home, 'phase-console');
+}
+
+/**
+ * A TEST process that resolves the operator's real state/config directories
+ * is a leak in the making: 3,553 tmpdirs (52 MB) once landed in the live
+ * `~/.local/state/phase-console/runs` because suites booted the runner before
+ * the sandbox redirect ran. A warn would be the journal-only failure mode
+ * this repo keeps paying for — so it throws, with the fix in the message.
+ * Production never sets the test markers; the escape hatch covers deliberate
+ * real-state reads.
+ */
+function guardTestState(resolved, real, envName) {
+  const env = process.env;
+  const testing = env.NODE_TEST_CONTEXT || env.VITEST
+    || process.argv.includes('--test') || process.argv.some((a) => a.startsWith('--test-'));
+  if (!testing || env.PHASE_CONSOLE_ALLOW_REAL_STATE) return;
+  if (resolved === real) {
+    throw new Error(
+      `a test process resolved the REAL ${envName === 'XDG_STATE_HOME' ? 'state' : 'config'} `
+      + `directory (${join(real, 'phase-console')}) — import viewer/test/state-sandbox.ts before `
+      + `any server import, or set ${envName}. Deliberate real reads: PHASE_CONSOLE_ALLOW_REAL_STATE=1.`,
+    );
+  }
 }
 
 /**

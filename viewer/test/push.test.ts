@@ -23,6 +23,7 @@ import {
 // happen before anything pulls it in — otherwise this writes a VAPID key and a
 // subscription register into the real state directory.
 process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), 'phase-push-'));
+process.env.XDG_CONFIG_HOME = join(process.env.XDG_STATE_HOME, 'config');
 
 let push: typeof import('../server/push/index.ts');
 let send: typeof import('../server/push/send.ts');

@@ -18,6 +18,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Sandbox BOTH homes before anything under ../server resolves them — the
+// belt in shared/instances.mjs throws on a test reaching the real dirs.
+process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), 'pc-sbx-'));
+process.env.XDG_CONFIG_HOME = join(process.env.XDG_STATE_HOME, 'config');
+
 const { DocsWatcher } = await import('../server/watch.ts');
 const { configureLog, log, recent, consoleDetached } = await import('../server/log.ts');
 const { degradedState, clearDegraded, markDegraded, onShutdown, runShutdownHandlers } = await import('../server/lifecycle.ts');

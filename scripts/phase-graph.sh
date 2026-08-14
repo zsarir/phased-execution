@@ -1530,6 +1530,11 @@ case "$mode" in
     printf 'then fill in docs/handoffs/%s/phase-%s-<kebab-title>.md and commit it.\n' "$slug" "$pad"
     printf 'Cannot finish? Hand off `in-progress` (paused, resumable) or `blocked` (needs help) —\n'
     printf 'never end the session without a handoff. Stop after the handoff exists.\n'
+    printf 'Waiting on something OUTSIDE this session (a CI build, a PR auto-merge, a deploy\n'
+    printf 'window)? Saying so in prose is invisible to the supervisor. Hand off `in-progress`,\n'
+    printf 'then declare it and stop:\n'
+    printf -- '    bash %s/phase-outcome.sh %s %s waiting-external --wait-minutes <M> --reason "<what>" --watch <ref>\n' "$SCRIPT_DIR" "$slug" "$p"
+    printf 'The supervisor parks the phase and resumes THIS session when the window elapses.\n'
     exit 0
     ;;
   board) ;;  # fall through to the human board

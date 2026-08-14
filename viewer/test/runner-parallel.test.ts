@@ -24,6 +24,7 @@ import { join } from 'node:path';
 
 const STATE_HOME = mkdtempSync(join(tmpdir(), 'pc-lanes-state-'));
 process.env.XDG_STATE_HOME = STATE_HOME;
+process.env.XDG_CONFIG_HOME = join(STATE_HOME, 'config');
 process.env.PHASE_CONSOLE_LOG = '';
 
 const { Runner } = await import('../server/runner/runner.ts');

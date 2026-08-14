@@ -66,7 +66,7 @@ than asking you to retype it.
 | A halted or interrupted run | **Continue**, **Dismiss**, or an AI recovery — and if the phases it stopped for have since gone green, it is resolved for you before you get there. |
 | A stale claim | **Release** — one, or all at once. The owner is read off the lock file, so there is nothing to type. A lease that is still live is refused rather than stolen. |
 | Unread notifications | **Mark all read**. |
-| A plan that will not parse | The actual issues, each a link to the line, and **Repair with AI**. |
+| A plan that will not parse | The actual issues, each a link to the line, and **Repair the plan with a new agent**. |
 
 ## A resolved run is annotated, never deleted
 

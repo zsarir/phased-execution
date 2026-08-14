@@ -24,6 +24,9 @@ import { join } from 'node:path';
 
 const STATE_HOME = mkdtempSync(join(tmpdir(), 'pc-gitstrat-state-'));
 process.env.XDG_STATE_HOME = STATE_HOME;
+// The config guard too: the registry read at import was reaching the
+// operator's REAL ~/.config/phase-console before the belt existed.
+process.env.XDG_CONFIG_HOME = join(STATE_HOME, 'config');
 process.env.PHASE_CONSOLE_LOG = '';
 
 const { Runner } = await import('../server/runner/runner.ts');

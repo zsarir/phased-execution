@@ -152,7 +152,7 @@ available, so closing is a cheap, reversible call.
 | `parked` | Every remaining phase needs a person first — a gate, an approval, a decision. | Read "Why this is stopped": each blocker is named with its remedy. |
 | `queued` | In line behind another plan holding the same repos; starts itself when the scope frees. | Nothing — the holder is named on the queued chip. |
 | `halting` | A halt was recorded; live sessions are finishing before the run fully stops. | Read the halt card. The run reads halted once the last session settles. |
-| `halted` | Stopped on something that must not be automated past — usually a red verification. | Fix with AI on the halt card, or fix the cause yourself and Retry the phase. |
+| `halted` | Stopped on something that must not be automated past — usually a red verification. | 'Finish in its own session' or 'Fix with a new agent' on the halt card, or fix the cause yourself and Retry the phase. |
 | `stopping` | A stop was requested; sessions are being wound down. | Wait a moment. |
 | `finished` | Nothing left to run on this plan. | Nothing. |
 | `interrupted` | Nothing is driving it and nothing recorded why — a console or session died mid-flight. | Resume with AI, or press Continue — work already on disk is kept. |
@@ -170,7 +170,7 @@ disk.
 | `verifying` | The session finished; the console runs the plan's verification commands itself. | Nothing — green marks it done, red halts with the evidence. |
 | `awaiting-verification` | The machine checks passed; steps only a person can confirm remain. | Answer the verification card — it lists exactly what needs your eyes. |
 | `done` | Finished and independently verified in this run. | Nothing. |
-| `failed` | The attempt failed — a red verification, or a session that produced nothing. | Why? shows the evidence; Fix with AI repairs it, or Retry restarts the run here. |
+| `failed` | The attempt failed — a red verification, or a session that produced nothing. | Why? shows the evidence; 'Fix with a new agent' repairs it, or Retry restarts the run here. |
 | `interrupted` | The session or console died mid-phase — or the operator stopped this one session from its tab; the working tree is wherever it stopped. | Resume with AI or Retry — the session id is kept, and uncommitted work is preserved, never redone blindly. |
 | `skipped` | Taken off this run's list by the operator. | Retry it later if it should still happen. |
 | `parked` | Needs a person before the loop will touch it again — the note says exactly why. | Read the note (gate, foreign lock, decision), act on it, then Retry. |
@@ -189,7 +189,7 @@ The "Status" column, in departures spelling.
 | `ready` | **Boarding** | Every dependency is met; this phase can start now. | Start it (or the autopilot will), or copy its boot prompt from the phase page. |
 | `in-progress` | **On track** | A session is on this phase right now. | Watch its tab. The board catches up when the handoff lands. |
 | `waiting` | **Held** | An earlier phase it depends on is not done yet. | Nothing here; finish what it waits on. |
-| `stuck` / `blocked` | **Blocked** | Its handoff is marked blocked — the Outstanding section says exactly why. | Read the excerpt on the phase page, or Repair with AI on the run page. |
+| `stuck` / `blocked` | **Blocked** | Its handoff is marked blocked — the Outstanding section says exactly why. | Read the excerpt on the phase page, or 'Repair the plan with a new agent' right on the phase page. |
 | `gated` | **Gated** | The plan gates this phase — on a person (`manual`), a session's own check (`ai`), or an automatic condition. | The phase page's Gate card shows the steps and the Approve button; ai gates clear themselves when their session boots. |
 
 ## The claim

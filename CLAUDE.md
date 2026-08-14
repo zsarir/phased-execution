@@ -140,10 +140,16 @@ rather than refusing.
   **F14** rides the same arm as a WARNING (stderr, exit untouched): an open, not-done phase whose
   §Verification holds nothing runnable — the thing the autopilot would otherwise park on at boarding.
   **F15** rides it too, same tier and same reasoning: a plan or phase naming an MCP server this
-  machine has not registered. **F16** completes the family: a §Verification command that waits on an
+  machine has not registered. **F16** rides it too: a §Verification command that waits on an
   external clock (`gh run watch`, `task deploy`, `--watch`/`wait` flags, long sleeps) — runnable by
   F14's test, unfinishable inside a session's turn; split the phase behind a Gate-check or expect a
-  runtime park.
+  runtime park. **F17** and **F18** complete the family, both born from one measured incident class
+  (16 verify-failed halts, 15 spurious): F17 warns when a §Verification lead is not installed on
+  THIS machine (`rg` a shell function elsewhere, `python` meaning python3) — the runner now SKIPS
+  such a command at verification (recorded, never failed; a phase whose every check is skipped
+  parks) — and F18 when a cwd-sensitive lead (`pnpm`, `docker`, …) has no `**Verify in:**`, since
+  verification runs at the repository root. `scripts/verify.env` is the F5-style single source for
+  those two word-lists, sourced by bash and parsed by `runner/verify-env.ts` with a drift test.
 - **bash 3.2.** The scripts' target runtime is macOS system bash. `tests/helpers/test_helper.bash`
   forces `/bin/bash` for every script under test — no associative arrays, no `${var^^}`, no `mapfile`.
 - **Never implicitly build the client.** `client/dist` is gitignored; the console warns when the build

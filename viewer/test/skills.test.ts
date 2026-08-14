@@ -15,6 +15,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.PHASE_CONSOLE_LOG = '';
+// Sandbox BOTH homes before anything under ../server resolves them — the
+// belt in shared/instances.mjs throws on a test reaching the real dirs.
+process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), 'pc-sbx-'));
+process.env.XDG_CONFIG_HOME = join(process.env.XDG_STATE_HOME, 'config');
 
 const { listSkills, forgetSkills, skillDirective, claudeHome, installedPlugins } =
   await import('../server/skills.ts');

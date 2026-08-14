@@ -232,6 +232,13 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
      `validate.sh` warns (F14) on any open phase whose §Verification would extract nothing runnable
      — heed it at plan time; at run time the same defect parks the phase at boarding (and, under
      keep-going autonomy, dispatches a plan-repair agent to author the bullet from the exit criteria).
+     Backticked numbers alone (`1`, an exit-code table) do not count as runnable.
+     It warns (**F17**) when a command's lead binary is **not installed on this machine** — write the
+     check with what exists (`grep -R` not `rg`, `python3` not `python`): the autopilot SKIPS such a
+     command at verification (recorded, not failed), and a phase whose every check is skipped parks.
+     It warns (**F18**) when a cwd-sensitive lead (`pnpm`, `npm`, `docker`, `task`, `pytest`, …) has
+     no `- **Verify in:** <dir>` — verification runs at the repository root, where the command may
+     test the wrong tree (a `cd <dir> && …` prefix also settles it).
      It also warns (**F16**) when a §Verification command **waits on an external clock** — `gh run
      watch`, a `task deploy` that needs a CI-built image, a `--watch`/`wait` flag, a long `sleep` —
      because the runner bounds each verification command at 30 minutes and an unattended session cannot

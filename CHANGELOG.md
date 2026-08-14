@@ -6,6 +6,49 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [2.2.0] - 2026-08-15
+
+Recovery grew organically into two systems both called "recovery" — a fresh briefed agent
+("Fix with AI") and the runner's resume-of-the-phase's-own-session verbs — five word-books, four
+different menus on one page, and a concurrency hole letting both edit one tree at once. One shared
+model now decides every offer (`viewer/shared/recovery-model.js`), and one component renders it as
+**Ways forward** on every surface: halt banner, phase diagnosis (the agent path appears there at
+last), next-steps, dashboard, route cards, the fleet (which listed every stopped run and offered no
+recovery at all), stats, the phase page and Ready. Every button names its mechanism — *own session*
+(cheap, context intact) vs *new agent* (fresh eyes, costs a session) — and carries exactly what will
+happen as a tooltip on desktop and a tappable ⓘ on touch. Parked runs finally raise dashboard cards
+(an MCP-parked plan once sat 85 minutes with its one-button remedy unreachable), the run-verbs
+refuse with a link while an agent recovery holds the phase, and a recovery that finds nothing wrong
+now says so as the good news it is.
+
+The dominant real-world failure — 16 verify-failed halts, 15 of them spurious, every one predicted
+by the preflight and run anyway — can no longer happen: a §Verification command whose lead binary
+this machine lacks (`rg` as a shell function elsewhere, `python` meaning python3) is **skipped and
+recorded**, never run to a 127 halt; a phase whose every check is skipped parks at boarding; and two
+new plan-time warnings land the same facts while the author is still at the keyboard (**F17**
+missing lead, **F18** cwd-sensitive command with no `Verify in:` — `scripts/verify.env` is their
+shared single source). A phase that declared itself `blocked` halts as `phase-blocked` instead of
+"no handoff was written" (twelve real halts, four looping closeout sessions), every halt site now
+writes a typed kind, read-only `gh` and `docker compose config` pass the verification allowlist,
+and `PE_MCP_SERVERS` reaches every session and pty so the F15 MCP advisory fires in production.
+A halt the board has already moved past **retracts** its urgent notification (same push tag, quiet);
+repeated push rejections (`BadJwtToken` — a measured 29-send outage) surface on a new environment
+card beside launchd PATH rot the doctor now audits (`agent.sh status` names dead directories and
+foreign homes); `GET /api/plans/:slug/verify-preflight` serves boarding's findings before any money
+is spent; and a test process that resolves the operator's real state directory now throws (3,553
+leaked tmpdirs cleaned up).
+
+The console is usable one-thumb. The software keyboard no longer hides what you type
+(`interactive-widget=resizes-content` + a visualViewport-driven `--app-height`; the tab bar steps
+aside while a field has focus); the one page scroller resets on navigation; the 16px input floor
+finally beats `text-xs` (the ask-box zoomed iOS and left it zoomed); the live console and skill
+picker stop eating flicks at their ends; terminal and agent are true full-height routes (banners
+squeeze the frame instead of pushing the KeyBar under the keyboard), with a contained scrollback, a
+jump-to-Latest button and a font size that follows the breakpoint live; the fleet and the plan's
+Route tab render as cards on a phone; dialogs stop measuring by `100vw`; and the route map sizes by
+`dvh`. Boot prompts and the Stop hook now lead with the `waiting-external` declaration (used once in
+$3k of runs while dozens of sessions ended "waiting on the build" in prose).
+
 ## [2.1.0] - 2026-08-11
 
 An MCP server that will not connect stops being able to stop a plan. A run of an eleven-phase plan
