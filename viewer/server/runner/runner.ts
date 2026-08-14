@@ -25,7 +25,7 @@
 
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync, constants as fsConstants, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 
@@ -35,7 +35,7 @@ import { run as engineRun, readMemoryBlock, readGateStatus, readLint, readText, 
 import { mcpDirective, skillDirective } from '../skills.ts';
 import { classify, fallbackChain, limitBucket, nextModel, type Disposition } from './errors.ts';
 import { markFor, spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
-import { extractCommands, hardenedPath, verifyPhase } from './verify.ts';
+import { extractCommands, resolveLead, unresolvableLeads, verifyPhase } from './verify.ts';
 import { failureContext } from './failure-context.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
@@ -405,6 +405,11 @@ function unattendedDirective(scriptsDir: string, slug: string, phase: number): s
     '- Need a person (an MCP sign-in, a manual gate, credentials)? Declare it and stop:',
     `      bash ${scriptsDir}/phase-outcome.sh ${slug} ${phase} needs-human --reason "<what and why>"`,
     '- Never end the turn silently waiting. Declare an outcome or finish the closeout.',
+    '  Ending your turn with words like "waiting for the build" and NO declared outcome',
+    '  reads as a FAILED phase and stops the run.',
+    '- The supervisor re-runs §Verification itself in plain bash and SKIPS (records, never',
+    '  fails) any command whose binary does not exist on this machine — if your',
+    '  §Verification depends on rg/python, verify with what exists and note it in the handoff.',
   ].join('\n');
 }
 
@@ -3621,6 +3626,7 @@ export class Runner {
     const cwd = await this.verifyCwd(phase);
     const verification = await verify(text, {
       cwd,
+      preflightSkip: Runner.PREFLIGHT_SKIP,
       // Explicit, and longer than the 15-minute default: a real phase's
       // verification is a full suite, sometimes a container build, and the
       // default turned a slow-but-passing check into a red one that proved
@@ -3644,6 +3650,7 @@ export class Runner {
       cwd: record.verifiedIn,
       ran: verification.ran.map((r) => ({ command: r.command, code: r.code, ms: r.ms })),
       notRun: verification.notRun,
+      ...(verification.skipped?.length ? { skipped: verification.skipped } : {}),
     }, phase);
 
     // A command that ran and failed is a verdict. A verification that could not
@@ -3694,6 +3701,12 @@ export class Runner {
 
     record.status = 'done';
     record.endedAt = new Date().toISOString();
+    // The honest verdict travels with the record: a phase that passed with
+    // checks skipped is not the same fact as one whose every check ran.
+    if (verification.skipped?.length) {
+      record.note = `verified with ${verification.skipped.length} check(s) skipped — unrunnable `
+        + `on this machine (${[...new Set(verification.skipped.map((s) => s.lead))].join(', ')})`;
+    }
     state.consecutiveFailures = 0;
     // Not a flat `null`: with another lane still running, clearing the pointer
     // here would tell the console the run was between phases while a session
@@ -3701,7 +3714,10 @@ export class Runner {
     // clears it when nothing is.
     if (this.lanes.size > 1) this.syncMirror();
     else state.activePhase = null;
-    this.record('phase.done', { costUsd: record.costUsd, attempts: record.attempts }, phase);
+    this.record('phase.done', {
+      costUsd: record.costUsd, attempts: record.attempts,
+      ...(verification.skipped?.length ? { skippedChecks: verification.skipped.length } : {}),
+    }, phase);
     this.emit('phase', { phase, status: 'done' });
     return true;
   }
@@ -3720,17 +3736,10 @@ export class Runner {
 
   private static readonly VERIFICATION_PARK = VERIFICATION_PARK_NOTE;
 
-  /** The program a command starts with, past any `FOO=1` prefixes — or null. */
+  /** The program a command starts with — the shared extractor in verify.ts,
+   * so the boarding preflight and the verify-time skip can never disagree. */
   private leadToken(command: string): string | null {
-    let rest = command.trim();
-    for (;;) {
-      const assignment = /^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/.exec(rest);
-      if (!assignment) break;
-      rest = rest.slice(assignment[0].length);
-    }
-    const token = rest.split(/\s+/)[0] ?? '';
-    if (!token || token.includes('/')) return null; // paths are judged elsewhere
-    return token;
+    return resolveLead(command);
   }
 
   /**
@@ -3959,16 +3968,28 @@ export class Runner {
       }
     }
 
-    const dirs = hardenedPath(process.env.PATH).path.split(':').filter(Boolean);
-    const seen = new Set<string>();
-    for (const command of commands) {
-      const lead = this.leadToken(command);
-      if (!lead || seen.has(lead) || Runner.PREFLIGHT_SKIP.has(lead)) continue;
-      seen.add(lead);
-      const found = dirs.some((dir) => {
-        try { accessSync(join(dir, lead), fsConstants.X_OK); return true; } catch { return false; }
+    const missing = unresolvableLeads(commands, process.env.PATH, Runner.PREFLIGHT_SKIP);
+    for (const lead of missing.keys()) {
+      // The consequence named matches what the runner will actually DO now:
+      // skip and record, never run to a 127 halt. `python` gets its errand.
+      const hint = lead === 'python' && !missing.has('python3')
+        ? ' — this machine has python3; write python3' : '';
+      warnings.push(`\`${lead}\` is not on the verification PATH — its command will be `
+        + `SKIPPED at verification (recorded, not failed)${hint}`);
+    }
+    if (missing.size) {
+      // When EVERY command's lead is missing, boarding would buy a session
+      // whose verification cannot run at all — the same park F14/F17 promise.
+      const anyRunnable = commands.some((command) => {
+        const lead = resolveLead(command);
+        return !lead || !missing.has(lead);
       });
-      if (!found) warnings.push(`\`${lead}\` is not on the verification PATH — its command would exit 127`);
+      if (!anyRunnable) {
+        return `phase ${phase}'s §Verification cannot run on this machine — every command's lead `
+          + `is missing from the PATH (${[...missing.keys()].join(', ')}). Fix the PATH (re-run `
+          + 'deploy/agent.sh install from a full shell), rewrite the bullet with what exists, '
+          + 'or Repair with AI, then Retry.';
+      }
     }
 
     // On the record too, not just the journal: the journal is rendered by

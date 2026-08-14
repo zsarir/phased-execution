@@ -77,10 +77,11 @@
  */
 
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { log } from '../log.ts';
-import type { VerifyRun, VerifySummary } from './state.ts';
+import type { VerifyRun, VerifySkip, VerifySummary } from './state.ts';
 
 /** Kept in step with `GATE_CMD_DENY` in scripts/phase-graph.sh — same intent. */
 const MUTATION_DENY = new RegExp(
@@ -108,7 +109,7 @@ const VERBS = new Set([
   'python', 'python3', 'pytest', 'uv', 'poetry', 'ruff', 'mypy', 'black', 'tox', 'alembic',
   'go', 'cargo', 'rustc',
   'bash', 'sh', 'zsh', 'shellcheck',
-  'docker', 'docker-compose', 'kubectl',
+  'docker', 'docker-compose', 'kubectl', 'gh',
   'git', 'terraform',
   'curl', 'dig', 'ssh', 'psql', 'redis-cli', 'jq',
   'grep', 'rg', 'diff', 'test', 'ls', 'cat', 'head', 'tail', 'wc', 'find', 'awk', 'sed',
@@ -175,12 +176,37 @@ const REACHES_OUT: Record<string, (segment: string) => string | null> = {
   // `run` and `exec` are judged by the command they carry (see `innerCommand`),
   // not by their own name: `docker compose run --rm api pytest -q` is a test
   // suite, and refusing it sends every containerised plan's verification to a
-  // human. The hyphenated and spaced spellings are the same thing.
+  // human. The hyphenated and spaced spellings are the same thing. Token-walked
+  // rather than regexed: `docker compose -f infra/compose.yml config` used to
+  // backtrack the optional `compose\s+` group and judge the subcommand as
+  // `compose` — refusing a pure read ~5 times on one real plan.
   docker: (c) => {
-    const sub = /^docker(?:-compose)?\s+(?:compose\s+)?([a-z][a-z-]*)/.exec(c)?.[1];
+    let rest = headOf(tokenize(c)).slice(1);
+    if (rest[0] === 'compose') rest = rest.slice(1);
+    rest = skipFlags(rest);
+    const sub = rest[0];
     if (!sub) return null; // bare `docker` prints usage
     if (DOCKER_READ_ONLY.has(sub) || sub === 'run' || sub === 'exec') return null;
     return 'is not one of the read-only docker subcommands';
+  },
+  // GitHub's CLI: most of it writes, so the question is inverted like kubectl —
+  // only demonstrably read-only subcommand pairs pass. `--watch` shapes wait on
+  // an external clock (F16 warns at plan time; here they would hold a session
+  // for the full CI duration). `gh api` passes only as a plain GET.
+  gh: (c) => {
+    if (/\s--watch\b/.test(c) || /^gh\s+run\s+watch\b/.test(c)) {
+      return 'waits on an external clock the runner cannot bound';
+    }
+    const m = /^gh\s+([a-z-]+)(?:\s+([a-z-]+))?/.exec(c);
+    if (!m) return 'is not a gh invocation the runner can judge';
+    if (m[1] === 'api') {
+      return /\s(-X|--method)\s+(?!GET\b)\S+/i.test(c) || /(^|\s)(-f|-F|--field|--raw-field|--input)\b/.test(c)
+        ? 'sends a non-GET GitHub API request'
+        : null;
+    }
+    const pair = `${m[1]} ${m[2] ?? ''}`.trim();
+    const READ = /^(run (list|view|download)|pr (list|view|checks|status|diff)|issue (list|view)|release (list|view)|repo view|workflow (list|view)|search (repos|issues|prs|code)|status|auth status)$/;
+    return READ.test(pair) ? null : 'is not one of the read-only gh subcommands';
   },
   kubectl: (c) => (/^kubectl\s+(get|describe|logs|top|explain|version|api-resources)\b/.test(c)
     ? null
@@ -276,6 +302,11 @@ const CITED_SOURCE = /^[\w.@-]+(\/[\w.@-]+)+\.(ts|tsx|js|jsx|mjs|cjs|py)$/;
 function namesAThing(candidate: string): boolean {
   const text = candidate.trim();
   if (HTTP_CALL.test(text)) return true;
+  // `1`, `128 112 3 12 124` — an exit-code table's cells, backticked. Pure
+  // numbers are the prose naming values; handing them to bash produced real
+  // "a person will be asked: 1 …" cards. Before the whitespace test, since
+  // the multi-number shape contains spaces.
+  if (/^\d[\d\s.,]*$/.test(text)) return true;
   if (/\s/.test(text)) return false;
   if (CITED_SOURCE.test(text)) return true;
   if (SCRIPT_PATH.test(text)) return false;
@@ -404,7 +435,10 @@ function refuseSegment(segment: string, depth: number): string | null {
     const rest = tokens.slice(1);
     const inert = verb === 'set'
       ? rest.every((t) => /^[-+][A-Za-z]+$/.test(t) || /^[-+]o$/.test(t) || /^[a-z]+$/.test(t))
-      : rest.length > 0 && rest.every((t) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
+      // Bare names beside the assignments are inert too: `export A=1 npm` marks
+      // `npm` for export as a VARIABLE NAME and runs nothing — bash semantics,
+      // not a command with a prefix.
+      : rest.length > 0 && rest.every((t) => /^[A-Za-z_][A-Za-z0-9_]*(=|$)/.test(t));
     if (inert) return PREAMBLE;
   }
 
@@ -595,6 +629,8 @@ const VALUE_FLAGS = new Set([
   '-I', '-n', '-P', '-d', '-a', '-s', '-L', '-E', // xargs
   '-e', '--env', '-v', '--volume', '-w', '--workdir', '-u', '--user', '-p', '--publish',
   '--name', '--entrypoint', '-l', '--label', '--network', '--platform', '--env-file',
+  // compose-level flags that sit before the subcommand.
+  '-f', '--file', '--project-directory', '--project-name', '--profile',
 ]);
 
 /**
@@ -619,6 +655,9 @@ function innerCommand(verb: string, tokens: string[]): string | typeof UNREADABL
   if (verb === 'docker' || verb === 'docker-compose') {
     let rest = tokens.slice(1);
     if (rest[0] === 'compose') rest = rest.slice(1);
+    // Compose-level flags (`-f infra/compose.yml`, `-p name`) sit BEFORE the
+    // subcommand — the same walk the gate does, or `run`'s payload goes unjudged.
+    rest = skipFlags(rest);
     const sub = rest[0];
     if (sub !== 'run' && sub !== 'exec') return null;
     const tail = skipFlags(rest.slice(1));
@@ -663,7 +702,60 @@ export type VerifyOptions = {
   signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   onStart?: (command: string, index: number, total: number) => void;
+  /** Leads never worth a resolution check (builtins, keywords). */
+  preflightSkip?: ReadonlySet<string>;
+  /** Test seam: overrides the on-disk executability probe. Production never sets it. */
+  canExecute?: (lead: string) => boolean;
 };
+
+/** Fallback when the caller passes no skip set (mirrors scripts/verify.env). */
+const DEFAULT_PREFLIGHT_SKIP: ReadonlySet<string> = new Set([
+  'cd', 'true', 'false', 'echo', 'printf', 'test', 'pwd', 'env', 'which',
+  'bash', 'sh', 'command', 'export', 'set', 'time',
+  'if', 'then', 'fi', 'elif', 'else', 'for', 'while', 'until', 'do', 'done', 'case', 'esac',
+]);
+
+/** The program a command starts with, past `FOO=1` prefixes — or null for
+ * paths (judged elsewhere) and empty candidates. One extractor, three
+ * consumers: the boarding preflight, the verify-time skip below, and (via
+ * the same rules re-implemented in bash) lint F17. */
+export function resolveLead(command: string): string | null {
+  let rest = command.trim();
+  for (;;) {
+    const assignment = /^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/.exec(rest);
+    if (!assignment) break;
+    rest = rest.slice(assignment[0].length);
+  }
+  const token = rest.split(/\s+/)[0] ?? '';
+  if (!token || token.includes('/')) return null;
+  return token;
+}
+
+/**
+ * Which leads resolve to no executable on the (hardened) verification PATH —
+ * `lead → reason`. The predicate the boarding preflight and verify-time skip
+ * share, so "predicted missing" and "skipped" can never disagree.
+ */
+export function unresolvableLeads(
+  commands: readonly string[],
+  envPath: string | undefined,
+  skip: ReadonlySet<string> = DEFAULT_PREFLIGHT_SKIP,
+  canExecute?: (lead: string) => boolean,
+): Map<string, string> {
+  const missing = new Map<string, string>();
+  const dirs = hardenedPath(envPath).path.split(':').filter(Boolean);
+  const executable = canExecute ?? ((lead: string) => dirs.some((dir) => {
+    try { accessSync(join(dir, lead), fsConstants.X_OK); return true; } catch { return false; }
+  }));
+  const seen = new Set<string>();
+  for (const command of commands) {
+    const lead = resolveLead(command);
+    if (!lead || seen.has(lead) || skip.has(lead)) continue;
+    seen.add(lead);
+    if (!executable(lead)) missing.set(lead, `\`${lead}\` is not installed on the verification PATH here`);
+  }
+  return missing;
+}
 
 const DEFAULT_TIMEOUT_MS = 15 * 60_000;
 /** Enough tail to see which assertion failed, not a whole suite log. */
@@ -686,19 +778,59 @@ export async function verifyPhase(
     };
   }
 
+  // A lead the PATH cannot resolve would exit 127 — a fact about this MACHINE,
+  // not about the work. 15 of 16 observed verify-failed halts were this shape
+  // (`rg` a shell function elsewhere, `python` meaning python3), every one
+  // predicted at boarding and run anyway. Skipped-with-reason, never failed;
+  // PHASE_CONSOLE_VERIFY_NO_SKIP=1 restores the old behaviour for one release.
+  const skipped: VerifySkip[] = [];
+  let runnable: string[] = commands;
+  if (process.env.PHASE_CONSOLE_VERIFY_NO_SKIP !== '1') {
+    const missing = unresolvableLeads(
+      commands, (opts.env ?? process.env).PATH,
+      opts.preflightSkip ?? DEFAULT_PREFLIGHT_SKIP, opts.canExecute);
+    if (missing.size) {
+      runnable = [];
+      for (const command of commands) {
+        const lead = resolveLead(command);
+        if (lead && missing.has(lead)) {
+          skipped.push({
+            command: condense(command),
+            lead,
+            reason: `\`${lead}\` is not installed on the verification PATH — confirm this check by hand, or fix the PATH`,
+          });
+        } else runnable.push(command);
+      }
+    }
+  }
+
+  if (!runnable.length && skipped.length) {
+    // Everything the plan wrote is unrunnable HERE. Not a verdict — an
+    // unanswered question: the skips ride `notRun` so the runner's existing
+    // person-park (askHuman) owns it, never a verify-failed halt.
+    const leads = [...new Set(skipped.map((s) => s.lead))].join(', ');
+    return {
+      ok: false,
+      reason: `all ${commands.length} command(s) are unrunnable here — leads not on the verification PATH: ${leads}`,
+      ran: [],
+      notRun: [...notRun, ...skipped.map((s) => ({ text: s.command, reason: s.reason }))],
+      skipped,
+    };
+  }
+
   const ran: VerifyRun[] = [];
-  for (const [index, command] of commands.entries()) {
+  for (const [index, command] of runnable.entries()) {
     if (opts.signal?.aborted) {
       notRun.push({ text: condense(command), reason: 'the run was stopped before this command' });
       continue;
     }
-    opts.onStart?.(command, index, commands.length);
+    opts.onStart?.(command, index, runnable.length);
     const result = await runOne(command, opts);
     ran.push(result);
     // Stop at the first red: later commands usually depend on earlier ones, and
     // a wall of cascading failures buries the one that actually matters.
     if (!result.ok) {
-      for (const rest of commands.slice(index + 1)) {
+      for (const rest of runnable.slice(index + 1)) {
         notRun.push({ text: condense(rest), reason: 'skipped after an earlier command failed' });
       }
       break;
@@ -706,13 +838,17 @@ export async function verifyPhase(
   }
 
   const failed = ran.find((r) => !r.ok);
+  const skipNote = skipped.length
+    ? `; ${skipped.length} skipped — unrunnable here (${[...new Set(skipped.map((s) => s.lead))].join(', ')})`
+    : '';
   return {
     ok: !failed,
     reason: failed
       ? `\`${condense(failed.command)}\` exited ${failed.code}`
-      : `${ran.length} command${ran.length === 1 ? '' : 's'} green`,
+      : `${ran.length} command${ran.length === 1 ? '' : 's'} green${skipNote}`,
     ran,
     notRun,
+    ...(skipped.length ? { skipped } : {}),
   };
 }
 

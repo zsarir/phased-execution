@@ -120,12 +120,24 @@ export type VerifyRun = {
   output: string;
 };
 
+/**
+ * A §Verification command the runner did not run because its lead binary does
+ * not exist on this machine's verification PATH. Neither `ran` (no verdict was
+ * produced) nor `notRun` (not a human chore by itself): "I could not check"
+ * and "it failed" are different facts, and 15 of 16 observed verify-failed
+ * halts were the first fact reported as the second.
+ */
+export type VerifySkip = { command: string; lead: string; reason: string };
+
 export type VerifySummary = {
   ok: boolean;
   reason: string;
   ran: VerifyRun[];
   /** Commands present in the plan that the runner would not execute, and why. */
   notRun: { text: string; reason: string }[];
+  /** Commands skipped because their lead is not installed here. Optional —
+   * records written before the skip machinery simply never have it. */
+  skipped?: VerifySkip[];
 };
 
 /**

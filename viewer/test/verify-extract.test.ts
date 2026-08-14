@@ -329,3 +329,141 @@ test('MUTATION_DENY and GATE_CMD_DENY still say the same thing', () => {
   const missing = [...verbs(tsBlock)].filter((word) => !verbs(shBlock).has(word));
   assert.deepEqual(missing, [], `phase-graph.sh is missing: ${missing.join(', ')}`);
 });
+
+/* ------------------------------------------------------------------ *
+ * G4: gh, docker compose flags, export names, exit-code tables
+ * ------------------------------------------------------------------ */
+
+test('read-only gh passes; everything that writes, waits or posts goes to a person', () => {
+  for (const command of [
+    'gh run list --repo o/r --limit 5',
+    'gh run view 123 --log',
+    'gh pr checks 42',
+    'gh pr status',
+    'gh pr diff 42',
+    'gh issue list --state open',
+    'gh release view v1.2.3',
+    'gh workflow list',
+    'gh api repos/o/r/actions/runs -q ".workflow_runs[0].status"',
+    'gh auth status',
+  ]) {
+    assert.deepEqual(runs(command), [command], command);
+  }
+  for (const [command, why] of [
+    ['gh pr merge 42', /read-only gh subcommands/],
+    ['gh release create v1.0.0', /read-only gh subcommands/],
+    ['gh run cancel 123', /read-only gh subcommands/],
+    ['gh run watch 123', /external clock/],
+    ['gh pr checks 42 --watch', /external clock/],
+    ['gh api repos/o/r/dispatches -X POST', /non-GET GitHub API request/],
+    ['gh api graphql -f query=mutation', /non-GET GitHub API request/],
+  ] as const) {
+    assert.equal(runs(command).length, 0, command);
+    assert.match(held(command)[0]?.reason ?? '', why, command);
+  }
+});
+
+test('compose-level flags no longer hide the subcommand from the gate', () => {
+  // The backtracking bug: `-f` after `compose` made the captured subcommand
+  // "compose", which is not in DOCKER_READ_ONLY — refusing a pure read.
+  assert.deepEqual(
+    runs('docker compose -f infra/compose.yml config'),
+    ['docker compose -f infra/compose.yml config'],
+  );
+  assert.deepEqual(
+    runs('docker compose --project-directory infra ps'),
+    ['docker compose --project-directory infra ps'],
+  );
+  // The payload of a flagged `run` is still judged — a mutating inner command
+  // must not ride in behind the flags.
+  assert.equal(runs('docker compose -f infra/compose.yml run --rm api pytest -q').length, 1);
+  assert.equal(runs('docker compose -f infra/compose.yml run --rm api rm -rf /data').length, 0);
+  // And `up` stays refused with or without flags.
+  assert.equal(runs('docker compose -f infra/compose.yml up -d').length, 0);
+});
+
+test('export with bare names is bash exporting VARIABLES, not a command with a prefix', () => {
+  // `export A=1 npm` marks `npm` for export as a NAME and runs nothing — a
+  // preamble, reported to nobody.
+  const extraction = only('`export NODE_ENV=test npm`');
+  assert.equal(extraction.commands.length, 0);
+  assert.equal(extraction.notRun.length, 0);
+  // The command shapes still work.
+  assert.equal(runs('export NODE_ENV=test && npm test').length, 1);
+  assert.deepEqual(runs('NODE_ENV=test npm test'), ['NODE_ENV=test npm test']);
+});
+
+test('backticked exit-code tables are citations, never commands or chores', () => {
+  // `1` and `128 112 3 12 124` produced real "a person will be asked: 1 …"
+  // cards on a live plan.
+  const extraction = only('exit codes seen: `1`, `128 112 3 12 124`; check `npm test` stays green');
+  assert.deepEqual(extraction.commands, ['npm test']);
+  assert.equal(extraction.notRun.length, 0);
+});
+
+/* ------------------------------------------------------------------ *
+ * G1: the skip machinery — a missing lead is a fact about the machine
+ * ------------------------------------------------------------------ */
+
+test('resolveLead walks env prefixes and refuses paths', async () => {
+  const { resolveLead } = await import('../server/runner/verify.ts');
+  assert.equal(resolveLead('FOO=1 BAR=2 rg -c pattern .'), 'rg');
+  assert.equal(resolveLead('pnpm test'), 'pnpm');
+  assert.equal(resolveLead('./scripts/check.sh'), null);
+  assert.equal(resolveLead(''), null);
+});
+
+test('unresolvableLeads names exactly the leads no PATH dir can execute', async () => {
+  const { unresolvableLeads } = await import('../server/runner/verify.ts');
+  const missing = unresolvableLeads(
+    ['pe-absent-xyz --check', 'git status', 'FOO=1 pe-absent-abc'],
+    process.env.PATH,
+    new Set(['cd']),
+  );
+  assert.deepEqual([...missing.keys()].sort(), ['pe-absent-abc', 'pe-absent-xyz']);
+});
+
+// The observed incident's shape exactly: `rg` is ALLOWLISTED (it passes the
+// classifier) and absent from the machine's PATH (a shell function elsewhere).
+// The probe is injected so the tests hold on machines that DO have ripgrep.
+const rgAbsent = (lead: string) => lead !== 'rg';
+
+test('verifyPhase skips a missing-lead command, runs the rest, and says so', async () => {
+  const { verifyPhase } = await import('../server/runner/verify.ts');
+  const summary = await verifyPhase(
+    '- `rg -c "pattern" src`\n- `true`',
+    { cwd: process.cwd(), canExecute: rgAbsent },
+  );
+  assert.equal(summary.ok, true);
+  assert.equal(summary.ran.length, 1);
+  assert.equal(summary.skipped?.length, 1);
+  assert.equal(summary.skipped?.[0].lead, 'rg');
+  assert.match(summary.reason, /1 command green; 1 skipped — unrunnable here \(rg\)/);
+});
+
+test('verifyPhase with EVERY lead missing is an unanswered question, not a failure verdict', async () => {
+  const { verifyPhase } = await import('../server/runner/verify.ts');
+  const summary = await verifyPhase(
+    '- `rg -c "pattern" src`',
+    { cwd: process.cwd(), canExecute: rgAbsent },
+  );
+  assert.equal(summary.ok, false);
+  assert.equal(summary.ran.length, 0, 'nothing ran, so nothing "failed"');
+  assert.match(summary.reason, /unrunnable here — leads not on the verification PATH: rg/);
+  // The skips ride notRun so the runner's person-park owns them.
+  assert.ok(summary.notRun.some((entry) => /rg -c/.test(entry.text)));
+});
+
+test('PHASE_CONSOLE_VERIFY_NO_SKIP=1 restores the old run-to-127 behaviour', async () => {
+  const { verifyPhase } = await import('../server/runner/verify.ts');
+  process.env.PHASE_CONSOLE_VERIFY_NO_SKIP = '1';
+  try {
+    const summary = await verifyPhase(
+      '- `rg --version-definitely-not-a-flag`',
+      { cwd: process.cwd(), canExecute: rgAbsent },
+    );
+    assert.equal(summary.ok, false);
+    assert.equal(summary.ran.length, 1);
+    assert.equal(summary.skipped, undefined);
+  } finally { delete process.env.PHASE_CONSOLE_VERIFY_NO_SKIP; }
+});
