@@ -552,9 +552,18 @@ test('a queued second lane does not repaint a run that is still driving its firs
   const spawn: SpawnFn = async (request) => {
     const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
     if (phase === 1) {
-      await sleep(400); // let phase 2 reach admission and queue behind this scope
-      const state = instance.current()!;
-      sampled = { run: state.status, p2: state.phases['2']?.status };
+      // Wait for phase 2 to REACH admission rather than assuming a fixed delay
+      // covers it — on a loaded CI runner 400ms was not enough and the sample
+      // read a phase that had not queued yet. The claims under test are
+      // unchanged: once the lane has a recorded status it must be `queued`
+      // (never a concurrent boarding into the same scope), and the RUN must
+      // still say `running` while its first lane drives.
+      for (let tick = 0; tick < 100 && !sampled.p2; tick++) {
+        await sleep(50);
+        const state = instance.current()!;
+        const p2 = state.phases['2']?.status;
+        if (p2) sampled = { run: state.status, p2 };
+      }
       gate.resolve();
     }
     await Promise.race([gate.promise, sleep(3_000)]);
