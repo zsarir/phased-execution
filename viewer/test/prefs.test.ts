@@ -80,7 +80,19 @@ test('sanitiseAutomation is the single coercion table', () => {
     openPrOnComplete: true, repoGuard: true,
     autoRecoverByDefault: true, autoContinueRecovery: true,
     mcpPolicy: 'continue',
+    ladderPerPhaseRungs: 3, ladderPerPhaseUsd: 100, ladderPerRunRungs: 10, ladderPerRunUsd: 400, ladderPerDayUsd: 600,
+    unblockAttempts: true, staleClaimTakeover: true, resumeAtBoot: true, autoAccountSwitch: true,
+    convergeEveryMs: 300_000,
   });
+  // Ladder caps: a finite non-negative number or the default — a string, a
+  // negative or NaN must never make the ladder unbounded (or zero).
+  assert.equal(sanitiseAutomation({ ladderPerPhaseUsd: 25 }).ladderPerPhaseUsd, 25);
+  assert.equal(sanitiseAutomation({ ladderPerPhaseUsd: '25' } as never).ladderPerPhaseUsd, 100);
+  assert.equal(sanitiseAutomation({ ladderPerRunRungs: -1 }).ladderPerRunRungs, 10);
+  assert.equal(sanitiseAutomation({ ladderPerDayUsd: Number.NaN }).ladderPerDayUsd, 600);
+  assert.equal(sanitiseAutomation({ convergeEveryMs: 0 }).convergeEveryMs, 0, 'zero is a valid "timer off"');
+  assert.equal(sanitiseAutomation({ unblockAttempts: false }).unblockAttempts, false);
+  assert.equal(sanitiseAutomation({ staleClaimTakeover: 'no' } as never).staleClaimTakeover, true);
   assert.equal(sanitiseAutomation({ gitMode: 'new-branch' }).gitMode, 'new-branch');
   // The recovery automation defaults are ON, and a typo cannot turn them off.
   assert.equal(sanitiseAutomation({ autoRecoverByDefault: 'no' } as never).autoRecoverByDefault, true);

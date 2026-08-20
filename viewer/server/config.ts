@@ -714,6 +714,37 @@ export type Prefs = {
   autoContinueRecovery?: boolean;
   mcpPolicy?: McpPolicy;
   /**
+   * The remediation ladder (`runner/ladder.ts`) — what the autopilot may try
+   * by itself before it asks a person, and how much it may spend doing so.
+   *
+   * - `ladderPerPhaseRungs` / `ladderPerPhaseUsd`: rungs and dollars per phase
+   *   (defaults 3 and $100); `ladderPerRunRungs` / `ladderPerRunUsd` per run
+   *   (10 and $400); `ladderPerDayUsd` per console per day ($600). A cap that
+   *   is reached parks the phase with an Errand — one card, one ask.
+   * - `unblockAttempts`: a handoff or outcome that declares a blocker of no
+   *   machine-checkable kind may get ONE bounded session explicitly allowed
+   *   to do the work (the measured "closeout-only passes have looped" shape).
+   * - `staleClaimTakeover`: an expired foreign lock over unfinished work is
+   *   taken over rather than parked on.
+   * - `resumeAtBoot`: lanes a console restart killed resume their own session
+   *   when the console comes back.
+   * - `autoAccountSwitch`: an auth or usage wall switches to a registered
+   *   account with headroom instead of halting.
+   * - `convergeEveryMs`: how often the convergence loop re-reads every open
+   *   plan even when nothing happened (default 5 min). 0 disables the timer;
+   *   boot, change and post-halt passes still run.
+   */
+  ladderPerPhaseRungs?: number;
+  ladderPerPhaseUsd?: number;
+  ladderPerRunRungs?: number;
+  ladderPerRunUsd?: number;
+  ladderPerDayUsd?: number;
+  unblockAttempts?: boolean;
+  staleClaimTakeover?: boolean;
+  resumeAtBoot?: boolean;
+  autoAccountSwitch?: boolean;
+  convergeEveryMs?: number;
+  /**
    * Which categories the console is allowed to announce **at all** — the switch
    * an operator actually means when they turn a notification off.
    *
@@ -740,6 +771,9 @@ const DEFAULT_PREFS: Prefs = {
   recentRoots: [], theme: 'system', density: 'comfortable', sort: 'activity',
   attachDefaultSkills: false, qaByDefault: false, gitMode: 'default-branch', openPrOnComplete: true, repoGuard: true,
   autoRecoverByDefault: true, autoContinueRecovery: true, mcpPolicy: 'continue',
+  ladderPerPhaseRungs: 3, ladderPerPhaseUsd: 100, ladderPerRunRungs: 10, ladderPerRunUsd: 400, ladderPerDayUsd: 600,
+  unblockAttempts: true, staleClaimTakeover: true, resumeAtBoot: true, autoAccountSwitch: true,
+  convergeEveryMs: 300_000,
   notify: sanitiseCategories(undefined),
 };
 
@@ -752,8 +786,15 @@ const DEFAULT_PREFS: Prefs = {
  */
 export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
   'attachDefaultSkills' | 'qaByDefault' | 'gitMode' | 'openPrOnComplete' | 'repoGuard'
-  | 'autoRecoverByDefault' | 'autoContinueRecovery' | 'mcpPolicy'> {
+  | 'autoRecoverByDefault' | 'autoContinueRecovery' | 'mcpPolicy'
+  | 'ladderPerPhaseRungs' | 'ladderPerPhaseUsd' | 'ladderPerRunRungs' | 'ladderPerRunUsd' | 'ladderPerDayUsd'
+  | 'unblockAttempts' | 'staleClaimTakeover' | 'resumeAtBoot' | 'autoAccountSwitch' | 'convergeEveryMs'> {
   const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback);
+  // A cap is a finite, non-negative number or it is the default — a string,
+  // a negative or NaN in config.json must never turn the ladder unbounded
+  // (or, the other way, into a zero that parks every phase on an errand).
+  const cap = (value: unknown, fallback: number): number =>
+    (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback);
   return {
     attachDefaultSkills: bool(parsed.attachDefaultSkills, false),
     qaByDefault: bool(parsed.qaByDefault, false),
@@ -763,6 +804,16 @@ export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
     autoRecoverByDefault: bool(parsed.autoRecoverByDefault, true),
     autoContinueRecovery: bool(parsed.autoContinueRecovery, true),
     mcpPolicy: parsed.mcpPolicy === 'require' ? 'require' : 'continue',
+    ladderPerPhaseRungs: cap(parsed.ladderPerPhaseRungs, 3),
+    ladderPerPhaseUsd: cap(parsed.ladderPerPhaseUsd, 100),
+    ladderPerRunRungs: cap(parsed.ladderPerRunRungs, 10),
+    ladderPerRunUsd: cap(parsed.ladderPerRunUsd, 400),
+    ladderPerDayUsd: cap(parsed.ladderPerDayUsd, 600),
+    unblockAttempts: bool(parsed.unblockAttempts, true),
+    staleClaimTakeover: bool(parsed.staleClaimTakeover, true),
+    resumeAtBoot: bool(parsed.resumeAtBoot, true),
+    autoAccountSwitch: bool(parsed.autoAccountSwitch, true),
+    convergeEveryMs: cap(parsed.convergeEveryMs, 300_000),
   };
 }
 

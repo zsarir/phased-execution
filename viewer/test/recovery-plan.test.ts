@@ -164,6 +164,31 @@ test('a REAL halt arms bounded auto-recovery and runs the same healer, once, now
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a needs-you carries the errand when the ladder wrote one — need and how, not a bare refusal', async () => {
+  const root = scratch();
+  try {
+    const svc = service(root);
+    // A declared credential blocker: the session said what it lacks; no rung
+    // exists for it, so the errand is written at once and the answer repeats it.
+    haltedRun(root, {
+      autoRecover: { attempts: 2 },
+      halt: {
+        at: new Date().toISOString(),
+        reason: 'phase 2 declared itself blocked: the deploy needs the SSH key for the box, which no session holds',
+        phase: 2, kind: 'phase-blocked',
+      },
+    });
+    try {
+      const report = await svc.recoverPlan('alpha');
+      assert.equal(report.outcome, 'needs-you');
+      assert.ok(report.steps.some((step) => /phase 2 reads Declared blocked · credential/.test(step)), report.steps.join(' | '));
+      assert.match(report.detail, /needs a person — needed: .*credential/i);
+      assert.match(report.detail, /How: /);
+      assert.equal(report.run?.recoveries?.['2']?.errand?.situation, 'blocked-declared:credential');
+    } finally { svc.close(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('what only a person can settle comes back named, never blindly retried', async () => {
   const root = scratch();
   try {

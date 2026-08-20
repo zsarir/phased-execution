@@ -372,6 +372,25 @@ The runner will also not execute a verification command that reaches outside the
 it can be shown read-only — `curl -X POST`, `ssh box 'systemctl restart …'` and `psql -c 'DELETE …'`
 all go to a person with the reason attached, while `docker ps` and `psql -c 'SELECT …'` still run.
 
+### What the healer reads first: the situation
+
+Since 2.3.0 the unattended healer (and the phase page's *Why is this not done?* panel) no longer
+picks a remedy from the halt kind alone. Every open phase is **classified** from evidence that
+already exists — the board line, the handoff's status and Outstanding text, the run's record and
+halt, the lock, the working tree of the repos the phase names, the gate, QA, MCP and health — into
+one **situation** (`viewer/shared/situation-model.js`: `never-started`, `work-in-progress`,
+`done-unrecorded`, `verify-red`, `blocked-declared:<lock|credential|gate|external|unknown>`,
+`waiting-external`, `gated-manual`, `plan-broken`, `mcp-unavailable`,
+`resource-wall:<usage|auth|budget|model>`, `foreign-live`, `foreign-stale`, `qa-pending`,
+`qa-failed`, `superseded`, `unknown`). A **remediation ladder** (`server/runner/ladder.ts`) then
+names the next rung for that situation — never the same rung twice on one phase, bounded per
+phase / run / day by attempts **and dollars** (Settings ▸ Automation: `ladderPerPhaseRungs` 3,
+`ladderPerPhaseUsd` 100, `ladderPerRunRungs` 10, `ladderPerRunUsd` 400, `ladderPerDayUsd` 600) —
+and when the ladder is exhausted the phase carries an **Errand**: what is needed, how to give it,
+what was already tried. The journal records `phase.situation`, `phase.rung` and `phase.errand`.
+The full rung tables live in `server/runner/ladder.ts` (`RUNGS_BY_SITUATION`); the rollout's
+remaining vehicles and the convergence loop are documented in `docs/loop.md` as they land.
+
 ## Sessions, and the two the console starts for you
 
 Agent sessions and shells are processes on this machine, not objects in a tab. Closing the browser

@@ -10,6 +10,7 @@
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 import { instanceId } from '../shared/instances.mjs';
 import {
@@ -52,6 +53,14 @@ import {
   type AskResult, type RecoverMode, type RunSettingsPatch, type StartOptions,
 } from './runner/runner.ts';
 import { Scheduler, type LockView } from './runner/scheduler.ts';
+import {
+  classifySituation, collectEvidence, summariseEvidence,
+  type EvidenceDeps, type PhaseEvidence, type Situation,
+} from './runner/situation.ts';
+import {
+  accountRung, errandFor, ladderCaps, nextRung, rungsFor, settleRung, type Rung,
+} from './runner/ladder.ts';
+import type { PhaseRecord as RunPhaseRecord } from './runner/state.ts';
 import { formatScope, scopeOfRow, scopesIntersect } from '../shared/scope.js';
 import {
   KIND_PROFILE, NO_HANDOFF_AUTO_RE, VERIFICATION_AUTO_RE, recoveryActionsFor,
@@ -348,6 +357,13 @@ export type PhaseDiagnosis = {
   workingTree: string[];
   lock: string | null;
   actions: RecoveryAction[];
+  /**
+   * The classifier's word for the phase (`runner/situation.ts`) — what the
+   * unattended healer would act on — with the sentences that decided it.
+   */
+  situation: Situation | null;
+  /** The evidence it was decided from, as short lines (`summariseEvidence`). */
+  evidence: string[];
 };
 
 /**
@@ -392,12 +408,15 @@ function recoveryOwner(request: RecoveryRequest): string {
  * `test/recovery.test.ts` walks every terminal status and asserts this is never
  * empty.
  */
-export function recoveryActions(status: string, resumable: boolean): RecoveryAction[] {
+export function recoveryActions(
+  status: string, resumable: boolean, situation?: { id: string; sub?: string } | null,
+): RecoveryAction[] {
   // The words, the mechanisms and the ordering all come from the shared model
   // — this wrapper only keeps the wire shape the diagnosis payload has always
   // had (`detail`, not `blurb`). Flag gating is deliberately absent here: the
   // client holds the console's flags and computes its own disabled states.
-  return recoveryActionsFor({ record: { status, resumable } }).map((action) => ({
+  // The situation, when known, leads the ordering (additive — see the model).
+  return recoveryActionsFor({ record: { status, resumable }, ...(situation ? { situation } : {}) }).map((action) => ({
     id: action.id as RecoveryAction['id'],
     label: action.label,
     detail: action.blurb,
@@ -564,6 +583,24 @@ export function autoRecoveryClass(
   if (NO_HANDOFF_AUTO_RE.test(halt.reason)) return 'halted-missing-handoff';
   return null;
 }
+
+/** A rung, translated to what this console can launch today. */
+type DriveVehicle =
+  | { kind: 'retry' }
+  | { kind: 'session'; mode: RecoverMode; instruction?: string }
+  | { kind: 'agent'; cls: RecoveryClass };
+
+/** What `maybeAutoRecover` answers — launched or not, and what it read. */
+export type AutoRecoverResult = {
+  launched: boolean;
+  reason?: string;
+  phase?: number;
+  /** The `id:sub` situation key of the anchor phase. */
+  situation?: string;
+  label?: string;
+  rung?: string;
+  vehicle?: 'retry' | 'session' | 'agent';
+};
 
 export class Service {
   readonly flags: Flags;
@@ -3902,19 +3939,32 @@ export class Service {
     }
     const attempt = await this.maybeAutoRecover(slug);
     const after = latestRun(root, slug, this.liveRunIds()) ?? state;
+    // The step is named: which phase, what it reads as, which rung — so the
+    // answer is never a bare "needs-you" about nothing in particular.
+    if (attempt.phase != null && attempt.label) {
+      const vehicleWords = attempt.vehicle === 'retry' ? 're-boarding it fresh through the runner'
+        : attempt.vehicle === 'session' ? 'resuming its own session through the runner'
+          : attempt.vehicle === 'agent' ? 'briefing a fresh agent'
+            : null;
+      steps.push(`phase ${attempt.phase} reads ${attempt.label}`
+        + (attempt.launched && vehicleWords ? ` — ${vehicleWords}${attempt.rung ? ` (rung ${attempt.rung})` : ''}` : ''));
+    }
     if (attempt.launched) {
       steps.push('launched the recovery — the run continues by itself when the board reads fixed');
-      journal.append('run.plan-recover', { step: 'launched' });
+      journal.append('run.plan-recover', { step: 'launched', phase: attempt.phase ?? null, situation: attempt.situation ?? null, rung: attempt.rung ?? null, vehicle: attempt.vehicle ?? null });
       return {
         outcome: 'recovering', steps,
         detail: 'A bounded recovery is running. You will be notified with the verdict either way.',
         run: after,
       };
     }
-    journal.append('run.plan-recover', { step: 'needs-you', reason: attempt.reason ?? null });
+    journal.append('run.plan-recover', { step: 'needs-you', reason: attempt.reason ?? null, phase: attempt.phase ?? null, situation: attempt.situation ?? null });
+    const errand = attempt.phase != null ? after.recoveries?.[String(attempt.phase)]?.errand : undefined;
     return {
       outcome: 'needs-you', steps,
-      detail: attempt.reason ?? 'This stop needs a person.',
+      detail: errand
+        ? `${attempt.reason ?? 'This stop needs a person.'}. This stop needs a person — needed: ${errand.need} How: ${errand.how}`
+        : (attempt.reason ?? 'This stop needs a person.'),
       run: after,
     };
   }
@@ -4072,10 +4122,23 @@ export class Service {
     if (!record) return null;
 
     const board = await this.boardStates(slug);
-    const [dirty, lock] = await Promise.all([
+    const [dirty, lock, classified] = await Promise.all([
       gitPorcelain(run.root),
       this.phaseLock(slug, phase),
+      this.classifyPhase(slug, phase, run, board).catch(() => null),
     ]);
+    // The classification is cached on the record for the phase table; the
+    // read path writes it only when the run is not being driven (the loop
+    // owns the file then) and only when it changed.
+    if (classified && !this.liveRunner(slug)) {
+      const cached = record.situation;
+      if (!cached || cached.key !== classified.situation.key) {
+        this.writeStoredRun(run, (stored) => {
+          const r = stored.phases[String(phase)];
+          if (r) r.situation = { key: classified.situation.key, at: classified.evidence.at, why: classified.situation.why };
+        });
+      }
+    }
 
     return {
       runId: run.id,
@@ -4100,8 +4163,193 @@ export class Service {
       note: record.note ?? null,
       workingTree: dirty ? dirty.split('\n').slice(0, 40) : [],
       lock,
-      actions: recoveryActions(record.status, Boolean(record.sessionId ?? record.resumeSessionId)),
+      actions: recoveryActions(record.status, Boolean(record.sessionId ?? record.resumeSessionId), classified?.situation ?? null),
+      situation: classified?.situation ?? null,
+      evidence: classified ? summariseEvidence(classified.evidence) : [],
     };
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Situations — what the healer and the diagnosis panel read first
+   * ---------------------------------------------------------------- */
+
+  /**
+   * The dependencies `collectEvidence` reads through, built from what this
+   * service already holds: the store's parsed handoff and lock, the engine for
+   * the phase's scope, QA mode and result, the plan's health issues. Nothing
+   * here invents a fact; a dependency the console lacks stays absent.
+   */
+  private evidenceDeps(slug: string): EvidenceDeps {
+    const root = this.root?.path ?? '';
+    const record = this.store?.get(slug);
+    const ours = (owner: string) => /^(autopilot|console)\//.test(owner);
+    return {
+      root,
+      handoff: (_slug, phase) => {
+        const h = record ? handoffFor(record, phase) : undefined;
+        return h ? { status: h.status, outstanding: h.outstanding } : null;
+      },
+      lock: async (_slug, phase) => {
+        const l = record ? lockFor(record, phase) : undefined;
+        if (l) {
+          return {
+            holder: l.owner, ours: ours(l.owner), expired: l.expired,
+            ...(l.leaseUntil ? { leaseUntil: l.leaseUntil } : {}),
+            ...(l.scope?.length ? { scope: l.scope } : {}),
+          };
+        }
+        return null;
+      },
+      qa: async (_slug, phase) => {
+        const mode = await this.qaMode(slug).catch((): QaMode => ({ mode: 'off' }));
+        if (mode.mode === 'off') return { mode: 'off' };
+        const row = record ? qaFor(record, phase) : undefined;
+        return { mode: mode.mode, ...(row ? { result: row.result } : {}) };
+      },
+      health: async () => {
+        if (!record) return [];
+        try {
+          return healthIssues(await this.context(record)).map((issue) => ({
+            kind: issue.kind, severity: issue.severity,
+            ...(issue.phase != null ? { phase: issue.phase } : {}),
+            ...((issue as { message?: string }).message ? { detail: (issue as { message?: string }).message } : {}),
+          }));
+        } catch { return []; }
+      },
+      repos: async (_slug, phase) => {
+        // The phase's SCOPE, as directories under the root that exist — the
+        // repos whose trees say whether the phase did anything. `all`, or a
+        // scope naming nothing that is here, falls back to the root itself.
+        try {
+          const out = await run(this.engineOpts(), 'phase-graph.sh', [slug, '--repos', String(phase)]);
+          const names = out.stdout.trim().split(',').map((n) => n.trim()).filter(Boolean);
+          if (!names.length || names.includes('all')) return ['.'];
+          const dirs = names.filter((n) => n !== '.' && !n.includes('..') && existsSync(join(root, n)));
+          return dirs.length ? dirs : ['.'];
+        } catch { return ['.']; }
+      },
+    };
+  }
+
+  /** Evidence + situation for ONE phase of a run, against the board already read. */
+  async classifyPhase(
+    slug: string, phase: number, run: RunState | null, board: Record<number, string>,
+  ): Promise<{ evidence: PhaseEvidence; situation: Situation }> {
+    const evidence = await collectEvidence(this.evidenceDeps(slug), slug, phase, run, board);
+    const live = run ? this.liveRunner(slug)?.current()?.id === run.id && Boolean(childrenOf(run).find((c) => c.phase === phase)) : false;
+    if (live && evidence.record) evidence.record.live = true;
+    return { evidence, situation: classifySituation(evidence) };
+  }
+
+  /**
+   * Every open phase of a run, classified — the healer's candidate list. Order
+   * is the halt's phase, the active phase, live lanes, then ascending: the
+   * first one whose ladder has a rung this console can climb is the anchor.
+   * Phases the board reads done are not candidates; their records are closed
+   * by the reconcile pass, not diagnosed.
+   */
+  async classifyOpenPhases(
+    slug: string, state: RunState, board: Record<number, string>,
+  ): Promise<Array<{ phase: number; evidence: PhaseEvidence; situation: Situation }>> {
+    const seen = new Set<number>();
+    const order: number[] = [];
+    const add = (phase: number | null | undefined) => {
+      if (phase == null || seen.has(phase)) return;
+      seen.add(phase); order.push(phase);
+    };
+    add(state.halt?.phase);
+    add(state.activePhase);
+    for (const child of childrenOf(state)) add(child.phase);
+    for (const key of Object.keys(state.phases).map(Number).sort((a, b) => a - b)) add(key);
+    const out: Array<{ phase: number; evidence: PhaseEvidence; situation: Situation }> = [];
+    for (const phase of order) {
+      if (!state.phases[String(phase)]) continue;
+      if (board[phase] === 'done') continue;
+      try {
+        out.push({ phase, ...(await this.classifyPhase(slug, phase, state, board)) });
+      } catch (error) {
+        log.warn('run.situation-failed', { slug, phase, error });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Which of the vehicles THIS console can drive today a rung maps to — or
+   * null when the rung's vehicle has not landed yet (the ladder then skips
+   * it). Three vehicles exist today: the runner's own re-board (`retryPhase`),
+   * the phase's own session through the runner (`recoverPhase`), and a fresh
+   * briefed pty agent (`resolveRecovery` + mint).
+   */
+  private vehicleForRung(
+    rung: Rung, situation: Situation, record: RunPhaseRecord | undefined, evidence: PhaseEvidence,
+  ): DriveVehicle | null {
+    // Capability flags (`--allow-run`, `--allow-agent`, node-pty) are NOT
+    // consulted here: a vehicle the console has but may not use is still the
+    // right vehicle, and the launch path refuses it BY NAME ("needs
+    // --allow-agent") — a rung skipped silently would read as "nothing to
+    // climb" and hide the flag that was actually in the way.
+    const resumable = Boolean(record?.sessionId ?? record?.resumeSessionId);
+    const agent = true;
+    const outstanding = evidence.handoff.outstanding?.trim();
+    switch (rung.vehicle) {
+      case 'reboard-fresh':
+      case 'queue':
+        return { kind: 'retry' };
+      case 'resume-own-session': {
+        if (!resumable) return null;
+        const mode = String(rung.params?.mode ?? 'continue');
+        const instruction = mode === 'fix-verification'
+          ? 'Your phase\'s §Verification is RED. Read the failing commands and their output below, fix the cause, '
+            + 're-run the verification until it is green, then commit and write the handoff.'
+          : 'You are RESUMING this phase — it is not finished. Read `git status` and `git diff` FIRST: anything '
+            + 'uncommitted is your own earlier work; never stash, checkout or reset it away. Then carry the phase to '
+            + 'its exit criteria (the Outstanding section of your handoff says what is left), verify, commit, and '
+            + 'write the handoff as complete.'
+            + (outstanding ? `\n\nOutstanding, as you left it:\n${outstanding.slice(0, 4_000)}` : '');
+        return { kind: 'session', mode: 'resume', instruction };
+      }
+      case 'unblock-session': {
+        if (this.prefs.unblockAttempts === false) return null;
+        if (!resumable) return null;
+        return {
+          kind: 'session', mode: 'resume',
+          instruction: 'You declared this phase BLOCKED. This is ONE bounded unblock session: you are explicitly '
+            + 'allowed — asked — to do the work that unblocks it yourself where a machine can (build what is '
+            + 'unbuilt, fix what is red, finish what is partial). Read `git status` and `git diff` first; never '
+            + 'discard earlier work. If the blocker is genuinely outside your reach (a credential nobody holds, a '
+            + 'person\'s approval, a third party), say exactly what is needed with `phase-outcome.sh … blocked '
+            + '--reason` and stop. Otherwise carry the phase to its exit criteria, verify, commit and hand off.'
+            + (outstanding ? `\n\nYour Outstanding section, as you left it:\n${outstanding.slice(0, 4_000)}` : ''),
+        };
+      }
+      case 'closeout-own-session':
+        return resumable ? { kind: 'session', mode: 'closeout' } : null;
+      case 'closeout-agent':
+        return agent ? { kind: 'agent', cls: 'halted-missing-handoff' } : null;
+      case 'fix-agent':
+        return agent ? { kind: 'agent', cls: 'halted-verification' } : null;
+      case 'plan-repair-agent':
+        return agent ? { kind: 'agent', cls: 'plan-repair' } : null;
+      case 'stale-claim-takeover':
+        return agent && this.prefs.staleClaimTakeover !== false ? { kind: 'agent', cls: 'stale-claim-takeover' } : null;
+      // Landing with the runner re-board vehicles (Phase 2), the convergence
+      // loop (Phase 3) and the resource ladder (Phase 4): not drivable yet.
+      case 'reboard-resume-brief':
+      case 'plan-repair-script':
+      case 'switch-account':
+      case 'switch-model':
+      case 'wait-window':
+      case 'raise-budget':
+      case 'poll-park':
+      case 'timed-park':
+      case 'recheck-watch':
+      case 'wait-heal':
+      case 'mcp-continue':
+        return null;
+      default:
+        return null;
+    }
   }
 
   private async phaseLock(slug: string, phase: number): Promise<string | null> {
@@ -4646,8 +4894,9 @@ export class Service {
    * and persisted BEFORE the mint, so a console that dies mid-recovery
    * relaunches at most what the budget still allows on the next boot.
    */
-  async maybeAutoRecover(slug: string): Promise<{ launched: boolean; reason?: string }> {
-    const no = (reason: string) => ({ launched: false as const, reason });
+  async maybeAutoRecover(slug: string): Promise<AutoRecoverResult> {
+    const no = (reason: string, extra: Partial<AutoRecoverResult> = {}): AutoRecoverResult =>
+      ({ launched: false, reason, ...extra });
     if (!this.root?.ok) return no('no source directory is open');
     if (this.liveRunner(slug)) return no('the run is live again');
 
@@ -4655,73 +4904,174 @@ export class Service {
     if (!state) return no('no run of that plan');
     if (!state.autoRecover) return no('the run opted out of auto-recovery');
 
-    const phase = state.halt?.phase ?? state.activePhase ?? childrenOf(state)[0]?.phase;
-    if (phase == null) return no('no phase to anchor a recovery on');
+    /* Resolve-first, for the halt's own phase when there is one: the board is
+     * re-read, records it has overtaken close, the halt about them dissolves
+     * and nothing is launched for finished work. A standing resolution is an
+     * answer somebody already gave. (The same gate runs again on the anchor
+     * below — idempotent, and the anchor may be a different phase.) */
+    if (state.halt?.phase != null) {
+      const gate = await this.preRecoveryGate(slug, state, state.halt.phase);
+      if (gate === 'superseded') {
+        return no('the board had already moved past the halt — records reconciled, nothing to launch');
+      }
+      if (gate === 'resolved') return no('the stop is already resolved');
+    } else if (state.resolved) {
+      return no('the stop is already resolved');
+    }
 
-    // The record rides along so a no-handoff halt with red verification is
-    // classed as the verification failure it is, not as missing paperwork.
-    const cls = autoRecoveryClass(state.halt, state.status, phase != null ? state.phases[String(phase)] : null);
-    if (!cls) return no('the halt is not auto-recoverable');
+    /* The anchor is no longer "the halt's phase, else the active phase": every
+     * open record is CLASSIFIED (runner/situation.ts) and the anchor is the
+     * first whose situation has a rung this console can climb (runner/
+     * ladder.ts). That is what cures the measured dead end — a parked run
+     * whose only open record was `interrupted` had no halt phase and no active
+     * phase, so the old derivation answered "no phase to anchor a recovery
+     * on" about a phase that had simply never started. */
+    const board = await this.boardStates(slug);
+    const candidates = await this.classifyOpenPhases(slug, state, board);
+    if (!candidates.length) return no('no open phase of this run has a record to act on');
 
-    /* The pre-recovery gate: reconcile against the board FIRST, and respect a
-     * standing resolution. This kills the observed class of recoveries
-     * launched 19 and 61 seconds AFTER the console had already logged
-     * "superseded — the board shows phase N done": the classifier never read
-     * the board, and `run.resolved` was never consulted. */
+    const journal = new Journal(this.root.path, slug, state.id);
+    const caps = ladderCaps(this.prefs);
+    const cap = state.autoRecover.attempts;
+    const recoveries = (state.recoveries ??= {});
+    const runHistory = Object.values(recoveries).flatMap((slot) => slot.rungs ?? []);
+    const totalAttempts = Object.values(recoveries).reduce((sum, slot) => sum + (slot.attempts ?? 0), 0);
+
+    let chosen: {
+      phase: number; evidence: PhaseEvidence; situation: Situation; rung: Rung; vehicle: DriveVehicle;
+    } | null = null;
+    let firstRefusal: AutoRecoverResult | null = null;
+    const refuse = (reason: string, c: { phase: number; situation: Situation }) => {
+      firstRefusal ??= { launched: false, reason, phase: c.phase, situation: c.situation.key, label: c.situation.label };
+    };
+
+    for (const c of candidates) {
+      const key = String(c.phase);
+      const record = state.phases[key];
+      const slot = recoveries[key];
+      // Settle a rung left open by an earlier climb, by what the board says now
+      // — the board's answer, never the fact that a session ended.
+      if (slot?.rungs?.some((r) => r.outcome === 'running')) {
+        const settled = settleRung(slot, record?.status === 'done' ? 'fixed' : 'failed', undefined,
+          record?.status === 'done' ? 'the record reads done' : `the record reads ${record?.status ?? 'absent'}`);
+        if (settled) journal.append('phase.rung-settled', { rung: settled.rung, outcome: settled.outcome }, c.phase);
+      }
+      journal.append('phase.situation', { situation: c.situation.key, sub: c.situation.sub ?? null, why: c.situation.why }, c.phase);
+      if (record) record.situation = { key: c.situation.key, at: c.evidence.at, why: c.situation.why };
+
+      if (c.situation.actor === 'wait' || c.situation.actor === 'none') {
+        refuse(`phase ${c.phase} reads ${c.situation.label} — nothing to climb`, c);
+        continue;
+      }
+      // The run's own per-phase launch cap (the launch dialog's number) and
+      // the legacy per-run cap still bound the healer, for the records and
+      // readers that predate rungs; the ladder's caps apply on top.
+      if ((slot?.attempts ?? 0) >= cap) {
+        refuse(`phase ${c.phase}'s recovery budget is spent (${cap} launch${cap === 1 ? '' : 'es'})`, c);
+        continue;
+      }
+      if (totalAttempts >= 5) return no('the run recovery budget is spent (5 launches)', { phase: c.phase, situation: c.situation.key, label: c.situation.label });
+
+      // A legacy slot that tried the identical failure once, before rungs were
+      // recorded, is read as having climbed the rung the old healer drove —
+      // the own session when it had one, the agent otherwise — so the ladder
+      // escalates from there instead of repeating it.
+      const history: typeof runHistory = slot?.rungs ? [...slot.rungs] : [];
+      if (!slot?.rungs && slot?.lastReason && state.halt?.reason === slot.lastReason && (slot.attempts ?? 0) >= 1) {
+        const resumable = Boolean(record?.sessionId ?? record?.resumeSessionId);
+        for (const rung of rungsFor(c.situation.key)) {
+          const own = rung.vehicle === 'resume-own-session' || rung.vehicle === 'closeout-own-session' || rung.vehicle === 'unblock-session';
+          const agent = rung.vehicle === 'fix-agent' || rung.vehicle === 'closeout-agent' || rung.vehicle === 'plan-repair-agent';
+          if ((resumable && own) || (!resumable && agent)) {
+            history.push({ situation: c.situation.key, rung: rung.vehicle, at: slot.lastAt, outcome: 'failed', ...(rung.params ? { params: rung.params } : {}) });
+          }
+        }
+      }
+
+      const next = nextRung({
+        situation: c.situation.key, history, runHistory, caps,
+        available: (rung) => this.vehicleForRung(rung, c.situation, record, c.evidence) !== null,
+      });
+      if (!next.ok) {
+        if (next.exhausted || c.situation.actor === 'person') {
+          const errand = errandFor(c.situation.key, slot?.rungs ?? [], c.phase);
+          (recoveries[key] ??= { attempts: 0, lastAt: errand.at }).errand = errand;
+          journal.append('phase.errand', { ...errand }, c.phase);
+        }
+        refuse(`phase ${c.phase} reads ${c.situation.label} — ${next.reason}`, c);
+        continue;
+      }
+      const vehicle = this.vehicleForRung(next.rung, c.situation, record, c.evidence);
+      if (!vehicle) { refuse(`phase ${c.phase} reads ${c.situation.label} — ${next.rung.label} cannot be driven here`, c); continue; }
+      chosen = { ...c, rung: next.rung, vehicle };
+      break;
+    }
+    try { saveRun(state); } catch { /* the verdict matters more than the write */ }
+    this.emit('run:state', { state });
+    if (!chosen) return firstRefusal ?? no('nothing the autopilot can climb');
+
+    const { phase, situation, rung, vehicle } = chosen;
+    const key = String(phase);
     const gate = await this.preRecoveryGate(slug, state, phase);
     if (gate === 'superseded') {
-      return no('the board had already moved past the halt — records reconciled, nothing to launch');
+      return no('the board had already moved past the halt — records reconciled, nothing to launch', { phase, situation: situation.key, label: situation.label });
     }
-    if (gate === 'resolved') return no('the stop is already resolved');
+    if (gate === 'resolved') return no('the stop is already resolved', { phase, situation: situation.key, label: situation.label });
 
-    const key = String(phase);
-    const slot = state.recoveries?.[key];
-    const cap = state.autoRecover.attempts;
-    if ((slot?.attempts ?? 0) >= cap) {
-      return no(`phase ${phase}'s recovery budget is spent (${cap} launch${cap === 1 ? '' : 'es'})`);
-    }
-    const total = Object.values(state.recoveries ?? {}).reduce((sum, s) => sum + (s.attempts ?? 0), 0);
-    if (total >= 5) return no('the run recovery budget is spent (5 launches)');
-    if (slot?.lastReason && state.halt?.reason === slot.lastReason && (slot.attempts ?? 0) >= 1) {
-      return no('the same failure twice — a person should look before another session does');
-    }
-
-    /* The right VEHICLE, by class. A phase whose own session can finish the
-     * paperwork is resumed through the RUNNER — `claude -p --resume`, with
-     * the settings file, the deny rules, the hooks and the journal all
-     * applying, under `--allow-run` — never a fresh interactive agent with
-     * none of that. The pty agent remains for plan-shaped repairs (a session
-     * to EDIT the plan) and for people. */
-    const sessionable = (cls === 'halted-missing-handoff' || cls === 'halted-verification')
-      && Boolean(state.phases[key]?.sessionId);
-    if (sessionable) {
-      if (!this.flags.allowRun) return no('session recovery needs --allow-run');
-      const now = new Date().toISOString();
-      const bumped = ((state.recoveries ??= {})[key] ??= { attempts: 0, lastAt: now });
-      bumped.attempts += 1;
-      bumped.lastAt = now;
-      if (state.halt?.reason) bumped.lastReason = state.halt.reason;
+    const answer = (extra: Partial<AutoRecoverResult> = {}): AutoRecoverResult =>
+      ({ launched: true, phase, situation: situation.key, label: situation.label, rung: rung.vehicle, vehicle: vehicle.kind, ...extra });
+    const now = new Date().toISOString();
+    const slot = (recoveries[key] ??= { attempts: 0, lastAt: now });
+    const climb = () => {
+      // Recorded BEFORE the spend, so a console that dies mid-rung still
+      // remembers it tried — and the old `attempts`/`lastAt` move with it.
+      accountRung(slot, { situation: situation.key, rung: rung.vehicle, params: rung.params, at: now, note: rung.label });
+      if (state.halt?.reason) slot.lastReason = state.halt.reason;
       saveRun(state);
       this.emit('run:state', { state });
-      log.info('run.auto-recovery', {
-        slug, runId: state.id, phase, class: cls, vehicle: 'session', attempt: bumped.attempts,
-      });
+      journal.append('phase.rung', { situation: situation.key, rung: rung.vehicle, params: rung.params ?? null, vehicle: vehicle.kind, attempt: slot.attempts }, phase);
+      log.info('run.auto-recovery', { slug, runId: state.id, phase, situation: situation.key, rung: rung.vehicle, vehicle: vehicle.kind, attempt: slot.attempts });
       this.announce('session', {
         title: `Auto-recovery started · ${slug} P${phase}`,
-        body: `${RECOVERY_TITLES[cls]} — resuming the phase's own session `
-          + `(attempt ${bumped.attempts} of ${cap}). The run resumes by itself when the board reads fixed.`,
-        tag: tagFor('session', state.id, `auto-recover-${phase}-${bumped.attempts}`),
+        body: `${situation.label} — ${rung.label} (attempt ${slot.attempts} of ${cap}). The run resumes by itself when the board reads fixed.`,
+        tag: tagFor('session', state.id, `auto-recover-${phase}-${slot.attempts}`),
       }, { slug, runId: state.id, phase });
-      void this.recoverPhase(slug, phase, 'closeout', { by: 'auto-recovery' })
+    };
+
+    /* The runner's own re-board: reset the record and continue the run under
+     * normal admission — the cheapest vehicle there is, and the right one for
+     * a phase that never started. */
+    if (vehicle.kind === 'retry') {
+      if (!this.flags.allowRun) return no('the runner re-board needs --allow-run', { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
+      climb();
+      void this.retryPhase(slug, phase)
+        .catch((error) => {
+          log.warn('run.auto-recovery-failed', { slug, phase, error });
+          settleRung(slot, 'failed', undefined, (error as Error)?.message ?? String(error));
+          try { saveRun(state); } catch { /* best effort */ }
+        });
+      return answer();
+    }
+
+    /* The phase's own session through the RUNNER — `claude -p --resume`, with
+     * the settings file, the deny rules, the hooks and the journal all
+     * applying, under `--allow-run` — never a fresh interactive agent with
+     * none of that. */
+    if (vehicle.kind === 'session') {
+      if (!this.flags.allowRun) return no('session recovery needs --allow-run', { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
+      climb();
+      void this.recoverPhase(slug, phase, vehicle.mode, { by: 'auto-recovery', ...(vehicle.instruction ? { instruction: vehicle.instruction } : {}) })
         .then(async () => {
           const after = this.runners.get(slug)?.current()
             ?? (this.root ? loadRun(this.root.path, slug, state.id, this.liveRunIds()) : null);
           if (!after || after.id !== state.id) return;
+          const afterSlot = ((after.recoveries ??= {})[key] ??= { attempts: 0, lastAt: now });
           if (after.status === 'parked' && !after.halt) {
-            const done = ((after.recoveries ??= {})[key] ??= { attempts: 0, lastAt: now });
-            done.fixed = true;
-            done.lastOutcome = 'fixed';
-            delete done.lastReason;
+            settleRung(afterSlot, 'fixed', after.phases[key]?.costUsd, 'the board reads fixed');
+            afterSlot.fixed = true;
+            afterSlot.lastOutcome = 'fixed';
+            delete afterSlot.lastReason;
+            delete afterSlot.errand;
             saveRun(after);
             if (this.prefs.autoContinueRecovery !== false && this.flags.allowRun && !this.liveRunner(slug)) {
               log.info('run.recovery-continue', { slug, runId: after.id });
@@ -4734,19 +5084,30 @@ export class Service {
           } else if (after.status === 'waiting' && after.waitUntil) {
             // The honest middle: the session declared the external clock has
             // still not landed. The park machinery owns it from here.
+            settleRung(afterSlot, 'no-defect', undefined, 'the session declared an external wait');
+            saveRun(after);
             this.armLimitResume(slug, after);
+          } else {
+            settleRung(afterSlot, 'failed', undefined, `the run reads ${after.status}${after.halt ? ` — ${after.halt.reason.slice(0, 120)}` : ''}`);
+            saveRun(after);
           }
         })
-        .catch((error) => log.warn('run.auto-recovery-failed', { slug, phase, error }));
-      return { launched: true };
+        .catch((error) => {
+          log.warn('run.auto-recovery-failed', { slug, phase, error });
+          settleRung(slot, 'failed', undefined, (error as Error)?.message ?? String(error));
+          try { saveRun(state); } catch { /* best effort */ }
+        });
+      return answer();
     }
 
-    if (!agentEnabled(this.flags)) return no('agent auto-recovery needs --allow-agent');
-    if (this.terminals.availability() === 'no') return no('agent sessions are unavailable (node-pty)');
+    /* A fresh briefed pty agent — for plan-shaped repairs, for phases whose
+     * own session is gone, and for the stronger second try. */
+    if (!agentEnabled(this.flags)) return no('agent auto-recovery needs --allow-agent', { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
+    if (this.terminals.availability() === 'no') return no('agent sessions are unavailable (node-pty)', { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
 
-    const request: RecoveryRequest = { class: cls, slug, phase, runId: state.id };
+    const request: RecoveryRequest = { class: vehicle.cls, slug, phase, runId: state.id };
     const resolved = await this.resolveRecovery(request);
-    if (!resolved.ok) return no(resolved.error);
+    if (!resolved.ok) return no(resolved.error, { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
 
     // Spawn as the run's own account: the run's quota, the run's identity.
     const env = state.accountId ? await this.accounts.envFor(state.accountId) : null;
@@ -4770,28 +5131,18 @@ export class Service {
         ...(account ? { account } : {}),
       },
     );
-    if (!built.ok) return no(built.error);
+    if (!built.ok) return no(built.error, { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
 
-    // Bumped before the session exists — see the doc comment.
-    const now = new Date().toISOString();
-    const bumped = ((state.recoveries ??= {})[key] ??= { attempts: 0, lastAt: now });
-    bumped.attempts += 1;
-    bumped.lastAt = now;
-    saveRun(state);
-    this.emit('run:state', { state });
-
+    // Bumped before the session exists — see `climb`.
+    climb();
     const minted = await this.terminals.mint(undefined, undefined, built.launch);
-    if (!minted.ok) return no(minted.error);
-
-    this.runners.get(slug)?.note('run.auto-recovery', { phase, class: cls, attempt: bumped.attempts }, phase);
-    log.info('run.auto-recovery', { slug, runId: state.id, phase, class: cls, attempt: bumped.attempts });
-    this.announce('session', {
-      title: `Auto-recovery started · ${slug} P${phase}`,
-      body: `${RECOVERY_TITLES[cls]} — attempt ${bumped.attempts} of ${cap}. `
-        + 'The run resumes by itself when the board reads fixed.',
-      tag: tagFor('session', state.id, `auto-recover-${phase}-${bumped.attempts}`),
-    }, { slug, runId: state.id, phase });
-    return { launched: true };
+    if (!minted.ok) {
+      settleRung(slot, 'failed', undefined, minted.error);
+      try { saveRun(state); } catch { /* best effort */ }
+      return no(minted.error, { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
+    }
+    this.runners.get(slug)?.note('run.auto-recovery', { phase, class: vehicle.cls, situation: situation.key, rung: rung.vehicle, attempt: slot.attempts }, phase);
+    return answer();
   }
 
   /* ---------------------------------------------------------------- *
@@ -5787,6 +6138,19 @@ export class Service {
     if (typeof patch.autoRecoverByDefault === 'boolean') picked.autoRecoverByDefault = patch.autoRecoverByDefault;
     if (typeof patch.autoContinueRecovery === 'boolean') picked.autoContinueRecovery = patch.autoContinueRecovery;
     if (isMcpPolicy(patch.mcpPolicy)) picked.mcpPolicy = patch.mcpPolicy;
+    // The ladder caps and toggles: numbers must be finite and non-negative,
+    // booleans booleans — the same rule `sanitiseAutomation` applies on load.
+    const cap = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+    if (cap(patch.ladderPerPhaseRungs)) picked.ladderPerPhaseRungs = patch.ladderPerPhaseRungs;
+    if (cap(patch.ladderPerPhaseUsd)) picked.ladderPerPhaseUsd = patch.ladderPerPhaseUsd;
+    if (cap(patch.ladderPerRunRungs)) picked.ladderPerRunRungs = patch.ladderPerRunRungs;
+    if (cap(patch.ladderPerRunUsd)) picked.ladderPerRunUsd = patch.ladderPerRunUsd;
+    if (cap(patch.ladderPerDayUsd)) picked.ladderPerDayUsd = patch.ladderPerDayUsd;
+    if (cap(patch.convergeEveryMs)) picked.convergeEveryMs = patch.convergeEveryMs;
+    if (typeof patch.unblockAttempts === 'boolean') picked.unblockAttempts = patch.unblockAttempts;
+    if (typeof patch.staleClaimTakeover === 'boolean') picked.staleClaimTakeover = patch.staleClaimTakeover;
+    if (typeof patch.resumeAtBoot === 'boolean') picked.resumeAtBoot = patch.resumeAtBoot;
+    if (typeof patch.autoAccountSwitch === 'boolean') picked.autoAccountSwitch = patch.autoAccountSwitch;
     // `notify` is a map inside a patch, so a shallow spread alone would let a
     // client sending one toggle reset every other category to its default.
     // Merged off the *current* map (captured before the spread overwrites it),

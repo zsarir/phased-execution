@@ -253,6 +253,25 @@ btw "why did you skip the cache?"     # or the box under the session console
 به یک آدم ارجاع داده می‌شوند (همراه با دلیلش)، در حالی که `docker ps` و `psql -c 'SELECT …'` همچنان
 اجرا می‌شوند.
 
+### چیزی که درمان‌گر اول می‌خواند: وضعیت (situation)
+
+از ۲.۳.۰ به بعد، درمان‌گرِ بی‌مراقب (و پنل «چرا این تمام نشده؟» در صفحهٔ فاز) دیگر درمان را
+فقط از روی نوع توقف (halt kind) انتخاب نمی‌کند. هر فاز باز از روی شواهدی که همین حالا وجود دارند
+— خط تخته، وضعیت و متن Outstanding هندآف، رکورد و توقف اجرا، قفل، درخت کاری مخزن‌هایی که فاز
+نام برده، گیت، QA، MCP و سلامت طرح — در یک **وضعیت** دسته‌بندی می‌شود
+(`viewer/shared/situation-model.js`: `never-started`، `work-in-progress`، `done-unrecorded`،
+`verify-red`، `blocked-declared:<lock|credential|gate|external|unknown>`، `waiting-external`،
+`gated-manual`، `plan-broken`، `mcp-unavailable`، `resource-wall:<usage|auth|budget|model>`،
+`foreign-live`، `foreign-stale`، `qa-pending`، `qa-failed`، `superseded`، `unknown`). سپس یک
+**نردبان درمان** (`server/runner/ladder.ts`) پلهٔ بعدی را برای آن وضعیت نام می‌برد — هرگز یک پله
+دو بار روی یک فاز، و محدود به ازای فاز / اجرا / روز هم به تعداد تلاش و هم به **دلار**
+(Settings ▸ Automation: `ladderPerPhaseRungs` ۳، `ladderPerPhaseUsd` ۱۰۰، `ladderPerRunRungs` ۱۰،
+`ladderPerRunUsd` ۴۰۰، `ladderPerDayUsd` ۶۰۰) — و وقتی نردبان تمام شد، فاز یک **Errand** با خود
+دارد: چه چیزی لازم است، چطور بدهید، چه چیزهایی قبلاً امتحان شده. ژورنال `phase.situation`،
+`phase.rung` و `phase.errand` را ثبت می‌کند. جدول کامل پله‌ها در `server/runner/ladder.ts`
+(`RUNGS_BY_SITUATION`) است؛ وسیله‌های باقی‌ماندهٔ رول‌اوت و حلقهٔ هم‌گرایی هم‌زمان با رسیدن در
+`docs/loop.md` مستند می‌شوند.
+
 ## نشست‌ها، و آن دو نشستی که کنسول برایتان می‌سازد
 
 نشست‌های ایجنت و شل‌ها پروسه‌هایی روی همین ماشین‌اند، نه چیزی داخلِ یک تب. بستنِ مرورگر فقط سوکت را جدا

@@ -445,7 +445,37 @@ export function classifyBoardPhase(state) {
  * @property {{ holder?: string | null, expired?: boolean }} [lock]
  * @property {boolean} [authFailure]
  * @property {boolean} [planIssues]  The plan itself fails lint/health — plan-repair's own case.
+ * @property {{ id: string, sub?: string } | null} [situation]  The classifier's word for the phase
+ *   (`situation-model.js`). Additive: when present and a record is held, the situation's own first
+ *   rung leads the ordering (`leadActionFor`); everything else is unchanged.
  */
+
+/**
+ * Which deterministic action a SITUATION leads with — the same vehicle the
+ * unattended ladder climbs first (`server/runner/ladder.ts`), so the button a
+ * person sees first is the thing the autopilot would have pressed.
+ *
+ * @param {string|undefined|null} id
+ * @param {string|undefined} sub
+ * @param {boolean} resumable
+ * @returns {'retry'|'resume'|'closeout'|'recheck'|'plan-repair'|undefined}
+ */
+export function leadActionFor(id, sub, resumable) {
+  switch (id) {
+    case 'never-started': return 'retry';
+    case 'work-in-progress': return resumable ? 'resume' : 'retry';
+    case 'done-unrecorded': return resumable ? 'closeout' : 'recheck';
+    case 'verify-red': return resumable ? 'resume' : undefined;
+    case 'blocked-declared':
+      if (sub === 'lock') return 'retry';
+      if (sub === 'external') return 'recheck';
+      if (sub === 'unknown' || sub == null) return resumable ? 'resume' : undefined;
+      return undefined;
+    case 'plan-broken': return 'plan-repair';
+    case 'superseded': return 'recheck';
+    default: return undefined;
+  }
+}
 
 /**
  * Every way forward for this state, ordered primary → secondary → overflow.
@@ -459,7 +489,7 @@ export function classifyBoardPhase(state) {
  * @returns {RecoveryActionView[]}
  */
 export function recoveryActionsFor(ctx = {}) {
-  const { boardState, record, run, flags = {}, live = {}, lock, authFailure, planIssues } = ctx;
+  const { boardState, record, run, flags = {}, live = {}, lock, authFailure, planIssues, situation } = ctx;
   if (boardState === 'done') return [];
   const status = record?.status;
   if (record && (status === 'done' || status === 'skipped')) return [];
@@ -505,6 +535,15 @@ export function recoveryActionsFor(ctx = {}) {
   /* -- Phase-level actions, when the caller holds a record -- */
 
   if (record) {
+    // The situation's own first rung leads, when the caller knows it — the
+    // button a person sees first is what the autopilot would have pressed.
+    // Additive: `push` dedupes, so the rest of the ordering is untouched.
+    const lead = situation ? leadActionFor(situation.id, situation.sub, resumable) : undefined;
+    if (lead === 'retry') push('retry', 'primary', busy);
+    else if (lead === 'resume') push('resume', 'primary', busy);
+    else if (lead === 'closeout') push('closeout', 'primary', busy);
+    else if (lead === 'recheck') push('recheck', 'primary');
+    else if (lead === 'plan-repair') pushAgent('plan-repair', 'primary');
     const sessionShaped = profile ? profile.sessionShaped : true;
     if (resumable && sessionShaped) {
       push('closeout', 'primary', busy);

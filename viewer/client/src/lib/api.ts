@@ -522,6 +522,17 @@ export interface ConsoleState {
     autoRecoverByDefault?: boolean;
     autoContinueRecovery?: boolean;
     mcpPolicy?: McpPolicy;
+    /** The remediation ladder's caps and toggles (server `Prefs`; Settings ▸ Automation renders them). */
+    ladderPerPhaseRungs?: number;
+    ladderPerPhaseUsd?: number;
+    ladderPerRunRungs?: number;
+    ladderPerRunUsd?: number;
+    ladderPerDayUsd?: number;
+    unblockAttempts?: boolean;
+    staleClaimTakeover?: boolean;
+    resumeAtBoot?: boolean;
+    autoAccountSwitch?: boolean;
+    convergeEveryMs?: number;
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -1243,6 +1254,13 @@ export interface PhaseDiagnosis {
   workingTree: string[];
   lock: string | null;
   actions: RecoveryAction[];
+  /** The classifier's word for the phase and why (`server/runner/situation.ts`); null when it could not read. */
+  situation: {
+    id: string; sub?: string; key: string; label: string; blurb: string;
+    actor: 'machine' | 'person' | 'wait' | 'none' | string; why: string[];
+  } | null;
+  /** The evidence it was decided from, as short lines. Absent on older servers. */
+  evidence?: string[];
 }
 
 export interface TranscriptEntry {

@@ -242,20 +242,61 @@ test('the per-run cap counts every phase’s launches together', async () => {
   } finally { cleanup(); }
 });
 
-test('the identical failure is never retried — that is a person’s to read', async () => {
+test('a legacy attempt on the identical failure counts as the rung the old healer drove — the ladder escalates from it, never repeats it', async () => {
+  // Before rungs were recorded, `recoveries[phase]` held only `attempts` and
+  // `lastReason`, and the identical reason twice was REFUSED outright — a
+  // dead end, not an escalation (the measured "same failure twice — a person
+  // should look" on phases a stronger try would have fixed). A legacy slot is
+  // now read as having climbed the vehicle the old healer used: the agent,
+  // for a phase with no session. verify-red's ladder is [own session, fix
+  // agent]; with no session the own-session rung is undrivable and the agent
+  // rung reads as tried — so the ladder is exhausted, an Errand is written,
+  // and the reason says which rungs were spent, not merely "same failure".
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
     const minted = stubMint(svc);
     const reason = 'phase 2 did not verify: 1 of 2 command(s) failed — npm test';
-    haltedRun(root, {
+    const run = haltedRun(root, {
       recoveries: { 2: { attempts: 1, lastAt: new Date().toISOString(), lastReason: reason } },
     });
 
     const out = await svc.maybeAutoRecover('alpha');
     assert.equal(out.launched, false);
-    assert.match(out.reason ?? '', /same failure/i);
+    assert.equal(out.situation, 'verify-red');
+    assert.match(out.reason ?? '', /every rung for verify-red has been tried/);
     assert.equal(minted.length, 0);
+    const disk = loadRun(root, 'alpha', run.id, null)!;
+    assert.equal(disk.recoveries?.['2']?.errand?.situation, 'verify-red', 'exhaustion writes the errand');
+    assert.ok((disk.recoveries?.['2']?.errand?.need ?? '').length > 10);
+  } finally { cleanup(); }
+});
+
+test('the same failure with a session left is escalated, not refused: own session first, then a stronger agent', async () => {
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    const minted = stubMint(svc);
+    const reason = 'phase 2 did not verify: 1 of 2 command(s) failed — npm test';
+    const run = haltedRun(root, {
+      recoveries: { 2: { attempts: 1, lastAt: new Date().toISOString(), lastReason: reason } },
+      phases: { 2: { phase: 2, status: 'failed', attempts: 1, costUsd: 0, sessionId: 'sess-0002' } },
+    });
+    const resumed: Array<{ phase: number; mode: string }> = [];
+    (svc as never as { recoverPhase: (slug: string, phase: number, mode: string) => Promise<null> })
+      .recoverPhase = async (_slug: string, phase: number, mode: string) => { resumed.push({ phase, mode }); return null; };
+
+    // The legacy attempt reads as the own-session rung; the next rung is the
+    // stronger fresh agent — the escalation the old refusal never offered.
+    const out = await svc.maybeAutoRecover('alpha');
+    assert.equal(out.launched, true, out.reason);
+    assert.equal(out.rung, 'fix-agent');
+    assert.equal(out.vehicle, 'agent');
+    assert.equal(minted.length, 1);
+    assert.deepEqual(resumed, [], 'the own session was the legacy attempt — not repeated');
+    const disk = loadRun(root, 'alpha', run.id, null)!;
+    assert.equal(disk.recoveries?.['2']?.rungs?.[0]?.rung, 'fix-agent');
+    assert.equal(disk.recoveries?.['2']?.attempts, 2);
   } finally { cleanup(); }
 });
 
@@ -424,8 +465,12 @@ test('a failed verification repair cannot loop: the same reason twice is refused
 
     const again = await svc.maybeAutoRecover('alpha');
     assert.equal(again.launched, false);
-    assert.match(again.reason ?? '', /same failure twice/,
-      'a deterministic reason string meets the identical-failure refusal, and the loop ends');
+    // plan-broken:verification climbs [repair script (not drivable yet), repair
+    // agent]; the agent was the rung just spent, so the ladder is exhausted and
+    // the phase carries an errand — the loop ends with a named ask, not a retry.
+    assert.match(again.reason ?? '', /every rung for plan-broken:verification has been tried/,
+      'the same rung is never climbed twice on one phase, and the loop ends');
+    assert.equal(loadRun(root, 'alpha', run.id, null)?.recoveries?.['1']?.errand?.situation, 'plan-broken:verification');
   } finally { cleanup(); }
 });
 
@@ -503,5 +548,105 @@ test('the pre-recovery gate: a board that moved past the halt reconciles the rec
     assert.equal(after.halt, null, 'the halt about the finished phase is stood down');
     assert.ok(after.resolved, 'the run is resolved as superseded');
     assert.match(after.resolved?.reason ?? '', /superseded/);
+  } finally { cleanup(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * The anchor is a SITUATION, not the halt's phase — the measured dead end
+ * ------------------------------------------------------------------ */
+
+import { execFileSync } from 'node:child_process';
+
+/** A scratch root that is a clean git repository: the work evidence can then say "nothing" rather than "unreadable". */
+function gitInit(root: string): void {
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  execFileSync('git', ['init', '-q'], { cwd: root, env });
+  execFileSync('git', ['add', '-A'], { cwd: root, env });
+  execFileSync('git', ['commit', '-qm', 'seed'], { cwd: root, env });
+}
+
+test('a parked run whose only open record is interrupted with no work anchors on it and re-boards fresh — no "no phase to anchor"', async () => {
+  // The 2026-08-19 P12 specimen: the operator resumed a run, it parked at once
+  // on an `interrupted` record (stopped by the operator, 16 turns, during
+  // bootstrap), and Recover & continue answered "needs-you: no phase to
+  // anchor a recovery on" — twice — before a $3.32 closeout discovered the
+  // phase had never been implemented. activePhase is null after a park and
+  // the park's halt names no phase, so the old derivation had nothing.
+  const { root, cleanup } = scratch();
+  try {
+    gitInit(root);
+    const svc = service(root, { allowAgent: false });
+    const minted = stubMint(svc);
+    const state = newRun({ slug: 'alpha', root, autoRecover: true });
+    state.status = 'parked';
+    state.activePhase = null;
+    state.halt = {
+      at: new Date().toISOString(),
+      reason: 'nothing left to run on its own — phase 1 is interrupted (stopped by the operator)',
+    };
+    state.finishedReason = state.halt.reason;
+    const record = phaseRecord(state, 1);
+    record.status = 'interrupted';
+    record.note = 'stopped by the operator';
+    record.sessionId = 'sess-0001';
+    record.startedAt = new Date(Date.now() + 5_000).toISOString(); // started after the seed commit: nothing since
+    record.turns = 16;
+    record.costUsd = 1.44;
+    saveRun(state);
+
+    const retried: number[] = [];
+    (svc as never as { retryPhase: (slug: string, phase: number) => Promise<null> })
+      .retryPhase = async (_slug: string, phase: number) => { retried.push(phase); return null; };
+
+    const out = await svc.maybeAutoRecover('alpha');
+    assert.equal(out.launched, true, out.reason);
+    assert.equal(out.phase, 1);
+    assert.equal(out.situation, 'never-started');
+    assert.equal(out.rung, 'reboard-fresh');
+    assert.equal(out.vehicle, 'retry', 'the runner\'s own re-board — no closeout, no agent, no person');
+    assert.deepEqual(retried, [1]);
+    assert.equal(minted.length, 0);
+
+    const disk = loadRun(root, 'alpha', state.id, null)!;
+    assert.equal(disk.recoveries?.['1']?.rungs?.[0]?.situation, 'never-started');
+    assert.equal(disk.recoveries?.['1']?.rungs?.[0]?.rung, 'reboard-fresh');
+    assert.equal(disk.recoveries?.['1']?.attempts, 1, 'the legacy counter moves with the rung');
+    assert.equal(disk.phases['1'].situation?.key, 'never-started', 'the record caches what it read as');
+
+    // The journal carries the situation and the rung by name.
+    const { readFileSync } = await import('node:fs');
+    const { journalFile } = await import('../server/runner/state.ts');
+    const lines = readFileSync(journalFile(root, 'alpha', state.id), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { event: string; phase?: number; data: Record<string, unknown> });
+    const situation = lines.find((l) => l.event === 'phase.situation');
+    assert.equal(situation?.phase, 1);
+    assert.equal(situation?.data.situation, 'never-started');
+    const rung = lines.find((l) => l.event === 'phase.rung');
+    assert.equal(rung?.data.rung, 'reboard-fresh');
+    assert.equal(rung?.data.vehicle, 'retry');
+  } finally { cleanup(); }
+});
+
+test('Recover & continue names the step: the phase, what it reads as, and the rung', async () => {
+  const { root, cleanup } = scratch();
+  try {
+    gitInit(root);
+    const svc = service(root, { allowAgent: false });
+    stubMint(svc);
+    const state = newRun({ slug: 'alpha', root });
+    state.status = 'parked';
+    state.activePhase = null;
+    state.halt = { at: new Date().toISOString(), reason: 'nothing left to run on its own — phase 1 is interrupted (stopped by the operator)' };
+    state.finishedReason = state.halt.reason;
+    const record = phaseRecord(state, 1);
+    record.status = 'interrupted';
+    record.note = 'stopped by the operator';
+    record.startedAt = new Date(Date.now() + 5_000).toISOString();
+    saveRun(state);
+    (svc as never as { retryPhase: (slug: string, phase: number) => Promise<null> }).retryPhase = async () => null;
+
+    const report = await svc.recoverPlan('alpha');
+    assert.equal(report.outcome, 'recovering', report.detail);
+    assert.ok(report.steps.some((step) => /phase 1 reads Never started — re-boarding it fresh through the runner \(rung reboard-fresh\)/.test(step)),
+      report.steps.join(' | '));
   } finally { cleanup(); }
 });

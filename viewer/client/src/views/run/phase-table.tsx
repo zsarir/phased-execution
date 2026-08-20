@@ -29,6 +29,7 @@ import { DepsCell, LockCell, PhaseDetails, SizeCell } from '@/views/plan/phase-c
 import { ForceReleaseButton } from '@/components/release-lock';
 import { useNow } from '@/lib/clock';
 import { useConsoleState, useDiagnosis } from '@/lib/queries';
+import { SituationSummary } from '@/components/situation';
 import { navigate } from '@/router';
 import { phaseProgress } from './header';
 import { MCP_REASON } from './defaults';
@@ -722,6 +723,10 @@ function PhaseDiagnosis({
 
       {data && (
         <div className="mt-2 flex flex-col gap-2">
+          {/* What the healer reads first: the situation, why, and the evidence.
+              A panel that showed four unrelated fields and left the reader to
+              infer the diagnosis is what sent people to NDJSON. */}
+          <SituationSummary situation={data.situation} evidence={data.evidence} />
           <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-2xs">
             <dt className="text-ink-faint">Blocked on</dt>
             <dd>{BLOCKED_ON[data.blockedOn ?? ''] ?? 'nothing the runner can name'}</dd>
@@ -838,6 +843,7 @@ function PhaseDiagnosis({
             ctx={{
               ...(run ? { run } : {}),
               record: { status: data.status, resumable: data.resumable },
+              ...(data.situation ? { situation: { id: data.situation.id, ...(data.situation.sub ? { sub: data.situation.sub } : {}) } } : {}),
             }}
             max={3}
             showBlurbs

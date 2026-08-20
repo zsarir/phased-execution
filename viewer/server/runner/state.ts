@@ -306,6 +306,49 @@ export type PhaseRecord = {
    * claim.
    */
   lockWaitSince?: string;
+  /**
+   * What the classifier last said this phase's situation was (`situation.ts`),
+   * with the `id:sub` key the journal and the rung history use. Written by
+   * whoever classified (the healer, the diagnosis read path, later the
+   * convergence loop) — a cache for the phase table, never an input to the
+   * next classification, which always re-reads the evidence.
+   */
+  situation?: { key: string; at: string; why?: string[] };
+};
+
+/**
+ * One rung of the remediation ladder, as it was climbed on one phase.
+ *
+ * `situation` is the `id:sub` key the rung was chosen FOR, `rung` the vehicle
+ * it drove (`ladder.ts` `RungVehicle`), `costUsd` what the session it launched
+ * spent once known, `outcome` how it ended. The ladder reads this list to keep
+ * its one hard promise — never the same rung twice for one situation on one
+ * phase — and its caps count and sum it.
+ */
+export type RungRecord = {
+  situation: string;
+  rung: string;
+  at: string;
+  params?: Record<string, string | number | boolean>;
+  costUsd?: number;
+  outcome?: 'running' | 'fixed' | 'no-defect' | 'superseded' | 'failed';
+  note?: string;
+};
+
+/**
+ * What a person is asked for, ONCE, when the ladder for a phase is exhausted
+ * or the situation is intrinsically human. Structured so one card, one push
+ * and one journal line can all say the same thing: what the situation is,
+ * what was already tried (so nobody tries it again by hand), what is needed,
+ * and how to give it.
+ */
+export type Errand = {
+  phase: number;
+  situation: string;
+  tried: string[];
+  need: string;
+  how: string;
+  at: string;
 };
 
 /**
@@ -676,6 +719,14 @@ export type RunState = {
      * unnecessary instead of scored as a failure that clears nothing.
      */
     lastOutcome?: 'fixed' | 'no-defect' | 'superseded' | 'failed';
+    /**
+     * The ladder's own history for this phase — every rung climbed, in
+     * order, with what it was for and what it cost (`ladder.ts`). `attempts`
+     * and `lastOutcome` above stay in step for readers that predate rungs.
+     */
+    rungs?: RungRecord[];
+    /** The one open ask for a person, when the ladder is exhausted; cleared when the phase moves. */
+    errand?: Errand;
   }>;
   /**
    * The run heals itself: an auto-recoverable halt launches the fix agent, and
