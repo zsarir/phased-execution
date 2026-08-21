@@ -13,6 +13,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, '..');
 const theme = readFileSync(join(here, 'theme.css'), 'utf8');
 const indexHtml = readFileSync(join(SRC, '..', 'index.html'), 'utf8');
+/** Every primitive that floats over the page and must size by the VISIBLE viewport. */
+const OVERLAYS = ['dialog.tsx', 'alert-dialog.tsx', 'sheet.tsx', 'popover.tsx', 'dropdown-menu.tsx', 'select.tsx', 'command.tsx'];
 
 function* walk(dir: string): Generator<string> {
   for (const name of readdirSync(dir)) {
@@ -76,8 +78,8 @@ describe('per-page mobile fixes stay fixed', () => {
     expect(map).not.toMatch(/56vh/);
   });
 
-  it('dialogs never size by 100vw (it ignores the scrollbar)', () => {
-    for (const name of ['dialog.tsx', 'alert-dialog.tsx']) {
+  it('dialogs, sheets, menus and popovers never size by 100vw (it ignores the scrollbar)', () => {
+    for (const name of OVERLAYS) {
       const text = readFileSync(join(SRC, 'components', 'ui', name), 'utf8');
       expect(text).not.toMatch(/100vw/);
     }
@@ -111,8 +113,8 @@ describe('per-page mobile fixes stay fixed', () => {
     }
   });
 
-  it('dialogs, sheets and alerts size by --app-height — never dvh, which ignores the iOS keyboard', () => {
-    for (const name of ['dialog.tsx', 'alert-dialog.tsx']) {
+  it('dialogs, sheets, menus and popovers size by --app-height — never dvh, which ignores the iOS keyboard', () => {
+    for (const name of OVERLAYS) {
       const text = readFileSync(join(SRC, 'components', 'ui', name), 'utf8');
       // Classes, not prose: a `dvh` inside an arbitrary-value bracket.
       expect(text, `${name} sizes by dvh`).not.toMatch(/\[[^\]]*\bdvh\b[^\]]*\]/);

@@ -79,10 +79,14 @@
     stroke-width: 3;
     transition: transform var(--duration-fast) var(--ease-transit);
   }
-  .station.state-done .dot { fill: var(--line-done); stroke: var(--line-done); }
-  .station.state-in-progress .dot { fill: color-mix(in oklab, var(--line-progress) 30%, var(--surface)); }
-  .station.state-stuck .dot { fill: color-mix(in oklab, var(--line-stuck) 25%, var(--surface)); }
-  .station.state-blocked .dot { fill: color-mix(in oklab, var(--line-blocked) 25%, var(--surface)); }
+  /* The station's fill says which of the eight UI states it is in; the
+     stroke is `--state`, set by the `.state-<ui>` class the map puts on it. */
+  .station.state-done .dot { fill: var(--status-done); stroke: var(--status-done); }
+  .station.state-running .dot { fill: color-mix(in oklab, var(--status-running) 30%, var(--surface)); }
+  /* Verifying is running's family, drawn dashed — the line-style variant. */
+  .station.state-verifying .dot { fill: color-mix(in oklab, var(--status-verifying) 30%, var(--surface)); stroke-dasharray: 5 3; }
+  .station.state-needs-you .dot { fill: color-mix(in oklab, var(--status-needs-you) 25%, var(--surface)); }
+  .station.state-failed .dot { fill: color-mix(in oklab, var(--status-failed) 25%, var(--surface)); }
   .station.state-waiting .dot { stroke-dasharray: 3 3; }
 
   /* A claimed station wears a cordon.

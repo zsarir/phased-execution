@@ -105,7 +105,7 @@ describe('building a row', () => {
       run({ id: 'old', status: 'finished' }),
     ], NOW);
     expect(row.run?.id).toBe('new');
-    expect(row.run?.outcome).toBe('live');
+    expect(row.run?.ui).toBe('running');
   });
 
   it('counts an unreadable plan as an error even when the issue list is empty', () => {

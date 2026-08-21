@@ -27,10 +27,19 @@
  * way through it.
  */
 
-import { OUTCOMES, isLive, outcomeOf, type OutcomeId } from '../run/defaults';
+import { isLive } from '../run/defaults';
+import { STATE_META, UI_STATES, UI_STATE_HELP, isUiState, runUiState, type UiState } from '@/lib/status-vocab';
 import type { PhaseRecord, RunResolution, RunState } from '@/lib/api';
 
-export { OUTCOMES, type OutcomeId };
+/**
+ * The states the fleet is filtered and counted by: the status vocabulary's
+ * own eight, worst first, each with its label and its one-line meaning. A
+ * run's twelve statuses collapse onto these through `runUiState` — there is
+ * no second table of "outcomes" here any more.
+ */
+export const FLEET_STATES: readonly { id: UiState; label: string; hint: string }[] = UI_STATES.map((id) => ({
+  id, label: STATE_META[id].label, hint: UI_STATE_HELP[id].means,
+}));
 
 export interface RunRow {
   /** The raw halt — kind included, for the shared recovery model. */
@@ -38,7 +47,8 @@ export interface RunRow {
   id: string;
   slug: string;
   status: string;
-  outcome: OutcomeId;
+  /** The run's status through the vocabulary — what the row is painted and filtered as. */
+  ui: UiState;
   live: boolean;
   /** Something is frozen — the whole run, or one lane of it. */
   frozen: boolean;
@@ -141,7 +151,7 @@ export function toRows(runs: readonly RunState[]): RunRow[] {
       id: run.id,
       slug: run.slug,
       status: run.status,
-      outcome: outcomeOf(run.status),
+      ui: runUiState(run.status),
       live: isLive(run.status),
       frozen: run.status === 'frozen' || Boolean(run.freeze),
 
@@ -219,7 +229,7 @@ export function sortRows(rows: readonly RunRow[], by: SortId): RunRow[] {
 export interface Filters {
   /** Free text over the plan slug and the run id. */
   query: string;
-  /** One outcome, or every outcome. */
+  /** One UI state (`runUiState`), or every state. A value the vocabulary does not know reads as every state. */
   outcome: string;
   /** One plan, or every plan. */
   plan: string;
@@ -237,7 +247,7 @@ export const NO_FILTERS: Filters = { query: '', outcome: '', plan: '' };
 export function applyFilters(rows: readonly RunRow[], filters: Filters): RunRow[] {
   const words = filters.query.toLowerCase().split(/\s+/).filter(Boolean);
   return rows.filter((row) => {
-    if (filters.outcome && row.outcome !== filters.outcome) return false;
+    if (isUiState(filters.outcome) && row.ui !== filters.outcome) return false;
     if (filters.plan && row.slug !== filters.plan) return false;
     if (!words.length) return true;
     const haystack = `${row.slug} ${row.id}`.toLowerCase();
@@ -245,10 +255,10 @@ export function applyFilters(rows: readonly RunRow[], filters: Filters): RunRow[
   });
 }
 
-/** How many runs each outcome holds — the filter chips' own counts. */
-export function outcomeCounts(rows: readonly RunRow[]): Record<OutcomeId, number> {
-  const counts = { live: 0, attention: 0, halted: 0, finished: 0, interrupted: 0 };
-  for (const row of rows) counts[row.outcome]++;
+/** How many runs each UI state holds — the filter chips' own counts. */
+export function outcomeCounts(rows: readonly RunRow[]): Record<UiState, number> {
+  const counts = Object.fromEntries(UI_STATES.map((id) => [id, 0])) as Record<UiState, number>;
+  for (const row of rows) counts[row.ui]++;
   return counts;
 }
 
@@ -295,8 +305,8 @@ export function fleetTotals(rows: readonly RunRow[]) {
   let spent = 0;
   let worked = 0;
   for (const row of rows) {
-    if (row.outcome === 'live') live++;
-    if (row.outcome === 'attention') attention++;
+    if (row.live) live++;
+    if (row.ui === 'needs-you') attention++;
     spent += row.spentUsd;
     worked += row.workedMs ?? 0;
   }

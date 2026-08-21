@@ -23,7 +23,7 @@
 
 import { useEffect, useRef } from 'react';
 import { Markdown } from '@/components/markdown';
-import { decorateStatusWord } from '@/components/ui/chip';
+import { decorateStatusWord } from '@/components/ui/status-badge';
 
 export function StatusProse({ text, className }: { text?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);

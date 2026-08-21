@@ -25,7 +25,7 @@
  * that was missing.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   AlertDialog, AlertDialogContent, AlertDialogTrigger,
@@ -138,13 +138,15 @@ export function Controls({
   // on every render of the parent, so depending on the array itself would reset
   // the picker — and every other field with it — on each poll.
   const defaultKey = defaultSkills.join(',');
+  // …and the list re-derived from it, so the effect and the seed read ONE stable array.
+  const defaults = useMemo(() => (defaultKey ? defaultKey.split(',') : []), [defaultKey]);
   const [model, setModel] = useState(run?.model ?? DEFAULTS.model);
   const [effort, setEffort] = useState(run?.effort ?? DEFAULTS.effort);
   const [autonomy, setAutonomy] = useState<Autonomy>(run?.autonomy ?? DEFAULTS.autonomy);
   const [phaseBudget, setPhaseBudget] = useState(String(run?.phaseBudgetUsd ?? ''));
   const [runBudget, setRunBudget] = useState(String(run?.runBudgetUsd ?? ''));
   const [overrides, setOverrides] = useState<Record<string, PhaseOptions>>(run?.phaseOptions ?? {});
-  const [runSkills, setRunSkills] = useState<string[]>(() => seedSkills(run, defaultSkills));
+  const [runSkills, setRunSkills] = useState<string[]>(() => seedSkills(run, defaults));
   const { data: mcp } = useMcp();
   const [runMcp, setRunMcp] = useState<string[]>(() => run?.mcpServers ?? []);
   const [mcpChoice, setMcpChoice] = useState<McpPolicy | null>(null);
@@ -187,11 +189,11 @@ export function Controls({
     setPhaseBudget(String(run?.phaseBudgetUsd ?? ''));
     setRunBudget(String(run?.runBudgetUsd ?? ''));
     setOverrides(run?.phaseOptions ?? {});
-    setRunSkills(seedSkills(run, defaultSkills));
+    setRunSkills(seedSkills(run, defaults));
     setProfile(run?.permissionProfile ?? (run ? 'guarded' : DEFAULTS.permissionProfile));
     setMcpChoice(null);
   }, [run?.id, run?.model, run?.effort, run?.autonomy, run?.phaseBudgetUsd, run?.runBudgetUsd,
-    run?.permissionProfile, run, defaultKey]);
+    run?.permissionProfile, run, defaults]);
 
   const resumable = Boolean(run) && !live && run?.status !== 'finished';
   const disabled = !allowRun || Boolean(busy);

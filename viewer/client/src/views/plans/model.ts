@@ -29,7 +29,7 @@
  */
 
 import { plainText } from '@/components/markdown';
-import { outcomeOf, type OutcomeId } from '../run/defaults';
+import { runUiState, type UiState } from '@/lib/status-vocab';
 import { isClosed as readClosed } from '@/lib/closure';
 import type { EtaEstimate, PlanSummaryFull, RunState } from '@/lib/api';
 
@@ -37,7 +37,8 @@ import type { EtaEstimate, PlanSummaryFull, RunState } from '@/lib/api';
 export interface RowRun {
   id: string;
   status: string;
-  outcome: OutcomeId;
+  /** The run's status through the vocabulary. */
+  ui: UiState;
   activePhase: number | null;
   updatedAt: number;
 }
@@ -116,7 +117,7 @@ export function toRows(
     newest.set(run.slug, {
       id: run.id,
       status: run.status,
-      outcome: outcomeOf(run.status),
+      ui: runUiState(run.status),
       activePhase: run.activePhase ?? null,
       updatedAt: Date.parse(run.updatedAt) || 0,
     });
@@ -222,7 +223,7 @@ export function concerns(row: PlanRow): Concern[] {
   }
   if (row.isClosed) return out;
 
-  if (row.run?.outcome === 'halted') {
+  if (row.run?.status === 'halted') {
     out.push({ key: 'halted', text: 'the autopilot halted here', tone: 'bad' });
   }
   if (row.stuck.length) {
@@ -583,7 +584,7 @@ export function rowTotals(rows: readonly PlanRow[]) {
     ready += row.readyPhases.length;
     sessions += row.remainingSessions;
     if (row.errors) errors++;
-    if (row.run?.outcome === 'live') running++;
+    if (row.run?.ui === 'running') running++;
   }
 
   return { plans, documents, closed, phases, done, ready, sessions, errors, running, total: rows.length };

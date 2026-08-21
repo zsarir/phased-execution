@@ -68,7 +68,8 @@ export default function PlansView() {
   const runsEnabled = state != null && state.autopilot !== false;
   const { data: runs } = useRuns(runsEnabled);
 
-  const summaries = (plans ?? []) as unknown as PlanSummaryFull[];
+  // Memoised: a fresh `[]` per render would re-run every memo below on every render.
+  const summaries = useMemo(() => (plans ?? []) as unknown as PlanSummaryFull[], [plans]);
   const all = useMemo(() => toRows(summaries, runs ?? []), [summaries, runs]);
 
   const filters: Filters = useMemo(

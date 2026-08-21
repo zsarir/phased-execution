@@ -1,27 +1,27 @@
 /* ------------------------------------------------------------------ *
  * Phase Console — design tokens (Tailwind v4)
  *
- * A plan is a network: phases are stations, dependencies are track, and a
- * session batch is one train carrying several stations. Every phase state gets
- * its own line colour, and amber — the "boarding" colour of a departures board
- * — is reserved for the one thing that is actionable now. That reservation is
- * encoded here as `--action`: nothing in the interface may reach for the amber
- * literal, because the literal cannot say *why* it is amber.
+ * The instrument-panel system (3.0). Status is a SYSTEM, not a colour: every
+ * state the console can show is one of eight UI states, each with a hue, an
+ * icon and a plain label, read from one module (`shared/status-vocab.js`).
+ * This file holds the hues. Amber — the one accent — is reserved for the one
+ * thing that needs a person (`--status-needs-you` = `--accent` = `--action` =
+ * the focus ring); nothing else in the interface may reach for it by literal,
+ * because the literal cannot say *why* it is amber.
  *
- * ---- What changed from web/styles/tokens.css ----
+ * ---- What this file promises (and styles/*.test.ts hold) ----
  *
- * 1. ONE palette definition. The old file wrote the Paper map twice (once for
- *    `[data-theme='light']`, once inside `@media (prefers-color-scheme: light)`)
- *    on top of the Night board — three blocks, hand-synchronised. They had
- *    already drifted: `--line-waiting` was missing from the media-query copy, so
- *    a system-light browser inherited the Night value. Here each token is
- *    declared ONCE with `light-dark(paper, night)` and the theme is a single
- *    `color-scheme` flip. Drift is now unrepresentable.
- * 2. OKLCH, and AA-verified. Every state colour clears 4.5:1 against the worst
- *    background of its own theme — see the table above the state palette. The
- *    Paper map did not: `waiting` sat at 2.90:1 on the map ground.
- * 3. `--line-stuck` exists. `.state-stuck` used to alias `--line-blocked`, so a
- *    wedged run and a failed one were the same colour.
+ * 1. ONE palette definition. Each token is declared ONCE with
+ *    `light-dark(paper, night)` and the theme is a single `color-scheme` flip.
+ *    Drift between the two grounds is unrepresentable.
+ * 2. Equal weight, AA-verified. The eight status hues sit at ONE fixed OKLCH
+ *    lightness/chroma per theme (Paper 48 % / 0.08 · Night 75 % / 0.12; the two
+ *    neutrals `queued` and `skipped` keep the lightness and drop the chroma),
+ *    so no state shouts louder than another by accident — and
+ *    `styles/contrast.test.ts` converts every one of them to sRGB and asserts
+ *    ≥ 4.5:1 as text on every surface and ≥ 3:1 as a mark against the track,
+ *    in both themes. The table above the palette is that test's output.
+ * 3. The type floor is 12 px. `--text-2xs` is 0.75 rem and nothing is smaller.
  * ------------------------------------------------------------------ */
 
 @import 'tailwindcss';
@@ -36,24 +36,39 @@
 
 /* ------------------------------------------------------------------ *
  * Fonts — vendored, hashed by Vite (no network at runtime, ever)
+ *
+ * IBM Plex, four files, latin subset (SIL OFL 1.1): the Sans as ONE variable
+ * file for the whole UI weight range, Sans Condensed 600 for display (page
+ * titles, big numbers), Mono 400/500 for data. Never the @fontsource index CSS
+ * — it would precache every unicode subset into the offline shell.
  * ------------------------------------------------------------------ */
 
 @font-face {
-  font-family: 'Archivo Narrow';
-  src: url('../assets/fonts/archivo-narrow.woff2') format('woff2-variations');
-  font-weight: 400 700;
+  font-family: 'IBM Plex Sans';
+  src: url('../assets/fonts/ibm-plex-sans-var.woff2') format('woff2-variations');
+  font-weight: 100 700;
+  font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: 'Public Sans';
-  src: url('../assets/fonts/public-sans.woff2') format('woff2-variations');
-  font-weight: 300 700;
+  font-family: 'IBM Plex Sans Condensed';
+  src: url('../assets/fonts/ibm-plex-sans-condensed-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: 'JetBrains Mono';
-  src: url('../assets/fonts/jetbrains-mono.woff2') format('woff2-variations');
-  font-weight: 400 600;
+  font-family: 'IBM Plex Mono';
+  src: url('../assets/fonts/ibm-plex-mono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('../assets/fonts/ibm-plex-mono-500.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
   font-display: swap;
 }
 
@@ -78,43 +93,61 @@
   /* ---- Ink ---- */
   --ink: light-dark(oklch(21.36% 0.0229 232.86), oklch(95.17% 0.0097 204.91));
   --ink-muted: light-dark(oklch(47.24% 0.0283 227.06), oklch(74.72% 0.0244 220.82));
+  /* Faint ink is for true metadata only — timestamps, ids, hints. */
   --ink-faint: light-dark(oklch(58.32% 0.0264 223.97), oklch(60.50% 0.0298 223.53));
 
   /* ---- The track the stations sit on ---- */
   --track: light-dark(oklch(82.37% 0.0175 196.82), oklch(36.05% 0.0405 223.66));
-  --hatch: light-dark(oklch(54.13% 0.2466 293.01 / 18%), oklch(71.97% 0.1930 308.60 / 22%));
+  --hatch: light-dark(oklch(48% 0.08 300 / 18%), oklch(75% 0.12 300 / 22%));
 
-  /* ---- Line colours — one per phase state ----
-     Hue is held across both themes so the route map reads the same way on
-     either ground; only lightness moves, and it moves exactly as far as WCAG
-     AA demands. Measured against the worst background of each theme (Night:
-     `--surface-raised`; Paper: `--ground`) — every one of these is >= 4.5:1:
+  /* ---- The status palette — eight UI states, one hue each ----
+     Equal weight: Paper oklch(48% 0.08 h) · Night oklch(75% 0.12 h); the two
+     neutrals keep L and drop C. Hue is held across both themes so a state reads
+     the same way on either ground. Measured contrast (styles/contrast.test.ts
+     recomputes these on every run):
 
-              Night (ground/surface/raised)   Paper (ground/surface/raised)
-       done        6.90 / 6.06 / 5.48             4.58 / 5.58 / 5.21
-       ready       9.99 / 8.77 / 7.93             4.59 / 5.59 / 5.22
-       progress    6.99 / 6.14 / 5.55             4.59 / 5.60 / 5.23
-       waiting     5.77 / 5.07 / 4.58             4.56 / 5.56 / 5.19
-       blocked     5.82 / 5.11 / 4.62             4.56 / 5.56 / 5.19
-       stuck       5.76 / 5.05 / 4.57             4.82 / 5.87 / 5.49
-       gated       6.51 / 5.72 / 5.17             4.68 / 5.70 / 5.32 */
-  --line-done: light-dark(oklch(50.36% 0.1097 161.43), oklch(69.85% 0.1240 165.27));
-  --line-ready: light-dark(oklch(52.35% 0.1117 69.62), oklch(82.44% 0.1632 77.79));
-  --line-progress: light-dark(oklch(52.08% 0.1676 256.16), oklch(71.63% 0.1533 250.39));
-  --line-waiting: light-dark(oklch(51.55% 0.0224 224.50), oklch(66.35% 0.0224 224.50));
-  --line-blocked: light-dark(oklch(54.01% 0.1859 25.95), oklch(69.22% 0.1976 23.83));
-  /* Wedged, not failed — a sibling of `blocked` in tone, its own hue. Never
-     amber: a stuck run is not a thing you can act on by tapping it. */
-  --line-stuck: light-dark(oklch(53.13% 0.2015 5.62), oklch(69.30% 0.2124 2.33));
-  --line-gated: light-dark(oklch(54.13% 0.2466 293.01), oklch(71.97% 0.1930 308.60));
+                  Paper (ground / deep / surface / raised / track)   Night (ground / deep / surface / raised / track)
+       done         5.15 / 4.68 / 6.28 / 5.87 / 3.67                  8.27 / 8.73 / 7.27 / 6.57 / 5.06
+       running      5.35 / 4.85 / 6.52 / 6.09 / 3.81                  7.90 / 8.34 / 6.94 / 6.27 / 4.83
+       verifying    5.18 / 4.70 / 6.31 / 5.89 / 3.68                  8.23 / 8.69 / 7.23 / 6.54 / 5.03
+       queued       5.34 / 4.84 / 6.50 / 6.08 / 3.80                  7.91 / 8.35 / 6.95 / 6.28 / 4.83
+       waiting      5.54 / 5.02 / 6.75 / 6.30 / 3.94                  7.57 / 7.99 / 6.65 / 6.01 / 4.63
+       needs-you    5.45 / 4.94 / 6.64 / 6.20 / 3.88                  7.73 / 8.15 / 6.79 / 6.14 / 4.72
+       failed       5.58 / 5.07 / 6.80 / 6.35 / 3.97                  7.49 / 7.91 / 6.58 / 5.95 / 4.58
+       skipped      5.35 / 4.85 / 6.51 / 6.08 / 3.80                  7.90 / 8.33 / 6.94 / 6.27 / 4.83
 
-  /* ---- The one actionable colour ----
-     `--action` is the semantic name; `--line-ready` happens to be the same
-     amber because "ready" IS the actionable state. Anything else that wants to
-     say "do this now" reaches for `--action`, never for the amber literal and
-     never for `--line-ready` (which means a phase state, not an affordance). */
-  --action: var(--line-ready);
-  --focus: var(--action);
+     `verifying` is running's family (a dashed line-style on a map or strip is
+     what tells the two apart at a glance; the label and icon do the rest), and
+     `running` is the only state that may pulse. */
+  --status-done: light-dark(oklch(48% 0.08 155), oklch(75% 0.12 155));
+  --status-running: light-dark(oklch(48% 0.08 252), oklch(75% 0.12 252));
+  --status-verifying: light-dark(oklch(48% 0.08 205), oklch(75% 0.12 205));
+  --status-queued: light-dark(oklch(48% 0.035 245), oklch(75% 0.035 245));
+  --status-waiting: light-dark(oklch(48% 0.08 300), oklch(75% 0.12 300));
+  --status-needs-you: light-dark(oklch(48% 0.08 72), oklch(75% 0.12 72));
+  --status-failed: light-dark(oklch(48% 0.08 25), oklch(75% 0.12 25));
+  --status-skipped: light-dark(oklch(48% 0.012 230), oklch(75% 0.012 230));
+
+  /* ---- The one accent ----
+     Amber is what needs a person. `--accent` is the semantic name; `--action`
+     ("do this now") and `--focus` (the ring) are it. Nothing asks for the amber
+     literal and nothing but a needs-you state asks for `--status-needs-you`. */
+  --accent: var(--status-needs-you);
+  --action: var(--accent);
+  --focus: var(--accent);
+
+  /* ---- Legacy line tokens (2.x) — aliases, removed in Phase 11 ----
+     The old board palette, pointed at the new vocabulary so the views that
+     predate it keep painting: a ready phase is "next up" (queued), a blocked,
+     stuck or gated one needs a person, "progress" is running. New code never
+     names these. */
+  --line-done: var(--status-done);
+  --line-ready: var(--status-queued);
+  --line-progress: var(--status-running);
+  --line-waiting: var(--status-waiting);
+  --line-blocked: var(--status-failed);
+  --line-stuck: var(--status-needs-you);
+  --line-gated: var(--status-needs-you);
 
   /* ---- Elevation ---- */
   --shadow-card: light-dark(
@@ -125,10 +158,7 @@
     0 8px 20px -18px oklch(21.36% 0.0229 232.86 / 40%),
     0 8px 24px -16px oklch(0% 0 0 / 80%)
   );
-  --glow-action: 0 0 0 3px light-dark(
-    oklch(52.35% 0.1117 69.62 / 12%),
-    oklch(82.44% 0.1632 77.79 / 14%)
-  );
+  --glow-action: 0 0 0 3px color-mix(in oklab, var(--accent) 14%, transparent);
 
   /* ---- Touch ----
      44px is Apple's floor for a target you are expected to hit with a thumb.
@@ -154,7 +184,7 @@
   --z-base: 1; /* sticky table headers, list group headings */
   --z-sticky: 20; /* the phone top bar */
   --z-shell: 40; /* the phone tab bar and the sheet it opens */
-  --z-scrim: 60; /* modals */
+  --z-scrim: 60; /* modals, sheets, menus, popovers */
   --z-toast: 70; /* toasts — above everything, including a modal */
 
   --rail-width: 236px;
@@ -189,23 +219,37 @@
   --color-track: var(--track);
   --color-hatch: var(--hatch);
 
-  --color-done: var(--line-done);
+  /* The eight UI states, by name: `text-running`, `bg-needs-you/12`, … */
+  --color-done: var(--status-done);
+  --color-running: var(--status-running);
+  --color-verifying: var(--status-verifying);
+  --color-queued: var(--status-queued);
+  --color-waiting: var(--status-waiting);
+  --color-needs-you: var(--status-needs-you);
+  --color-failed: var(--status-failed);
+  --color-skipped: var(--status-skipped);
+
+  /* Legacy 2.x colour names — the same aliases as the line tokens above. */
   --color-ready: var(--line-ready);
   --color-progress: var(--line-progress);
-  --color-waiting: var(--line-waiting);
   --color-blocked: var(--line-blocked);
   --color-stuck: var(--line-stuck);
   --color-gated: var(--line-gated);
 
+  --color-accent: var(--accent);
   --color-action: var(--action);
-  /* `state` is set by the `.state-*` classes below; any chip, dot, row or map
+  /* `state` is set by the `.state-*` classes below; any badge, dot, row or map
      segment can then paint itself `text-state` / `bg-state` without knowing
      which state it is showing. */
-  --color-state: var(--state, var(--line-waiting));
+  --color-state: var(--state, var(--status-queued));
 
-  --font-display: 'Archivo Narrow', 'Helvetica Neue', system-ui, sans-serif;
-  --font-body: 'Public Sans', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'IBM Plex Sans Condensed', 'IBM Plex Sans', 'Helvetica Neue', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  /* A ligature turns `!=` into `≠` and `->` into `→`. In a diff, a command or a
+     phase id that is a lie about the bytes — so the `font-mono` utility itself
+     turns them off, not only the `code` element below. */
+  --font-mono--font-feature-settings: 'liga' 0, 'calt' 0;
 
   --shadow-card: var(--shadow-card);
   --shadow-action: var(--glow-action);
@@ -224,15 +268,19 @@
 
   /* Display sizes are fluid: they are the ones that overflow a phone. The
      reading sizes are NOT — body text that shrinks with the viewport is the
-     opposite of what a small screen wants. */
+     opposite of what a small screen wants.
+
+     The floor is 12 px: `--text-2xs` is for badges and counters in new code,
+     `--text-xs` is the smallest a sentence may be set in. Lifting these four
+     tokens is what raised every 2.x `text-2xs` site at once. */
   --text-3xl: clamp(1.75rem, 1.35rem + 1.9vw, 2.25rem);
   --text-2xl: clamp(1.35rem, 1.16rem + 0.9vw, 1.6rem);
   --text-xl: clamp(1.12rem, 1.02rem + 0.5vw, 1.25rem);
   --text-lg: clamp(1rem, 0.97rem + 0.15vw, 1.05rem);
-  --text-md: 0.925rem;
-  --text-sm: 0.825rem;
-  --text-xs: 0.75rem;
-  --text-2xs: 0.68rem;
+  --text-md: 0.9375rem;
+  --text-sm: 0.875rem;
+  --text-xs: 0.8125rem;
+  --text-2xs: 0.75rem;
 
   --radius-sm: 3px;
   --radius: 6px;
@@ -272,6 +320,12 @@
   50% { opacity: 0.35; }
 }
 
+/* Tabular figures on demand — for a number that sits in a column or ticks. The
+   body already asks for them; this is for an element that opted out upstream. */
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+}
+
 /* ------------------------------------------------------------------ *
  * Base
  * ------------------------------------------------------------------ */
@@ -289,9 +343,11 @@
     min-height: 100dvh;
     background: var(--ground);
     color: var(--ink);
-    font-family: var(--font-body);
+    font-family: var(--font-sans);
     font-size: var(--text-md);
     line-height: 1.55;
+    /* Numbers line up in columns and do not jitter while they tick. */
+    font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     /* The shell owns its own scrolling; the document must not also scroll
@@ -337,7 +393,7 @@
   /* An input below 16px makes iOS zoom the viewport to meet it and stay there. */
   input, textarea, select { font-size: max(var(--text-input), 1em); }
 
-  ::selection { background: color-mix(in oklab, var(--action) 30%, transparent); }
+  ::selection { background: color-mix(in oklab, var(--accent) 30%, transparent); }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -353,17 +409,27 @@
  * State → colour
  *
  * One class sets `--state`; everything downstream paints with it. This is what
- * lets a chip, a dot, a table row and a map segment agree without any of them
- * naming a colour.
+ * lets a badge, a dot, a table row and a map segment agree without any of them
+ * naming a colour. The eight are the UI states of `shared/status-vocab.js`;
+ * `StatusBadge` and these classes are the only two places a hue is read.
  * ------------------------------------------------------------------ */
 
-.state-done { --state: var(--line-done); }
-.state-ready { --state: var(--line-ready); }
-.state-in-progress { --state: var(--line-progress); }
-.state-waiting { --state: var(--line-waiting); }
-.state-blocked { --state: var(--line-blocked); }
-.state-stuck { --state: var(--line-stuck); }
-.state-gated { --state: var(--line-gated); }
+.state-done { --state: var(--status-done); }
+.state-running { --state: var(--status-running); }
+.state-verifying { --state: var(--status-verifying); }
+.state-queued { --state: var(--status-queued); }
+.state-waiting { --state: var(--status-waiting); }
+.state-needs-you { --state: var(--status-needs-you); }
+.state-failed { --state: var(--status-failed); }
+.state-skipped { --state: var(--status-skipped); }
+
+/* Legacy 2.x board-state classes — aliases onto the vocabulary, removed in
+   Phase 11 with the views that set them. */
+.state-ready { --state: var(--status-queued); }
+.state-in-progress { --state: var(--status-running); }
+.state-blocked { --state: var(--status-needs-you); }
+.state-stuck { --state: var(--status-needs-you); }
+.state-gated { --state: var(--status-needs-you); }
 
 /* ------------------------------------------------------------------ *
  * Safe areas — the phone shell's floor and ceiling

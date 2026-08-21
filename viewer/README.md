@@ -693,9 +693,19 @@ npm test                      # server + shared contracts (node --test — needs
 PHASE_CONSOLE_TEST_ROOT=~/code/your-repo npm test    # + integration & engine parity
 npm run test:client           # the client suite (Vitest + jsdom)
 npm run typecheck:client      # two programs: the app (DOM libs) and the worker (WebWorker libs)
+npm run lint:client           # ESLint over client/src + shared (typescript-eslint, react-hooks)
+npm run format                # Prettier over the same files (format:check is what CI runs)
+npm run verify:dist           # build into client/.dist-verify + the build gate — the live dist untouched
 npm run build                 # emit client/dist and stamp .build-rev with the commit
 npm run check:dist            # the build gate: budget, precache sanity, sw.js at the root
 ```
+
+`verify:dist` exists because `client/dist` is what a running console serves: a build into it cuts the
+live console over on the next request. `PC_DIST_DIR` (relative to `client/`, or absolute) is the one
+knob — `vite.config.ts`, `stamp-build.mjs` and `check-dist.mjs` all read it; the server never does — and
+`verify:dist` sets it to a scratch directory, runs the same gate, and cleans up (`--keep` to look).
+`typescript` is pinned to the 6.x line on purpose: typescript-eslint parses through the TypeScript JS
+compiler API, which the native 7.x package does not ship.
 
 The node suite passes without a build on purpose — a fresh clone must be able to verify the server
 before it has ever built the client (`test/static.test.ts` holds the not-built answers, including
@@ -712,10 +722,11 @@ server/   index.ts (http) · service.ts (the model) · engine.ts (script wrapper
           lifecycle.ts (degraded state, ordered shutdown, supervisor detection)
 client/   src/ (the React app: shell/ · views/ · components/ · lib/ · styles/ · sw.ts)
           public/ (icons, manifest) → dist/ (built output + .build-rev — gitignored)
-shared/   routes.js · route-meta.js · console-model.js · phase-model.js · sw-push.js
+shared/   routes.js · route-meta.js · console-model.js · phase-model.js · status-vocab.js · sw-push.js
           — dependency-free ESM, imported by the Node tests and the client alike
-scripts/  check-dist.mjs (build gate) · stamp-build.mjs · check-stamp.mjs
+scripts/  check-dist.mjs (build gate) · verify-dist.mjs (the gate in a scratch build) · stamp-build.mjs · check-stamp.mjs
 deploy/   agent.sh (launchd/systemd install/update/uninstall/status/restart/log)
 ```
 
-Fonts are Archivo Narrow, Public Sans and JetBrains Mono (SIL Open Font License), bundled by the build.
+Fonts are IBM Plex Sans (one variable file), IBM Plex Sans Condensed and IBM Plex Mono (SIL Open Font License), four
+vendored woff2 files bundled by the build — never the `@fontsource` index CSS, which would precache every subset.

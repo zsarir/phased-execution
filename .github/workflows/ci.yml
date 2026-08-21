@@ -114,6 +114,8 @@ jobs:
         run: npm run test:client
       - name: Client typecheck
         run: npm run typecheck:client
+      - name: Client lint + format check
+        run: npm run lint:client && npm run format:check
       - name: Build
         run: npm run build
       - name: Build gate

@@ -172,15 +172,18 @@ describe('the guide view', () => {
     await waitFor(() => {
       const halted = [...panel.querySelectorAll('code')].find((el) => el.textContent === 'halted');
       expect(halted, 'the glossary names halted as inline code').toBeTruthy();
-      expect(halted!.className, 'painted with the run chip\'s own bad tone').toContain('border-blocked');
+      // A halted run needs a person: the badge wears the needs-you state class
+      // and paints by `--state`, never a colour of its own.
+      expect(halted!.className, 'painted as the run badge\'s own UI state').toContain('state-needs-you');
+      expect(halted!.className).toContain('text-state');
       expect(halted!.getAttribute('title')).toMatch(/must not be automated past/);
     });
 
-    // The departures spellings too — the words the board actually shows.
-    const departed = [...panel.querySelectorAll('strong')].find((el) => el.textContent === 'Departed');
-    expect(departed, 'Departed appears bold in the board table').toBeTruthy();
-    expect(departed!.className).toContain('state-done');
-    expect(departed!.getAttribute('title')).toMatch(/finished and verified/);
+    // The eight UI states are words in the same glossary, and wear themselves.
+    const done = [...panel.querySelectorAll('code')].find((el) => el.textContent === 'done');
+    expect(done, 'done appears as inline code in the eight-states table').toBeTruthy();
+    expect(done!.className).toContain('state-done');
+    expect(done!.getAttribute('title')).toMatch(/Finished/);
 
     // A code word that is NOT a status stays a plain code span.
     const flag = [...panel.querySelectorAll('code')].find((el) => el.textContent?.startsWith('--allow'));

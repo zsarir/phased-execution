@@ -115,14 +115,38 @@ The full set — boot prompts, session batching, gate status, handoff scaffoldin
 | `n` | Notifications |
 | `Esc` | Close a dialog |
 
-## The five vocabularies
+## The eight states
+
+Every badge in the console is one of eight **UI states**, each with its own colour, icon and plain
+word — and colour is never the only carrier: the word and the icon are always there. Amber is one
+state's alone: **Needs you**. The underlying vocabularies (a run's status, a phase record, the board,
+a situation) each map onto these eight; the tables further down list every word under the state it
+reads as.
+
+| State | Badge | What it means | Underlying words |
+|---|---|---|---|
+| `needs-you` | **Needs you** | Stopped until a person does something — an approval, a gate, a sign-in, a decision, an errand. The only amber. | run `halting` `halted` `parked` `interrupted` · phase `gated` `parked` `awaiting-verification` `interrupted` · board `gated` `blocked` `stuck` · a situation for a person, or any with an errand |
+| `failed` | **Failed** | The attempt failed — a red verification, or a session that produced nothing the board accepts. | phase `failed` · QA `fail` |
+| `running` | **Running** | A session is working right now. The only state that may pulse. | run `running` · phase `running` · board `in-progress` · a machine's situation |
+| `verifying` | **Verifying** | The session finished; the console is running the plan's §Verification itself. Running's family, drawn dashed on a map or strip. | phase `verifying` |
+| `waiting` | **Waiting** | Asleep on something that settles by itself — a dependency, a usage window, an external clock, a pause you asked for. | run `waiting` `paused` `pausing` `frozen` `stopping` · phase `waiting` · board `waiting` · a situation that waits on time or someone else |
+| `queued` | **Queued** | In line — next up, or behind something holding the same repos. A board phase that is `ready` reads **Next up**. | run `queued` · phase `queued` `pending` · board `ready` · QA `pending` |
+| `skipped` | **Skipped** | Taken off this run's list by the operator. Not finished, not failed. | phase `skipped` · QA `waived` |
+| `done` | **Done** | Finished and recorded on the board. | run `finished` · phase `done` · board `done` · QA `pass` · a situation the board already settled |
+
+A thing several vocabularies describe at once reads as the **worst** of them, in the order above —
+except that the board saying `done` wins over everything: a run record the board has overtaken is
+history, not a state.
+
+## The vocabularies underneath
 
 They coexist on purpose, and they nest. A **plan** has a status (is anyone still pursuing this at
 all). A **run** has a status (what the autopilot is doing with it right now). Each **phase in that
-run** has a record (what happened to it here). The **board** states what is true of a phase on disk,
-spelled the way a departures board would. And a **claim** says whether somebody is already working it.
+run** has a record (what happened to it here). The **board** states what is true of a phase on disk.
+And a **claim** says whether somebody is already working it.
 
-Every badge in the app says this on hover; the tables below are the same text in one place.
+Every badge in the app says this on hover; the tables below are the same text in one place, and the
+badge each word wears is its UI state's.
 
 ## Plan status
 
@@ -143,55 +167,57 @@ available, so closing is a cheap, reversible call.
 
 ## Run status
 
-| Word | What it means | What to do |
-|---|---|---|
-| `running` | The autopilot is driving: sessions spawn, verify and hand off by themselves. | Nothing — watch the phase tabs. Pause, Freeze and Stop all apply. |
-| `pausing` | A pause is armed: whatever is running finishes, and nothing new boards. | Wait for the boundary, or Cancel pause to keep going. |
-| `paused` | Stopped between phases at your request; nothing is running. | Press Continue when ready — it picks up exactly where it left off. |
-| `waiting` | Sleeping until the account's usage window reopens, then resumes itself. | Nothing. |
-| `frozen` | Every session is stopped where it stands (mid-token), warm and losing nothing. A freeze on ONE session of several is recorded on that session's tab instead, and the run stays `running`. | Continue the frozen session to resume instantly, or Stop it. |
-| `parked` | Every remaining phase needs a person first — a gate, an approval, a decision. | Read "Why this is stopped": each blocker is named with its remedy. |
-| `queued` | In line behind another plan holding the same repos; starts itself when the scope frees. | Nothing — the holder is named on the queued chip. |
-| `halting` | A halt was recorded; live sessions are finishing before the run fully stops. | Read the halt card. The run reads halted once the last session settles. |
-| `halted` | Stopped on something that must not be automated past — usually a red verification. | 'Finish in its own session' or 'Fix with a new agent' on the halt card, or fix the cause yourself and Retry the phase. |
-| `stopping` | A stop was requested; sessions are being wound down. | Wait a moment. |
-| `finished` | Nothing left to run on this plan. | Nothing. |
-| `interrupted` | Nothing is driving it and nothing recorded why — a console or session died mid-flight. | Resume with AI, or press Continue — work already on disk is kept. |
+| Word | Reads as | What it means | What to do |
+|---|---|---|---|
+| `running` | Running | The autopilot is driving: sessions spawn, verify and hand off by themselves. | Nothing — watch the phase tabs. Pause, Freeze and Stop all apply. |
+| `pausing` | Waiting | A pause is armed: whatever is running finishes, and nothing new boards. | Wait for the boundary, or Cancel pause to keep going. |
+| `paused` | Waiting | Stopped between phases at your request; nothing is running. | Press Continue when ready — it picks up exactly where it left off. |
+| `waiting` | Waiting | Sleeping until the account's usage window reopens, then resumes itself. | Nothing. |
+| `frozen` | Waiting | Every session is stopped where it stands (mid-token), warm and losing nothing. A freeze on ONE session of several is recorded on that session's tab instead, and the run stays `running`. | Continue the frozen session to resume instantly, or Stop it. |
+| `parked` | Needs you | Every remaining phase needs a person first — a gate, an approval, a decision. | Read "Why this is stopped": each blocker is named with its remedy. |
+| `queued` | Queued | In line behind another plan holding the same repos; starts itself when the scope frees. | Nothing — the holder is named on the queued chip. |
+| `halting` | Needs you | A halt was recorded; live sessions are finishing before the run fully stops. | Read the halt card. The run reads halted once the last session settles. |
+| `halted` | Needs you | Stopped on something that must not be automated past — usually a red verification. | 'Finish in its own session' or 'Fix with a new agent' on the halt card, or fix the cause yourself and Retry the phase. |
+| `stopping` | Waiting | A stop was requested; sessions are being wound down. | Wait a moment. |
+| `finished` | Done | Nothing left to run on this plan. | Nothing. |
+| `interrupted` | Needs you | Nothing is driving it and nothing recorded why — a console or session died mid-flight. | Resume with AI, or press Continue — work already on disk is kept. |
 
 ## Phase record
 
 The "This run" column: what happened to a phase *in this run*, as opposed to what is true of it on
 disk.
 
-| Word | What it means | What to do |
-|---|---|---|
-| `pending` | This run has not started the phase yet. | Nothing — the loop reaches it when its dependencies are done. |
-| `gated` | Held at the plan's gate — a human or automatic condition the run cannot clear itself (ai gates never park: their session is booted to clear them). | Do the gate's steps and Approve on the phase page's Gate card (it can continue the run in the same action), or Retry to re-check. |
-| `running` | A session is working this phase right now. | Watch its tab; Ask reaches the session mid-flight. |
-| `verifying` | The session finished; the console runs the plan's verification commands itself. | Nothing — green marks it done, red halts with the evidence. |
-| `awaiting-verification` | The machine checks passed; steps only a person can confirm remain. | Answer the verification card — it lists exactly what needs your eyes. |
-| `done` | Finished and independently verified in this run. | Nothing. |
-| `failed` | The attempt failed — a red verification, or a session that produced nothing. | Why? shows the evidence; 'Fix with a new agent' repairs it, or Retry restarts the run here. |
-| `interrupted` | The session or console died mid-phase — or the operator stopped this one session from its tab; the working tree is wherever it stopped. | Resume with AI or Retry — the session id is kept, and uncommitted work is preserved, never redone blindly. |
-| `skipped` | Taken off this run's list by the operator. | Retry it later if it should still happen. |
-| `parked` | Needs a person before the loop will touch it again — the note says exactly why. | Read the note (gate, foreign lock, decision), act on it, then Retry. |
-| `queued` | Waiting for repos another phase or plan is holding; starts itself when they free. | Nothing — the queued chip names what it waits on. |
+| Word | Reads as | What it means | What to do |
+|---|---|---|---|
+| `pending` | Queued | This run has not started the phase yet. | Nothing — the loop reaches it when its dependencies are done. |
+| `gated` | Needs you | Held at the plan's gate — a human or automatic condition the run cannot clear itself (ai gates never park: their session is booted to clear them). | Do the gate's steps and Approve on the phase page's Gate card (it can continue the run in the same action), or Retry to re-check. |
+| `running` | Running | A session is working this phase right now. | Watch its tab; Ask reaches the session mid-flight. |
+| `verifying` | Verifying | The session finished; the console runs the plan's verification commands itself. | Nothing — green marks it done, red halts with the evidence. |
+| `awaiting-verification` | Needs you | The machine checks passed; steps only a person can confirm remain. | Answer the verification card — it lists exactly what needs your eyes. |
+| `done` | Done | Finished and independently verified in this run. | Nothing. |
+| `failed` | Failed | The attempt failed — a red verification, or a session that produced nothing. | Why? shows the evidence; 'Fix with a new agent' repairs it, or Retry restarts the run here. |
+| `interrupted` | Needs you | The session or console died mid-phase — or the operator stopped this one session from its tab; the working tree is wherever it stopped. | Resume with AI or Retry — the session id is kept, and uncommitted work is preserved, never redone blindly. |
+| `skipped` | Skipped | Taken off this run's list by the operator. | Retry it later if it should still happen. |
+| `parked` | Needs you | Needs a person before the loop will touch it again — the note says exactly why. | Read the note (gate, foreign lock, decision), act on it, then Retry. |
+| `waiting` | Waiting | Parked on an external clock the session declared — a CI build, a PR auto-merge, a deploy window. | Nothing — the runner resumes the phase's own session when the window elapses. |
+| `queued` | Queued | Waiting for repos another phase or plan is holding; starts itself when they free. | Nothing — the queued chip names what it waits on. |
 
 A `failed` record under a phase the **board** calls done means: this run's attempt stopped, and the
 work was finished and verified outside it. The row says "nothing to fix — done elsewhere".
 
 ## Board state
 
-The "Status" column, in departures spelling.
+The "Status" column — what is true of a phase on disk, as `phase-graph.sh` computes it. The badge
+shows the UI state's word (`ready` reads **Next up**).
 
-| State | On the board | What it means | What to do |
+| State | Reads as | What it means | What to do |
 |---|---|---|---|
-| `done` | **Departed** | The handoff is complete; the work is finished and verified. | Nothing. |
-| `ready` | **Boarding** | Every dependency is met; this phase can start now. | Start it (or the autopilot will), or copy its boot prompt from the phase page. |
-| `in-progress` | **On track** | A session is on this phase right now. | Watch its tab. The board catches up when the handoff lands. |
-| `waiting` | **Held** | An earlier phase it depends on is not done yet. | Nothing here; finish what it waits on. |
-| `stuck` / `blocked` | **Blocked** | Its handoff is marked blocked — the Outstanding section says exactly why. | Read the excerpt on the phase page, or 'Repair the plan with a new agent' right on the phase page. |
-| `gated` | **Gated** | The plan gates this phase — on a person (`manual`), a session's own check (`ai`), or an automatic condition. | The phase page's Gate card shows the steps and the Approve button; ai gates clear themselves when their session boots. |
+| `done` | Done | The handoff is complete; the work is finished and verified. | Nothing. |
+| `ready` | Next up | Every dependency is met; this phase can start now. | Start it (or the autopilot will), or copy its boot prompt from the phase page. |
+| `in-progress` | Running | A session is on this phase right now. | Watch its lane. The board catches up when the handoff lands. |
+| `waiting` | Waiting | An earlier phase it depends on is not done yet. | Nothing here; finish what it waits on. |
+| `stuck` / `blocked` | Needs you | Its handoff is marked blocked — the Outstanding section says exactly why. | Read the excerpt on the phase page, or use Ways forward on the run page. |
+| `gated` | Needs you | The plan gates this phase — on a person (`manual`), a session's own check (`ai`), or an automatic condition. | The phase page's Gate card shows the steps and the Approve button; ai gates clear themselves when their session boots. |
 
 ## The claim
 

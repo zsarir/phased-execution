@@ -167,7 +167,7 @@ export function NextDeparture({ d, allowRun }: { d: Departure; allowRun: boolean
                   fraction={meter.fraction}
                   label={meter.short}
                   description={meter.long}
-                  tone={meter.over ? 'blocked' : 'progress'}
+                  tone={meter.over ? 'failed' : 'running'}
                   className="max-w-80 min-w-40 flex-1"
                 />
                 {d.weight != null && d.budget > 0 && (
@@ -316,7 +316,7 @@ export function DepartureRow({ d, index }: { d: Departure; index: number }) {
             fraction={meter.fraction}
             label={meter.short}
             description={meter.long}
-            tone={meter.over ? 'blocked' : 'progress'}
+            tone={meter.over ? 'failed' : 'running'}
             className="order-2 hidden w-32 shrink-0 md:flex"
           />
 

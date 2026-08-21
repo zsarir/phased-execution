@@ -49,9 +49,10 @@ const CALENDAR = [
 ];
 
 describe('the chart palette', () => {
-  it('resolves every tone to a --line-* custom property', () => {
+  it('resolves every tone — the eight UI states — to a --status-* custom property', () => {
+    expect([...CHART_TONES]).toEqual(['needs-you', 'failed', 'running', 'verifying', 'waiting', 'queued', 'skipped', 'done']);
     for (const tone of CHART_TONES) {
-      expect(toneVar(tone)).toBe(`var(--line-${tone})`);
+      expect(toneVar(tone)).toBe(`var(--status-${tone})`);
     }
   });
 
@@ -65,7 +66,7 @@ describe('the chart palette', () => {
   it('paints the Calendar with tokens only, including the mixed intensities', () => {
     const { container } = render(<Calendar data={CALENDAR} />);
     const used = paints(container);
-    // The heat cells are `color-mix(... var(--line-done) N%, var(--track))`,
+    // The heat cells are `color-mix(... var(--status-done) N%, var(--track))`,
     // which is the one place a percentage could tempt a literal.
     expect(used.some((v) => v.includes('color-mix'))).toBe(true);
     for (const value of used) expect(value, value).not.toMatch(LITERAL_COLOUR);
@@ -78,7 +79,7 @@ describe('the chart palette', () => {
         <StackBar
           segments={[
             { label: 'done', value: 3, tone: 'done' },
-            { label: 'ready', value: 1, tone: 'ready' },
+            { label: 'next up', value: 1, tone: 'queued' },
           ]}
         />
       </>,
@@ -93,7 +94,7 @@ describe('the charts as charts', () => {
     const bars = [...container.querySelectorAll('rect')];
     expect(bars).toHaveLength(VELOCITY.length);
     expect(bars.at(-1)!.getAttribute('fill')).toBe('var(--action)');
-    expect(bars[0].getAttribute('fill')).toBe(toneVar('progress'));
+    expect(bars[0].getAttribute('fill')).toBe(toneVar('running'));
   });
 
   it('gives a zero-count bar no height rather than a misleading minimum', () => {
@@ -120,7 +121,7 @@ describe('the charts as charts', () => {
       <StackBar
         segments={[
           { label: 'done', value: 3, tone: 'done' },
-          { label: 'ready', value: 1, tone: 'ready' },
+          { label: 'next up', value: 1, tone: 'queued' },
         ]}
       />,
     );
@@ -128,7 +129,7 @@ describe('the charts as charts', () => {
       .map((el) => el.style.width);
     expect(widths).toEqual(['75%', '25%']);
     expect(container.textContent).toContain('done');
-    expect(container.textContent).toContain('ready');
+    expect(container.textContent).toContain('next up');
   });
 
   it('does not divide by zero when every segment is empty', () => {
@@ -161,10 +162,11 @@ describe('the charts as charts', () => {
     expect(container.textContent).toBe('unsized');
   });
 
-  it('paints a state the engine has not taught it grey, never transparent', () => {
-    // `var(--line-${state})` would interpolate an undeclared property for a new
-    // engine word and paint the segment invisible — which reads as "this phase
-    // does not exist" rather than "we do not know what this is".
+  it('paints a state the engine has not taught it as the unknown state, never transparent', () => {
+    // `var(--status-${state})` would interpolate an undeclared property for a
+    // new engine word and paint the segment invisible — which reads as "this
+    // phase does not exist" rather than "we do not know what this is". The
+    // vocabulary's unknown state is `waiting`: never amber, never green.
     const { container } = render(
       <RouteStrip phases={[{ phase: 1, state: 'quantum-superposition' }]} />,
     );
@@ -194,9 +196,9 @@ describe('the charts as charts', () => {
       ]} />,
     );
     for (const value of paints(container)) expect(value, value).not.toMatch(LITERAL_COLOUR);
-    // Same fallback the route strip makes: grey says "we do not know what this
-    // is", where an interpolated `var(--line-<new word>)` would say nothing at
-    // all by painting the segment invisible.
+    // Same fallback the route strip makes: the unknown state says "we do not
+    // know what this is", where an interpolated `var(--status-<new word>)`
+    // would say nothing at all by painting the segment invisible.
     expect(container.querySelector<HTMLElement>('[title^="P3"]')!.style.background)
       .toBe(toneVar('waiting'));
   });
@@ -215,9 +217,10 @@ describe('the charts as charts', () => {
     );
     const fills = [...container.querySelector('[role="img"]')!.children]
       .map((c) => (c as HTMLElement).style.background);
-    // `parked` is a queue of questions, not a failure — gated, never blocked.
+    // `parked` is a queue of questions, not a failure — it needs a person,
+    // never red; `awaiting-verification` likewise; `skipped` is its own word.
     expect(fills).toEqual([
-      toneVar('blocked'), toneVar('gated'), toneVar('ready'), toneVar('waiting'),
+      toneVar('failed'), toneVar('needs-you'), toneVar('needs-you'), toneVar('skipped'),
     ]);
   });
 

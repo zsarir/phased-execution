@@ -69,18 +69,3 @@ export const QA_PROFILE_LABEL: Record<QaProfile, string> = {
 export function canQa(state: string): boolean {
   return state !== 'waiting';
 }
-
-/**
- * What the chip beside a phase says about its recorded verdict.
- *
- * `pending` is deliberately not styled as a result: a row that says pending is
- * a review that was asked for and never answered, which is closer to "nothing
- * here" than to a verdict.
- */
-export const QA_TONE: Record<string, string> = {
-  pass: 'done',
-  fail: 'blocked',
-  waived: 'muted',
-  pending: 'muted',
-  unknown: 'muted',
-};

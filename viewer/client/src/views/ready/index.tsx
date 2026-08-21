@@ -7,7 +7,7 @@
  * ## Why it looks like a board
  *
  * The design system has committed to a transit reading since the first phase:
- * plans are lines, phases are stations, `STATE_BOARD` spells the states
+ * plans are lines, phases are stations, the status vocabulary spells the states
  * Departed / Boarding / On track / Held, and `pad2` exists because "a phase
  * number as a departures board writes it" is `07`. Nothing had ever actually
  * built the board. This is it — and the metaphor earns its place by doing work
@@ -55,7 +55,8 @@ export default function ReadyView() {
   const [prefs, setPrefs] = usePrefs();
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
 
-  const summaries = (plans ?? []) as unknown as PlanSummaryFull[];
+  // Memoised: a fresh `[]` per render would re-run every memo below on every render.
+  const summaries = useMemo(() => (plans ?? []) as unknown as PlanSummaryFull[], [plans]);
 
   // Only plans that actually have something ready are worth an engine run — and
   // a closed plan's ready phases are never going to board, so fetching its

@@ -21,7 +21,7 @@ import { ChevronRight, Link2 } from 'lucide-react';
 import { cardClass } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { navigate } from '@/router';
-import { decorateStatusWord } from '@/components/ui/chip';
+import { decorateStatusWord } from '@/components/ui/status-badge';
 import { StatusProse } from './prose';
 import type { GuideCard as Card } from './split';
 

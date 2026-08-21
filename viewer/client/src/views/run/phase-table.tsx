@@ -17,8 +17,7 @@
 
 import { useState } from 'react';
 import {
-  Button, Card, CardBody, CardHeader, CardTitle, Chip, Empty, StateChip,
-  TBody, TD, TH, THead, TR, Table, TableWrap, toast,
+  Button, Card, CardBody, CardHeader, CardTitle, Chip, Empty, StateChip, TBody, TD, TH, THead, TR, Table, TableWrap, toast, StatusBadge,
 } from '@/components/ui';
 import {
   api, type PhaseEta, type PhaseLock, type PhaseRecord, type PhaseScope, type PhaseView,
@@ -48,7 +47,7 @@ import { Bot, Gauge, TerminalSquare } from 'lucide-react';
 
 import { scopeOfRow } from '@shared/scope.js';
 import { ScopeChips } from '@/components/scope-chips';
-import { PHASE_STATUS_TONE, boardStateTitle, phaseStatusTitle } from '@/lib/status-vocab';
+import { boardStateTitle, phaseStatusTitle, phaseUiState } from '@/lib/status-vocab';
 import { cn } from '@/lib/cn';
 
 /**
@@ -104,9 +103,6 @@ const fellOver = fellOverToAnotherModel as (record: PhaseRecord | undefined) => 
 const ORDER = BOARD_ORDER as string[];
 /** The Repos cell as scope tokens, never empty — a blank cell means `all`. */
 const scopeOf = scopeOfRow as (cell: string | undefined) => string[];
-
-// Single-sourced with the words' own explanations in `lib/status-vocab.ts`.
-const PHASE_TONE = PHASE_STATUS_TONE;
 
 /**
  * What this console can hand to a Claude session, and what is already on it.
@@ -412,7 +408,7 @@ function PhaseRows({
         <TD className="text-2xs">
           {r ? (
             <>
-              <Chip tone={PHASE_TONE[r.status]} title={phaseStatusTitle(r.status)}>{r.status}</Chip>
+              <StatusBadge state={phaseUiState(r.status)} label={r.status} mono title={phaseStatusTitle(r.status)} pulse={r.status === 'running'} />
               {/* Same icon vocabulary as the header's Model tile — what a row
                   ran as should not be the smallest, least-scannable text on it. */}
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ink-faint">

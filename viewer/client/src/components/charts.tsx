@@ -18,20 +18,22 @@
 import { useMemo, useState } from 'react';
 import { useNarrow } from '@/lib/media';
 import { cn } from '@/lib/cn';
+import { UI_STATES, boardUiState, phaseUiState, type UiState } from '@/lib/status-vocab';
 
 /**
- * The only colours a chart may use.
+ * The only colours a chart may use: the eight UI states of the status
+ * vocabulary, by name.
  *
  * Deliberately the *state* palette rather than a decorative one: every chart on
  * the statistics page is counting phases in some state, so a bar's colour and a
- * chip's colour mean the same thing on the same screen.
+ * badge's colour mean the same thing on the same screen.
  */
-export const CHART_TONES = ['done', 'ready', 'progress', 'waiting', 'blocked', 'stuck', 'gated'] as const;
+export const CHART_TONES = UI_STATES;
 
-export type ChartTone = (typeof CHART_TONES)[number];
+export type ChartTone = UiState;
 
 /** A tone name → the CSS custom property that holds it. Nothing else is legal. */
-export const toneVar = (tone: ChartTone): string => `var(--line-${tone})`;
+export const toneVar = (tone: ChartTone): string => `var(--status-${tone})`;
 
 /* ------------------------------------------------------------------ *
  * Bars — weekly completions
@@ -80,7 +82,7 @@ export function Bars({
             width={barWidth}
             height={Math.max(point.count ? 1.5 : 0, barHeight)}
             rx="0.6"
-            fill={current ? 'var(--action)' : toneVar('progress')}
+            fill={current ? 'var(--action)' : toneVar('running')}
             opacity={current ? 1 : 0.75}
           >
             <title>{`${point.week}: ${point.count} ${label}`}</title>
@@ -204,7 +206,7 @@ export interface BarListItem {
 export function BarList({
   items,
   unit = '',
-  tone = 'progress',
+  tone = 'running',
   className,
 }: {
   items: BarListItem[];
@@ -303,7 +305,7 @@ export function LoadMeter({
   fraction,
   label,
   description,
-  tone = 'progress',
+  tone = 'running',
   className,
 }: {
   /** 0–1, or null when the phase has no weight or the plan no budget. */
@@ -359,25 +361,6 @@ export interface StripPhase {
 }
 
 /**
- * The engine's state vocabulary → this palette's.
- *
- * A closed table rather than `var(--line-${state})`: an engine that learns a new
- * word would otherwise interpolate an undeclared custom property and paint the
- * segment *transparent*, which reads as "this phase does not exist". Grey —
- * "we do not know that this can start" — is the honest fallback, and it is the
- * same one `asPhaseState` makes for chips.
- */
-const STRIP_TONE: Record<string, ChartTone> = {
-  done: 'done',
-  ready: 'ready',
-  'in-progress': 'progress',
-  waiting: 'waiting',
-  blocked: 'blocked',
-  stuck: 'stuck',
-  gated: 'gated',
-};
-
-/**
  * A plan's phases as one line of track.
  *
  * The route map answers "what depends on what"; this answers "how far along is
@@ -414,7 +397,10 @@ export function RouteStrip({ phases, className }: { phases: StripPhase[]; classN
               // 6px segment, which is not a difference on a phone in daylight.
               ready ? 'self-stretch' : 'my-[3px]',
             )}
-            style={{ background: toneVar(STRIP_TONE[p.state] ?? 'waiting') }}
+            // The board word → its UI state, through the vocabulary: an engine
+            // that learns a new word paints it as the unknown state, never as an
+            // undeclared custom property (transparent — "this phase does not exist").
+            style={{ background: toneVar(boardUiState(p.state)) }}
             title={`P${p.phase} · ${p.state}${p.title ? ` · ${p.title}` : ''}`}
           />
         );
@@ -434,37 +420,6 @@ export interface RunPhase {
   /** The caller's one-line reading, for the tooltip. Cost and attempts belong here. */
   detail?: string;
 }
-
-/**
- * A run's phases → this palette.
- *
- * Deliberately a second table rather than a widening of `STRIP_TONE`: a plan's
- * phase is in one of seven *states* the engine derives from the board, while a
- * run's phase has one of ten *outcomes* the runner recorded. `done` is the only
- * word they share, and it means the same thing in both — everything else here
- * (`failed`, `skipped`, `parked`, `awaiting-verification`) has no plan-side
- * equivalent at all. One table covering both would have to answer what a
- * `blocked` run phase is, and there is no such thing.
- *
- * The mapping people get wrong: `parked` is `gated`, not `blocked`. A parked
- * phase is not broken, it is waiting for a person — the same shape of fact as a
- * gate, and painting it red would send someone looking for a failure that never
- * happened.
- */
-const RUN_TONE: Record<string, ChartTone> = {
-  done: 'done',
-  running: 'progress',
-  verifying: 'progress',
-  // Machine-checked as far as it can be; the rest is a question for a person.
-  // That makes it the one segment on the strip anybody can act on.
-  'awaiting-verification': 'ready',
-  failed: 'blocked',
-  interrupted: 'stuck',
-  parked: 'gated',
-  gated: 'gated',
-  skipped: 'waiting',
-  pending: 'waiting',
-};
 
 /**
  * One run as a line of track.
@@ -499,7 +454,9 @@ export function RunStrip({ phases, className }: { phases: RunPhase[]; className?
               'block min-w-0 flex-1 rounded-[1px] first:rounded-l-sm last:rounded-r-sm',
               active ? 'self-stretch' : 'my-[3px]',
             )}
-            style={{ background: toneVar(RUN_TONE[p.status] ?? 'waiting') }}
+            // The runner's word → its UI state, through the same vocabulary a
+            // badge reads: `parked` needs a person (never red), `failed` is red.
+            style={{ background: toneVar(phaseUiState(p.status)) }}
             title={`P${p.phase} · ${p.status}${p.detail ? ` · ${p.detail}` : ''}`}
           />
         );

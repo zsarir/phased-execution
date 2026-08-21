@@ -18,14 +18,14 @@
 
 import { Bot } from 'lucide-react';
 import {
-  Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip,
+  Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip, StatusBadge,
 } from '@/components/ui';
 import { useAuth, useConsoleState, useConverge, useRun } from '@/lib/queries';
 import { money } from '@/lib/format';
 import { isClosed } from '@/lib/closure';
 import { looksLikeAuthFailure } from '@/lib/failures';
 import { WAYS_FORWARD, classifyRun, recoveryKey } from '@/lib/recovery';
-import { RUN_STATUS_TONE, runStatusTitle } from '@/lib/status-vocab';
+import { runStatusTitle, runUiState } from '@/lib/status-vocab';
 import { PlanPulse } from '@/components/pulse';
 import { RecoveryActions, type RecoveryCtx } from '@/components/recovery-actions';
 import { planHref } from '@shared/routes.js';
@@ -95,7 +95,6 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
   }
   if (lintFailed) offer('lint', { slug }, { planIssues: true } as RecoveryCtx);
 
-  const tone = RUN_STATUS_TONE[(run?.status ?? '') as keyof typeof RUN_STATUS_TONE];
 
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -120,7 +119,7 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
         <CardHeader>
           <CardTitle>Autopilot</CardTitle>
           {run
-            ? <Chip tone={tone} title={runStatusTitle(run.status)}>{run.status}</Chip>
+            ? <StatusBadge state={runUiState(run.status)} label={run.status} mono title={runStatusTitle(run.status)} pulse={run.status === 'running'} />
             : <Chip>not running</Chip>}
         </CardHeader>
         <CardBody className="flex flex-col gap-2">

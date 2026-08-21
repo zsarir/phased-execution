@@ -28,16 +28,14 @@ import { useState } from 'react';
 import { ChevronRight, Radio } from 'lucide-react';
 import {
   AlertDialog, AlertDialogContent, AlertDialogTrigger,
-  Button, Chip, TBody, TD, TH, THead, TR, Table, TableWrap, Tile,
+  Button, StatusBadge, TBody, TD, TH, THead, TR, Table, TableWrap, Tile,
 } from '@/components/ui';
 import { LoadMeter, RunStrip } from '@/components/charts';
 import { duration, money, relativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
-import { phaseStatusTitle, runStatusTitle } from '@/lib/status-vocab';
+import { phaseStatusTitle, phaseUiState, runStatusTitle, runUiState } from '@/lib/status-vocab';
 import { planHref } from '@shared/routes.js';
-import type { ChipProps } from '@/components/ui';
 import type { PhaseRecord } from '@/lib/api';
-import { RUN_TONE } from '../run/header';
 import { PROFILE_LABEL } from '../run/defaults';
 import { fleetTotals, groupRows, type RunRow } from './model';
 import { RecoveryActions } from '@/components/recovery-actions';
@@ -51,17 +49,6 @@ import { usePhone } from '@/lib/media';
  * that quietly truncates reads as "that is everything".
  */
 const SHOW_LIMIT = 40;
-
-const PHASE_TONE: Record<string, ChipProps['tone']> = {
-  done: 'ok',
-  running: 'busy',
-  verifying: 'busy',
-  failed: 'bad',
-  interrupted: 'stuck',
-  parked: 'gate',
-  gated: 'gate',
-  'awaiting-verification': 'warn',
-};
 
 /* ------------------------------------------------------------------ *
  * The counters
@@ -121,7 +108,7 @@ function PhaseLine({ phase }: { phase: PhaseRecord }) {
     <li className="flex min-w-0 flex-col gap-0.5 border-l-2 border-rule py-1 pl-2.5">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <span className="font-mono text-2xs tabular-nums text-ink-faint">P{phase.phase}</span>
-        <Chip tone={PHASE_TONE[phase.status] ?? 'neutral'} title={phaseStatusTitle(phase.status)}>{phase.status}</Chip>
+        <StatusBadge state={phaseUiState(phase.status)} label={phase.status} mono title={phaseStatusTitle(phase.status)} />
         <span className="min-w-0 truncate font-mono text-2xs text-ink-faint">{facts.join(' · ')}</span>
       </div>
       {verify && !verify.ok && (
@@ -361,14 +348,13 @@ function FleetRows({
             </TD>
             <TD><code className="font-mono text-2xs text-ink-faint">{row.id}</code></TD>
             <TD>
-              <Chip
-                tone={RUN_TONE[row.status as keyof typeof RUN_TONE]}
-                dot={row.live}
-                className={cn(row.live && 'animate-pulse-soft')}
+              <StatusBadge
+                state={runUiState(row.status)}
+                label={row.status}
+                mono
+                pulse={row.live}
                 title={runStatusTitle(row.status)}
-              >
-                {row.status}
-              </Chip>
+              />
             </TD>
             <TD className="w-36">
               {row.phases.length
@@ -399,7 +385,7 @@ function FleetRows({
                 description={row.budgetUsd
                   ? `${money(row.spentUsd)} of a ${money(row.budgetUsd)} run budget`
                   : `${money(row.spentUsd)}, no run budget set`}
-                tone={row.overBudget ? 'blocked' : 'progress'}
+                tone={row.overBudget ? 'failed' : 'running'}
               />
             </TD>
             <TD className="whitespace-nowrap font-mono text-2xs tabular-nums text-ink-faint">
@@ -411,7 +397,7 @@ function FleetRows({
                   'block truncate text-2xs',
                   // A resolved run's halt reason is history, not a warning — it
                   // reads in the muted voice even when it says "halted".
-                  row.outcome === 'halted' && !row.resolution ? 'text-blocked' : 'text-ink-muted',
+                  row.ui === 'needs-you' && row.halt && !row.resolution ? 'text-failed' : 'text-ink-muted',
                 )}
                 title={row.reason}
               >
@@ -474,9 +460,7 @@ function FleetCards({
                 {row.slug}
               </a>
               <code className="font-mono text-2xs text-ink-faint">{row.id.slice(0, 8)}</code>
-              <Chip tone={RUN_TONE[row.status as keyof typeof RUN_TONE]} title={runStatusTitle(row.status)} className="ml-auto">
-                {row.status}
-              </Chip>
+              <StatusBadge state={runUiState(row.status)} label={row.status} mono title={runStatusTitle(row.status)} className="ml-auto" />
             </div>
             {row.reason && <p className="max-w-prose text-2xs text-ink-muted">{row.reason}</p>}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-2xs tabular-nums text-ink-faint">

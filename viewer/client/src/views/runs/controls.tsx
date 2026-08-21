@@ -12,7 +12,8 @@ import { Search, SlidersHorizontal, X } from 'lucide-react';
 import { Button, ButtonGroup, Chip, Sheet, SheetContent, SheetTrigger } from '@/components/ui';
 import { usePhone } from '@/lib/media';
 import { cn } from '@/lib/cn';
-import { OUTCOMES, SORTS, type Filters, type OutcomeId, type SortId } from './model';
+import type { UiState } from '@/lib/status-vocab';
+import { FLEET_STATES, SORTS, type Filters, type SortId } from './model';
 
 export interface ControlsProps {
   sortId: SortId;
@@ -21,7 +22,7 @@ export interface ControlsProps {
   onFilters: (patch: Partial<Filters>) => void;
   grouped: boolean;
   onGrouped: (value: boolean) => void;
-  counts: Record<OutcomeId, number>;
+  counts: Record<UiState, number>;
   plans: { slug: string; runs: number }[];
   /** How many runs the filters are currently hiding — never a silent cut. */
   hidden: number;
@@ -31,15 +32,15 @@ const fieldClass =
   'h-9 min-w-0 rounded border border-rule bg-surface px-2 text-sm text-ink '
   + 'hover:border-rule-strong [@media(hover:none)]:min-h-(--tap-min)';
 
-/** An outcome with no runs in it is not a filter, it is a dead button. */
+/** A state with no runs in it is not a filter, it is a dead button. */
 function OutcomeChips({
   counts, value, onChange,
 }: {
-  counts: Record<OutcomeId, number>;
+  counts: Record<UiState, number>;
   value: string;
   onChange: (value: string) => void;
 }) {
-  const live = OUTCOMES.filter((o) => counts[o.id] > 0);
+  const live = FLEET_STATES.filter((o) => counts[o.id] > 0);
   if (live.length < 2) return null;
 
   return (

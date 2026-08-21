@@ -93,6 +93,7 @@ for a in \
   "viewer/scripts/stamp-build.mjs" \
   "viewer/scripts/build-rev.mjs" \
   "viewer/scripts/check-dist.mjs" \
+  "viewer/scripts/verify-dist.mjs" \
   "docs/" \
   "tests/" \
   "evals/" \
@@ -104,6 +105,7 @@ for a in \
   "viewer/shared/setup-prompts" \
   "viewer/shared/console-model" \
   "viewer/shared/phase-model" \
+  "viewer/shared/status-vocab" \
   "viewer/shared/sw-push"; do
   if grep -q "package/$a" "$list"; then
     echo "MUST NOT ship, but is in tarball: $a" >&2

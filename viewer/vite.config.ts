@@ -128,7 +128,12 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: 'dist',
+    // `client/dist` is the only client the server serves, so a build into it
+    // cuts the live console over. `PC_DIST_DIR` (relative to `client/`, or
+    // absolute) lets `npm run verify:dist` prove the tree builds and passes
+    // the gate in a scratch directory instead — `stamp-build.mjs` and
+    // `check-dist.mjs` read the same variable; the server never does.
+    outDir: process.env.PC_DIST_DIR || 'dist',
     emptyOutDir: true,
   },
   test: {

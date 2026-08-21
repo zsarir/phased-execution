@@ -209,6 +209,7 @@ export function instancePrefsPath(id, env = process.env) {
  * never as `ab` — a silent join is its own small lie about what the file said.
  */
 function stripControl(value) {
+  // eslint-disable-next-line no-control-regex -- stripping C0 controls and DEL is the point
   return String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ');
 }
 

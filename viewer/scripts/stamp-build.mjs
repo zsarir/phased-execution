@@ -11,20 +11,24 @@
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 // One computation for the stamp AND the client's baked `__BUILD_REV__` —
 // see build-rev.mjs; the Interface row compares the two, so they must agree.
 import { VIEWER_DIR as VIEWER, buildRev } from './build-rev.mjs';
 
-const DIST = join(VIEWER, 'client', 'dist');
+// Which build to read: `client/dist` (what the server serves) unless
+// `PC_DIST_DIR` names another — `npm run verify:dist` builds into a scratch
+// directory so the live console is never touched. Same variable, same
+// resolution as vite.config.ts: relative to `client/`, or absolute.
+const DIST = resolve(join(VIEWER, 'client'), process.env.PC_DIST_DIR || 'dist');
 
 if (!existsSync(join(DIST, 'index.html'))) {
-  process.stderr.write('stamp-build: no client/dist to stamp — run `vite build` first.\n');
+  process.stderr.write(`stamp-build: no ${DIST.replace(VIEWER + '/', '')} to stamp — run \`vite build\` first.\n`);
   process.exit(1);
 }
 
 const rev = buildRev();
 
 writeFileSync(join(DIST, '.build-rev'), `${rev}\n`, 'utf8');
-process.stdout.write(`stamped client/dist/.build-rev = ${rev.slice(0, 12)}\n`);
+process.stdout.write(`stamped ${DIST.replace(VIEWER + '/', '')}/.build-rev = ${rev.slice(0, 12)}\n`);

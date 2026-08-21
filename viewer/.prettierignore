@@ -1,0 +1,15 @@
+# Prettier covers the client sources and the shared/ modules (see `npm run format`).
+# Not CSS: theme.css is read by source guards that pin its shape, and the
+# hand-aligned token tables are documentation. Not markdown: the guide content
+# is prose the Vitest suite reads as-is.
+node_modules/
+client/dist/
+client/.dist-verify/
+client/dev-dist/
+client/public/
+**/*.css
+**/*.md
+**/*.json
+server/
+test/
+deploy/

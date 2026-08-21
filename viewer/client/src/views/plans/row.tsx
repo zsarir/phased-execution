@@ -27,42 +27,32 @@
  */
 
 import { AlertTriangle, Lock } from 'lucide-react';
-import { Card, Chip, StateChip, TBody, TD, TH, THead, TR, Table, TableWrap } from '@/components/ui';
+import { Card, Chip, StateChip, StatusBadge, TBody, TD, TH, THead, TR, Table, TableWrap } from '@/components/ui';
 import { Progress } from '@/components/ui';
 import { etaLabel, etaTitle, relativeTime } from '@/lib/format';
 import { closedTitle } from '@/lib/closure';
 import { cn } from '@/lib/cn';
 import { phaseHref, planHref } from '@shared/routes.js';
-import type { ChipProps } from '@/components/ui';
-import { runStatusTitle } from '@/lib/status-vocab';
+import { runStatusTitle, runUiState } from '@/lib/status-vocab';
 import { SORTS, concerns, type PlanRow, type SortId } from './model';
 
 /* ------------------------------------------------------------------ *
  * Shared pieces
  * ------------------------------------------------------------------ */
 
-const RUN_TONE: Record<string, ChipProps['tone']> = {
-  live: 'busy',
-  attention: 'warn',
-  halted: 'bad',
-  interrupted: 'warn',
-  finished: 'ok',
-};
-
 /** What the autopilot is doing to this plan, when it has ever done anything. */
 export function RunChip({ row, className }: { row: PlanRow; className?: string }) {
   if (!row.run) return null;
-  const { status, activePhase, outcome } = row.run;
+  const { status, activePhase } = row.run;
   return (
     <a href={planHref(row.slug, 'run')} className={cn('shrink-0 rounded-sm', className)}>
-      <Chip
-        tone={RUN_TONE[outcome] ?? 'neutral'}
-        dot={outcome === 'live'}
+      <StatusBadge
+        state={runUiState(status)}
+        label={`${status}${activePhase != null ? ` P${activePhase}` : ''}`}
         mono
+        pulse={status === 'running'}
         title={runStatusTitle(status)}
-      >
-        {status}{activePhase != null ? ` P${activePhase}` : ''}
-      </Chip>
+      />
     </a>
   );
 }

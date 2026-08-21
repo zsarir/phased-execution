@@ -24,7 +24,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClientConfig } from '@/lib/queries';
 import { setPrefs } from '@/lib/prefs';
 import type { RunState } from '@/lib/api';
-import { outcomeOf } from '../run/defaults';
+import { isLive } from '../run/defaults';
+import { runUiState } from '@/lib/status-vocab';
 import {
   NO_FILTERS, applyFilters, fleetTotals, groupRows, outcomeCounts, phasesOf, planOptions,
   sortRows, stopReason, toRows,
@@ -66,30 +67,30 @@ const phases = (...records: { phase: number; status: string; [k: string]: unknow
  * The vocabulary
  * ------------------------------------------------------------------ */
 
-describe('collapsing every status into five outcomes', () => {
-  it('maps every status the runner can write', () => {
+describe('every status collapses onto the vocabulary', () => {
+  it('maps every status the runner can write to one of the eight UI states', () => {
     const all = [
       'running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting',
       'paused', 'parked', 'halted', 'finished', 'interrupted',
     ];
-    expect(all.map(outcomeOf)).toEqual([
-      'live', 'live', 'live', 'live', 'live', 'live', 'live',
-      'attention', 'attention', 'halted', 'finished', 'interrupted',
+    expect(all.map(runUiState)).toEqual([
+      'running', 'waiting', 'waiting', 'waiting', 'waiting', 'queued', 'needs-you',
+      'waiting', 'needs-you', 'needs-you', 'done', 'needs-you',
     ]);
   });
 
-  it('puts a paused run with the ones waiting on a person, and a frozen one with the live', () => {
-    // `paused` has genuinely stopped and only a person restarts it. `frozen`
-    // still holds a warm child, so it belongs with what is running.
-    expect(outcomeOf('paused')).toBe('attention');
-    expect(outcomeOf('frozen')).toBe('live');
+  it('puts a paused run with the waits, and keeps a frozen one live for the controls', () => {
+    // `paused` has genuinely stopped and only a person restarts it — a wait.
+    // `frozen` still holds a warm child: its row is a wait, but `isLive` keeps
+    // Stop/Steer/Continue offered.
+    expect(runUiState('paused')).toBe('waiting');
+    expect(isLive('frozen')).toBe(true);
+    expect(isLive('queued')).toBe(true);
   });
 
   it('does not report a queued run as one that died', () => {
-    // `outcomeOf` ends in a bare `return 'interrupted'`, so a status missing
-    // from `LIVE_STATUSES` is not merely uncategorised — it is actively
-    // mislabelled as a run that stopped without saying why.
-    expect(outcomeOf('queued')).toBe('live');
+    expect(runUiState('queued')).toBe('queued');
+    expect(runUiState('quantum-superposition')).toBe('waiting');
   });
 });
 
@@ -207,19 +208,19 @@ describe('filtering the fleet', () => {
   });
 
   it('filters by outcome, by plan and by free text over the slug or the run id', () => {
-    expect(applyFilters(rows, { ...NO_FILTERS, outcome: 'halted' }).map((r) => r.id)).toEqual(['b2']);
+    expect(applyFilters(rows, { ...NO_FILTERS, outcome: 'needs-you' }).map((r) => r.id)).toEqual(['b2']);
     expect(applyFilters(rows, { ...NO_FILTERS, plan: 'demo' }).map((r) => r.id)).toEqual(['a1']);
     expect(applyFilters(rows, { ...NO_FILTERS, query: 'b2' }).map((r) => r.id)).toEqual(['b2']);
     expect(applyFilters(rows, { ...NO_FILTERS, query: 'TRADE' }).map((r) => r.id)).toEqual(['b2']);
   });
 
   it('counts each outcome, and lists the plans busiest first', () => {
-    expect(outcomeCounts(rows)).toMatchObject({ finished: 1, halted: 1, live: 0 });
+    expect(outcomeCounts(rows)).toMatchObject({ done: 1, 'needs-you': 1, running: 0 });
     expect(planOptions(rows)).toEqual([{ slug: 'demo', runs: 1 }, { slug: 'trade', runs: 1 }]);
   });
 
   it('sums spend across what is shown, not across everything that ever ran', () => {
-    const totals = fleetTotals(applyFilters(rows, { ...NO_FILTERS, outcome: 'halted' }));
+    const totals = fleetTotals(applyFilters(rows, { ...NO_FILTERS, outcome: 'needs-you' }));
     expect(totals).toMatchObject({ shown: 1, spent: 1.65 });
   });
 
@@ -340,7 +341,7 @@ describe('the runs page', () => {
     const { default: RunsView } = await import('./index');
     mount(<RunsView />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Halted, 1 run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Needs you, 1 run' }));
     await waitFor(() => expect(screen.getByText(/1 hidden by filters/)).toBeTruthy());
     expect(screen.queryByRole('link', { name: 'demo' })).toBeNull();
   });
@@ -362,7 +363,7 @@ describe('the runs page', () => {
     const { default: RunsView } = await import('./index');
     const { container } = mount(<RunsView />);
 
-    const halted = await screen.findByRole('button', { name: 'Halted, 1 run' });
+    const halted = await screen.findByRole('button', { name: 'Needs you, 1 run' });
     const amber = () => [...container.querySelectorAll('button')]
       .filter((b) => b.className.includes('bg-action/12'))
       .map((b) => b.textContent?.trim());
@@ -370,7 +371,7 @@ describe('the runs page', () => {
     expect(screen.getByRole('button', { name: 'Everything' }).getAttribute('aria-pressed')).toBe('true');
 
     fireEvent.click(halted);
-    await waitFor(() => expect(amber()).toContain('Halted1'));
+    await waitFor(() => expect(amber()).toContain('Needs you1'));
   });
 
   it('reports a failed read as a failure rather than an empty fleet', async () => {

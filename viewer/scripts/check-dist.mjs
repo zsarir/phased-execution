@@ -28,18 +28,22 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 const VIEWER = dirname(dirname(fileURLToPath(import.meta.url)));
-const DIST = join(VIEWER, 'client', 'dist');
+// Which build to read: `client/dist` (what the server serves) unless
+// `PC_DIST_DIR` names another — `npm run verify:dist` builds into a scratch
+// directory so the live console is never touched. Same variable, same
+// resolution as vite.config.ts: relative to `client/`, or absolute.
+const DIST = resolve(join(VIEWER, 'client'), process.env.PC_DIST_DIR || 'dist');
 
 /** The plan's bundle budget: ~300 KB gzipped for the entry's JS. */
 const BUDGET_GZ = 300 * 1024;
 
 if (!existsSync(join(DIST, 'index.html'))) {
-  process.stderr.write('check-dist: no client/dist/index.html — run `npm run build` first.\n');
+  process.stderr.write(`check-dist: no ${DIST.replace(VIEWER + '/', '')}/index.html — run \`npm run build\` first.\n`);
   process.exit(1);
 }
 

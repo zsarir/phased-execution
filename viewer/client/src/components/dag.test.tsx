@@ -143,20 +143,20 @@ describe('<RouteMap>', () => {
     // Named, not just counted — the toolbar's zoom controls are buttons too.
     const stations = screen.getAllByRole('button', { name: /^Phase \d/ });
     expect(stations).toHaveLength(4);
-    expect(screen.getByLabelText(/Phase 1: Foundations, Departed/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Phase 2: .*, Boarding/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Phase 3: Terminal, Held/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Phase 4: Cutover, Blocked/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Phase 1: Foundations, Done/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Phase 2: .*, Next up/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Phase 3: Terminal, Waiting/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Phase 4: Cutover, Needs you/)).toBeInTheDocument();
     for (const station of stations) expect(station).toHaveAttribute('tabindex', '0');
   });
 
   it('paints each station with its own state class, so no two states look alike', () => {
     const { container } = render(<RouteMap route={ROUTE} />);
     expect(container.querySelector('.station.state-done')).not.toBeNull();
-    expect(container.querySelector('.station.state-ready.boarding')).not.toBeNull();
+    expect(container.querySelector('.station.state-queued.boarding')).not.toBeNull();
     expect(container.querySelector('.station.state-waiting')).not.toBeNull();
     // `stuck` had aliased `blocked` in the old palette; it is its own line now.
-    expect(container.querySelector('.station.state-stuck')).not.toBeNull();
+    expect(container.querySelector('.station.state-needs-you')).not.toBeNull();
   });
 
   it('hatches a gated station and nothing else', () => {

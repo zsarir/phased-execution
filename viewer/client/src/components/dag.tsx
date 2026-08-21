@@ -22,7 +22,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Lock, Unlock } from 'lucide-react';
-import { Button, ButtonGroup, STATE_BOARD, asPhaseState, type PhaseState } from '@/components/ui';
+import { Button, ButtonGroup, asPhaseState, type PhaseState } from '@/components/ui';
+import { STATE_META, boardLabel, boardUiState, type UiState } from '@/lib/status-vocab';
 import { weight } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { useNarrow } from '@/lib/media';
@@ -385,8 +386,18 @@ interface Train extends BatchGroup {
   head: PlacedNode;
 }
 
-/** The five states the legend shows, in the order a board reads them. */
-const LEGEND_STATES = ['done', 'ready', 'in-progress', 'waiting', 'stuck'] as const;
+/**
+ * The legend: the UI states a station can be in, worst first — plus the
+ * hatched disc for a gate, which is a needs-you with a barrier drawn on it.
+ * Labels come from the vocabulary; `ready` reads "Next up" like every badge.
+ */
+const LEGEND: readonly { state: UiState; label: string }[] = [
+  { state: 'needs-you', label: STATE_META['needs-you'].label },
+  { state: 'running', label: STATE_META.running.label },
+  { state: 'queued', label: boardLabel('ready') },
+  { state: 'waiting', label: STATE_META.waiting.label },
+  { state: 'done', label: STATE_META.done.label },
+];
 
 export interface RouteMapProps {
   route: RouteView;
@@ -410,7 +421,7 @@ function stationTitle(
   state: PhaseState,
   needs: number[] | undefined,
 ): string {
-  const lines = [`Phase ${node.phase} — ${node.title}`, `${STATE_BOARD[state]} · size ${node.size}`];
+  const lines = [`Phase ${node.phase} — ${node.title}`, `${boardLabel(state)} · size ${node.size}`];
   if (needs?.length) lines.push(`needs ${needs.map((n) => `P${n}`).join(' · ')}`);
   if (node.locked === 'live') lines.push('claimed by another session');
   if (node.locked === 'stale') lines.push('a lapsed claim — release it to tidy the board');
@@ -485,7 +496,7 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
     <div className={cn('overflow-hidden rounded-lg border border-rule bg-surface', className)}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule bg-surface-raised px-3 py-2">
         <div className="flex flex-wrap items-center gap-3">
-          {LEGEND_STATES.map((state) => (
+          {LEGEND.map(({ state, label }) => (
             <span
               key={state}
               className={cn(
@@ -494,10 +505,10 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
               )}
             >
               <span className="legend-dot" aria-hidden />
-              {STATE_BOARD[state]}
+              {label}
             </span>
           ))}
-          <span className="inline-flex items-center gap-1.5 font-display text-2xs uppercase tracking-wider text-ink-faint state-gated">
+          <span className="inline-flex items-center gap-1.5 font-display text-2xs uppercase tracking-wider text-ink-faint state-needs-you">
             <span className="legend-dot hatched" aria-hidden />
             Gated
           </span>
@@ -589,14 +600,15 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
                   key={node.phase}
                   className={cn(
                     'station',
-                    `state-${state}`,
+                    // The station wears its UI state; the CSS paints by it.
+                    `state-${boardUiState(state)}`,
                     state === 'ready' && 'boarding',
                     dim && 'dim',
                     selected === node.phase && 'selected',
                   )}
                   tabIndex={0}
                   role="button"
-                  aria-label={`Phase ${node.phase}: ${node.title}, ${STATE_BOARD[state]}`}
+                  aria-label={`Phase ${node.phase}: ${node.title}, ${boardLabel(state)}`}
                   onClick={() => { if (!dragged.current) onSelect?.(node.phase); }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {

@@ -12,9 +12,9 @@
 
 import { useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
-import { Button, Chip } from '@/components/ui';
-import { qaResultTitle } from '@/lib/status-vocab';
-import { QA_TONE, isVerdict } from '@/lib/qa';
+import { Button, StatusBadge } from '@/components/ui';
+import { qaResultTitle, qaUiState } from '@/lib/status-vocab';
+import { isVerdict } from '@/lib/qa';
 import { LaunchDialog, type QaTarget } from '@/components/launch-dialog';
 
 export type { QaTarget } from '@/components/launch-dialog';
@@ -95,7 +95,7 @@ export function QaButton({
  */
 export function QaVerdict({ qa, href }: { qa?: { result: string; report?: string }; href?: string }) {
   if (!qa || !isVerdict(qa.result)) return null;
-  const chip = <Chip tone={QA_TONE[qa.result] as never} title={qaResultTitle(qa.result)}>QA {qa.result}</Chip>;
+  const chip = <StatusBadge state={qaUiState(qa.result)} label={`QA ${qa.result}`} title={qaResultTitle(qa.result)} />;
   return qa.report && href
     ? <a href={href} className="hover:underline" title={qa.report}>{chip}</a>
     : chip;

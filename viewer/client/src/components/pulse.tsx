@@ -13,15 +13,14 @@
  * that keeps the elapsed timers honest while anything is live.
  */
 
-import { useEffect, useState } from 'react';
 import { Bot, CircleDashed, Clock3, Eye, Hourglass, Lock, RefreshCw, Snowflake, Terminal } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useNow } from '@/lib/clock';
 import { money } from '@/lib/format';
 import { rungLabel, situationLabelFor } from '@/lib/ladder';
-import { runStatusTitle } from '@/lib/status-vocab';
-import { RUN_TONE } from '@/views/run/header';
+import { runStatusTitle, runUiState } from '@/lib/status-vocab';
 import { RunStrip } from '@/components/charts';
-import { Chip } from '@/components/ui';
+import { Chip, StatusBadge } from '@/components/ui';
 import { navigate } from '@/router';
 import { planHref } from '@shared/routes.js';
 import type { ConvergeView, ForeignSession, PhaseRecord, RunState } from '@/lib/api';
@@ -197,17 +196,9 @@ export function pulseWaits(run: RunState, titles?: Map<number, string>): PulseWa
 
 /* ---------------- time ---------------- */
 
-/** A 1s clock, running only while something is worth timing. */
-export function useNow(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [active]);
-  return now;
-}
+/* The clock is `lib/clock.ts`'s `useNow` — one interval implementation for
+   every ticking figure in the app; re-exported here for the pulse page. */
+export { useNow };
 
 export function fmtElapsed(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return '—';
@@ -294,9 +285,7 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign, co
             </a>
           )
           : <span className="font-medium text-ink">Right now</span>}
-        <Chip tone={RUN_TONE[run.status as keyof typeof RUN_TONE] ?? 'neutral'} title={runStatusTitle(run.status)}>
-          {run.status}
-        </Chip>
+        <StatusBadge state={runUiState(run.status)} label={run.status} mono title={runStatusTitle(run.status)} pulse={run.status === 'running'} />
         <span className="ml-auto shrink-0 font-mono text-2xs tabular-nums text-ink-faint">
           {money(run.spentUsd)} spent
         </span>

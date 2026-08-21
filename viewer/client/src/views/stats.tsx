@@ -29,7 +29,7 @@ const SEVERITY_ORDER: Record<string, number> = { error: 0, warning: 1, info: 2 }
 const SEVERITY_TONE = { error: 'bad', warning: 'warn', info: 'neutral' } as const;
 
 /** Phase sizes, in the order the engine declares them. */
-const SIZE_TONE: ChartTone[] = ['done', 'progress', 'gated'];
+const SIZE_TONE: ChartTone[] = ['done', 'running', 'waiting'];
 
 type Severity = 'all' | HealthIssue['severity'];
 
@@ -183,9 +183,9 @@ export default function StatsView() {
             <StackBar
               segments={[
                 { label: 'done', value: t.done, tone: 'done' },
-                { label: 'in progress', value: t.inProgress, tone: 'progress' },
-                { label: 'ready', value: t.ready, tone: 'ready' },
-                { label: 'blocked', value: t.stuck, tone: 'blocked' },
+                { label: 'running', value: t.inProgress, tone: 'running' },
+                { label: 'next up', value: t.ready, tone: 'queued' },
+                { label: 'needs you', value: t.stuck, tone: 'needs-you' },
                 { label: 'waiting', value: t.waiting, tone: 'waiting' },
               ]}
             />

@@ -231,7 +231,8 @@ describe('the dashboard', () => {
     await waitFor(() => expect(container.querySelector('[aria-label="3 phases, 1 done"]')).toBeTruthy());
     const strip = container.querySelector('[aria-label="3 phases, 1 done"]')!;
     const fills = [...strip.children].map((c) => (c as HTMLElement).style.background);
-    expect(fills).toEqual(['var(--line-done)', 'var(--line-ready)', 'var(--line-waiting)']);
+    // Board words through the vocabulary: done → done, ready → queued ("Next up"), waiting → waiting.
+    expect(fills).toEqual(['var(--status-done)', 'var(--status-queued)', 'var(--status-waiting)']);
   });
 
   it('links each ready phase of a strip to that phase', async () => {

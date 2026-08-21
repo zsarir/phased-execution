@@ -30,7 +30,7 @@
 
 import type { Autonomy, McpDegradation, PermissionProfile } from '@/lib/api';
 
-export interface RunDefaults {
+interface RunDefaults {
   model: string;
   effort: string;
   autonomy: Autonomy;
@@ -100,55 +100,16 @@ export const AUTONOMY_LABEL: Record<Autonomy, string> = {
  * `queued` belongs for the same reason read from the other end: it holds no child
  * and no lock — which is exactly why the server keeps it out of its own
  * `IN_FLIGHT` — but a loop IS behind it, sitting in `admit()`. Left out, a queued
- * run fell through `outcomeOf`'s tail and the fleet called it **interrupted**,
+ * run fell through the status mapping's tail and the fleet called it **interrupted**,
  * while its plan offered a Start button the server answers with a 409.
  */
-export const LIVE_STATUSES = [
+const LIVE_STATUSES = [
   // `halting` is a drain: sessions are still live and Stop must stay offered.
   'running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting',
 ] as const;
 
 export const isLive = (status: string | undefined): boolean =>
   (LIVE_STATUSES as readonly string[]).includes(status ?? '');
-
-/**
- * The ten statuses collapsed to the five words an operator uses.
- *
- * `RunStatus` is precise because the runner needs it to be — `pausing` and
- * `paused` are genuinely different to a loop deciding what to do next. To
- * somebody reading a list of runs they are one thing, and a filter offering ten
- * chips is a filter nobody uses. The distinction that survives is what the run
- * is *asking of you*: nothing (in flight), a decision (waiting), an
- * investigation (halted), or nothing ever again (finished, interrupted).
- *
- * This lives here rather than in either view's model because both the fleet and
- * the plan list read it, and a second copy would eventually disagree about where
- * `paused` belongs.
- */
-export const OUTCOMES = [
-  { id: 'live', label: 'In flight', hint: 'a loop is driving it right now' },
-  { id: 'attention', label: 'Waiting on you', hint: 'stopped until a person moves it' },
-  { id: 'halted', label: 'Halted', hint: 'stopped on something that must not be automated past' },
-  { id: 'finished', label: 'Finished', hint: 'nothing left to do on that plan' },
-  { id: 'interrupted', label: 'Interrupted', hint: 'nothing is driving it, and nothing said why' },
-] as const;
-
-export type OutcomeId = (typeof OUTCOMES)[number]['id'];
-
-/**
- * Every `RunStatus` maps to exactly one outcome.
- *
- * `paused` is "waiting on you", not "in flight": the loop has genuinely stopped
- * and only a person restarts it. `frozen` is the opposite call — a live child
- * still holds a warm session, so it belongs with the running ones.
- */
-export function outcomeOf(status: string | undefined): OutcomeId {
-  if (isLive(status)) return 'live';
-  if (status === 'parked' || status === 'paused') return 'attention';
-  if (status === 'halted') return 'halted';
-  if (status === 'finished') return 'finished';
-  return 'interrupted';
-}
 
 /** Plans write these as prose; only a known alias is a choice. */
 export function modelAlias(text: string | undefined): string | undefined {

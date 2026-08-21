@@ -61,7 +61,8 @@ export default function DashboardView() {
   const { data: approvals } = useApprovals(runsEnabled);
   const { data: stats } = useStats();
 
-  const summaries = (plans ?? []) as unknown as PlanSummaryFull[];
+  // Memoised: a fresh `[]` per render would re-run every memo below on every render.
+  const summaries = useMemo(() => (plans ?? []) as unknown as PlanSummaryFull[], [plans]);
 
   // "Unfinished" is not the same question as "still being worked on". `done <
   // phases` is true of every abandoned plan ever written, and this list drives
@@ -236,9 +237,9 @@ export default function DashboardView() {
               <StackBar
                 segments={[
                   { label: 'done', value: totals.done, tone: 'done' },
-                  { label: 'in progress', value: totals.inProgress, tone: 'progress' },
-                  { label: 'ready', value: totals.ready, tone: 'ready' },
-                  { label: 'stuck', value: totals.stuck, tone: 'blocked' },
+                  { label: 'running', value: totals.inProgress, tone: 'running' },
+                  { label: 'next up', value: totals.ready, tone: 'queued' },
+                  { label: 'needs you', value: totals.stuck, tone: 'needs-you' },
                   { label: 'waiting', value: totals.waiting, tone: 'waiting' },
                 ]}
               />

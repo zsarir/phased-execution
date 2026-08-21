@@ -13,7 +13,8 @@
 
 import { Activity, Terminal } from 'lucide-react';
 import { Chip, Empty } from '@/components/ui';
-import { PlanPulse, fmtElapsed, foreignVehicle, isLiveRun, pulseLanes, pulseWaits, useNow } from '@/components/pulse';
+import { PlanPulse, fmtElapsed, foreignVehicle, isLiveRun, pulseLanes, pulseWaits } from '@/components/pulse';
+import { useNow } from '@/lib/clock';
 import { Page } from '../_page';
 import { useConsoleState, useRuns, useSessionRegistry, useConverge } from '@/lib/queries';
 import { isResolved } from '@/views/runs/model';

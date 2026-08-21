@@ -77,13 +77,10 @@ const statusListeners = new Set<() => void>();
 
 let source: EventSource | null = null;
 let status: SseStatus = 'connecting';
-/** Bumped on every status change so `useSyncExternalStore` sees a new snapshot. */
-let statusVersion = 0;
 
 function setStatus(next: SseStatus): void {
   if (status === next) return;
   status = next;
-  statusVersion++;
   for (const notify of statusListeners) notify();
 }
 
@@ -164,5 +161,4 @@ export function __resetStreamForTests(): void {
   listeners.clear();
   statusListeners.clear();
   status = 'connecting';
-  statusVersion = 0;
 }

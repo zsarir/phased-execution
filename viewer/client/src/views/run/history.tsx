@@ -10,10 +10,10 @@
  * machine and none on another.
  */
 
-import { Card, CardBody, CardHeader, CardTitle, Chip, TBody, TD, TH, THead, TR, Table, TableWrap }
+import { Card, CardBody, CardHeader, CardTitle, StatusBadge, TBody, TD, TH, THead, TR, Table, TableWrap }
   from '@/components/ui';
 import { money, relativeTime } from '@/lib/format';
-import { RUN_TONE } from './header';
+import { runStatusTitle, runUiState } from '@/lib/status-vocab';
 import type { RunState } from '@/lib/api';
 
 export function RunHistory({ history }: { history: RunState[] }) {
@@ -43,7 +43,7 @@ export function RunHistory({ history }: { history: RunState[] }) {
                     <code className="font-mono text-2xs">{r.id}</code>
                   </TD>
                   <TD>
-                    <Chip tone={RUN_TONE[r.status]}>{r.status}</Chip>
+                    <StatusBadge state={runUiState(r.status)} label={r.status} mono title={runStatusTitle(r.status)} />
                   </TD>
                   <TD className="text-ink-faint">{relativeTime(Date.parse(r.updatedAt))}</TD>
                   <TD className="text-right font-mono tabular-nums">{money(r.spentUsd)}</TD>

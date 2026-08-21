@@ -569,6 +569,9 @@ npm test                      # server + shared contracts (node --test — needs
 PHASE_CONSOLE_TEST_ROOT=~/code/your-repo npm test    # + integration & engine parity
 npm run test:client           # the client suite (Vitest + jsdom)
 npm run typecheck:client      # two programs: the app (DOM libs) and the worker (WebWorker libs)
+npm run lint:client           # ESLint over client/src + shared (typescript-eslint, react-hooks)
+npm run format                # Prettier over the same files (format:check is what CI runs)
+npm run verify:dist           # build into client/.dist-verify + the build gate — the live dist untouched
 npm run build                 # emit client/dist and stamp .build-rev with the commit
 npm run check:dist            # the build gate: budget, precache sanity, sw.js at the root
 ```
@@ -592,14 +595,18 @@ server/   index.ts (http) · service.ts (the model) · engine.ts (script wrapper
           lifecycle.ts (degraded state, ordered shutdown, supervisor detection)
 client/   src/ (the React app: shell/ · views/ · components/ · lib/ · styles/ · sw.ts)
           public/ (icons, manifest) → dist/ (built output + .build-rev — gitignored)
-shared/   routes.js · route-meta.js · console-model.js · phase-model.js · sw-push.js
-scripts/  check-dist.mjs (build gate) · stamp-build.mjs · check-stamp.mjs
+shared/   routes.js · route-meta.js · console-model.js · phase-model.js · status-vocab.js · sw-push.js
+scripts/  check-dist.mjs (build gate) · verify-dist.mjs (the gate in a scratch build) · stamp-build.mjs · check-stamp.mjs
 deploy/   agent.sh (launchd/systemd install/update/uninstall/status/restart/log)
 ```
 
 </div>
 
-فونت‌ها Archivo Narrow و Public Sans و JetBrains Mono هستند (با مجوزِ SIL Open Font License) که build
-آن‌ها را باندل می‌کند.
+فونت‌ها IBM Plex Sans (یک فایلِ variable)، IBM Plex Sans Condensed و IBM Plex Mono هستند (با مجوزِ SIL Open Font
+License) — چهار فایلِ woff2 که در خودِ مخزن نگه داشته شده‌اند و build آن‌ها را باندل می‌کند؛ هرگز CSS
+فهرستِ `@fontsource`، که همهٔ زیرمجموعه‌های یونیکد را precache می‌کرد.
+
+`npm run verify:dist` را هم ببینید: چون `client/dist` همان چیزی است که کنسولِ در حالِ اجرا سرو می‌کند، این
+دستور در `client/.dist-verify` می‌سازد و همان build gate را روی آن اجرا می‌کند (`PC_DIST_DIR` تنها کلید است).
 
 </div>

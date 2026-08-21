@@ -4,6 +4,8 @@
 # clean checkout can `npm ci && npm run build`.
 node_modules/
 client/dist/
+# `npm run verify:dist` builds here so the live client/dist is never touched.
+client/.dist-verify/
 dist/
 *.local.json
 .DS_Store

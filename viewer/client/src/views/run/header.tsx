@@ -14,19 +14,13 @@
  */
 
 import { Bot, Clock, Gauge, Timer } from 'lucide-react';
-import { Chip, Tile } from '@/components/ui';
+import { Chip, StatusBadge, Tile } from '@/components/ui';
 import { elapsed, etaLabel, etaPoint, etaTitle, money, relativeTime } from '@/lib/format';
 import { useAccounts } from '@/lib/queries';
 import { useNow } from '@/lib/clock';
 import { cn } from '@/lib/cn';
-import { RUN_STATUS_TONE, runStatusTitle } from '@/lib/status-vocab';
+import { runStatusTitle, runUiState } from '@/lib/status-vocab';
 import type { EtaEstimate, PhaseEta, PhaseRecord, RunState } from '@/lib/api';
-
-// The tones live in `lib/status-vocab.ts` beside the words' explanations —
-// one module owns what a status says AND how it paints, so the guide's
-// coloured glossary and these chips cannot drift. Re-exported under the old
-// name for every existing reader.
-export const RUN_TONE = RUN_STATUS_TONE;
 
 /**
  * The phases this run holds a live session on, lowest first.
@@ -98,7 +92,7 @@ export function RunHeader({
   return (
     <header className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
-        <Chip tone={RUN_TONE[run.status]} title={runStatusTitle(run.status)}>{run.status}</Chip>
+        <StatusBadge state={runUiState(run.status)} label={run.status} mono title={runStatusTitle(run.status)} pulse={run.status === 'running'} />
         {accountLabel ? (
           <Chip title="Which Claude account this run's sessions spend. Absent means the machine login.">
             {accountLabel}
