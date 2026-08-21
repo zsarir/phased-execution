@@ -1,8 +1,7 @@
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import { Power, WifiOff } from 'lucide-react';
-import { cn } from '@/lib/cn';
-import { usePhone } from '@/lib/media';
 import { useOnline, useServiceWorker } from '@/lib/pwa';
+import { usePhone } from '@/lib/media';
 import { onSse, useSseStatus } from '@/lib/sse';
 import { useConsoleStopped } from '@/lib/shutdown';
 import {
@@ -15,22 +14,26 @@ import {
   useSessions,
 } from '@/lib/queries';
 import { Banner, Spinner, Toaster, TooltipProvider, toast } from '@/components/ui';
-import { installAppHeight, useKeyboardOpen } from '@/lib/viewport';
-import { CHROMELESS_HEADS, FULL_HEIGHT_HEADS, navigate, resolveView, useRoute } from '@/router';
-import { Disconnected } from '@/shell/disconnected';
-import { Rail } from '@/shell/rail';
-import { MoreSheet, TabBar, TopBar } from '@/shell/phone';
+import { installAppHeight } from '@/lib/viewport';
+import { resolveView, useNavigate, useRoute } from '@/app/router';
+import { CHROMELESS_HEADS, FULL_HEIGHT_HEADS, redirectTarget } from '@/app/routes';
+import { LegacyRoute } from '@/app/legacy-route';
+import { ShellLayout } from '@/app/shell/layout';
+import { Palette } from '@/app/command/palette';
+import { NotificationsDrawer } from '@/app/notifications/drawer';
+import { HelpSheet } from '@/app/help/sheet';
+import { Disconnected } from '@/app/shell/disconnected';
 
-/** `head` → shortcut, for a keyboard on a desktop. */
-const SHORTCUTS: Record<string, string> = {
-  '/': 'search',
-  r: 'ready',
-  p: 'plans',
-  d: 'dashboard',
-  s: 'stats',
-  g: 'guide',
-  n: 'notifications',
-};
+/**
+ * The composition root.
+ *
+ * Everything that used to be *in* here is somewhere better now: the grid, the
+ * rail, the tab bar and the one scroller are `app/shell/layout.tsx`; the route
+ * table is `app/router.tsx`; the keyboard shortcuts belong to the palette that
+ * implements them. What is left is the four things only a root can do — mount
+ * the live data once, decide whether there is a console to talk to at all,
+ * follow a redirect, and hang the three overlays where every page can reach them.
+ */
 
 /**
  * A recovery session's verdict, toasted as it lands.
@@ -80,35 +83,32 @@ function useRecoveryOutcomeToasts(): void {
 
 export function App() {
   const route = useRoute();
+  const navigate = useNavigate();
   const head = route.segments[0];
   const phone = usePhone();
   const sse = useSseStatus();
   const online = useOnline();
   const stopped = useConsoleStopped();
-  const keyboardOpen = useKeyboardOpen();
-  const [moreOpen, setMoreOpen] = useState(false);
-  const main = useRef<HTMLElement>(null);
 
   // Every server event, wired to what it makes stale. Mounted once, here.
   useLiveData();
   // `--app-height` follows the visual viewport (the keyboard, mostly) — the
   // shell's height token. Once, for the app's life.
   useEffect(() => installAppHeight(), []);
-  // The one scroller is a PERSISTENT node — React swaps its children, so its
-  // scrollTop survived every route change: scroll a 65-plan list, tap Ready,
-  // land mid-page. Reset on the PATH (never the query — typing in `#/search?q=`
-  // must not jump); the guide's `?card=` anchor runs after Suspense resolves,
-  // i.e. after this.
-  useEffect(() => {
-    // Full-height routes have no scrollTop to reset — main does not scroll there.
-    if (!FULL_HEIGHT_HEADS.has(route.segments[0] ?? '')) main.current?.scrollTo(0, 0);
-  }, [route.path, route.segments]);
   // Registers the worker and offers an update when one is waiting. Also once.
   useServiceWorker();
   // The recovery verdict, said where the person is looking. The notification
   // leg announces it too; this is the in-page echo of the same event the run
   // queries re-read themselves off (`patchSessions`).
   useRecoveryOutcomeToasts();
+
+  // An alias resolves before anything renders, and it REPLACES rather than
+  // pushes: `#/dashboard` in the history is a bookmark someone followed, not a
+  // page they should have to press Back through twice to leave.
+  const target = redirectTarget(route);
+  useEffect(() => {
+    if (target) navigate(target, { replace: true });
+  }, [target, navigate]);
 
   const {
     data: state,
@@ -122,34 +122,11 @@ export function App() {
   // fills the browser console with 404s.
   const { data: approvals } = useApprovals(Boolean(state?.autopilot));
   // Sessions outlive the page that opened them, so the badge has to be shell-wide
-  // rather than something the Agent/Terminal pages know while you are on them.
+  // rather than something the Sessions page knows while you are on it.
   const { data: sessions } = useSessions(state);
   const { data: mcp } = useMcp();
 
   const counts = shellCounts(plans, approvals, state?.unread ?? 0, sessions?.sessions, mcp?.servers);
-
-  // Going anywhere closes the sheet — including "back", which is the gesture a
-  // sheet is most often dismissed with.
-  useEffect(() => {
-    setMoreOpen(false);
-  }, [route.path]);
-  useEffect(() => {
-    if (!phone) setMoreOpen(false);
-  }, [phone]);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const tag = (event.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      const target = SHORTCUTS[event.key];
-      if (!target) return;
-      event.preventDefault();
-      navigate(target);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
 
   // The queries are invalidated by the stream, not by a timer, so nothing
   // retries on its own once this one has failed. Coming back onto a network is
@@ -199,14 +176,24 @@ export function App() {
     );
   }
 
-  const View = resolveView(head);
+  // Mid-redirect: the effect above has fired and the hash is about to change.
+  // Rendering the alias's (nonexistent) page for one frame would flash the
+  // fallback at everyone who followed an old link.
+  if (target) {
+    return (
+      <div className="grid min-h-dvh place-items-center">
+        <Spinner />
+      </div>
+    );
+  }
 
-  // The guide is what you read before you have set anything up, so it is the one
-  // view that does not send you to the directory picker first.
-  const needsSource = (!rootOk || CHROMELESS_HEADS.has(head ?? '')) && head !== 'guide';
+  // The help sheet is what you read before you have set anything up, so an
+  // unconfigured console still opens it rather than sending you to the picker.
+  const askingForHelp = route.query.help != null;
+  const needsSource = (!rootOk || CHROMELESS_HEADS.has(head ?? '')) && !askingForHelp;
 
   if (needsSource) {
-    const SourceView = resolveView('source');
+    const SourceView = resolveView('source')!;
     return (
       <TooltipProvider delayDuration={300}>
         <Suspense
@@ -223,45 +210,19 @@ export function App() {
     );
   }
 
-  const pickSource = () => navigate('source');
+  const View = resolveView(head)!;
+  const fullHeight = FULL_HEIGHT_HEADS.has(head ?? '');
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div
-        // `.is-phone` is the shell contract: the class the layout, the tests and
-        // the browser checks all agree means "top bar + tab bar, no rail".
-        className={cn(
-          // h-(--app-height), not h-dvh: dvh ignores the software keyboard on
-          // iOS. The token falls back to 100dvh where visualViewport is absent.
-          'grid h-(--app-height) overflow-hidden bg-ground',
-          phone
-            ? // rows: top bar · the only scrolling region · tab bar
-              'is-phone grid-rows-[auto_minmax(0,1fr)_auto]'
-            : 'grid-cols-[auto_minmax(0,1fr)]',
-        )}
-      >
-        {phone ? (
-          <TopBar state={state} counts={counts} head={head} onPickSource={pickSource} />
-        ) : (
-          <Rail state={state} counts={counts} head={head} onPickSource={pickSource} />
-        )}
-
-        {/* `overscroll-none`, not `contain`: `contain` stops the scroll
-            *chaining* to the document but leaves the rubber band, so a flick
-            past the last card still bounces a strip of empty ground into view
-            above the tab bar. */}
-        <main
-          ref={main}
-          className={
-            FULL_HEIGHT_HEADS.has(head ?? '')
-              ? // Terminal/agent own their height: banners stay in flow and the
-                // frame gets the definite remainder — never a second scroller.
-                'flex min-w-0 flex-col overflow-hidden'
-              : 'min-w-0 overflow-y-auto overscroll-none'
-          }
-        >
-          {(state.serverStale || stopped || !online || sse !== 'live') && (
-            <div className="flex shrink-0 flex-col gap-2 px-3 pt-3 md:px-5">
+      <ShellLayout
+        state={state}
+        counts={counts}
+        route={route}
+        phone={phone}
+        banners={
+          (state.serverStale || stopped || !online || sse !== 'live') && (
+            <>
               {state.serverStale && (
                 <Banner severity="warn">
                   <div className="min-w-0">
@@ -304,49 +265,18 @@ export function App() {
                   </Banner>
                 )
               )}
-            </div>
-          )}
+            </>
+          )
+        }
+      >
+        <LegacyRoute view={View} route={route} fullHeight={fullHeight} />
+      </ShellLayout>
 
-          <Suspense
-            fallback={
-              <div className="grid place-items-center py-16">
-                <Spinner />
-              </div>
-            }
-          >
-            {FULL_HEIGHT_HEADS.has(head ?? '') ? (
-              <div className="min-h-0 flex-1">
-                <View route={route} />
-              </div>
-            ) : (
-              <View route={route} />
-            )}
-          </Suspense>
-        </main>
-
-        {/* Hidden while a text field has focus on touch: typing is never a
-            navigation moment, and those 60px keep the terminal's prompt and
-            KeyBar visible above the software keyboard. */}
-        {phone && !keyboardOpen && (
-          <TabBar
-            counts={counts}
-            head={head}
-            moreOpen={moreOpen}
-            onMore={() => setMoreOpen((open) => !open)}
-          />
-        )}
-      </div>
-
-      {phone && (
-        <MoreSheet
-          open={moreOpen}
-          onOpenChange={setMoreOpen}
-          state={state}
-          counts={counts}
-          head={head}
-          onPickSource={pickSource}
-        />
-      )}
+      {/* The three overlays. Each is open exactly when the URL says so, which is
+          why none of them needs the shell to hold a flag for it. */}
+      <Palette route={route} state={state} counts={counts} />
+      <NotificationsDrawer route={route} />
+      <HelpSheet route={route} />
 
       <Toaster />
     </TooltipProvider>

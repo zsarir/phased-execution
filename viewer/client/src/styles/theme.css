@@ -189,6 +189,10 @@
 
   --rail-width: 236px;
   --content-max: 1560px;
+  /* The 3.0 header. A definite height so the one scroller below it gets a
+     definite remainder — a header that sizes to its contents makes the whole
+     shell relayout whenever a usage meter appears. */
+  --header-height: 48px;
 }
 
 :root[data-theme='dark'] { color-scheme: dark; }

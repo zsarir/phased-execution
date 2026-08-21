@@ -1,6 +1,6 @@
 import { CloudOff, RefreshCw, WifiOff } from 'lucide-react';
 import { Button } from '@/components/ui';
-import { RouteGlyph } from '@/shell/brand';
+import { RouteGlyph } from '@/app/shell/brand';
 
 /**
  * What the app is when it cannot reach the console.

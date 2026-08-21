@@ -143,7 +143,7 @@ export default function DashboardView() {
 
   if (error) {
     return (
-      <Page title="Dashboard">
+      <Page title="Now">
         <Banner severity="error">{String((error as Error).message ?? error)}</Banner>
       </Page>
     );
@@ -154,7 +154,7 @@ export default function DashboardView() {
 
   return (
     <Page
-      title="Dashboard"
+      title="Now"
       // `root.planCount` counts every document in `docs/plans`, which is not the
       // number the rail shows; a header that disagrees with the nav beside it
       // reads as a bug in both.

@@ -39,6 +39,25 @@ import { StatusProse } from './prose';
 import { cardsOf, splitGuide, type GuideCard as GuideCardData, type GuideOutline } from './split';
 import type { GuideSection } from './sections';
 
+/**
+ * Bring one card to the top of the pane it lives in — and of nothing else.
+ *
+ * `scrollIntoView` is banned app-wide for exactly this case: it walks every
+ * scrollable ancestor, so a card deep-linked inside the help sheet also scrolls
+ * the page behind it, and on a phone it scrolls the shell out from under the tab
+ * bar. Finding the nearest ancestor that actually scrolls and setting its
+ * `scrollTop` moves one container and leaves the rest of the app where it was.
+ */
+function reveal(id: string): void {
+  const card = document.getElementById(`card-${id}`);
+  if (!card) return;
+  let pane: HTMLElement | null = card.parentElement;
+  while (pane && pane.scrollHeight <= pane.clientHeight) pane = pane.parentElement;
+  if (!pane) return;
+  const top = card.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+  pane.scrollTo({ top, behavior: 'smooth' });
+}
+
 /** Which cards a fresh visit opens. */
 function initialOpen(outline: GuideOutline, phone: boolean, wanted?: string): Set<string> {
   const all = cardsOf(outline);
@@ -78,17 +97,13 @@ export function SectionPanel({ section, card: wanted }: { section: GuideSection;
   // scrolling to a zero-height `<details>` lands in the wrong place.
   useEffect(() => {
     if (!target) return;
-    const frame = requestAnimationFrame(() => {
-      document.getElementById(`card-${target}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    });
+    const frame = requestAnimationFrame(() => reveal(target));
     return () => cancelAnimationFrame(frame);
   }, [target]);
 
   const scrollTo = (id: string) => {
     setOpen((prev) => new Set(prev).add(id));
-    requestAnimationFrame(() => {
-      document.getElementById(`card-${id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    });
+    requestAnimationFrame(() => reveal(id));
   };
 
   const allOpen = cards.every((c) => open.has(c.id));

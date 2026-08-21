@@ -24,13 +24,17 @@ describe('SSE → Query bridge', () => {
     expect(extra, `phantom events: ${extra.join(', ')}`).toEqual([]);
   });
 
-  it('carries the 20 wire names, run events included', () => {
-    expect(SSE_EVENTS).toHaveLength(20);
+  it('carries the 21 wire names, run events included', () => {
+    expect(SSE_EVENTS).toHaveLength(21);
     // Sessions are on the stream deliberately: the socket is a session's own
     // live channel, but the dashboard card and the nav badges do not hold it.
     expect(SSE_EVENTS).toContain('sessions');
     // Accounts ride the stream so the header meters move without polling.
     expect(SSE_EVENTS).toContain('accounts');
+    // Declared in Phase 3, emitted from Phase 4: the unified work inbox. An
+    // event nothing sends is inert; a badge built against an event nobody
+    // declared is a number that silently stops moving.
+    expect(SSE_EVENTS).toContain('inbox');
     // So does the MCP registry: a server that goes needs-auth changes what
     // every launch dialog may offer, and no page is holding that.
     expect(SSE_EVENTS).toContain('mcp');
@@ -92,6 +96,11 @@ describe('shellCounts', () => {
       phases: 11,
       ready: 2,
       approvals: 1,
+      // Now's badge. The same figure as `approvals` today and deliberately its
+      // own key: Phase 4's `/api/inbox` widens what it counts (errands, gates,
+      // sign-ins) without renaming the badge on every surface that reads it.
+      needsYou: 1,
+      sessions: 0,
       unread: 4,
       agentSessions: 0,
       terminalSessions: 0,
@@ -114,6 +123,9 @@ describe('shellCounts', () => {
     ]);
     expect(counts.agentSessions).toBe(1);
     expect(counts.terminalSessions).toBe(3);
+    // Sessions is ONE destination in 3.0, so its badge is the total of both
+    // kinds — the two figures above stay for the panes inside it.
+    expect(counts.sessions).toBe(4);
   });
 
   // The badge links straight to the departures board, so it has to promise
@@ -140,6 +152,8 @@ describe('shellCounts', () => {
       phases: 0,
       ready: 0,
       approvals: 0,
+      needsYou: 0,
+      sessions: 0,
       unread: 0,
       agentSessions: 0,
       terminalSessions: 0,

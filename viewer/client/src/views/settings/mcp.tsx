@@ -12,7 +12,7 @@
 
 import { useMcp } from '@/lib/queries';
 import { Button, Card, CardBody, CardHeader, CardTitle, Chip, KeyValue } from '@/components/ui';
-import { navigate } from '@/router';
+import { navigate } from '@/app/router';
 
 export function McpCard() {
   const { data } = useMcp();

@@ -22,7 +22,7 @@ import { api, type TerminalTicket } from '@/lib/api';
 import { usePhone } from '@/lib/media';
 import { keys, useAutoReadNotifications, useConsoleState, usePlans, useTerminals } from '@/lib/queries';
 import { estimateTerminalSize } from '@/lib/terminal';
-import { navigate, type Route } from '@/router';
+import { navigate, type Route } from '@/app/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // Through `pane`, deliberately — see the re-export note there: a second
 // importable module in this shared chunk renames it and precaches xterm.

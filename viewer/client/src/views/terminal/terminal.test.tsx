@@ -22,7 +22,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClientConfig } from '@/lib/queries';
-import { visibleNav } from '@/shell/nav';
 import type { ConsoleState, TerminalState } from '@/lib/api';
 import { Composer } from './composer';
 
@@ -123,7 +122,7 @@ async function openPage(route = { segments: ['terminal'], query: {}, path: 'term
 async function openLive(hash: string) {
   window.location.hash = hash;
   const { default: TerminalView } = await import('./index');
-  const { useRoute } = await import('@/router');
+  const { useRoute } = await import('@/app/router');
   const Harness = () => <TerminalView route={useRoute()} />;
   return mount(<Harness />);
 }
@@ -356,66 +355,5 @@ describe('the composer', () => {
     fireEvent.change(input, { target: { value: 'y' } });
     fireEvent.submit(input.closest('form')!);
     expect(sent).toEqual(['y\r']);
-  });
-});
-
-/* ------------------------------------------------------------------ *
- * The nav gate
- * ------------------------------------------------------------------ */
-
-describe('the nav entry', () => {
-  it('appears only where the server has a terminal', () => {
-    const ids = (state?: ConsoleState) => visibleNav(state).map((item) => item.id);
-    expect(ids({ ...BASE_STATE, allowTerminal: true })).toContain('terminal');
-    expect(ids({ ...BASE_STATE, allowTerminal: false })).not.toContain('terminal');
-    // An older server does not report the field at all; absent is off.
-    expect(ids({ ...BASE_STATE, allowTerminal: undefined })).not.toContain('terminal');
-    expect(ids(undefined)).not.toContain('terminal');
-  });
-
-  it('gates the agent entry on its own capability, independently', () => {
-    const ids = (state?: ConsoleState) => visibleNav(state).map((item) => item.id);
-    expect(ids({ ...BASE_STATE, allowAgent: true })).toContain('agent');
-    expect(ids({ ...BASE_STATE, allowAgent: false })).not.toContain('agent');
-    expect(ids({ ...BASE_STATE, allowAgent: undefined })).not.toContain('agent');
-    // Each flag opens only its own door.
-    expect(ids({ ...BASE_STATE, allowTerminal: false, allowAgent: true })).toEqual(
-      expect.arrayContaining(['agent']),
-    );
-    expect(ids({ ...BASE_STATE, allowTerminal: false, allowAgent: true })).not.toContain('terminal');
-    expect(ids({ ...BASE_STATE, allowTerminal: true, allowAgent: false })).not.toContain('agent');
-  });
-
-  it('hides nothing else', () => {
-    expect(visibleNav({ ...BASE_STATE, allowTerminal: false }).map((i) => i.id)).toEqual([
-      'dashboard',
-      'ready',
-      'plans',
-      'runs',
-      'pulse',
-      'notifications',
-      'stats',
-      'search',
-      'mcp',
-      'guide',
-      'settings',
-    ]);
-    // With both capabilities on, the two gated entries appear in NAV order —
-    // Agent, then Terminal — and everything else stays put.
-    expect(visibleNav({ ...BASE_STATE, allowTerminal: true, allowAgent: true }).map((i) => i.id)).toEqual([
-      'dashboard',
-      'ready',
-      'plans',
-      'runs',
-      'pulse',
-      'notifications',
-      'stats',
-      'search',
-      'agent',
-      'terminal',
-      'mcp',
-      'guide',
-      'settings',
-    ]);
   });
 });

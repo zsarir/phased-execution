@@ -22,7 +22,7 @@ import { api, type TerminalState } from '@/lib/api';
 import { usePhone } from '@/lib/media';
 import { keys, useConsoleState, useSkills } from '@/lib/queries';
 import { estimateTerminalSize } from '@/lib/terminal';
-import { navigate } from '@/router';
+import { navigate } from '@/app/router';
 import {
   Button,
   Dialog,

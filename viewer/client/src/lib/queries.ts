@@ -250,6 +250,14 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
   'notification:read': { invalidate: [keys.notifications()], patch: patchUnread },
   'notification:cleared': { invalidate: [keys.notifications()], patch: patchUnread },
 
+  /* ---- the unified work inbox (Phase 4 emits it; declared here) ----
+     Approvals and the notification inbox are the two surfaces its rows are
+     assembled from today, so both are invalidated. When `/api/inbox` lands it
+     gets its own key and this gains it — the point of declaring the event now
+     is that the shell's badge cannot go stale the day the server starts
+     emitting. */
+  inbox: { invalidate: [keys.approvals(), keys.notifications()] },
+
   /* ---- sessions ----
      The list rides on the event, so this is a cache write rather than a
      refetch: a session appearing or ending must reach the dashboard card and
@@ -855,9 +863,21 @@ export interface ShellCounts {
   ready: number;
   approvals: number;
   unread: number;
-  /** Live claude sessions — the Agent entry's badge. */
+  /**
+   * How many things are waiting on a PERSON — Now's badge, and the only count
+   * that wears the accent hue.
+   *
+   * Pending approvals today. Phase 4 builds `/api/inbox` — one deduped list of
+   * approvals, errands, gates and sign-ins — and this becomes its length; the
+   * name is `needsYou` rather than `approvals` precisely so that widening what
+   * it counts does not mean renaming the badge on every surface that reads it.
+   */
+  needsYou: number;
+  /** Every live session, of either kind — the Sessions destination's badge. */
+  sessions: number;
+  /** Live claude sessions. */
   agentSessions: number;
-  /** Live shells — the Terminal entry's badge. */
+  /** Live shells. */
   terminalSessions: number;
   /**
    * Registered MCP servers that need a person: not signed in, not connecting,
@@ -898,6 +918,8 @@ export function shellCounts(
     ready: list.reduce((n, p) => n + (isClosed(p) ? 0 : (p.ready?.length ?? 0)), 0),
     approvals: (approvals ?? []).filter((a) => a.status === 'pending').length,
     unread,
+    needsYou: (approvals ?? []).filter((a) => a.status === 'pending').length,
+    sessions: live.length,
     agentSessions: live.filter((session) => session.kind === 'claude').length,
     terminalSessions: live.filter((session) => (session.kind ?? 'shell') === 'shell').length,
     mcpAttention: (mcp ?? []).filter(

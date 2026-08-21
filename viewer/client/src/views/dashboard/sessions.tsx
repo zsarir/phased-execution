@@ -24,7 +24,7 @@ import { api, type ConsoleState, type TerminalSession } from '@/lib/api';
 import { keys, useSessions } from '@/lib/queries';
 import { relativeTime } from '@/lib/format';
 import { phaseHref, planHref } from '@shared/routes.js';
-import { navigate } from '@/router';
+import { navigate } from '@/app/router';
 import {
   AlertDialog,
   AlertDialogContent,

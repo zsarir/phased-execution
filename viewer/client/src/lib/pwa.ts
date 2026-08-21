@@ -157,7 +157,7 @@ export function useServiceWorker(): void {
     // and `controllerchange` above still reloads only a change we asked for.
     const AUTO_KEY = 'pc-sw-auto-applied';
     const autoApplySafe = () => {
-      if (/^#\/(terminal|agent)/.test(window.location.hash)) return false;
+      if (/^#\/(sessions|terminal|agent)/.test(window.location.hash)) return false;
       const active = document.activeElement;
       if (
         active instanceof HTMLElement &&

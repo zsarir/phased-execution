@@ -29,7 +29,7 @@ import {
   Skeleton,
   toast,
 } from '@/components/ui';
-import { navigate } from '@/router';
+import { navigate } from '@/app/router';
 
 export default function SourceView() {
   const { data: state } = useConsoleState();

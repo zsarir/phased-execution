@@ -66,6 +66,12 @@ export const SSE_EVENTS = [
   // the event, exactly as `accounts` does, so this is a cache write and not a
   // reason to go and ask again.
   'mcp',
+  // The unified WORK inbox moved: an errand was raised or acknowledged, an
+  // approval landed, a gate opened. Declared in Phase 3, ahead of the server
+  // that emits it (Phase 4) — an event nothing sends is inert, where a surface
+  // built against an event nobody declared is a screen that silently stops
+  // updating. `EVENT_EFFECTS` already gives it somewhere to land.
+  'inbox',
 ] as const;
 
 export type SseEvent = (typeof SSE_EVENTS)[number];

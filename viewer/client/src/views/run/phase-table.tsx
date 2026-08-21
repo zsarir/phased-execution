@@ -52,7 +52,7 @@ import { ForceReleaseButton } from '@/components/release-lock';
 import { useNow } from '@/lib/clock';
 import { useConsoleState, useDiagnosis } from '@/lib/queries';
 import { SituationSummary } from '@/components/situation';
-import { navigate } from '@/router';
+import { navigate } from '@/app/router';
 import { phaseProgress } from './header';
 import { MCP_REASON } from './defaults';
 import { classifyBoardPhase, classifyPhase, liveRecovery } from '@/lib/recovery';

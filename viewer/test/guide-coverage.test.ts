@@ -1,7 +1,7 @@
 /**
  * The guide, asserted against the code it describes.
  *
- * `client/src/views/guide/guide.test.tsx` already pins the registry's totality
+ * `client/src/app/help/sheet.test.tsx` already pins the registry's totality
  * in both directions — a section with no content, or content with no route.
  * What it cannot see is whether the prose still matches the machine, and that is
  * the failure mode that actually happened: the permissions page said an agent

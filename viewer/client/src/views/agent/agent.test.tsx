@@ -143,7 +143,7 @@ async function openPage(route = { segments: ['agent'], query: {}, path: 'agent' 
 async function openLive(hash: string) {
   window.location.hash = hash;
   const { default: AgentView } = await import('./index');
-  const { useRoute } = await import('@/router');
+  const { useRoute } = await import('@/app/router');
   const Harness = () => <AgentView route={useRoute()} />;
   return mount(<Harness />);
 }

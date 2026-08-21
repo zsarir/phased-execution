@@ -28,7 +28,7 @@
 import { RotateCcw, Trash2 } from 'lucide-react';
 import type { TerminalSession } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
-import { navigate } from '@/router';
+import { navigate } from '@/app/router';
 import { Button, CopyButton, Empty } from '@/components/ui';
 
 /** How it ended, in words rather than a number a reader has to interpret. */

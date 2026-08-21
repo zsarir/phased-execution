@@ -63,9 +63,12 @@ describe('the keyboard contract', () => {
 
   it('--app-height exists with its dvh fallback, and the shell consumes it', () => {
     expect(theme).toMatch(/--app-height:\s*100dvh/);
-    const app = readFileSync(join(SRC, 'App.tsx'), 'utf8');
-    expect(app).toMatch(/h-\(--app-height\)/);
-    expect(app).not.toMatch(/'grid h-dvh/);
+    // The grid moved out of `App.tsx` and into the shell layout in 3.0; the
+    // rule did not move with it — `dvh` ignores the software keyboard on iOS,
+    // so the shell's own height is this token and nothing else.
+    const layout = readFileSync(join(SRC, 'app', 'shell', 'layout.tsx'), 'utf8');
+    expect(layout).toMatch(/h-\(--app-height\)/);
+    expect(layout).not.toMatch(/'grid h-dvh/);
   });
 });
 
@@ -139,7 +142,7 @@ describe('per-page mobile fixes stay fixed', () => {
     expect(toast).toMatch(/--bottom-bars/);
     expect(toast).not.toMatch(/fixed inset-x-0 bottom-0/);
     // The bars that register: the shell's tab bar and the terminal's bottom row.
-    expect(readFileSync(join(SRC, 'shell', 'phone.tsx'), 'utf8')).toMatch(/useBottomBar/);
+    expect(readFileSync(join(SRC, 'app', 'shell', 'tab-bar.tsx'), 'utf8')).toMatch(/useBottomBar/);
     expect(readFileSync(join(SRC, 'views', 'terminal', 'pane.tsx'), 'utf8')).toMatch(/useBottomBar/);
   });
 

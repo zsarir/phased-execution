@@ -33,7 +33,7 @@ import {
   toast,
 } from '@/components/ui';
 import { LimitsOverview } from '@/components/limits-widget';
-import { navigate } from '@/router';
+import { navigate } from '@/app/router';
 
 export function AccountsCard() {
   const client = useQueryClient();

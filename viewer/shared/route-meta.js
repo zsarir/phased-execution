@@ -12,42 +12,83 @@
 // hand-written dispatch shape. The rewrite replaces both scrapes with imports of the
 // two arrays below, so the contract is asserted against data, not source text.
 //
-// The URL vocabulary itself is FROZEN by the server (`server/push/catalogue.ts`):
-// `#/plan/:slug/run`, `#/plan/:slug/phase/:n`, `#/plan/:slug/route`, `#/ready`,
-// `#/runs`, `#/plans`, `#/settings`, `#/notifications`, `#/guide`. Renaming a head or
-// a tab here means editing that server file too — the test will catch a divergence.
+// The URL vocabulary the SERVER emits is frozen by `server/push/catalogue.ts`
+// (`routeFor`, the only emitter): `#/plan/:slug/run`, `#/plan/:slug/phase/:n`,
+// `#/plan/:slug/route`, `#/ready`, `#/runs`, `#/plans`, `#/agent[/:id]`,
+// `#/terminal[/:id]`, `#/settings`. Renaming one of those heads means editing that
+// server file too — the test will catch a divergence.
+//
+// (`#/notifications` and `#/guide` were listed here as server-emitted until 3.0 and
+// never were: no `routeFor` branch has ever produced either. They are client-only
+// heads, which is what let 3.0 turn both into overlays without touching the server.)
+//
+// 3.0 added `now`, `sessions` and `insights` and kept EVERY older head. Some of the
+// old ones are now redirects rather than pages (`app/routes.ts` `REDIRECTS`), but a
+// head that ever appeared in a bookmark, a push payload or a handoff stays in this
+// list and stays resolvable — which is the whole contract this array exists for.
 
 /**
  * Top-level route heads — `route.segments[0]`. The empty hash (`#/`) and any
- * unknown head resolve to `dashboard` (the client registry maps '' → 'dashboard').
+ * unknown head resolve to `DEFAULT_HEAD` below.
+ *
+ * The first six are the 3.0 DESTINATIONS — what the rail and the phone tab bar
+ * offer. Everything after them is a head that still resolves (a page a later
+ * phase has not rebuilt yet, or a redirect onto its new home) but is not a place
+ * the navigation sends you.
+ *
  * `source` renders outside the app shell (the pre-open directory picker).
  * `terminal` takes an optional session id (`#/terminal/<id>`) so a shell survives
  * a reload; it is a route whether or not `--allow-terminal` was given, because a
  * route that explains why it is off is better than one that vanishes.
  * `agent` is the same shape for interactive claude sessions (`#/agent/<id>`,
- * gated by `--allow-agent`) — with no id it renders the launcher.
- * NOTE: the route-registry guard asserts every head here resolves to a real
- * component AND that no component exists without a head — adding one means
- * adding both sides.
+ * gated by `--allow-agent`) — with no id it renders the launcher. Both are
+ * DESTINED for `sessions`, which is the nav entry that lights up on them.
+ *
+ * NOTE: the route-registry guard asserts every head here has a `ROUTE_TABLE`
+ * entry AND that no entry exists without a head — adding one means adding both
+ * sides.
  * @type {readonly string[]}
  */
 export const ROUTE_HEADS = Object.freeze([
-  'dashboard',
+  // the six destinations
+  'now',
   'plans',
+  'runs',
+  'sessions',
+  'insights',
+  'settings',
+  // pages a destination has not absorbed yet, plus the deep-link heads
   'plan',
   'ready',
-  'runs',
-  'stats',
-  'search',
-  'settings',
+  'pulse',
+  'notifications',
   'mcp',
   'source',
-  'notifications',
-  'guide',
   'terminal',
   'agent',
-  'pulse',
+  // redirects onto the above
+  'dashboard',
+  'stats',
+  'search',
+  'guide',
 ]);
+
+/**
+ * The head an empty or unknown hash means.
+ *
+ * Shared rather than client-local because it is the answer to "where does a
+ * notification whose deep link no longer resolves land?", and that question has
+ * to have the same answer on both sides of the wire.
+ * @type {string}
+ */
+export const DEFAULT_HEAD = 'now';
+
+/**
+ * The six destinations, in nav order — the rail, the phone tab bar and the
+ * palette's navigation group all read this.
+ * @type {readonly string[]}
+ */
+export const DESTINATIONS = Object.freeze(['now', 'plans', 'runs', 'sessions', 'insights', 'settings']);
 
 /**
  * Plan-detail tab ids — the second segment of `#/plan/:slug/:tab`. `run` is

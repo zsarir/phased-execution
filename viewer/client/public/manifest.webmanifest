@@ -1,7 +1,7 @@
 {
   "name": "Phase Console",
   "short_name": "Phase",
-  "description": "The portfolio view for phased execution: plans, the route map, the ready queue, live runs and the approval queue.",
+  "description": "The console for phased execution: what needs you, what is running and what it costs, every plan's route map, and the sessions doing the work.",
   "lang": "en",
   "dir": "ltr",
   "id": "/",
@@ -16,24 +16,24 @@
   "categories": ["productivity", "developer"],
   "shortcuts": [
     {
-      "name": "Ready now",
-      "short_name": "Ready",
-      "description": "Phases whose dependencies are all done",
-      "url": "/#/ready",
+      "name": "Now",
+      "short_name": "Now",
+      "description": "What needs you, what is running and what is next",
+      "url": "/#/now",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     },
     {
       "name": "Runs",
       "short_name": "Runs",
-      "description": "Live sessions and the approvals waiting on you",
+      "description": "Every run, its status and what it has spent",
       "url": "/#/runs",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     },
     {
-      "name": "Notifications",
-      "short_name": "Inbox",
-      "description": "Everything the console has announced",
-      "url": "/#/notifications",
+      "name": "Sessions",
+      "short_name": "Sessions",
+      "description": "Every process this console owns or can see, with its terminal",
+      "url": "/#/sessions",
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     }
   ],

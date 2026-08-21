@@ -19,7 +19,7 @@ import { Page } from '../_page';
 import { useConsoleState, useRuns, useSessionRegistry, useConverge } from '@/lib/queries';
 import { isResolved } from '@/views/runs/model';
 import type { ForeignSession, RunState } from '@/lib/api';
-import type { ViewProps } from '@/router';
+import type { ViewProps } from '@/app/router';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

@@ -100,12 +100,6 @@ function mount(node: React.ReactElement) {
   return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
 }
 
-const route = (segments: string[], query: Record<string, string> = {}) => ({
-  segments,
-  query,
-  path: segments.join('/'),
-});
-
 beforeEach(() => {
   vi.clearAllMocks();
   state.mockResolvedValue(BASE_STATE);
@@ -137,145 +131,6 @@ beforeEach(() => {
   // opens the runs console would otherwise leave it open for the next one.
   setPrefs({ runsConsole: false });
   window.location.hash = '';
-});
-
-/* ------------------------------------------------------------------ *
- * Search
- * ------------------------------------------------------------------ */
-
-describe('search', () => {
-  it('does not ask the server for one character', async () => {
-    const { default: SearchView } = await import('./search');
-    mount(<SearchView route={route(['search'], { q: 'a' })} />);
-    await waitFor(() => expect(screen.getByText(/Search the whole library/i)).toBeTruthy());
-    expect(search).not.toHaveBeenCalled();
-  });
-
-  it('renders every hit as a link, to the right place for its kind', async () => {
-    search.mockResolvedValue({
-      query: 'cart',
-      total: 3,
-      groups: [
-        {
-          slug: 'demo',
-          title: 'demo plan',
-          hits: [
-            {
-              slug: 'demo',
-              kind: 'phase',
-              phase: 3,
-              section: 'Phase 3',
-              title: 't',
-              score: 1,
-              snippet: 'the cart api',
-            },
-            {
-              slug: 'demo',
-              kind: 'handoff',
-              phase: 2,
-              section: 'State now',
-              title: 't',
-              score: 1,
-              snippet: 'cart done',
-            },
-            {
-              slug: 'demo',
-              kind: 'plan',
-              section: 'Context',
-              title: 't',
-              score: 1,
-              snippet: 'cart everywhere',
-            },
-          ],
-        },
-      ],
-    });
-    const { default: SearchView } = await import('./search');
-    mount(<SearchView route={route(['search'], { q: 'cart' })} />);
-
-    const links = await screen.findAllByRole('link');
-    const hrefs = links.map((a) => a.getAttribute('href'));
-    expect(hrefs).toContain('#/plan/demo/phase/3');
-    expect(hrefs).toContain('#/plan/demo/handoff/2');
-    expect(hrefs).toContain('#/plan/demo/overview');
-  });
-
-  it('marks the matched terms without letting the snippet be parsed as markup', async () => {
-    search.mockResolvedValue({
-      query: 'cart',
-      total: 1,
-      groups: [
-        {
-          slug: 'demo',
-          title: 'demo plan',
-          hits: [
-            {
-              slug: 'demo',
-              kind: 'plan',
-              section: 'Context',
-              title: 't',
-              score: 1,
-              snippet: 'the cart <script>alert(1)</script> api',
-            },
-          ],
-        },
-      ],
-    });
-    const { default: SearchView } = await import('./search');
-    const { container } = mount(<SearchView route={route(['search'], { q: 'cart' })} />);
-
-    const marks = await screen.findAllByText('cart');
-    expect(marks.some((el) => el.tagName === 'MARK')).toBe(true);
-    // The snippet is React text, so the tag is inert regardless of the sanitizer.
-    expect(container.querySelector('script')).toBeNull();
-    expect(container.textContent).toContain('<script>');
-  });
-
-  it('says nothing matched rather than showing an empty list', async () => {
-    const { default: SearchView } = await import('./search');
-    mount(<SearchView route={route(['search'], { q: 'zzzz' })} />);
-    expect(await screen.findByText(/Nothing matches/i)).toBeTruthy();
-  });
-
-  // Search KEEPS closed plans on purpose — an abandoned plan is often exactly
-  // what you are looking for, and a search that hides history is one you stop
-  // trusting. That is the whole reason the badge has to be there: a result with
-  // no marker reads as live work.
-  it('keeps a closed plan in the results, and says that it is closed', async () => {
-    const { api } = await import('@/lib/api');
-    vi.mocked(api.plans).mockResolvedValue([
-      { slug: 'gone', kind: 'plan', phases: 4, ready: [], status: 'abandoned', closed: true },
-      { slug: 'demo', kind: 'plan', phases: 4, ready: [2], status: 'active', closed: false },
-    ]);
-    search.mockResolvedValue({
-      query: 'cart',
-      total: 2,
-      groups: [
-        {
-          slug: 'gone',
-          title: 'walked away',
-          hits: [
-            { slug: 'gone', kind: 'plan', section: 'Context', title: 't', score: 2, snippet: 'the cart api' },
-          ],
-        },
-        {
-          slug: 'demo',
-          title: 'demo plan',
-          hits: [
-            { slug: 'demo', kind: 'plan', section: 'Context', title: 't', score: 1, snippet: 'the cart api' },
-          ],
-        },
-      ],
-    });
-    const { default: SearchView } = await import('./search');
-    mount(<SearchView route={route(['search'], { q: 'cart' })} />);
-
-    // Present, and still first — relevance is the only ranking a search has.
-    const slugs = await screen.findAllByRole('link', { name: /^(gone|demo)$/ });
-    expect(slugs.map((a) => a.textContent)).toEqual(['gone', 'demo']);
-    // Marked exactly once: the closed one.
-    expect(screen.getAllByText('closed')).toHaveLength(1);
-  });
 });
 
 /* ------------------------------------------------------------------ *
@@ -739,83 +594,23 @@ describe('the autopilot page', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Notifications
+ * Alerts (the notification SETTINGS page)
  * ------------------------------------------------------------------ */
 
-describe('the inbox', () => {
-  it('says nothing can reach you when no device and no command are set', async () => {
+// The inbox half of this page became the bell drawer in 3.0 — its cases live in
+// `app/notifications/drawer.test.tsx`. What is left here is the plumbing, and
+// the one property worth pinning is that the page still SAYS where the
+// announcements went: `#/notifications/settings` is a link people already have.
+describe('the alerts page', () => {
+  it('renders the settings cards and points at the drawer', async () => {
     const { default: NotificationsView } = await import('./notifications');
-    mount(<NotificationsView route={route(['notifications'])} />);
-    expect(await screen.findByText(/Nothing can reach you out of band yet/i)).toBeTruthy();
-  });
+    mount(<NotificationsView />);
 
-  it('renders a row as a link built from the server-supplied url', async () => {
-    notifications.mockResolvedValue({
-      items: [
-        {
-          id: 'n1',
-          at: new Date().toISOString(),
-          category: 'approval',
-          title: 'Permission needed',
-          body: 'A session is blocked.',
-          url: '/#/plan/demo/run',
-          urgent: true,
-          read: false,
-          delivery: [{ device: 'd1', label: 'Mac · Chrome', outcome: 'sent', at: '' }],
-        },
-      ],
-      total: 1,
-      unread: 1,
-      more: false,
-      categories: [
-        { id: 'approval', label: 'Permission needed', detail: 'x', byDefault: true, urgent: true },
-      ],
-      devices: 1,
-      outOfBand: { configured: false },
-    });
-    const { default: NotificationsView } = await import('./notifications');
-    mount(<NotificationsView route={route(['notifications'])} />);
-
-    const link = await screen.findByRole('link', { name: /Permission needed/ });
-    expect(link.getAttribute('href')).toBe('#/plan/demo/run');
-    expect(screen.getByText('sent to 1')).toBeTruthy();
-  });
-
-  it('says a notification reached no device rather than implying it was delivered', async () => {
-    notifications.mockResolvedValue({
-      items: [
-        {
-          id: 'n1',
-          at: new Date().toISOString(),
-          category: 'halted',
-          title: 'Run halted',
-          body: 'It stopped.',
-          url: '/#/runs',
-          urgent: true,
-          read: true,
-          delivery: [],
-        },
-      ],
-      total: 1,
-      unread: 0,
-      more: false,
-      categories: [],
-      devices: 0,
-      outOfBand: { configured: true },
-    });
-    const { default: NotificationsView } = await import('./notifications');
-    mount(<NotificationsView route={route(['notifications'])} />);
-    expect(await screen.findByText('no device')).toBeTruthy();
-  });
-
-  // The tab id stays `settings` — `routeFor` and every existing deep link name
-  // it — but it now holds the global switches above the per-device card, so the
-  // label follows the contents rather than the id.
-  it('deep-links the settings tab', async () => {
-    const { default: NotificationsView } = await import('./notifications');
-    mount(<NotificationsView route={route(['notifications', 'settings'])} />);
-    const tab = await screen.findByRole('tab', { name: 'Settings' });
-    expect(tab.getAttribute('aria-selected')).toBe('true');
+    expect(await screen.findByRole('heading', { name: 'Alerts' })).toBeTruthy();
+    const link = screen.getByRole('link', { name: /open the announcements/i });
+    expect(link.getAttribute('href')).toBe('#/now?bell=1');
+    // No inbox on this page any more — not a row, not a tab.
+    expect(screen.queryByRole('tab', { name: 'Inbox' })).toBeNull();
   });
 });
 

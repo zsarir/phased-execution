@@ -40,8 +40,8 @@ import {
   copy,
   toast,
 } from '@/components/ui';
-import { navigate } from '@/router';
-import type { ViewProps } from '@/router';
+import { navigate } from '@/app/router';
+import type { ViewProps } from '@/app/router';
 import { Page } from '../_page';
 
 /** How many servers is a working number, per the ecosystem's own experience. */

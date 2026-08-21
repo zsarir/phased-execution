@@ -20,7 +20,7 @@ import { ApiError, api, type TerminalState } from './api';
 import { isPhone } from './media';
 import { keys } from './queries';
 import { estimateTerminalSize } from './terminal';
-import { navigate } from '../router';
+import { navigate } from '@/app/router';
 import { toast } from '../components/ui';
 import type { QaProfile } from './qa';
 

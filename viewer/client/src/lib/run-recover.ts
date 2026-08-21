@@ -10,7 +10,7 @@
  */
 
 import { ApiError, api } from './api';
-import { navigate } from '../router';
+import { navigate } from '@/app/router';
 import { toast } from '../components/ui';
 
 export type RunRecoverVerb =

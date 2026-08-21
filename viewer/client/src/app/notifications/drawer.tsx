@@ -1,30 +1,10 @@
-/**
- * The inbox: everything the console has announced.
- *
- * This is the page the whole notification store exists for. Before it, a phone
- * asleep and no tab open meant the event had simply never happened — the
- * announcement was raised, delivered to nobody, and forgotten. Every row here
- * says not only *what* was announced but *what became of it*, because a silent
- * delivery failure is exactly the thing that is invisible otherwise.
- *
- * Ported from `web/views/notifications.js`. Three things changed:
- *
- * 1. **The rows are links.** They were `<button onClick=navigate>`, so the one
- *    list in the app whose entire purpose is "go and look at this" could not be
- *    opened in a background tab.
- * 2. **The four-way reload subscription is gone.** The old inbox re-fetched
- *    itself from a `subscribeNotifications({notification, delivery, read,
- *    cleared})` block; `EVENT_EFFECTS` already invalidates the `notifications`
- *    prefix on all four, so the data layer does it for every mounted variant.
- * 3. **Clear-all asks in a focus-trapped dialog** rather than `window.confirm`.
- */
-
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { api, type NotificationRecord } from '@/lib/api';
 import { keys, useInbox } from '@/lib/queries';
 import { plural, relativeTime } from '@/lib/format';
+import { usePhone } from '@/lib/media';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -33,13 +13,57 @@ import {
   Button,
   Chip,
   Empty,
+  Sheet,
+  SheetContent,
   Skeleton,
   toast,
 } from '@/components/ui';
-import { toHash } from '@shared/routes.js';
+import { useNavigate } from '@/app/router';
+import { OVERLAY_KEYS, closeOverlaysHref, toHash, type Route } from '@/app/routes';
 
-/** How many rows one page of the inbox holds before "Show older". */
-const PAGE = 60;
+/** How many rows one page of the drawer holds before "Show older". */
+const PAGE = 40;
+
+/**
+ * The bell drawer: everything the console has announced, over whatever page you
+ * are on.
+ *
+ * This is the surface the whole notification store exists for. Before it, a
+ * phone asleep and no tab open meant the event had simply never happened — the
+ * announcement was raised, delivered to nobody, and forgotten. Every row says
+ * not only *what* was announced but *what became of it*, because a silent
+ * delivery failure is exactly the thing that is invisible otherwise.
+ *
+ * It was a page's tab in 2.x (`#/notifications`, beside the device settings),
+ * which meant reading what the console had said cost leaving what you were
+ * looking at — and the two halves of that page answered completely different
+ * questions. The announcements are chrome now; the settings stay a page until
+ * Phase 11 folds them into Settings, and `#/notifications` redirects here.
+ *
+ * `?bell=1` is the open state, like `?k=` and `?help=`, so a push notification
+ * can deep-link straight into it and a reload does not lose it.
+ */
+export function NotificationsDrawer({ route }: { route: Route }) {
+  const navigate = useNavigate();
+  const phone = usePhone();
+  const open = route.query[OVERLAY_KEYS.bell] != null;
+
+  return (
+    <Sheet
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) navigate(closeOverlaysHref(route));
+      }}
+    >
+      {/* Right on a desktop — it is a list beside the page, not over it. Bottom
+          on a phone, where a right-hand drawer is a full-screen modal that has
+          not admitted it and where the thumb is at the other end of the device. */}
+      <SheetContent side={phone ? 'bottom' : 'right'} title="Announcements" showTitle className="p-0">
+        {open && <DrawerBody onOpen={(url) => navigate(toHash(url))} />}
+      </SheetContent>
+    </Sheet>
+  );
+}
 
 /** Day headings, newest first, with the two everyone actually reads named. */
 export function groupByDay(items: NotificationRecord[]): [string, NotificationRecord[]][] {
@@ -72,26 +96,16 @@ export function deliverySummary(item: NotificationRecord): { text: string; faile
     : { text: `sent to ${delivered.length}`, failed: false };
 }
 
-export function Inbox({ onUnread }: { onUnread?: (n: number) => void }) {
+/**
+ * The list. Split out so the drawer can mount it only while it is open — the
+ * inbox is a paged server query and a closed drawer has no business holding one.
+ */
+export function DrawerBody({ onOpen }: { onOpen: (url: string) => void }) {
   const client = useQueryClient();
-  const [category, setCategory] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [limit, setLimit] = useState(PAGE);
 
-  const { data, isPending } = useInbox({
-    category: category || undefined,
-    unread: unreadOnly || undefined,
-    limit,
-  });
-
-  // Reported up so the page header and the tab can carry the count without
-  // either of them fetching the inbox a second time. In an effect, not in
-  // render: setting a parent's state while rendering a child is a React
-  // warning at best and a loop at worst.
-  const unread = data?.unread;
-  useEffect(() => {
-    if (unread != null) onUnread?.(unread);
-  }, [unread, onUnread]);
+  const { data, isPending } = useInbox({ unread: unreadOnly || undefined, limit });
 
   const act = useMutation({
     mutationFn: (fn: () => Promise<unknown>) => fn(),
@@ -110,13 +124,13 @@ export function Inbox({ onUnread }: { onUnread?: (n: number) => void }) {
       void client.invalidateQueries({ queryKey: keys.notifications() });
       // The URL is whatever `routeFor` built on the server — never assembled
       // here. `toHash` normalises the `/#/…` form a push payload carries.
-      window.location.hash = toHash(url);
+      onOpen(url);
     },
   });
 
   if (isPending && !data) {
     return (
-      <div className="mt-3 flex flex-col gap-2">
+      <div className="flex flex-col gap-2 p-3">
         {[0, 1, 2, 3].map((i) => (
           <Skeleton key={i} className="h-16" />
         ))}
@@ -131,89 +145,72 @@ export function Inbox({ onUnread }: { onUnread?: (n: number) => void }) {
   const busy = act.isPending;
 
   return (
-    <div className="mt-3 flex flex-col gap-3">
+    <div className="flex flex-col gap-3 p-3">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button size="sm" aria-pressed={unreadOnly} onClick={() => setUnreadOnly(!unreadOnly)}>
+          Unread only
+        </Button>
+        <Button
+          size="sm"
+          disabled={busy || data.unread === 0}
+          onClick={() => act.mutate(() => api.markNotificationsRead())}
+        >
+          Mark all read
+        </Button>
+        <Button
+          size="sm"
+          disabled={busy || !data.total}
+          onClick={() => act.mutate(() => api.clearNotifications('read'))}
+        >
+          Clear read
+        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button size="sm" variant="danger" disabled={busy || !data.total}>
+              Clear all
+            </Button>
+          </AlertDialogTrigger>
+          {/* The only irreversible thing in here. It gets a question, and the
+              question says how many. */}
+          <AlertDialogContent
+            title={`Delete all ${plural(data.total, 'notification')}?`}
+            description="This cannot be undone. Delivery history goes with them."
+            confirmLabel="Delete them"
+            destructive
+            onConfirm={() => act.mutate(() => api.clearNotifications('all'))}
+          />
+        </AlertDialog>
+      </div>
+
       {nothingCanArrive && (
         <Banner severity="info">
-          <strong>Nothing can reach you out of band yet.</strong> No device is subscribed and no{' '}
-          <code>PHASE_CONSOLE_NOTIFY</code> command is set, so these arrive here and nowhere else.{' '}
-          <a href="#/notifications/settings" className="text-action underline">
-            Set a device up
-          </a>
-          .
+          <div className="min-w-0">
+            <strong>Nothing can reach you out of band yet.</strong> No device is subscribed and no{' '}
+            <code>PHASE_CONSOLE_NOTIFY</code> command is set, so these arrive here and nowhere else.{' '}
+            <a href="#/notifications/settings" className="text-action underline">
+              Set a device up
+            </a>
+            .
+          </div>
         </Banner>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by category">
-          <Button size="sm" aria-pressed={category === ''} onClick={() => setCategory('')}>
-            All
-          </Button>
-          {(data.categories ?? []).map((c) => (
-            <Button
-              key={c.id}
-              size="sm"
-              aria-pressed={category === c.id}
-              title={c.detail}
-              onClick={() => setCategory(category === c.id ? '' : c.id)}
-            >
-              {c.label}
-            </Button>
-          ))}
-        </div>
-
-        <div className="flex flex-wrap gap-1.5">
-          <Button size="sm" aria-pressed={unreadOnly} onClick={() => setUnreadOnly(!unreadOnly)}>
-            Unread only
-          </Button>
-          <Button
-            size="sm"
-            disabled={busy || data.unread === 0}
-            onClick={() => act.mutate(() => api.markNotificationsRead())}
-          >
-            Mark all read
-          </Button>
-          <Button
-            size="sm"
-            disabled={busy || !data.total}
-            onClick={() => act.mutate(() => api.clearNotifications('read'))}
-          >
-            Clear read
-          </Button>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button size="sm" variant="danger" disabled={busy || !data.total}>
-                Clear all
-              </Button>
-            </AlertDialogTrigger>
-            {/* The only irreversible thing on this page. It gets a question,
-                and the question says how many. */}
-            <AlertDialogContent
-              title={`Delete all ${plural(data.total, 'notification')}?`}
-              description="This cannot be undone. Delivery history goes with them."
-              confirmLabel="Delete them"
-              destructive
-              onConfirm={() => act.mutate(() => api.clearNotifications('all'))}
-            />
-          </AlertDialog>
-        </div>
-      </div>
-
       {!data.items.length ? (
         <Empty
-          title={unreadOnly || category ? 'Nothing matches that' : 'Nothing yet'}
+          title={unreadOnly ? 'Nothing unread' : 'Nothing yet'}
           body={
-            unreadOnly || category
-              ? 'Clear the filters to see the rest.'
+            unreadOnly
+              ? 'Everything the console has announced has been read.'
               : 'Approvals, halts, phases landing and plans finishing all arrive here.'
           }
         />
       ) : (
         groups.map(([day, items]) => (
           <section key={day}>
-            <h2 className="mb-1.5 font-display text-2xs tracking-[0.14em] text-ink-faint uppercase">{day}</h2>
+            <h3 className="mb-1.5 font-display text-2xs tracking-[0.14em] text-ink-faint uppercase">{day}</h3>
             <div className="flex flex-col gap-1">
               {items.map((item) => (
-                <InboxRow
+                <DrawerRow
                   key={item.id}
                   item={item}
                   onOpen={() => open.mutate(item)}
@@ -234,7 +231,7 @@ export function Inbox({ onUnread }: { onUnread?: (n: number) => void }) {
   );
 }
 
-function InboxRow({
+function DrawerRow({
   item,
   onOpen,
   onClear,
@@ -248,8 +245,9 @@ function InboxRow({
 
   return (
     <article
-      className={`flex items-stretch gap-1 rounded border bg-surface
-                  ${item.read ? 'border-rule' : 'border-action/45'}`}
+      className={`flex items-stretch gap-1 rounded border bg-surface ${
+        item.read ? 'border-rule' : 'border-action/45'
+      }`}
     >
       {/* A real link so it can be opened in a background tab; the click also
           marks it read, which a bare href cannot do. */}
@@ -296,7 +294,7 @@ function InboxRow({
         type="button"
         onClick={onClear}
         aria-label={`Remove “${item.title}”`}
-        className="shrink-0 px-2 text-ink-faint hover:bg-surface-raised hover:text-blocked"
+        className="shrink-0 px-2 text-ink-faint hover:bg-surface-raised hover:text-status-failed"
       >
         <X className="size-4" aria-hidden />
       </button>

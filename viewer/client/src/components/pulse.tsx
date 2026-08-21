@@ -31,7 +31,7 @@ import { rungLabel, situationLabelFor } from '@/lib/ladder';
 import { runStatusTitle, runUiState } from '@/lib/status-vocab';
 import { RunStrip } from '@/components/charts';
 import { Chip, StatusBadge } from '@/components/ui';
-import { navigate } from '@/router';
+import { navigate } from '@/app/router';
 import { planHref } from '@shared/routes.js';
 import type { ConvergeView, ForeignSession, PhaseRecord, RunState } from '@/lib/api';
 

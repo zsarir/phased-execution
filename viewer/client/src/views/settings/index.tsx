@@ -12,7 +12,7 @@
 import { usePrefs, type Theme } from '@/lib/prefs';
 import { useConsoleState } from '@/lib/queries';
 import { weight } from '@/lib/format';
-import { navigate } from '@/router';
+import { navigate } from '@/app/router';
 import {
   Banner,
   Button,
@@ -309,18 +309,17 @@ export default function SettingsView() {
             <CardTitle>Keyboard</CardTitle>
           </CardHeader>
           <CardBody>
-            {/* Kept in step with `SHORTCUTS` in App.tsx — the shell grew three
-                the legacy list never had. */}
+            {/* Three keys, not eight. The 2.x list was seven single-letter jumps
+                that had to be memorised from a card you had to remember to
+                visit; the palette replaced all of them with one chord that
+                shows you its own contents — and prints the chord on itself, in
+                the header, on every page. What is left here is what the palette
+                cannot document from inside itself. */}
             <KeyValue
               items={[
-                ['/', 'search'],
-                ['r', 'ready now'],
-                ['p', 'plans'],
-                ['d', 'dashboard'],
-                ['s', 'statistics'],
-                ['g', 'guide'],
-                ['n', 'notifications'],
-                ['Esc', 'close a dialog'],
+                ['⌘ K', 'search and commands'],
+                ['/', 'the same, without a modifier'],
+                ['Esc', 'close a dialog, sheet or the palette'],
               ]}
             />
           </CardBody>

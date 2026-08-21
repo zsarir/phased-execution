@@ -34,6 +34,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
       plans: vi.fn(async () => []),
       stats: vi.fn(async () => null),
       approvals: vi.fn(async () => []),
+      // The palette is shell chrome now and asks for the fleet by name.
+      runs: vi.fn(async () => []),
     },
   };
 });
@@ -83,7 +85,7 @@ const failsFreshly = (message = 'Failed to fetch') =>
 
 beforeEach(() => {
   vi.clearAllMocks();
-  window.location.hash = '#/ready';
+  window.location.hash = '#/now';
   setOnline(true);
 });
 
@@ -118,7 +120,7 @@ describe('the console cannot be reached', () => {
 
     // The whole point. A cached board is indistinguishable from a live one and
     // wrong within a minute.
-    for (const nav of ['Ready now', 'Plans', 'Dashboard', 'Runs', 'Statistics']) {
+    for (const nav of ['Now', 'Plans', 'Runs', 'Sessions', 'Insights', 'Settings']) {
       expect(screen.queryByRole('button', { name: new RegExp(nav, 'i') })).not.toBeInTheDocument();
       expect(screen.queryByRole('link', { name: new RegExp(nav, 'i') })).not.toBeInTheDocument();
     }
@@ -161,7 +163,7 @@ describe('the console cannot be reached', () => {
     await waitFor(() => {
       expect(screen.queryByRole('heading', { name: /you're offline/i })).not.toBeInTheDocument();
     });
-    expect(await screen.findByRole('button', { name: /ready now/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Now' })).toBeInTheDocument();
   });
 
   it('asks again by itself the moment the network returns', async () => {
@@ -176,7 +178,7 @@ describe('the console cannot be reached', () => {
     window.dispatchEvent(new Event('online'));
 
     await waitFor(() => expect(state.mock.calls.length).toBeGreaterThan(asked));
-    expect(await screen.findByRole('button', { name: /ready now/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Now' })).toBeInTheDocument();
   });
 });
 
@@ -184,7 +186,7 @@ describe('the network drops while the board is up', () => {
   it('labels what is on screen as no longer updating', async () => {
     state.mockResolvedValue(READY_STATE);
     mount();
-    await screen.findByRole('button', { name: /ready now/i });
+    await screen.findByRole('button', { name: 'Now' });
 
     setOnline(false);
     window.dispatchEvent(new Event('offline'));
@@ -192,6 +194,6 @@ describe('the network drops while the board is up', () => {
     // The board stays — it was true when it was fetched — but it stops being
     // presented as live, which is the only dishonest option here.
     expect(await screen.findByText(/no longer updating/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /ready now/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Now' })).toBeInTheDocument();
   });
 });

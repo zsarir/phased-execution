@@ -1,16 +1,18 @@
 /**
- * The guide.
+ * The help sheet.
  *
  * The property worth a test is **totality in both directions**. `GUIDE_SECTIONS`
  * lives in `shared/route-meta.js` because it is the frozen URL vocabulary; the
  * content lives in `client/src/content/guide/*.md`. A section added to one and
- * forgotten in the other is either a tab that renders an empty page or a page
+ * forgotten in the other is either a section that renders nothing or content
  * nothing can reach — neither of which is visible in a screenshot of the six
  * that do work.
  *
- * The deep-link case is the second: `#/guide/mobile` has to land on Mobile
- * setup, not on the first tab, because that URL is what the phone-setup
- * instructions tell people to open.
+ * The deep-link case is the second: `?help=mobile` has to land on Mobile setup,
+ * not on the first section, because `#/guide/mobile` — which redirects to
+ * exactly that — is the URL the phone-setup instructions tell people to open.
+ * Every case below was a `#/guide/:section` case before 3.0 turned the page
+ * into an overlay; what changed is the address, not the content model.
  */
 
 import { homedir, hostname, userInfo } from 'node:os';
@@ -21,7 +23,7 @@ import { GUIDE_SECTIONS } from '@shared/route-meta.js';
 import { queryClientConfig } from '@/lib/queries';
 import { SECTIONS, resolveSection, sectionIds } from './sections';
 import { splitGuide } from './split';
-import GuideView from './index';
+import { HelpSheet } from './sheet';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -50,18 +52,28 @@ afterEach(() => {
   phone = false;
 });
 
-function renderGuide(segments: string[], query: Record<string, string> = {}) {
+/**
+ * The sheet, open at a section.
+ *
+ * `?help=` is the open state, so "render the guide at mobile setup" is
+ * `renderHelp('mobile')` — and `renderHelp()` is the bare `#/guide` a More-sheet
+ * tap or an old link produces, which must land on the first section.
+ */
+function renderHelp(section?: string, query: Record<string, string> = {}) {
   const client = new QueryClient(queryClientConfig);
   return render(
     <QueryClientProvider client={client}>
-      <GuideView route={{ segments, query, path: segments.join('/') }} />
+      <HelpSheet route={{ segments: ['now'], query: { help: section ?? '', ...query }, path: 'now' }} />
     </QueryClientProvider>,
   );
 }
 
+/** The sheet's own body — every query below is scoped to it, not to the page. */
+const panelOf = () => screen.findByRole('dialog');
+
 const outlineOf = (id: string) => splitGuide(SECTIONS.find((s) => s.id === id)!.body);
 
-describe('the guide section registry', () => {
+describe('the help section registry', () => {
   it('covers every frozen GUIDE_SECTIONS id, in both directions', () => {
     expect([...sectionIds].sort()).toEqual([...GUIDE_SECTIONS].sort());
   });
@@ -132,45 +144,60 @@ describe('the guide section registry', () => {
   });
 });
 
-describe('the guide view', () => {
+describe('the help sheet', () => {
   it('renders the section named by the route, not the first one', async () => {
     // Asserted against the section's OWN first card rather than a heading
     // spelled out here. A test that names a heading turns editing prose into
     // breaking the build, which is the coupling the markdown split exists to
     // avoid — and it is how this test failed the first time the guide was
     // rewritten.
-    renderGuide(['guide', 'mobile']);
-    const panel = await screen.findByRole('tabpanel');
+    renderHelp('mobile');
+    const panel = await panelOf();
     const first = outlineOf('mobile').groups[0].cards[0];
     expect(within(panel).getByRole('heading', { name: first.title })).toBeTruthy();
   });
 
-  it('marks that tab selected so a reload lands where you were', async () => {
-    renderGuide(['guide', 'reference']);
-    const tab = await screen.findByRole('tab', { name: 'Reference' });
-    expect(tab.getAttribute('aria-selected')).toBe('true');
+  it('marks that section current so a reload lands where you were', async () => {
+    renderHelp('reference');
+    const chip = await screen.findByRole('button', { name: 'Reference' });
+    expect(chip.getAttribute('aria-current')).toBe('page');
   });
 
-  it('renders one tab per section', async () => {
-    renderGuide(['guide']);
-    const tabs = await screen.findAllByRole('tab');
-    expect(tabs).toHaveLength(SECTIONS.length);
+  it('offers every section, and falls back to the first when none is named', async () => {
+    renderHelp();
+    const panel = await panelOf();
+    const nav = within(panel).getByRole('navigation', { name: 'Guide sections' });
+    expect(within(nav).getAllByRole('button')).toHaveLength(SECTIONS.length);
+    // `?help=` with no value is what `#/guide` and the More sheet produce.
+    expect(within(nav).getByRole('button', { name: SECTIONS[0].label }).getAttribute('aria-current')).toBe(
+      'page',
+    );
   });
 
   it('says what this console can actually do before describing what one can', async () => {
-    renderGuide(['guide']);
+    renderHelp();
     expect(await screen.findByText(/Runs are enabled on this console/i)).toBeTruthy();
   });
 
+  it('renders nothing at all when the URL does not ask for it', () => {
+    const client = new QueryClient(queryClientConfig);
+    render(
+      <QueryClientProvider client={client}>
+        <HelpSheet route={{ segments: ['now'], query: {}, path: 'now' }} />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('renders markdown through the sanitizer — a table becomes a real table', async () => {
-    renderGuide(['guide', 'reference']);
-    const panel = await screen.findByRole('tabpanel');
+    renderHelp('reference');
+    const panel = await panelOf();
     expect(within(panel).getAllByRole('table').length).toBeGreaterThan(0);
   });
 
   it('paints the reference glossary words as their real badges, with the hover help', async () => {
-    renderGuide(['guide', 'reference']);
-    const panel = await screen.findByRole('tabpanel');
+    renderHelp('reference');
+    const panel = await panelOf();
 
     // The decoration runs in an effect after the sanitizer fills the DOM.
     await waitFor(() => {
@@ -198,15 +225,15 @@ describe('the guide view', () => {
 describe('the section is cards, not a wall', () => {
   it('breaks the reference glossary into separate cards', async () => {
     // The section this refactor exists for: ~90 table rows under one heading.
-    renderGuide(['guide', 'reference']);
-    const panel = await screen.findByRole('tabpanel');
+    renderHelp('reference');
+    const panel = await panelOf();
     expect(within(panel).getAllByRole('heading', { level: 3 }).length).toBeGreaterThan(6);
   });
 
   it('gives every card in every section an accessible name', async () => {
     for (const section of SECTIONS) {
-      const { unmount } = renderGuide(['guide', section.id]);
-      const panel = await screen.findByRole('tabpanel');
+      const { unmount } = renderHelp(section.id);
+      const panel = await panelOf();
       const summaries = [...panel.querySelectorAll('summary')];
       expect(summaries.length, `${section.id} rendered no cards`).toBeGreaterThan(1);
       for (const summary of summaries) {
@@ -219,15 +246,15 @@ describe('the section is cards, not a wall', () => {
   it('renders a group band as a real heading above its cards', async () => {
     const banded = SECTIONS.find((s) => outlineOf(s.id).groups.some((g) => g.banded));
     if (!banded) return; // Every file is flat today; this guards the shape, not the content.
-    renderGuide(['guide', banded.id]);
-    const panel = await screen.findByRole('tabpanel');
+    renderHelp(banded.id);
+    const panel = await panelOf();
     const group = outlineOf(banded.id).groups.find((g) => g.banded)!;
     expect(within(panel).getByRole('heading', { level: 2, name: group.title })).toBeTruthy();
   });
 
   it('opens every card on a desktop, except the bulky ones', async () => {
-    renderGuide(['guide', 'reference']);
-    const panel = await screen.findByRole('tabpanel');
+    renderHelp('reference');
+    const panel = await panelOf();
     // No reference card is bulky — a glossary you cannot Cmd-F is not a
     // glossary — so every one of them is open at desktop width.
     for (const card of panel.querySelectorAll('details')) {
@@ -237,8 +264,8 @@ describe('the section is cards, not a wall', () => {
 
   it('opens only the first card on a phone', async () => {
     phone = true;
-    renderGuide(['guide', 'reference']);
-    const panel = await screen.findByRole('tabpanel');
+    renderHelp('reference');
+    const panel = await panelOf();
     const cards = [...panel.querySelectorAll('details')] as HTMLDetailsElement[];
     expect(cards.length).toBeGreaterThan(1);
     // Asserted on `open`, not on a role query: whether jsdom exposes content
@@ -252,8 +279,8 @@ describe('the section is cards, not a wall', () => {
 describe('deep links to a card', () => {
   it('opens the card named by ?card=', async () => {
     const target = outlineOf('reference').groups[3].cards[0];
-    renderGuide(['guide', 'reference'], { card: target.id });
-    const panel = await screen.findByRole('tabpanel');
+    renderHelp('reference', { card: target.id });
+    const panel = await panelOf();
     const card = panel.querySelector<HTMLDetailsElement>(`#card-${CSS.escape(target.id)}`);
     expect(card, `no card with id ${target.id}`).toBeTruthy();
     expect(card!.open).toBe(true);
@@ -262,8 +289,8 @@ describe('deep links to a card', () => {
   it('ignores an unknown ?card= rather than rendering nothing', async () => {
     // Card ids come from prose, so they are deliberately NOT frozen vocabulary
     // — which means a stale link has to degrade, not break.
-    renderGuide(['guide', 'reference'], { card: 'no-such-card' });
-    const panel = await screen.findByRole('tabpanel');
+    renderHelp('reference', { card: 'no-such-card' });
+    const panel = await panelOf();
     expect(within(panel).getAllByRole('table').length).toBeGreaterThan(0);
   });
 });

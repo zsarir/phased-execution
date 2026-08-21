@@ -103,7 +103,7 @@ function accountName(account: AccountView): string {
   return account.name ?? account.email ?? account.id;
 }
 
-export function LimitsWidget({ variant }: { variant: 'rail' | 'phone' | 'sheet' }) {
+export function LimitsWidget({ variant }: { variant: 'header' | 'rail' | 'phone' | 'sheet' }) {
   const [open, setOpen] = useState(false);
   const { data } = useAccounts();
   const accounts = data?.accounts;
@@ -129,7 +129,38 @@ export function LimitsWidget({ variant }: { variant: 'rail' | 'phone' | 'sheet' 
         : undefined;
 
   const trigger =
-    variant === 'phone' ? (
+    variant === 'header' ? (
+      // The 3.0 shell header is ONE 48px row, so this is one row: the gauge,
+      // the worst 5-hour figure and a short bar. The rail's two stacked meters
+      // are a column and overflow it — the weekly window is in the title and in
+      // the dialog behind the click, which is where the detail belongs.
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label="Claude usage limits"
+        title={[
+          five ? `${fiveTitle} at ${Math.round(five.bucket.utilization)}%` : 'No usage data yet',
+          weekly ? `${weeklyTitle} at ${Math.round(weekly.bucket.utilization)}%` : null,
+          stale ? 'These figures could not be refreshed and may be old.' : null,
+        ]
+          .filter(Boolean)
+          .join('\n')}
+        className="flex min-h-(--tap-min) shrink-0 items-center gap-1.5 rounded px-2 text-2xs text-ink-muted hover:text-ink md:min-h-0 md:py-1"
+      >
+        <Gauge size={14} className="shrink-0" aria-hidden />
+        {five ? (
+          <>
+            <span className="tnum">{Math.round(five.bucket.utilization)}%</span>
+            <span className="hidden w-14 lg:block">
+              <Meter pct={five.bucket.utilization} />
+            </span>
+          </>
+        ) : (
+          <span className="text-ink-faint">no data</span>
+        )}
+        {stale && <span className="text-ink-faint">stale</span>}
+      </button>
+    ) : variant === 'phone' ? (
       <button
         type="button"
         onClick={() => setOpen(true)}

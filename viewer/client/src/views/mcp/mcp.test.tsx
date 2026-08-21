@@ -35,8 +35,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     },
   };
 });
-vi.mock('@/router', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/router')>()),
+vi.mock('@/app/router', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/app/router')>()),
   navigate: vi.fn(),
 }));
 

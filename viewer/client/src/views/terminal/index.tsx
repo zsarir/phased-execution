@@ -26,7 +26,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { TerminalSquare, Plus } from 'lucide-react';
 import { api } from '@/lib/api';
 import { keys, useAutoReadNotifications, useConsoleState, useTerminals } from '@/lib/queries';
-import { navigate, type Route } from '@/router';
+import { navigate, type Route } from '@/app/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // Through `./pane`, deliberately — see the re-export note there: a second
 // importable module in this shared chunk renames it and precaches xterm.

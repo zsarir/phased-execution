@@ -20,7 +20,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
   return { ...actual, api: { ...actual.api, accounts: accountsMock, state: vi.fn(async () => ({})) } };
 });
-vi.mock('@/router', () => ({ navigate: vi.fn() }));
+vi.mock('@/app/router', () => ({ navigate: vi.fn() }));
 
 import { AccountsCard } from './accounts';
 

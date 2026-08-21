@@ -31,7 +31,7 @@ import { OverviewTab } from './overview-tab';
 import { RawTab } from './raw-tab';
 import { DETAIL_TABS, TAB_IDS, isDetailRoute, resolveTab, tabLabel } from './tabs';
 import type { PlanDetail } from '@/lib/api';
-import type { ViewProps } from '@/router';
+import type { ViewProps } from '@/app/router';
 
 /**
  * The autopilot is its own chunk inside the plan chunk.

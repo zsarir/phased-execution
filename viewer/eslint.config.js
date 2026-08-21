@@ -103,13 +103,6 @@ export default tseslint.config(
     rules: { 'no-restricted-syntax': 'off' },
   },
   {
-    // The 2.x guide view brings a `?card=` deep link and the active strip tab
-    // into view with `scrollIntoView`; it is rewritten as the help sheet in a
-    // later phase (the ban stands for every new surface).
-    files: ['client/src/views/guide/**/*.{ts,tsx}'],
-    rules: { 'no-restricted-syntax': 'off' },
-  },
-  {
     // The Vitest suite: globals on, and a test may name a thing a rule bans.
     files: ['client/src/**/*.test.{ts,tsx}', 'client/src/test/**/*.ts', 'client/src/test-setup.ts'],
     languageOptions: { globals: { ...globals.browser, ...globals.node, ...globals.vitest } },
