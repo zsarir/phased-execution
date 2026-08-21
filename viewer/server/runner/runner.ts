@@ -295,6 +295,14 @@ export type RunnerDeps = {
    * already on the record by the time this fires.
    */
   onMcpRequireTimeout?: (state: RunState, phase: number, result: McpContinueResult) => void;
+  /**
+   * The session registry's presence for a lock (Phase 5): `ended` means the
+   * holder's session is gone — its SessionEnd arrived, or its process is — so
+   * the claim is debris, not a queue: the boarding belt-check releases it as
+   * the holder and goes on, instead of waiting out a lease nobody holds.
+   * Absent: every lock reads `unknown` and lease rules decide, as before.
+   */
+  lockPresence?: (lock: { slug: string; phase: number; owner: string; session?: string }) => 'live' | 'ended' | 'unknown';
   /** Verification-card answer window override — tests only; defaults to `VERIFY_ANSWER_MS`. */
   verifyAnswerMs?: number;
   /**
@@ -2644,6 +2652,76 @@ export class Runner {
     return result;
   }
 
+  /**
+   * A declared outcome that arrived from OUTSIDE a lane: `phase-outcome.sh`
+   * run by a session nobody here spawned — a person's `claude`, whose file
+   * landed in the console's inbox (`runs/<instance>/<slug>/outcomes/`). The
+   * same vocabulary as a lane's own declaration, read the same way:
+   *
+   *   waiting-external  the record is parked `waiting` until `resume_after`
+   *                     (the session's own clock; floored and budgeted like a
+   *                     lane's) and THAT session is what resumes — the phase's
+   *                     context is the whole point;
+   *   partial           the record is reset with a resume hint and the loop
+   *                     boards it at once — continuing the session when it can
+   *                     be reached, a fresh boot with the resume brief when not;
+   *   blocked / needs-human / complete
+   *                     journalled; the classifier reads the declaration as
+   *                     evidence and the ladder takes it from there.
+   *
+   * A phase a lane of this run is working, or whose record is done, is left
+   * alone — the declaration is journalled as ignored and the file was consumed.
+   */
+  declareOutcome(phase: number, declared: PhaseOutcome, by = 'unsupervised'): 'parked' | 'boarding' | 'noted' | 'ignored' | null {
+    const state = this.state;
+    if (!state) return null;
+    const record = phaseRecord(state, phase);
+    const ignore = (reason: string): 'ignored' => {
+      this.record('phase.outcome-ignored', { status: declared.status, reason, by, sessionId: declared.session_id ?? null }, phase);
+      return 'ignored';
+    };
+    if (this.lanes.has(phase)) return ignore('a lane of this run is working the phase');
+    if (record.status === 'done') return ignore('the record is already done');
+    this.record('phase.outcome', {
+      status: declared.status, reason: declared.reason ?? null,
+      resumeAfter: declared.resume_after ?? null, watch: declared.watch,
+      sessionId: declared.session_id ?? null, by,
+    }, phase);
+    if (declared.session_id) {
+      // The declaring session is the one to resume. A session nobody here
+      // spawned lives under the machine's own login — `resumableSession` ports
+      // its transcript when the run pays as somebody else.
+      record.sessionId = declared.session_id;
+      delete record.sessionAccountId;
+    }
+    let verdict: 'parked' | 'boarding' | 'noted';
+    switch (declared.status) {
+      case 'waiting-external': {
+        record.resumeSessionId = declared.session_id ?? record.sessionId;
+        verdict = this.parkWaiting(phase, declared) ? 'parked' : 'noted';
+        break;
+      }
+      case 'partial': {
+        resetForRetry(record);
+        const brief = declared.session_id ? 'continue' : 'resume';
+        record.boardingHint = {
+          situation: 'work-in-progress', rung: 'resume-own-session', brief,
+          ...(declared.session_id ? { sessionId: declared.session_id } : {}),
+          at: new Date().toISOString(), by,
+        };
+        this.record('phase.reboard-requested', { situation: 'work-in-progress', rung: 'resume-own-session', brief, by }, phase);
+        this.emit('phase', { phase, status: record.status, note: record.note ?? null });
+        verdict = 'boarding';
+        break;
+      }
+      default:
+        verdict = 'noted';
+    }
+    this.persist();
+    this.wake.resolve();
+    return verdict;
+  }
+
   /** Clear a phase's terminal state so the loop will pick it up again. */
   retry(phase: number): void {
     if (!this.state) return;
@@ -3283,7 +3361,23 @@ export class Runner {
     const owner = autopilotOwner(state.id);
     const status = await this.script('phase-lock.sh', [state.slug, 'status', String(phase)]);
     const expired = status.stdout.includes('EXPIRED');
-    const holder = expired ? undefined : /held by (\S+)/.exec(status.stdout)?.[1];
+    let holder = expired ? undefined : /held by (\S+)/.exec(status.stdout)?.[1];
+    const heldSession = /\[session: ([A-Za-z0-9._-]+)\]/.exec(status.stdout)?.[1];
+    if (holder && holder !== owner && heldSession
+      && this.deps.lockPresence?.({ slug: state.slug, phase, owner: holder, session: heldSession }) === 'ended') {
+      // Presence beats the lease (Phase 5): the holder's session has ended —
+      // the registry saw its SessionEnd, or its process is gone — so the claim
+      // is debris, released AS the holder (the runner's own release, `--git`
+      // never passed), journalled, and boarding goes on. The scheduler reached
+      // the same verdict one layer up (`SchedulerDeps.presence`); this is the
+      // belt-check's half of it, for the lock file the session itself reads.
+      const released = await this.script('phase-lock.sh', [state.slug, 'release', String(phase), '--owner', holder]);
+      this.record('phase.lock-debris-released', {
+        holder, session: heldSession, ok: released.code === 0, by: 'boarding',
+        detail: (released.stdout + released.stderr).trim().slice(0, 160),
+      }, phase);
+      if (released.code === 0) holder = undefined;
+    }
     if (holder && holder !== owner) {
       /* This used to park — TERMINALLY, since `parked` is settled — so a phase
        * a person was working by hand never boarded again for the life of the
@@ -5339,8 +5433,13 @@ export class Runner {
     lane.leaseBusy = true;
     try {
       const scope = formatScope(lane.grant?.scope ?? await this.scopeFor(lane.phase));
+      // The session id rides along when the record knows it, so the refreshed
+      // lock keeps naming the session the registry answers presence for (a
+      // refresh that names none keeps the line anyway — this is belt and braces).
+      const sessionId = phaseRecord(state, lane.phase).sessionId;
       const result = await this.script('phase-lock.sh', [
         state.slug, 'claim', String(lane.phase), '--owner', owner, '--scope', scope,
+        ...(sessionId ? ['--session', sessionId] : []),
       ]);
       const text = (result.stdout + result.stderr).trim();
       if (result.code === 0) {

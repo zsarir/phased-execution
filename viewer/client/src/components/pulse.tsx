@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Bot, CircleDashed, Clock3, Eye, Hourglass, Lock, Snowflake } from 'lucide-react';
+import { Bot, CircleDashed, Clock3, Eye, Hourglass, Lock, Snowflake, Terminal } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { money } from '@/lib/format';
 import { runStatusTitle } from '@/lib/status-vocab';
@@ -23,7 +23,7 @@ import { RunStrip } from '@/components/charts';
 import { Chip } from '@/components/ui';
 import { navigate } from '@/router';
 import { planHref } from '@shared/routes.js';
-import type { PhaseRecord, RunState } from '@/lib/api';
+import type { ForeignSession, PhaseRecord, RunState } from '@/lib/api';
 
 /* ---------------- derivation (exported for tests) ---------------- */
 
@@ -54,6 +54,27 @@ export interface PulseWait {
 }
 
 const LIVE_RUN = new Set(['running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting']);
+
+/** The vehicle a hook-reported session is, in words — the Pulse's other lane kind. */
+export function foreignVehicle(session: Pick<ForeignSession, 'kind'>): string {
+  return session.kind === 'agent' ? 'Console agent' : session.kind === 'autopilot' ? 'Autopilot session' : 'Terminal session';
+}
+
+/**
+ * The hook-reported sessions that belong on a plan's pulse: live, and
+ * correlated to THIS plan (a lock's `session=`, or the owner and the clock).
+ * A lane of the run itself is already drawn from the run; the registry's copy
+ * of it (same session id) is not drawn twice.
+ */
+export function foreignLanesFor(
+  sessions: readonly ForeignSession[] | undefined, slug: string, run?: RunState | null,
+): ForeignSession[] {
+  if (!sessions?.length) return [];
+  const own = new Set(Object.values(run?.children ?? {}).map((child) => child.sessionId).filter(Boolean));
+  return sessions
+    .filter((s) => s.presence === 'live' && s.plan?.slug === slug && !own.has(s.sessionId))
+    .sort((a, b) => (a.plan!.phase - b.plan!.phase) || a.startedAt.localeCompare(b.startedAt));
+}
 
 export function isLiveRun(run: RunState | null | undefined): boolean {
   return Boolean(run && LIVE_RUN.has(run.status));
@@ -163,14 +184,17 @@ export interface PlanPulseProps {
   /** Global view: the header links to the plan. */
   linkHeader?: boolean;
   className?: string;
+  /** Hook-reported sessions working this plan by hand (or in another console) — drawn as lanes of their own kind. */
+  foreign?: readonly ForeignSession[];
 }
 
-export function PlanPulse({ slug, run, board, linkHeader, className }: PlanPulseProps) {
+export function PlanPulse({ slug, run, board, linkHeader, className, foreign }: PlanPulseProps) {
   const titles = board ? new Map(board.map((p) => [p.phase, p.title])) : undefined;
   const lanes = pulseLanes(run, titles);
   const waits = pulseWaits(run, titles);
+  const others = foreignLanesFor(foreign, slug, run);
   const live = isLiveRun(run);
-  const now = useNow(live && lanes.length > 0);
+  const now = useNow((live && lanes.length > 0) || others.length > 0);
 
   // Up next, from the board: open phases whose dependencies are not done yet —
   // the queue the SCHEDULER sees, not just the records the run has touched.
@@ -179,7 +203,7 @@ export function PlanPulse({ slug, run, board, linkHeader, className }: PlanPulse
     .filter((p) => !lanes.some((l) => l.phase === p.phase) && !waits.some((w) => w.phase === p.phase))
     .slice(0, 8);
 
-  if (!lanes.length && !waits.length && !live) return null;
+  if (!lanes.length && !waits.length && !live && !others.length) return null;
 
   const strip = board
     ? board.map((p) => {
@@ -272,6 +296,32 @@ export function PlanPulse({ slug, run, board, linkHeader, className }: PlanPulse
               )}
             </span>
           </button>
+        ))}
+
+        {others.map((session) => (
+          <div
+            key={`foreign-${session.sessionId}`}
+            data-testid="foreign-lane"
+            className="flex w-full items-center gap-3 rounded-md border-l-4 border-ink-faint/70 bg-ground-deep/40 px-3 py-2"
+            title={`${foreignVehicle(session)} ${session.sessionId} — reported by the session-presence hook${session.plan?.strong ? '' : ' (matched by owner and time, not by the lock)'}`}
+          >
+            <span className="font-mono text-lg font-semibold tabular-nums text-ink">P{session.plan!.phase}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm text-ink">{titles?.get(session.plan!.phase) ?? `Phase ${session.plan!.phase}`}</span>
+              <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-2xs text-ink-muted">
+                <Chip tone="neutral" dot>
+                  <Terminal size={11} aria-hidden /> {foreignVehicle(session)}
+                </Chip>
+                {session.user && <span className="font-mono">{session.user}{session.host ? `@${session.host}` : ''}</span>}
+                {session.plan && !session.plan.strong && <span>probably</span>}
+                {session.turns > 0 && <span>{session.turns} {session.turns === 1 ? 'turn' : 'turns'}</span>}
+              </span>
+            </span>
+            <span className="shrink-0 font-mono text-sm tabular-nums text-ink" aria-label="in the session for">
+              <Clock3 size={12} className="mr-1 inline-block align-[-1px] text-ink-faint" aria-hidden />
+              {fmtElapsed(now - Date.parse(session.startedAt))}
+            </span>
+          </div>
         ))}
 
         {waits.map((wait) => (

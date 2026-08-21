@@ -472,12 +472,20 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
     return;
   }
 
+  // The session's id is decided HERE, before the child exists — minted for a
+  // fresh session, the resumed one otherwise — so it can ride into the child's
+  // environment as PE_SESSION_ID. `phase-lock.sh claim` writes it as the lock's
+  // `session=` line and `phase-outcome.sh` as the outcome's `session_id`, which
+  // is how the console's session registry ties a lock and a declared outcome
+  // to the Claude session that wrote them.
+  const sessionIdForChild = request.resume ?? request.sessionId ?? randomUUID();
+  if (!request.resume && !request.sessionId) request = { ...request, sessionId: sessionIdForChild };
   const argv = buildArgv(request);
   const shown = [...argv];
 
   const child = spawn('claude', argv, {
     cwd: request.cwd,
-    env: childEnv(request.env),
+    env: childEnv({ ...request.env, PE_SESSION_ID: sessionIdForChild }),
     // stdin is a pipe now: it carries the boot prompt, and it stays open so an
     // operator can put a question to a phase that is already running.
     stdio: ['pipe', 'pipe', 'pipe'],

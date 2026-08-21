@@ -20,6 +20,7 @@ import { useState } from 'react';
 import { applyUpdateNow } from '@/lib/pwa';
 import { Page } from '../_page';
 import { AutomationCard } from './automation';
+import { SessionHookCard } from './hooks';
 import { AccountsCard } from './accounts';
 import { McpCard } from './mcp';
 import { StartCommandCard } from './start-command';
@@ -184,6 +185,10 @@ export default function SettingsView() {
         </Card>
 
         <AutomationCard />
+
+        {/* Beside Automation: the hook is what lets the autopilot see the
+            sessions it shares the repository with. */}
+        <SessionHookCard />
 
         <AccountsCard />
 

@@ -42,6 +42,7 @@ function scheduler(options: {
   max?: number; locks?: () => LockView[]; now?: () => number;
   scopeFor?: (slug: string, phase: number) => string[] | undefined;
   guard?: () => boolean;
+  presence?: (lock: LockView) => 'live' | 'ended' | 'unknown';
 } = {}) {
   return new Scheduler({
     max: options.max ?? 8,
@@ -49,6 +50,7 @@ function scheduler(options: {
     now: options.now,
     scopeFor: options.scopeFor,
     guard: options.guard,
+    presence: options.presence,
   });
 }
 
@@ -531,5 +533,44 @@ test('a same-phase foreign lock the store has not scanned yet still blocks, read
   await tick();
   assert.equal(await pending(admission), false, 'and admits the moment the file is gone');
   s.release(await admission);
+  s.close();
+});
+
+/* ---------------- presence (Phase 5): the registry's word beats the lease ---------------- */
+
+test('a lock whose session the registry shows ENDED stops blocking at once, lease or no lease', async () => {
+  let presence: 'live' | 'ended' | 'unknown' = 'live';
+  const locks: LockView[] = [{ slug: 'a', phase: 1, owner: 'sam@laptop', expired: false, scope: ['api'], leaseUntil: Date.now() + 3_600_000, session: 's1' }];
+  const s = scheduler({ locks: () => locks, presence: (lock) => (lock.session === 's1' ? presence : 'unknown') });
+  const want = s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'] });
+  await tick();
+  assert.ok(await pending(want), 'a live session holds its lock');
+  const [entry] = s.snapshot().entries;
+  assert.equal(entry.waitingOn[0].kind, 'lock');
+  assert.equal(entry.waitingOn[0].session, 's1', 'the queue names the session');
+  assert.equal(entry.waitingOn[0].presence, 'live', '…and says it is live');
+  // The hook reported SessionEnd (or the process is gone): the same lock is debris now.
+  presence = 'ended';
+  s.poll();
+  assert.equal((await want).scope[0], 'api');
+  s.release(await want);
+});
+
+test('a lock whose session is UNKNOWN to the registry keeps lease rules; a lock naming no session is never asked about', async () => {
+  const asked: string[] = [];
+  const locks: LockView[] = [
+    { slug: 'a', phase: 1, owner: 'sam@laptop', expired: false, scope: ['api'], leaseUntil: Date.now() + 3_600_000, session: 's9' },
+    { slug: 'b', phase: 2, owner: 'old-script', expired: false, scope: ['web'], leaseUntil: Date.now() + 3_600_000 },
+  ];
+  const s = scheduler({ locks: () => locks, presence: (lock) => { asked.push(lock.session ?? '?'); return 'unknown'; } });
+  const api = s.admit({ slug: 'x', phase: 1, runId: 'r1', scope: ['api'] });
+  const web = s.admit({ slug: 'y', phase: 1, runId: 'r2', scope: ['web'] });
+  await tick();
+  assert.ok(await pending(api));
+  assert.ok(await pending(web));
+  assert.ok(asked.includes('s9'));
+  assert.ok(!asked.includes('?'), 'no session line, no question');
+  const entries = s.snapshot().entries;
+  assert.equal(entries.find((e) => e.slug === 'x')!.waitingOn[0].presence, undefined, 'unknown is not shown as live');
   s.close();
 });

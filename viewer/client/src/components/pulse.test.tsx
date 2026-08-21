@@ -8,8 +8,9 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { PlanPulse, fmtElapsed, isLiveRun, pulseLanes, pulseWaits } from './pulse';
-import { pulseRuns } from '@/views/pulse';
+import { PlanPulse, fmtElapsed, foreignLanesFor, foreignVehicle, isLiveRun, pulseLanes, pulseWaits } from './pulse';
+import type { ForeignSession } from '@/lib/api';
+import { otherSessions, pulseRuns } from '@/views/pulse';
 import type { RunState } from '@/lib/api';
 
 function run(over: Partial<RunState> = {}): RunState {
@@ -131,5 +132,82 @@ describe('isLiveRun', () => {
     expect(isLiveRun(run({ status: 'frozen' }))).toBe(true);
     expect(isLiveRun(run({ status: 'halted' }))).toBe(false);
     expect(isLiveRun(null)).toBe(false);
+  });
+});
+
+/* ---------------- foreign sessions (the presence hook) ---------------- */
+
+function foreign(over: Partial<ForeignSession> = {}): ForeignSession {
+  return {
+    sessionId: 'sess-hand', kind: 'foreign', cwd: '/work/demo', startedAt: new Date(Date.now() - 90_000).toISOString(),
+    lastSeen: new Date().toISOString(), turns: 2, presence: 'live', user: 'sam', host: 'laptop',
+    plan: { slug: 'demo', phase: 3, strong: true }, ...over,
+  };
+}
+
+describe('foreignLanesFor', () => {
+  it('keeps live sessions correlated to THIS plan, drops ended ones, other plans, and the run\'s own lanes', () => {
+    const state = run({ children: { '4': { pid: 1, phase: 4, sessionId: 'own-4', startedAt: '2026-08-15T10:05:00Z' } } } as never);
+    const lanes = foreignLanesFor([
+      foreign(),
+      foreign({ sessionId: 'ended', presence: 'ended' }),
+      foreign({ sessionId: 'elsewhere', plan: { slug: 'other', phase: 1, strong: true } }),
+      foreign({ sessionId: 'own-4', plan: { slug: 'demo', phase: 4, strong: true } }),
+      foreign({ sessionId: 'no-plan', plan: undefined }),
+    ], 'demo', state);
+    expect(lanes.map((l) => l.sessionId)).toEqual(['sess-hand']);
+    expect(foreignLanesFor(undefined, 'demo')).toEqual([]);
+  });
+
+  it('names the vehicle by kind', () => {
+    expect(foreignVehicle({ kind: 'foreign' })).toBe('Terminal session');
+    expect(foreignVehicle({ kind: 'agent' })).toBe('Console agent');
+    expect(foreignVehicle({ kind: 'autopilot' })).toBe('Autopilot session');
+  });
+});
+
+describe('PlanPulse — a hand-run session beside the lanes', () => {
+  it('draws a live hook-reported session as a lane of its own kind, with its phase, its owner and its clock', () => {
+    const state = run({ status: 'halted', phases: {} } as never);
+    render(<PlanPulse slug="demo" run={state} board={[{ phase: 3, title: 'checkout', state: 'in-progress' }]} foreign={[foreign()]} />);
+    const lane = screen.getByTestId('foreign-lane');
+    expect(lane.textContent).toContain('P3');
+    expect(lane.textContent).toContain('checkout');
+    expect(lane.textContent).toContain('Terminal session');
+    expect(lane.textContent).toContain('sam@laptop');
+    expect(lane.textContent).toContain('2 turns');
+    expect(lane.getAttribute('title')).toContain('sess-hand');
+  });
+
+  it('a weakly correlated session says so; with nothing foreign and nothing live the panel still renders nothing', () => {
+    const state = run({ status: 'halted', phases: {} } as never);
+    const { container, rerender } = render(<PlanPulse slug="demo" run={state} foreign={[foreign({ plan: { slug: 'demo', phase: 3, strong: false } })]} />);
+    expect(screen.getByTestId('foreign-lane').textContent).toContain('probably');
+    rerender(<PlanPulse slug="demo" run={state} foreign={[]} />);
+    expect(container.querySelector('section')).toBeNull();
+  });
+});
+
+describe('otherSessions', () => {
+  it('lists live sessions no plan row draws (no plan, or a plan without a run) and what ended within the hour; live first', () => {
+    const now = Date.now();
+    const rows = [run({ slug: 'demo', children: { '4': { pid: 1, phase: 4, sessionId: 'own-4', startedAt: '' } } } as never)];
+    const sessions: ForeignSession[] = [
+      foreign({ sessionId: 'drawn', plan: { slug: 'demo', phase: 3, strong: true } }),
+      foreign({ sessionId: 'own-4', plan: { slug: 'demo', phase: 4, strong: true } }),
+      foreign({ sessionId: 'no-plan', plan: undefined }),
+      foreign({ sessionId: 'other-plan', plan: { slug: 'beta', phase: 1, strong: true } }),
+      foreign({ sessionId: 'just-left', presence: 'ended', endedAt: new Date(now - 5 * 60_000).toISOString(), lastSeen: new Date(now - 5 * 60_000).toISOString() }),
+      foreign({ sessionId: 'long-gone', presence: 'ended', endedAt: new Date(now - 3 * 60 * 60_000).toISOString() }),
+      foreign({ sessionId: 'unknown', presence: 'unknown' }),
+    ];
+    const ids = otherSessions(sessions, rows, now).map((s) => s.sessionId);
+    expect(ids.slice(0, 2).sort()).toEqual(['no-plan', 'other-plan']);
+    expect(ids[2]).toBe('just-left');
+    expect(ids).not.toContain('drawn');
+    expect(ids).not.toContain('own-4');
+    expect(ids).not.toContain('long-gone');
+    expect(ids).not.toContain('unknown');
+    expect(otherSessions(undefined, rows, now)).toEqual([]);
   });
 });

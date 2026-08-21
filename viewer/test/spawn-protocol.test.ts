@@ -44,6 +44,8 @@ if (process.env.PC_STUB_ENV) {
   fs.writeFileSync(process.env.PC_STUB_ENV, JSON.stringify({
     CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? null,
     CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
+    // The session id the console tells the child about itself (Phase 5).
+    PE_SESSION_ID: process.env.PE_SESSION_ID ?? null,
   }));
 }
 
@@ -192,6 +194,7 @@ function bench(): Bench {
       PATH: `${dir}:${process.env.PATH ?? ''}`,
       PC_STUB_ARGV: argvFile,
       PC_STUB_HEARD: heardFile,
+      PC_STUB_ENV: join(dir, 'env.json'),
     },
     argv: () => JSON.parse(readFileSync(argvFile, 'utf8')) as string[],
     heard: () => (existsSync(heardFile) ? readFileSync(heardFile, 'utf8').split('\n').filter(Boolean) : []),
@@ -672,4 +675,31 @@ test('a missing claude is reported as a missing claude', async () => {
   assert.match(outcome.resultText, /not on PATH/);
   assert.equal(outcome.costUsd, 0, 'a session that never started spent nothing');
   rmSync(dir, { recursive: true, force: true });
+});
+
+/* ------------------------------------------------------------------ *
+ * The session id the child is told about itself (Phase 5)
+ * ------------------------------------------------------------------ */
+
+test('PE_SESSION_ID rides into the child\'s environment — the minted --session-id for a fresh session, the --resume id for a resumed one', async () => {
+  const b = bench();
+  try {
+    await spawnClaude({ prompt: 'BOOT phase 1', cwd: b.dir, env: b.env });
+    const argv = b.argv();
+    const minted = argv[argv.indexOf('--session-id') + 1];
+    assert.match(minted, /^[0-9a-f-]{36}$/, 'a fresh session gets a minted uuid');
+    const seen = JSON.parse(readFileSync(join(b.dir, 'env.json'), 'utf8')) as { PE_SESSION_ID: string | null };
+    assert.equal(seen.PE_SESSION_ID, minted, `the child knows its own id — phase-lock.sh and phase-outcome.sh read it (seen=${JSON.stringify(seen)} argv=${JSON.stringify(argv)})`);
+
+    await spawnClaude({ prompt: 'go on', cwd: b.dir, env: b.env, resume: '11111111-2222-3333-4444-555555555555' });
+    const again = JSON.parse(readFileSync(join(b.dir, 'env.json'), 'utf8')) as { PE_SESSION_ID: string | null };
+    assert.equal(again.PE_SESSION_ID, '11111111-2222-3333-4444-555555555555');
+    assert.ok(b.argv().includes('--resume'));
+
+    // A caller that fixed the id ahead of time is honoured, not re-minted.
+    await spawnClaude({ prompt: 'BOOT phase 2', cwd: b.dir, env: b.env, sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' });
+    const fixed = JSON.parse(readFileSync(join(b.dir, 'env.json'), 'utf8')) as { PE_SESSION_ID: string | null };
+    assert.equal(fixed.PE_SESSION_ID, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    assert.equal(b.argv()[b.argv().indexOf('--session-id') + 1], 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+  } finally { b.cleanup(); }
 });

@@ -451,6 +451,22 @@ reaped for being idle — a session ends when you end it, or when the console go
 of 8 counts live processes, so ended ones never crowd out a new one. A session that has exited stays
 in the list with its status and its `claude --resume <id>` until you dismiss it, or for 24 hours.
 
+**Session presence — the hook.** The console also knows about sessions it did not start. A
+user-scope Claude Code hook (`scripts/session-hook.sh`, installed from Settings ▸ Session presence or
+`phase-console install-hooks` / `uninstall-hooks` / `hooks-status`; it edits `~/.claude/settings.json`
+by merging three entries and never touches another key) reports every Claude session on the machine
+whose working directory a console owns — SessionStart, each finished turn, SessionEnd — to that
+console (`POST /hooks/session`, loopback only), or into the instance's inbox when it is down. The
+registry (`GET /api/sessions/registry`, and the Pulse) lists them with a three-valued presence:
+*live*, *ended*, *unknown*. A phase lock that names its session (`phase-lock.sh --session`, or the
+`PE_SESSION_ID` the runner exports) becomes debris the moment its session ends — the scheduler admits
+the phase queued behind it and the convergence loop releases the file — instead of at the end of its
+lease; a live session's lock is a queue to wait in; a lock nobody reports keeps lease rules. And a
+`phase-outcome.sh` run in a session nobody supervises (no `PE_OUTCOME_FILE`) lands in
+`runs/<instance>/<slug>/outcomes/`, where the console picks it up: a `waiting-external` parks the
+phase and resumes that very session at the window, a `partial` boards it again with a resume. Off by
+default — installing the hook is the operator's choice.
+
 Two kinds are composed for you rather than typed:
 
 **Recovery.** Each way a run comes to rest has a session that answers it — a failed verification, a

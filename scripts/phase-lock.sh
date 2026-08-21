@@ -19,8 +19,13 @@
 # still refuses only the same phase of the same plan, so an old console and an
 # old script keep working. The policy lives where the answer can be acted on.
 #
+# A lock may also name the Claude SESSION that holds it (`session=`): the id the
+# session-presence hook reports to Phase Console, which lets the console tell a
+# lock whose session has ENDED (debris, released at once) from one whose session
+# is live (queue behind it) — instead of waiting out the lease either way.
+#
 # Usage:
-#   phase-lock.sh <slug> claim   <N> [--owner ID] [--lease SECS] [--scope CSV] [--git] [--force]
+#   phase-lock.sh <slug> claim   <N> [--owner ID] [--lease SECS] [--scope CSV] [--session ID] [--git] [--force]
 #   phase-lock.sh <slug> release <N> [--owner ID] [--git] [--force]
 #   phase-lock.sh <slug> status  <N>
 #   phase-lock.sh <slug> list
@@ -29,6 +34,9 @@
 # Owner defaults to "$PE_OWNER" or "<user>@<host>". Pass a per-SESSION --owner
 # (e.g. "account/conversation-id") so two sessions on the same host are distinct.
 # Scope defaults to "$PE_SCOPE", else the plan's Repos cell for the phase.
+# Session defaults to "$PE_SESSION_ID" (runner-injected), else
+# "$CLAUDE_CODE_SESSION_ID" (Claude Code exports it to its own subprocesses);
+# a same-owner refresh that states none keeps the line the lock already has.
 #
 # Exit: 0 = ok / claimed / refreshed / taken-over / free / released / no conflict;
 #       1 = held by another live session, or scope conflicts;  2 = usage error.
@@ -62,19 +70,23 @@ esac
 owner="${PE_OWNER:-$(id -un)@$(hostname -s 2>/dev/null || hostname)}"
 lease=1800        # default lease: 30 min
 scope="${PE_SCOPE:-}"
+session="${PE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
 use_git=0
 force=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --owner) owner="${2:?--owner needs a value}"; shift 2 ;;
-    --lease) lease="${2:?--lease needs seconds}"; shift 2 ;;
-    --scope) scope="${2:?--scope needs a csv}"; shift 2 ;;
-    --git)   use_git=1; shift ;;
-    --force) force=1; shift ;;
+    --owner)   owner="${2:?--owner needs a value}"; shift 2 ;;
+    --lease)   lease="${2:?--lease needs seconds}"; shift 2 ;;
+    --scope)   scope="${2:?--scope needs a csv}"; shift 2 ;;
+    --session) session="${2:?--session needs an id}"; shift 2 ;;
+    --git)     use_git=1; shift ;;
+    --force)   force=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
 scope="$(scope_normalize "$scope")"
+# One line in a key=value file: the id is kept to the characters an id has.
+session="$(printf '%s' "$session" | tr -cd 'A-Za-z0-9._-' | cut -c1-128)"
 
 if [ -z "${DOCS_ROOT:-}" ]; then
   DOCS_ROOT="$(git rev-parse --show-superproject-working-tree 2>/dev/null || true)"
@@ -101,6 +113,8 @@ _write()  {
     # treats as colliding — and that is the right meaning for a lock written by
     # an older copy of this script.
     [ -n "$scope" ] && printf 'scope=%s\n' "$scope"
+    # Only when known. Absent means the console falls back to lease rules.
+    [ -n "$session" ] && printf 'session=%s\n' "$session"
   } > "$tmp"
   mv "$tmp" "$lockfile"
 }
@@ -142,6 +156,10 @@ case "$action" in
     if [ -f "$lockfile" ]; then
       cur_owner="$(_field owner)"; cur_lease="$(_field lease_until)"
       if [ "$cur_owner" = "$owner" ]; then
+        # A refresh that names no session keeps the one the lock carries — the
+        # runner's keepalive and a hand re-claim must not strip the line the
+        # session's own claim wrote.
+        [ -n "$session" ] || session="$(_field session)"
         _write; _git_sync refresh
         printf 'phase %s: lock refreshed for %s (lease %ss)\n' "$phase" "$owner" "$lease"; exit 0
       fi
@@ -183,11 +201,12 @@ case "$action" in
   status)
     if [ ! -f "$lockfile" ]; then printf 'phase %s: free\n' "$phase"; exit 0; fi
     cur_owner="$(_field owner)"; cur_lease="$(_field lease_until)"; cur_at="$(_field claimed_at)"
-    cur_scope="$(_field scope)"
+    cur_scope="$(_field scope)"; cur_session="$(_field session)"
     exp=""; [ -n "$cur_lease" ] && [ "$now" -ge "$cur_lease" ] && exp=" (EXPIRED — free to take over)"
     sc=""; [ -n "$cur_scope" ] && sc=" [scope: $cur_scope]"
-    printf 'phase %s: held by %s since %s, lease until %s%s%s\n' \
-      "$phase" "$cur_owner" "$(_fmt "$cur_at")" "$(_fmt "$cur_lease")" "$exp" "$sc"
+    se=""; [ -n "$cur_session" ] && se=" [session: $cur_session]"
+    printf 'phase %s: held by %s since %s, lease until %s%s%s%s\n' \
+      "$phase" "$cur_owner" "$(_fmt "$cur_at")" "$(_fmt "$cur_lease")" "$exp" "$sc" "$se"
     exit 0
     ;;
   list)
@@ -200,8 +219,10 @@ case "$action" in
       l="$(grep -m1 '^lease_until=' "$f" | sed 's/^lease_until=//')"
       p="$(grep -m1 '^phase=' "$f" | sed 's/^phase=//')"
       s="$(grep -m1 '^scope=' "$f" | sed 's/^scope=//' || true)"
+      se="$(grep -m1 '^session=' "$f" | sed 's/^session=//' || true)"
       exp=""; [ -n "$l" ] && [ "$now" -ge "$l" ] && exp=" (expired)"
       sc=""; [ -n "$s" ] && sc=" [scope: $s]"
+      [ -n "$se" ] && sc="$sc [session: $se]"
       printf 'phase %s: %s until %s%s%s\n' "$p" "$o" "$(_fmt "$l")" "$exp" "$sc"
     done
     [ "$found" = 0 ] && printf 'no active locks for %s\n' "$slug"

@@ -795,3 +795,61 @@ test('service: a lock-cap park on a stopped run re-arms and the run relaunches o
     } finally { svc.close(); }
   } finally { cleanup(); }
 });
+
+/* ------------------------------------------------------------------ *
+ * Presence (Phase 5): a session's claim is debris the moment its session ends
+ * ------------------------------------------------------------------ */
+
+const { endedSessionLocks } = await import('../server/converge.ts');
+
+test('planner: a lock naming a session the registry shows ENDED is released — a person\'s or a foreign run\'s — and a live run\'s own claim is not', () => {
+  const r = run({ status: 'halted', halt: { at: '', reason: 'x' } }, [{ phase: 2, status: 'failed' }]);
+  const locks: LockView[] = [
+    { slug: 'alpha', phase: 2, owner: 'sam@laptop', expired: false, leaseUntil: NOW + 3_600_000, session: 'ended-1' },
+    { slug: 'alpha', phase: 3, owner: 'autopilot/deadbeef', expired: false, leaseUntil: NOW + 3_600_000, session: 'ended-2' },
+    { slug: 'alpha', phase: 1, owner: 'sam@laptop', expired: false, leaseUntil: NOW + 3_600_000, session: 'live-1' },
+    { slug: 'alpha', phase: 4, owner: 'sam@laptop', expired: false, leaseUntil: NOW + 3_600_000 },
+  ];
+  const presence = (lock: LockView) => (lock.session?.startsWith('ended') ? 'ended' : lock.session ? 'live' : 'unknown');
+  assert.deepEqual(endedSessionLocks(locks, new Set(), presence).map((l) => l.phase), [2, 3]);
+  assert.deepEqual(endedSessionLocks(locks, new Set(['deadbeef']), presence).map((l) => l.phase), [2], 'a live run\'s lane is its runner\'s to release');
+  assert.deepEqual(endedSessionLocks(locks, new Set()).map((l) => l.phase), [], 'no registry, no verdict');
+  const plan = planConvergence(facts({ runs: [r], locks, presence }));
+  const debris = plan.actions.filter((a) => a.kind === 'release-debris');
+  assert.deepEqual(debris.map((a) => a.kind === 'release-debris' && [a.phase, a.owner, a.runId, a.session]),
+    [[2, 'sam@laptop', null, 'ended-1'], [3, 'autopilot/deadbeef', null, 'ended-2']]);
+  assert.match((debris[0] as { why: string }).why, /session ended-1 has ended/);
+  // The healer still runs for the run itself.
+  assert.ok(kinds(plan).includes('heal'));
+});
+
+test('planner: a lock-cap park re-arms when the lock it waited on is held by an ENDED session', () => {
+  const r = run({ status: 'halted', stoppedBy: 'system', halt: { at: '', reason: 'x' } }, [
+    { phase: 2, status: 'parked', note: 'phase 2 is locked by sam@laptop and has waited 121 minutes for it — held' },
+  ]);
+  const locks: LockView[] = [{ slug: 'alpha', phase: 2, owner: 'sam@laptop', expired: false, leaseUntil: NOW + 3_600_000, session: 'gone' }];
+  const held = planConvergence(facts({ runs: [r], locks }));
+  assert.ok(!kinds(held).includes('relaunch'), 'without the registry the unexpired lock still holds the park');
+  const freed = planConvergence(facts({ runs: [r], locks, presence: () => 'ended' }));
+  const relaunch = freed.actions.find((a) => a.kind === 'relaunch');
+  assert.ok(relaunch && relaunch.kind === 'relaunch' && relaunch.rearm.includes(2), skipWhy(freed));
+});
+
+test('executor: a session\'s debris (runId null) is released as its owner and journalled on the plan\'s latest run', async () => {
+  const state = run({ status: 'halted', halt: { at: '', reason: 'x' } }, [{ phase: 2, status: 'failed' }]);
+  const deps = stubDeps(state);
+  const plan = {
+    slug: 'alpha', trigger: 'change' as const, at: new Date(NOW).toISOString(),
+    actions: [
+      { kind: 'release-debris' as const, runId: null, phase: 2, owner: 'sam@laptop', session: 'gone', why: 'an unexpired claim of sam@laptop, whose session gone has ended' },
+      { kind: 'skip' as const, runId: state.id, why: 'the healer already ran' },
+    ],
+  };
+  const report = await executeConvergence(plan, deps);
+  assert.equal(report.outcomes[0].ok, true);
+  assert.deepEqual(deps.released, [{ phase: 2, owner: 'sam@laptop' }]);
+  const line = deps.lines.find((j) => j.event === 'run.lock-debris-released');
+  assert.ok(line, 'journalled');
+  assert.equal(line!.runId, state.id, 'on the latest run, since the claim has no run of its own');
+  assert.equal(line!.data.session, 'gone');
+});

@@ -95,6 +95,13 @@ export type ConvergeFacts = {
   /** Is a recorded child pid still alive? Injectable so a fixture can say. */
   pidAlive?: (pid: number) => boolean;
   /**
+   * The session registry's word on the session a lock names (Phase 5):
+   * `ended` — its SessionEnd arrived or its process is gone, so the lock is
+   * debris NOW whatever the lease says; `live` — a person is in it; `unknown`
+   * — nothing reports it and lease rules decide. Absent: every lock `unknown`.
+   */
+  presence?: (lock: LockView) => 'live' | 'ended' | 'unknown';
+  /**
    * The fingerprint of the latest run's open records at the last pass that
    * healed nothing. The same evidence yields the same answer, so the healer —
    * and its journal lines — are not run again until something changes.
@@ -104,8 +111,13 @@ export type ConvergeFacts = {
 };
 
 export type ConvergeAction =
-  /** A lock held by a run nothing is driving: released through the runner's own owner. */
-  | { kind: 'release-debris'; runId: string; phase: number; owner: string; why: string }
+  /**
+   * A lock held by a run nothing is driving, or by a session the registry
+   * shows ENDED: released through the runner's own owner. `runId` is the dead
+   * run's for the first shape and null for a session's claim (a person's, or
+   * another console's) — the journal line then goes on the plan's latest run.
+   */
+  | { kind: 'release-debris'; runId: string | null; phase: number; owner: string; why: string; session?: string }
   /**
    * Start the run again under normal admission: killed lanes re-board with a
    * hint (their own session where one exists), lock-cap parks whose lock is
@@ -173,12 +185,40 @@ export function killedLanes(run: RunState, board: Record<number, string>): Phase
     .sort((a, b) => a.phase - b.phase);
 }
 
-/** Is the phase's lock held, unexpired, by anyone but this run? */
-function heldByAnother(locks: readonly LockView[], phase: number, runId: string, now: number): boolean {
+/** Is the phase's lock held, unexpired — and not by a session that has ended — by anyone but this run? */
+function heldByAnother(
+  locks: readonly LockView[], phase: number, runId: string, now: number,
+  presence?: (lock: LockView) => 'live' | 'ended' | 'unknown',
+): boolean {
   return locks.some((lock) => lock.phase === phase
     && autopilotRunId(lock.owner) !== runId
     && !lock.expired
-    && (lock.leaseUntil == null || lock.leaseUntil > now));
+    && (lock.leaseUntil == null || lock.leaseUntil > now)
+    && presenceOfLock(lock, presence) !== 'ended');
+}
+
+function presenceOfLock(lock: LockView, presence?: (lock: LockView) => 'live' | 'ended' | 'unknown'): 'live' | 'ended' | 'unknown' {
+  if (!lock.session || !presence) return 'unknown';
+  try { return presence(lock); } catch { return 'unknown'; }
+}
+
+/**
+ * Locks whose SESSION the registry shows ended — a person's claim, another
+ * console's, an autopilot lane's whose run is still on disk as live elsewhere
+ * — minus this console's own live runs' claims (their runners release their
+ * own). Only a lock that NAMES its session can be debris this way: matching a
+ * session to a lock by owner and time is display, never release.
+ */
+export function endedSessionLocks(
+  locks: readonly LockView[], live: ReadonlySet<string>,
+  presence?: (lock: LockView) => 'live' | 'ended' | 'unknown',
+): LockView[] {
+  return locks.filter((lock) => {
+    if (!lock.session) return false;
+    const runId = autopilotRunId(lock.owner);
+    if (runId && live.has(runId)) return false;
+    return presenceOfLock(lock, presence) === 'ended';
+  });
 }
 
 /**
@@ -231,10 +271,27 @@ export function planConvergence(facts: ConvergeFacts): ConvergePlan {
    * behind its own dead claim otherwise. Only autopilot-shaped owners of runs
    * this console can see are dead; a person's claim is never debris to us. */
   const dead = new Set(facts.runs.filter((run) => runIsDead(run, facts.live, pidAlive)).map((run) => run.id));
+  const released = new Set<string>();
   for (const lock of debrisLocks(facts.locks, dead)) {
+    released.add(`${lock.phase}:${lock.owner}`);
     actions.push({
       kind: 'release-debris', runId: autopilotRunId(lock.owner)!, phase: lock.phase, owner: lock.owner,
       why: `${lock.expired ? 'an expired' : 'an unexpired'} claim of run ${autopilotRunId(lock.owner)}, which nothing is driving`,
+    });
+  }
+  /* Then the claims of sessions the registry shows ENDED — the presence channel
+   * (Phase 5): a person's session that wrote its lock and closed, a lane of a
+   * run some other console drove. The lease would free them in half an hour;
+   * the registry knows now. A session's own run id, when it has one, labels the
+   * journal line; a person's claim goes on the latest run. */
+  for (const lock of endedSessionLocks(facts.locks, facts.live, facts.presence)) {
+    if (released.has(`${lock.phase}:${lock.owner}`)) continue;
+    released.add(`${lock.phase}:${lock.owner}`);
+    const runId = autopilotRunId(lock.owner);
+    actions.push({
+      kind: 'release-debris', runId: runId && dead.has(runId) ? runId : null, phase: lock.phase, owner: lock.owner,
+      session: lock.session!,
+      why: `${lock.expired ? 'an expired' : 'an unexpired'} claim of ${lock.owner}, whose session ${lock.session} has ended`,
     });
   }
 
@@ -272,7 +329,7 @@ export function planConvergence(facts: ConvergeFacts): ConvergePlan {
   const rearm = Object.values(run.phases)
     .filter((record) => record.status === 'parked' && LOCK_CAP_PARK_NOTE.test(record.note ?? ''))
     .filter((record) => board[record.phase] !== 'done' && (!asked || asked.has(record.phase)))
-    .filter((record) => !heldByAnother(facts.locks, record.phase, run.id, facts.now))
+    .filter((record) => !heldByAnother(facts.locks, record.phase, run.id, facts.now, facts.presence))
     .map((record) => record.phase)
     .sort((a, b) => a - b);
 
@@ -379,6 +436,8 @@ export type ConvergeDeps = {
   locks: (slug: string) => LockView[];
   prefs: () => { resumeAtBoot?: boolean };
   pidAlive?: (pid: number) => boolean;
+  /** The session registry's presence for a lock's session — see `ConvergeFacts.presence`. */
+  presence?: (lock: LockView) => 'live' | 'ended' | 'unknown';
   /** Classify + ladder + drive for the plan's latest run. */
   heal: (slug: string) => Promise<HealResult>;
   startRun: (slug: string, options: {
@@ -420,15 +479,22 @@ export async function executeConvergence(plan: ConvergePlan, deps: ConvergeDeps)
   const touched = new Set<string>();
 
   const debris = plan.actions.filter((a): a is Extract<ConvergeAction, { kind: 'release-debris' }> => a.kind === 'release-debris');
+  // A session's claim (runId null) is journalled on the plan's latest run, when there is one.
+  const latestRunId = plan.actions.find((a): a is Extract<ConvergeAction, { kind: 'skip' | 'heal' | 'relaunch' | 'errand' }> =>
+    a.kind !== 'release-debris' && a.runId != null)?.runId ?? null;
   for (const action of debris) {
     let result: { ok: boolean; detail?: string };
     try { result = await deps.releaseLock(slug, action.phase, action.owner); } catch (error) {
       result = { ok: false, detail: (error as Error)?.message ?? String(error) };
     }
-    deps.journal(slug, action.runId, 'run.lock-debris-released', {
-      phase: action.phase, owner: action.owner, ok: result.ok, why: action.why, trigger, by: 'converge',
-      ...(result.detail ? { detail: result.detail.slice(0, 200) } : {}),
-    }, action.phase);
+    const journalRun = action.runId ?? latestRunId;
+    if (journalRun) {
+      deps.journal(slug, journalRun, 'run.lock-debris-released', {
+        phase: action.phase, owner: action.owner, ok: result.ok, why: action.why, trigger, by: 'converge',
+        ...(action.session ? { session: action.session } : {}),
+        ...(result.detail ? { detail: result.detail.slice(0, 200) } : {}),
+      }, action.phase);
+    }
     outcomes.push({ action, ok: result.ok, ...(result.detail ? { detail: result.detail } : {}) });
   }
   if (debris.length) { try { deps.locksChanged?.(slug); } catch { /* the poke is a courtesy */ } }
@@ -531,6 +597,7 @@ export async function convergePlan(
     locks: deps.locks(slug),
     prefs: deps.prefs(),
     ...(deps.pidAlive ? { pidAlive: deps.pidAlive } : {}),
+    ...(deps.presence ? { presence: deps.presence } : {}),
     lastNoop,
   };
   const plan = planConvergence(facts);

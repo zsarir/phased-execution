@@ -151,6 +151,15 @@ run scripts from the repo root or set `DOCS_ROOT=/path/to/repo` explicitly when 
   what lets an older script and an older console keep working against a scoped lock.
 - `scope=` is optional in the file. **Absent means UNKNOWN, and unknown collides with everything** — a lock
   written before scopes existed must never read as harmless.
+- `session=` is optional too: the Claude session that holds the lock (`--session <id>`, else
+  `$PE_SESSION_ID` — runner-injected — else `$CLAUDE_CODE_SESSION_ID`; a same-owner refresh that names none
+  keeps the line). It is the key Phase Console's **session registry** answers presence for, fed by the
+  user-scope hook `scripts/session-hook.sh` (installed from Settings ▸ Session presence or
+  `phase-console install-hooks`): a lock whose session the registry shows **ended** is debris at once —
+  the scheduler admits the queue behind it and the convergence loop releases the file — a lock whose
+  session is **live** is a queue to wait in (`foreign-live`), and a lock nobody reports keeps lease
+  rules. Only the lock's own `session=` may ever mean debris; matching a session by `<user>@<host>` and
+  time is display.
 - Leases auto-expire (default 30 min) so a dead session's lock can be taken over; refresh by re-claiming.
   Release at phase-finish (`phase-lock.sh <slug> release <N> --owner … --git`). Cooperative, not a hard mutex.
 

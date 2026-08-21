@@ -20,8 +20,11 @@ pe_nextp()    { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_S
 pe_hostatus() { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_SCRIPTS/handoff-status.sh"     "$@"; }
 qa_record()   { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_SCRIPTS/qa-record.sh"          "$@"; }
 gate_approve(){ DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" "$SYS_BASH" "$PE_SCRIPTS/gate-approve.sh"       "$@"; }
-# phase-outcome.sh needs no DOCS_ROOT — it writes only $PE_OUTCOME_FILE (or stdout).
+# phase-outcome.sh needs no DOCS_ROOT — it writes $PE_OUTCOME_FILE, or (unsupervised)
+# the console's inbox for the root it derives the way phase-lock.sh does.
 pe_outcome()  {                                                "$SYS_BASH" "$PE_SCRIPTS/phase-outcome.sh"     "$@"; }
+# session-hook.sh reads the hook payload on stdin; it needs no DOCS_ROOT either.
+pe_hook()     {                                                "$SYS_BASH" "$PE_SCRIPTS/session-hook.sh"      "$@"; }
 # PE_TODAY keeps closure dates off the wall clock so assertions stay stable.
 pe_close()    { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" PE_TODAY="${PE_TODAY:-2026-01-02}" \
                 "$SYS_BASH" "$PE_SCRIPTS/close-plan.sh" "$@"; }

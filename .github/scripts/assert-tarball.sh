@@ -60,6 +60,8 @@ for p in \
   "scripts/close-plan.sh" \
   "scripts/handoff-status.sh" \
   "scripts/scope.sh" \
+  "scripts/instance.sh" \
+  "scripts/session-hook.sh" \
   "scripts/sizing.env" \
   "scripts/mcp.env" \
   "scripts/gates.env" \

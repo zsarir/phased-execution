@@ -41,6 +41,13 @@ export type PhaseOutcome = {
   resume_after?: string;
   watch: string[];
   written_at: string;
+  /**
+   * The session that declared it, when it knew its own id (`$PE_SESSION_ID`,
+   * runner-injected; else `$CLAUDE_CODE_SESSION_ID`). The console resumes THAT
+   * session for an unsupervised `waiting-external` / `partial`, so the
+   * declaration from a hand-run session drives the same machinery as a lane's.
+   */
+  session_id?: string;
 };
 
 const STATUSES: readonly string[] = ['complete', 'waiting-external', 'blocked', 'needs-human', 'partial'];
@@ -48,6 +55,28 @@ const STATUSES: readonly string[] = ['complete', 'waiting-external', 'blocked', 
 /** Where a given attempt's outcome file lives, keyed by run and phase. */
 export function outcomeFileFor(root: string, slug: string, runId: string, phase: number): string {
   return join(runDir(root, slug), `run-${runId}-p${phase}-outcome.json`);
+}
+
+/**
+ * Where a session NOBODY supervises declares its outcome: `phase-outcome.sh`
+ * with no `PE_OUTCOME_FILE` writes `runs/<instance>/<slug>/outcomes/phase-NN.json`
+ * (the identity rule of `instances.mjs`, mirrored in `scripts/instance.sh`).
+ * The console watches this directory and feeds what lands there to the
+ * convergence loop — the one channel a human session's declared wait, block
+ * or partial has into the autopilot.
+ */
+export function outcomeInboxDir(root: string, slug: string): string {
+  return join(runDir(root, slug), 'outcomes');
+}
+
+export function inboxOutcomeFile(root: string, slug: string, phase: number): string {
+  return join(outcomeInboxDir(root, slug), `phase-${String(phase).padStart(2, '0')}.json`);
+}
+
+/** The phase an inbox file name addresses, or null for a name that is not one. */
+export function inboxOutcomePhase(file: string): number | null {
+  const m = /(?:^|\/)phase-(\d{2,})\.json$/.exec(file);
+  return m ? Number.parseInt(m[1], 10) : null;
 }
 
 /**
@@ -92,6 +121,9 @@ export function readOutcome(
       : {}),
     watch,
     written_at: parsed.written_at,
+    ...(typeof parsed.session_id === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(parsed.session_id)
+      ? { session_id: parsed.session_id }
+      : {}),
   };
 }
 

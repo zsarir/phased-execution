@@ -147,6 +147,57 @@ export interface TerminalState {
   sessions: TerminalSession[];
 }
 
+/**
+ * A Claude session the session-presence hook reported for this instance — a
+ * person's own `claude`, a console agent, an autopilot lane (here or in
+ * another console) — with the registry's three-valued presence and, when a
+ * lock's `session=` says so (strong) or the owner and the clock suggest it
+ * (weak), the plan and phase it works.
+ */
+export interface ForeignSession {
+  sessionId: string;
+  kind: 'autopilot' | 'agent' | 'foreign';
+  cwd: string;
+  root?: string;
+  transcript?: string;
+  owner?: string;
+  scope?: string;
+  user?: string;
+  host?: string;
+  pid?: number;
+  startedAt: string;
+  lastSeen: string;
+  endedAt?: string;
+  reason?: string;
+  source?: string;
+  turns: number;
+  presence: 'live' | 'ended' | 'unknown';
+  plan?: { slug: string; phase: number; strong: boolean };
+}
+
+export interface SessionRegistryView {
+  sessions: ForeignSession[];
+}
+
+/** The session-presence hook, as `~/.claude/settings.json` has it. */
+export interface HooksStatusView {
+  path: string;
+  exists: boolean;
+  installed: boolean;
+  partial: boolean;
+  events: Record<'SessionStart' | 'SessionEnd' | 'Stop', boolean>;
+  command: string;
+  stale: boolean;
+  parseError?: string;
+}
+
+export interface HooksWriteView {
+  ok: true;
+  path: string;
+  changed: boolean;
+  status: HooksStatusView;
+}
+
 /** What a shutdown or a restart is about to stop. Both dialogs render it. */
 export interface SessionInventory {
   live: number;
@@ -1872,6 +1923,11 @@ export const api = {
    */
   sessionStop: (id: string) =>
     post<{ ok: boolean; reason?: string; state: TerminalState }>(`/api/terminal/${q(id)}/stop`),
+
+  /* ---- session presence: the registry the hook feeds, and the hook installer ---- */
+  sessionRegistry: () => request<SessionRegistryView>('/api/sessions/registry'),
+  hooksStatus: () => request<HooksStatusView>('/api/hooks-install'),
+  hooksInstall: (action: 'install' | 'uninstall') => post<HooksWriteView>('/api/hooks-install', { action }),
 
   /* ---- the desktop launcher ---- */
   launcherPlan: () => request<LauncherPlanView>('/api/launcher'),

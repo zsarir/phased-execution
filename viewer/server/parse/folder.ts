@@ -68,6 +68,15 @@ export type Lock = {
    * alternative is admitting a second session into a tree it cannot see.
    */
   scope?: string[];
+  /**
+   * The Claude session that holds it — `session=`, written by `phase-lock.sh
+   * claim` from `--session` / `$PE_SESSION_ID` / `$CLAUDE_CODE_SESSION_ID`.
+   * Absent on locks older than the line, or claimed by a session that did not
+   * know its id: the reader then falls back to lease rules. Present, it is the
+   * key the session registry answers presence for — a lock whose session has
+   * ended is debris now, not at lease end.
+   */
+  session?: string;
   file: string;
 };
 
@@ -95,6 +104,7 @@ export function parseLock(text: string, file: string, now = Date.now()): Lock | 
     leaseUntil: Number.isFinite(leaseUntil) ? leaseUntil * 1000 : undefined,
     expired: Number.isFinite(leaseUntil) ? leaseUntil * 1000 < now : false,
     scope: scope.length ? scope : undefined,
+    ...(values.session ? { session: values.session.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 128) || undefined } : {}),
     file,
   };
 }

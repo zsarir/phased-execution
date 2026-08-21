@@ -10,6 +10,21 @@ load ../helpers/test_helper
 setup() {
   export PE_NOW="2026-08-10T21:10:03Z"
   export PE_OUTCOME_FILE="$BATS_TEST_TMPDIR/outcome.json"
+  # The session line is written only when a session id is known; this suite
+  # may itself run inside a Claude session that exports one.
+  unset PE_SESSION_ID CLAUDE_CODE_SESSION_ID
+  # The unsupervised fallback writes into the console's state home for the
+  # repository root — both pointed at the test's own directories.
+  export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
+  export DOCS_ROOT="$BATS_TEST_TMPDIR/work"
+  mkdir -p "$DOCS_ROOT"
+}
+
+# The identity rule of viewer/shared/instances.mjs, in bash: sha256(root)[:8]-basename.
+inbox_dir() { # <slug>
+  local id
+  id="$(printf '%s' "$DOCS_ROOT" | shasum -a 256 | cut -c1-8)-$(basename "$DOCS_ROOT")"
+  printf '%s/phase-console/runs/%s/%s/outcomes' "$XDG_STATE_HOME" "$id" "$1"
 }
 
 @test "outcome: waiting-external writes the exact JSON, atomically" {
@@ -58,12 +73,64 @@ setup() {
   assert_contains "$(cat "$PE_OUTCOME_FILE")" '"reason": "line one line \"two\"",'
 }
 
-@test "outcome: without PE_OUTCOME_FILE the JSON goes to stdout, exit stays 0" {
+@test "outcome: without PE_OUTCOME_FILE the JSON goes to the console's inbox for this root AND to stdout, exit stays 0" {
   unset PE_OUTCOME_FILE
   run pe_outcome demo 8 waiting-external --until 2026-08-10T21:40:00Z
   [ "$status" -eq 0 ]
   assert_contains "$output" '"status": "waiting-external",'
   assert_contains "$output" 'PE_OUTCOME_FILE is not set'
+  # runs/<sha256(root)[:8]-basename>/<slug>/outcomes/phase-NN.json — what the
+  # convergence loop watches for a session nobody supervises.
+  f="$(inbox_dir demo)/phase-08.json"
+  assert_contains "$output" "$f"
+  [ -f "$f" ]
+  expected='{
+  "version": 1,
+  "slug": "demo",
+  "phase": 8,
+  "status": "waiting-external",
+  "resume_after": "2026-08-10T21:40:00Z",
+  "watch": [],
+  "written_at": "2026-08-10T21:10:03Z"
+}'
+  [ "$(cat "$f")" = "$expected" ]
+  [ -z "$(ls "$(inbox_dir demo)"/*.tmp.* 2>/dev/null || true)" ]
+}
+
+@test "outcome: the unsupervised path derives the root the way phase-lock.sh does (git toplevel when DOCS_ROOT is unset)" {
+  unset PE_OUTCOME_FILE
+  unset DOCS_ROOT
+  repo="$BATS_TEST_TMPDIR/repo"; mkdir -p "$repo/sub"
+  git -C "$repo" init -q
+  id="$(printf '%s' "$(cd "$repo" && pwd -P)" | shasum -a 256 | cut -c1-8)-repo"
+  run bash -c "cd '$repo/sub' && '$SYS_BASH' '$PE_SCRIPTS/phase-outcome.sh' demo 2 partial --reason context"
+  [ "$status" -eq 0 ]
+  [ -f "$XDG_STATE_HOME/phase-console/runs/$id/demo/outcomes/phase-02.json" ]
+}
+
+@test "outcome: an unwritable state home still prints the JSON and exits 0" {
+  unset PE_OUTCOME_FILE
+  export XDG_STATE_HOME="/dev/null/nowhere"
+  run pe_outcome demo 8 blocked --reason "x"
+  [ "$status" -eq 0 ]
+  assert_contains "$output" '"status": "blocked",'
+  assert_contains "$output" 'could not be'
+}
+
+@test "outcome: the session id rides along as session_id — PE_SESSION_ID first, else CLAUDE_CODE_SESSION_ID, sanitised" {
+  PE_SESSION_ID="sess-1" run pe_outcome demo 8 complete
+  [ "$status" -eq 0 ]
+  assert_contains "$(cat "$PE_OUTCOME_FILE")" '"session_id": "sess-1",'
+  CLAUDE_CODE_SESSION_ID="abc-2" run pe_outcome demo 8 complete
+  assert_contains "$(cat "$PE_OUTCOME_FILE")" '"session_id": "abc-2",'
+  PE_SESSION_ID="one" CLAUDE_CODE_SESSION_ID="two" run pe_outcome demo 8 complete
+  assert_contains "$(cat "$PE_OUTCOME_FILE")" '"session_id": "one",'
+  # Only id characters survive, so the line can never break the JSON.
+  PE_SESSION_ID='we"ird id' run pe_outcome demo 8 complete
+  assert_contains "$(cat "$PE_OUTCOME_FILE")" '"session_id": "weirdid",'
+  # The exact-JSON pins above hold because no id was known there.
+  run pe_outcome demo 8 complete
+  refute_contains "$(cat "$PE_OUTCOME_FILE")" 'session_id'
 }
 
 @test "outcome: usage errors exit 2 (bad status, wait flags on non-waiting, both wait flags)" {

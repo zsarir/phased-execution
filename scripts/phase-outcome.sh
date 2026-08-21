@@ -20,12 +20,24 @@
 #
 # Writes ONE atomic JSON file to $PE_OUTCOME_FILE (tmp+mv) — the runner injects
 # that path into every session it supervises and consumes the file on exit.
-# Without $PE_OUTCOME_FILE (no runner supervising this session) the JSON goes to
-# stdout with a note on stderr and the exit is still 0: an interactive session
-# following the same discipline must not die here, and the runner-side check —
-# not this script — is the load-bearing enforcement.
+# Without $PE_OUTCOME_FILE (no runner supervising this session) the file goes to
+# the console's own inbox for this repository instead —
+#   ${XDG_STATE_HOME:-~/.local/state}/phase-console/runs/<instance id>/<slug>/outcomes/phase-NN.json
+# (the identity rule of viewer/shared/instances.mjs, mirrored in scripts/instance.sh) —
+# where Phase Console's convergence loop picks it up: a human session's declared
+# wait, block or partial drives the same machinery as a supervised one's. The JSON
+# is still printed to stdout, the path is named on stderr, and the exit is 0: an
+# interactive session following the same discipline must not die here, and the
+# runner-side check — not this script — is the load-bearing enforcement.
+# The session id rides along as "session_id" when the session knows it
+# ($PE_SESSION_ID, runner-injected; else $CLAUDE_CODE_SESSION_ID, which Claude
+# Code exports to its own subprocesses) so the console can resume THAT session.
 # Exit: 0 written/printed · 2 usage
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/instance.sh"
 
 usage() {
   echo 'usage: phase-outcome.sh <slug> <phase> <complete|waiting-external|blocked|needs-human|partial>' >&2
@@ -109,12 +121,15 @@ fi
 # exit status is its last command substitution's).
 reason_line="$( [ -n "$reason" ] && printf '\n  "reason": "%s",' "$(_json_str "$reason")" || true )"
 resume_line="$( [ -n "$resume_after" ] && printf '\n  "resume_after": "%s",' "$(_json_str "$resume_after")" || true )"
+session="${PE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
+session="$(printf '%s' "$session" | tr -cd 'A-Za-z0-9._-' | cut -c1-128)"
+session_line="$( [ -n "$session" ] && printf '\n  "session_id": "%s",' "$session" || true )"
 
 json="{
   \"version\": 1,
   \"slug\": \"$(_json_str "$slug")\",
   \"phase\": $phase,
-  \"status\": \"$status\",${reason_line}${resume_line}
+  \"status\": \"$status\",${reason_line}${resume_line}${session_line}
   \"watch\": [$watch_json],
   \"written_at\": \"$(_json_str "$now")\"
 }"
@@ -125,7 +140,23 @@ if [ -n "${PE_OUTCOME_FILE:-}" ]; then
   mv "$tmp" "$PE_OUTCOME_FILE"
   echo "outcome recorded: $slug phase $phase = $status  ->  $PE_OUTCOME_FILE"
 else
-  echo 'note: PE_OUTCOME_FILE is not set (no runner is supervising this session) — printing the outcome instead' >&2
+  # Unsupervised: the console's inbox for this repository. Best-effort — a state
+  # home that cannot be written (read-only HOME, no HOME at all) still leaves
+  # the JSON on stdout for whoever is reading, and the exit stays 0.
+  root="$(pe_instance_root)"
+  inbox="$(pe_runs_dir "$root" "$slug")/outcomes"
+  target="$inbox/phase-$(printf '%02d' "$phase").json"
+  if mkdir -p "$inbox" 2>/dev/null; then
+    tmp="$target.tmp.$$"
+    if printf '%s\n' "$json" > "$tmp" 2>/dev/null && mv "$tmp" "$target" 2>/dev/null; then
+      echo "note: PE_OUTCOME_FILE is not set (no runner is supervising this session) — recorded for the console at $target" >&2
+    else
+      rm -f "$tmp" 2>/dev/null || true
+      echo "note: PE_OUTCOME_FILE is not set and $target could not be written — printing the outcome only" >&2
+    fi
+  else
+    echo "note: PE_OUTCOME_FILE is not set and $inbox could not be created — printing the outcome only" >&2
+  fi
   printf '%s\n' "$json"
 fi
 exit 0

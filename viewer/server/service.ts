@@ -10,13 +10,19 @@
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, watch, type FSWatcher } from 'node:fs';
 
 import { instanceId } from '../shared/instances.mjs';
 import {
-  INSTANCE, agentEnabled, checkRoot, distRev, rememberRoot, loadPrefs, savePrefs, serverIsStale, staticRoot,
+  INSTANCE, INSTANCE_STATE_DIR, SKILL_DIR, STATE_DIR, agentEnabled, checkRoot, distRev, rememberRoot, loadPrefs, savePrefs,
+  serverIsStale, staticRoot,
   type Flags, type Prefs, type RootCheck,
 } from './config.ts';
+import {
+  SessionRegistry, correlate, parseHookPayload,
+  type SessionEventName, type SessionRecord, type SessionView,
+} from './sessions/registry.ts';
+import { hooksStatus, installHooks, uninstallHooks, type HooksStatus, type HooksWrite } from './hooks-install.ts';
 import { Store, handoffFor, lockFor, qaFor, readLock, type PlanRecord } from './store.ts';
 import {
   ConvergeScheduler, convergePlan, HALT_DELAY_MS, type ConvergeDeps, type ConvergeReport, type ConvergeTrigger,
@@ -75,12 +81,14 @@ import { environmentReport, type EnvIssue } from './env-doctor.ts';
 import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
 import {
-  autoResolveRun, childrenOf, latestRun, listRuns, loadRun, phaseRecord, pidAlive,
+  autoResolveRun, childrenOf, latestRun, listRuns, loadRun, newRun, phaseRecord, pidAlive,
   reconcileRecordsAgainstBoard, resetForRetry, resolveRunsAgainst, saveRun,
   slugsNeedingBoard, runDir, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, isMcpPolicy, mcpReasonText,
   type BoardingBrief, type Errand, type McpPolicy, type PreflightWarning, type RunState, type VerifySummary,
 } from './runner/state.ts';
-import { outcomeFileFor, readOutcome } from './runner/outcome.ts';
+import {
+  consumeOutcome, inboxOutcomePhase, outcomeFileFor, outcomeInboxDir, readOutcome, type PhaseOutcome,
+} from './runner/outcome.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
 import { extractCommands, resolveLead, unresolvableLeads, verifyPhase } from './runner/verify.ts';
 import { loadVerifyEnv } from './runner/verify-env.ts';
@@ -268,6 +276,20 @@ export type PlanDetail = {
  * run, and only degraded to `parked` several subprocesses later inside the
  * runner. The console said a run had started; nothing ran.
  */
+/** `POST /hooks/session` answered 400: the body is not a session event. */
+export class HookPayloadError extends Error {}
+/** `POST /hooks/session` answered 429: the bucket is empty. */
+export class HookRateError extends Error {}
+
+/** Session events accepted per minute — a person's sessions produce a few; a runaway loop must not write a storm. */
+export const HOOK_EVENTS_PER_MINUTE = 300;
+/** Per-file debounce for the unsupervised-outcome inbox watcher. */
+const OUTCOME_INBOX_DEBOUNCE_MS = 250;
+/** An inbox declaration older than this is history, not news. */
+const OUTCOME_INBOX_MAX_AGE_MS = 24 * 60 * 60_000;
+/** A `waiting-external` that names no window waits this long — the runner's own default. */
+const UNSUPERVISED_WAIT_DEFAULT_MS = 30 * 60_000;
+
 export class PhaseClaimedError extends Error {
   /* Plain fields, assigned in the body. Constructor parameter properties are
      TypeScript that Node's strip-only loader cannot erase, and this server runs
@@ -716,6 +738,24 @@ export class Service {
   readonly push: Push;
   readonly notifications: Notifications;
   readonly terminals: Terminals;
+  /**
+   * Who is in this repository right now — every Claude session the user-scope
+   * hook reports (a person's `claude`, a console agent, an autopilot lane),
+   * with its presence. See `sessions/registry.ts`. Per instance, like the
+   * accounts: two consoles on one machine are two projects.
+   */
+  readonly sessions: SessionRegistry;
+  /** `POST /hooks/session` token bucket — the hook fires per turn of every session on the machine. */
+  private hookBucket = { tokens: HOOK_EVENTS_PER_MINUTE, at: Date.now() };
+  /** The unsupervised-outcome inbox: `runs/<instance>/<slug>/outcomes/` under watch while a root is open. */
+  private outcomeWatcher: FSWatcher | null = null;
+  private outcomeTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * What sessions nobody here spawned declared, by `slug:phase` — the
+   * classifier's `declared` evidence for a hand-run phase (a `blocked` or
+   * `needs-human` from a person's session drives the same ladder as a lane's).
+   */
+  private declaredOutcomes = new Map<string, NonNullable<PhaseEvidence['declared']> & { sessionId?: string }>();
   /** This instance's Claude accounts — registry, meters, per-run environments. */
   readonly accounts: Accounts;
   private accountsEmitTimer: NodeJS.Timeout | null = null;
@@ -791,6 +831,13 @@ export class Service {
       });
     }
     this.watcher = new DocsWatcher((paths) => this.onChange(paths));
+    // The session registry: loaded from disk (records + whatever the hook
+    // dropped in the inbox while no console was up), then watching the inbox.
+    this.sessions = new SessionRegistry({
+      dir: join(INSTANCE_STATE_DIR, 'sessions'),
+      onChange: (record, event) => this.onPresenceChange(record, event),
+      onWarn: (what, detail) => log.warn(what, detail),
+    }).load().start();
     this.approvals = new Approvals({
       notify: (approval) => {
         this.emit('approval', approval);
@@ -836,11 +883,15 @@ export class Service {
         return lock ? {
           slug, phase: lock.phase, owner: lock.owner, expired: lock.expired, scope: lock.scope,
           ...(lock.leaseUntil != null ? { leaseUntil: lock.leaseUntil } : {}),
+          ...(lock.session ? { session: lock.session } : {}),
         } : null;
       },
       // A lock with no `scope=` line: recover what the plan says that phase
       // touches rather than reading it as `all`. See `SchedulerDeps.scopeFor`.
       scopeFor: (slug, phase) => this.scopeOf(slug, phase),
+      // Presence beats the lease: a lock whose session the registry shows
+      // ended stops blocking NOW; a live one is named as live on the queue.
+      presence: (lock) => this.sessions.presenceOfLock(lock),
       // The repository guard is a preference, read per call so a flip in the
       // settings page lands on the very next poll. Off never means unguarded
       // within one run — see `SchedulerDeps.guard`.
@@ -1108,6 +1159,8 @@ export class Service {
           // The lease clock, so the scheduler can judge expiry live instead
           // of trusting the bit frozen at scan time — and arm a wake at it.
           ...(lock.leaseUntil != null ? { leaseUntil: lock.leaseUntil } : {}),
+          // The holding session, so the registry can say whether it is still there.
+          ...(lock.session ? { session: lock.session } : {}),
         });
       }
     }
@@ -1127,6 +1180,9 @@ export class Service {
       approvals: this.approvals,
       scheduler: this.scheduler,
       maxParallel: () => this.flags.maxSessions,
+      // The registry's word on a lock's session, for the boarding belt-check:
+      // an ended session's claim is released and boarding goes on.
+      lockPresence: (lock) => this.sessions.presenceOfLock(lock),
       // The store's handoff for a phase — status and Outstanding — for the
       // loop's own situation classifier and the re-board briefs. The board's
       // word already says `stuck`/`in-progress`; this is what it SAYS.
@@ -1402,6 +1458,7 @@ export class Service {
       session,
       sessions: this.terminals.state().sessions,
       live: this.terminals.live(),
+      foreign: this.sessionViews(),
     });
 
     if (type !== 'exited') return;
@@ -1546,6 +1603,7 @@ export class Service {
       recovery: { ...link, ...outcome, synced: Boolean(synced) },
       sessions: this.terminals.state().sessions,
       live: this.terminals.live(),
+      foreign: this.sessionViews(),
     });
 
     // A fixed run carries on by itself — the same resume `retryPhase` and the
@@ -1614,6 +1672,7 @@ export class Service {
       qa: { ...link, ...outcome },
       sessions: this.terminals.state().sessions,
       live: this.terminals.live(),
+      foreign: this.sessionViews(),
     });
   }
 
@@ -1684,6 +1743,7 @@ export class Service {
 
     this.prefs = rememberRoot(this.prefs, check.path);
     this.watcher.start([check.plansDir, check.handoffsDir]);
+    this.armOutcomeInbox(check.path);
     void this.refreshRepoInfo();
     void this.warm();
     // The convergence loop: the boot pass once the queued re-adoption is done (a
@@ -1849,6 +1909,8 @@ export class Service {
     this.mcpRequireTimers.clear();
     this.converger.close();
     this.watcher.stop();
+    this.disarmOutcomeInbox();
+    this.sessions.close();
     // Nothing is admitted after this point, and every pending admission is
     // rejected rather than left holding a promise nobody will settle.
     this.scheduler.close();
@@ -3151,7 +3213,8 @@ export class Service {
     if (!handoffsDir || !phases?.length) return;
     for (const phase of phases) {
       const lock = readLock(handoffsDir, slug, phase);
-      if (lock && !lock.expired) throw new PhaseClaimedError(slug, phase, lock);
+      // A claim whose session the registry shows ended is debris, not a holder.
+      if (lock && !lock.expired && this.sessions.presenceOfLock(lock) !== 'ended') throw new PhaseClaimedError(slug, phase, lock);
     }
   }
 
@@ -4165,6 +4228,7 @@ export class Service {
       },
       locks: (slug) => this.allLocks().filter((lock) => lock.slug === slug),
       prefs: () => ({ resumeAtBoot: this.prefs.resumeAtBoot }),
+      presence: (lock) => this.sessions.presenceOfLock(lock),
       heal: (slug) => this.maybeAutoRecover(slug),
       startRun: (slug, options) => this.startRun(slug, options),
       editRun: (slug, runId, apply) => this.editStoredRunById(slug, runId, apply),
@@ -4184,6 +4248,285 @@ export class Service {
         this.scheduler.poll();
       },
     };
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Session presence (Phase 5): the registry the user-scope hook feeds,
+   * the hook installer, and the inbox of outcomes sessions nobody here
+   * spawned declare.
+   * ---------------------------------------------------------------- */
+
+  /** Every lock the store holds, in the registry's correlation shape. */
+  private locksForCorrelation(): { slug: string; phase: number; owner: string; session?: string; claimedAt?: number }[] {
+    const out: { slug: string; phase: number; owner: string; session?: string; claimedAt?: number }[] = [];
+    for (const record of this.store?.list() ?? []) {
+      if (record.plan?.closed) continue;
+      for (const lock of record.locks) {
+        out.push({
+          slug: record.slug, phase: lock.phase, owner: lock.owner,
+          ...(lock.session ? { session: lock.session } : {}),
+          ...(lock.claimedAt != null ? { claimedAt: lock.claimedAt } : {}),
+        });
+      }
+    }
+    return out;
+  }
+
+  /** The registry as the API and the Pulse read it: every session with its presence and the plan+phase it works. */
+  sessionViews(): SessionView[] {
+    return this.sessions.views(this.locksForCorrelation());
+  }
+
+  /**
+   * `POST /hooks/session`: validate, rate-limit, ingest. The caller is the
+   * hook script on this machine — no run token (there is no run), no console
+   * header (it is not a browser); the route keeps it to loopback and this
+   * keeps it to a body that is a session event and a rate a person's sessions
+   * can actually produce.
+   */
+  ingestSessionEvent(body: unknown): SessionRecord {
+    const payload = parseHookPayload(body);
+    if (!payload) {
+      throw new HookPayloadError('not a session event — session_id, event (SessionStart|SessionEnd|Stop) and an absolute cwd are required');
+    }
+    const now = Date.now();
+    const refill = Math.floor((now - this.hookBucket.at) / 1000) * (HOOK_EVENTS_PER_MINUTE / 60);
+    if (refill >= 1) {
+      this.hookBucket.tokens = Math.min(HOOK_EVENTS_PER_MINUTE, this.hookBucket.tokens + Math.floor(refill));
+      this.hookBucket.at = now;
+    }
+    if (this.hookBucket.tokens < 1) throw new HookRateError('too many session events — try again in a moment');
+    this.hookBucket.tokens -= 1;
+    return this.sessions.ingest(payload);
+  }
+
+  /**
+   * A record in the registry moved. Every move reaches the browser on the
+   * `sessions` event (the Pulse lists foreign sessions beside the lanes); an
+   * ENDED session is the one that changes what may run — its lock is debris
+   * now — so the queue is polled and the convergence loop asked to look at
+   * the plan it was working (or every open one, when no lock says which).
+   */
+  private onPresenceChange(record: SessionRecord, event: SessionEventName | 'prune'): void {
+    const presence = this.sessions.presence(record.sessionId);
+    this.emit('sessions', {
+      type: 'presence',
+      event,
+      presence: { ...record, presence },
+      sessions: this.terminals.state().sessions,
+      live: this.terminals.live(),
+      foreign: this.sessionViews(),
+    });
+    if (event === 'prune' || presence !== 'ended') return;
+    this.scheduler.poll();
+    const plan = correlate(record, this.locksForCorrelation(), Date.now());
+    const slugs = plan ? [plan.slug] : this.convergeSlugs();
+    for (const slug of slugs) {
+      this.runners.get(slug)?.noteDocsChanged();
+      if (this.convergeAutomatic()) this.converger.request(slug, 'change');
+    }
+  }
+
+  /** The session-presence hook, as `~/.claude/settings.json` has it. */
+  hooksStatus(): HooksStatus {
+    return hooksStatus({ skillDir: SKILL_DIR });
+  }
+
+  /** Write the three entries (behind `--allow-writes` — the file is outside the console's own state). */
+  installSessionHook(): HooksWrite {
+    if (!this.flags.allowWrites) throw new Error('Installing the session hook edits ~/.claude/settings.json — restart with --allow-writes.');
+    const out = installHooks({ skillDir: SKILL_DIR });
+    log.info('hooks.installed', { path: out.path, changed: out.changed });
+    return out;
+  }
+
+  uninstallSessionHook(): HooksWrite {
+    if (!this.flags.allowWrites) throw new Error('Removing the session hook edits ~/.claude/settings.json — restart with --allow-writes.');
+    const out = uninstallHooks({ skillDir: SKILL_DIR });
+    log.info('hooks.uninstalled', { path: out.path, changed: out.changed });
+    return out;
+  }
+
+  /**
+   * Watch `runs/<instance>/` for `<slug>/outcomes/phase-NN.json` — what
+   * `phase-outcome.sh` writes when no runner injected `PE_OUTCOME_FILE`, i.e.
+   * a session nobody here spawned. What landed while the console was away is
+   * read first; the watcher (recursive, debounced per file) takes it from there.
+   */
+  private armOutcomeInbox(root: string): void {
+    this.disarmOutcomeInbox();
+    const dir = join(STATE_DIR, 'runs', instanceId(root));
+    try { mkdirSync(dir, { recursive: true }); } catch { return; }
+    for (const slug of this.store?.list().map((r) => r.slug) ?? []) {
+      let names: string[] = [];
+      try { names = readdirSync(outcomeInboxDir(root, slug)); } catch { continue; }
+      for (const name of names) this.ingestOutcomeFile(slug, join(outcomeInboxDir(root, slug), name));
+    }
+    try {
+      this.outcomeWatcher = watch(dir, { recursive: true }, (_event, filename) => {
+        const name = String(filename ?? '');
+        const m = /^([^/]+)\/outcomes\/(phase-\d{2,}\.json)$/.exec(name);
+        if (!m) return;
+        const key = `${m[1]}/${m[2]}`;
+        const prev = this.outcomeTimers.get(key);
+        if (prev) clearTimeout(prev);
+        const timer = setTimeout(() => {
+          this.outcomeTimers.delete(key);
+          this.ingestOutcomeFile(m[1], join(dir, name));
+        }, OUTCOME_INBOX_DEBOUNCE_MS);
+        timer.unref?.();
+        this.outcomeTimers.set(key, timer);
+      });
+      // Never what keeps the process alive (shutdown, or a harness that never closes).
+      this.outcomeWatcher.unref?.();
+      this.outcomeWatcher.on('error', (error) => {
+        log.warn('outcome-inbox.watcher-error', { dir, error: (error as Error).message });
+        try { this.outcomeWatcher?.close(); } catch { /* gone */ }
+        this.outcomeWatcher = null;
+      });
+    } catch (error) {
+      log.warn('outcome-inbox.watch-failed', { dir, error: (error as Error).message });
+      this.outcomeWatcher = null;
+    }
+  }
+
+  private disarmOutcomeInbox(): void {
+    for (const timer of this.outcomeTimers.values()) clearTimeout(timer);
+    this.outcomeTimers.clear();
+    try { this.outcomeWatcher?.close(); } catch { /* gone */ }
+    this.outcomeWatcher = null;
+  }
+
+  /** Read, validate and consume one inbox file; a stale or invalid one is consumed and dropped. */
+  private ingestOutcomeFile(slug: string, file: string): void {
+    const phase = inboxOutcomePhase(file);
+    if (phase == null || !existsSync(file)) return;
+    const declared = readOutcome(file, { slug, phase });
+    consumeOutcome(file);
+    if (!declared) { log.warn('outcome-inbox.rejected', { slug, phase, file }); return; }
+    if (Date.now() - Date.parse(declared.written_at) > OUTCOME_INBOX_MAX_AGE_MS) {
+      log.info('outcome-inbox.stale', { slug, phase, writtenAt: declared.written_at });
+      return;
+    }
+    void this.applyUnsupervisedOutcome(slug, phase, declared)
+      .catch((error) => log.warn('outcome-inbox.apply-failed', { slug, phase, error: (error as Error)?.message ?? String(error) }));
+  }
+
+  /**
+   * A declared outcome from a session nobody here spawned — the same
+   * vocabulary as a lane's own, read the same way (`Runner.declareOutcome`).
+   * With the plan's runner live, it is the runner's act. Otherwise the record
+   * is written into the plan's latest run — created, paused and scoped to the
+   * phase, when there is none — and the resume is armed: `waiting-external`
+   * parks the phase `waiting` and the service's own clock resumes the session
+   * at the window (restart-safe, like a usage-window sleep); `partial` boards
+   * it now through normal admission. `blocked` / `needs-human` / `complete`
+   * are kept as the classifier's `declared` evidence and announced once.
+   */
+  private async applyUnsupervisedOutcome(slug: string, phase: number, declared: PhaseOutcome): Promise<void> {
+    if (!this.root?.ok) return;
+    const record = this.store?.get(slug);
+    if (!record?.plan?.phased) return;
+    this.declaredOutcomes.set(`${slug}:${phase}`, {
+      status: declared.status,
+      ...(declared.reason ? { reason: declared.reason } : {}),
+      ...(declared.watch.length ? { watch: declared.watch } : {}),
+      writtenAt: declared.written_at,
+      ...(declared.session_id ? { sessionId: declared.session_id } : {}),
+    });
+    log.info('outcome-inbox.declared', { slug, phase, status: declared.status, sessionId: declared.session_id ?? null });
+    let verdict: 'parked' | 'boarding' | 'noted' | 'ignored' | null = 'noted';
+    const live = this.liveRunner(slug);
+    if (live) {
+      verdict = live.declareOutcome(phase, declared, 'unsupervised');
+    } else if (this.flags.allowRun && (declared.status === 'waiting-external' || declared.status === 'partial')) {
+      const board = await this.board(slug).catch(() => null);
+      if (board && !board.error && board.states[phase] === 'done') { verdict = 'ignored'; } else {
+        let state = latestRun(this.root.path, slug, this.liveRunIds());
+        const created = !state;
+        if (!state) {
+          state = newRun({ slug, root: this.root.path, onlyPhases: [phase], autoRecover: this.prefs.autoRecoverByDefault !== false });
+          state.status = 'paused';
+          state.stoppedBy = 'system';
+          state.activePhase = null;
+        }
+        const journal = new Journal(this.root.path, slug, state.id);
+        const rec = phaseRecord(state, phase);
+        if (created) journal.append('run.start', { by: 'unsupervised', reason: `phase ${phase} declared ${declared.status} from a session the console did not start`, onlyPhases: [phase] });
+        journal.append('phase.outcome', {
+          status: declared.status, reason: declared.reason ?? null, resumeAfter: declared.resume_after ?? null,
+          watch: declared.watch, sessionId: declared.session_id ?? null, by: 'unsupervised',
+        }, phase);
+        if (declared.session_id) { rec.sessionId = declared.session_id; delete rec.sessionAccountId; }
+        const now = Date.now();
+        if (declared.status === 'waiting-external') {
+          const requested = declared.resume_after ? Date.parse(declared.resume_after) : NaN;
+          const until = new Date(Number.isFinite(requested) ? Math.max(requested, now + 60_000) : now + UNSUPERVISED_WAIT_DEFAULT_MS).toISOString();
+          rec.status = 'waiting';
+          rec.parkedUntil = until;
+          rec.parkReason = declared.reason;
+          rec.watch = declared.watch.length ? declared.watch : undefined;
+          rec.waits = (rec.waits ?? 0) + 1;
+          rec.endedAt = new Date(now).toISOString();
+          rec.resumeSessionId = declared.session_id ?? rec.sessionId;
+          delete rec.boardingHint;
+          if (state.status !== 'finished') { state.status = 'paused'; state.stoppedBy = 'system'; }
+          state.waitUntil = until;
+          state.finishedReason = `phase ${phase} declared itself waiting on external work`
+            + `${declared.reason ? ` (${declared.reason})` : ''}; its own session resumes at ${until}.`;
+          journal.append('phase.waiting', { until, reason: declared.reason ?? null, watch: declared.watch, waits: rec.waits, by: 'unsupervised' }, phase);
+          journal.append('run.waiting-external', { phases: [phase], waitUntil: until, by: 'unsupervised' }, phase);
+          saveRun(state);
+          this.emit('run:state', { state });
+          this.armLimitResume(slug, state);
+          verdict = 'parked';
+        } else {
+          resetForRetry(rec);
+          const brief = declared.session_id ? 'continue' : 'resume';
+          rec.boardingHint = {
+            situation: 'work-in-progress', rung: 'resume-own-session', brief,
+            ...(declared.session_id ? { sessionId: declared.session_id } : {}),
+            at: new Date(now).toISOString(), by: 'unsupervised',
+          };
+          journal.append('phase.reboard-requested', { situation: 'work-in-progress', rung: 'resume-own-session', brief, by: 'unsupervised' }, phase);
+          saveRun(state);
+          this.emit('run:state', { state });
+          if (this.convergeAutomatic()) {
+            try {
+              await this.startRun(slug, {
+                resumeRunId: state.id,
+                ...(state.onlyPhases?.length ? { onlyPhases: state.onlyPhases } : {}),
+                skills: state.skills ?? [],
+              });
+              verdict = 'boarding';
+            } catch (error) {
+              log.warn('outcome-inbox.board-failed', { slug, phase, error: (error as Error)?.message ?? String(error) });
+            }
+          }
+        }
+      }
+    }
+    this.announceDeclared(slug, phase, declared, verdict);
+    if (this.convergeAutomatic()) this.converger.request(slug, 'change', 0);
+  }
+
+  private announceDeclared(slug: string, phase: number, declared: PhaseOutcome, verdict: string | null): void {
+    const who = declared.session_id ? `session ${declared.session_id.slice(0, 8)}` : 'a session the console did not start';
+    const where = `${slug} phase ${phase}`;
+    if (declared.status === 'waiting-external') {
+      this.announce('parked', {
+        title: 'A hand-run phase is waiting on external work',
+        body: `${where} — ${who} declared it is waiting${declared.reason ? `: ${declared.reason}` : ''}`
+          + `${verdict === 'parked' ? '; the console resumes that session at the window' : ''}.`,
+        tag: tagFor('parked', slug, String(phase), 'unsupervised'),
+      }, { slug, phase });
+    } else if (declared.status === 'blocked' || declared.status === 'needs-human') {
+      this.announce('needs-you', {
+        title: declared.status === 'blocked' ? 'A hand-run phase declared itself blocked' : 'A hand-run phase needs you',
+        body: `${where} — ${who} declared ${declared.status}${declared.reason ? `: ${declared.reason}` : ''}.`,
+        tag: tagFor('needs-you', slug, String(phase), 'unsupervised'),
+      }, { slug, phase });
+    }
   }
 
   /**
@@ -4430,13 +4773,31 @@ export class Service {
       lock: async (_slug, phase) => {
         const l = record ? lockFor(record, phase) : undefined;
         if (l) {
+          const presence = this.sessions.presenceOfLock(l);
           return {
             holder: l.owner, ours: ours(l.owner), expired: l.expired,
             ...(l.leaseUntil ? { leaseUntil: l.leaseUntil } : {}),
             ...(l.scope?.length ? { scope: l.scope } : {}),
+            ...(l.session ? { session: l.session } : {}),
+            // Three-valued on purpose: `unknown` leaves the field absent, and
+            // the classifier keeps its lease-based reading.
+            ...(presence === 'live' ? { live: true } : presence === 'ended' ? { live: false } : {}),
           };
         }
         return null;
+      },
+      // The registry hit for the phase's lock holder: a live or ended session it names.
+      registry: (_slug, phase) => {
+        const l = record ? lockFor(record, phase) : undefined;
+        if (!l?.session) return null;
+        const presence = this.sessions.presenceOfLock(l);
+        if (presence === 'unknown') return null;
+        return { live: presence === 'live', sessionId: l.session, owner: l.owner };
+      },
+      // What a session nobody here spawned declared for the phase (the inbox).
+      declared: (_slug, phase) => {
+        const d = this.declaredOutcomes.get(`${slug}:${phase}`);
+        return d ? { status: d.status, ...(d.reason ? { reason: d.reason } : {}), ...(d.watch ? { watch: d.watch } : {}), ...(d.writtenAt ? { writtenAt: d.writtenAt } : {}) } : null;
       },
       qa: async (_slug, phase) => {
         const mode = await this.qaMode(slug).catch((): QaMode => ({ mode: 'off' }));

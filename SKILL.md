@@ -203,6 +203,11 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    `--owner` defaults to `$PE_OWNER` (which an autopilot exports to its sessions — do not override
    it, or the supervisor cannot release your lock) else `<user>@<host>`. Pass
    `--owner "<account>/<session>"` only when driving phases by hand as one of several people.
+   **Pass `--session <id>` when you know your Claude session id** (Phase Console's session-presence hook tells a
+   fresh session its id at start; `$PE_SESSION_ID` — runner-injected — or `$CLAUDE_CODE_SESSION_ID` in the
+   environment is read automatically, so usually nothing to type): the lock then names its session, and the
+   console can show it on the Pulse, queue autopilot lanes behind it while it lives, and release the lock the
+   moment the session ends instead of at the end of its lease.
    `conflicts` looks across **every plan**, because a working tree doesn't know which plan asked for it.
    If it names a live session — or `claim` reports the phase already held — **stop and ask the user**
    whether to wait, stop that session, take over (`--force`), or pick a ready phase with a disjoint
@@ -294,7 +299,11 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
    done, what remains, and what you are waiting on; (3) declare the wait machine-readably:
    `bash scripts/phase-outcome.sh <slug> <N> waiting-external --wait-minutes <M> --reason "<what>"
    --watch <ref>`; (4) stop. The supervisor parks the phase and resumes THIS session when the window
-   elapses. (An interactive session may instead simply keep the turn and wait.) Plans avoid the park
+   elapses. (An interactive session may instead simply keep the turn and wait.) **A session nobody supervises** (no
+   `PE_OUTCOME_FILE` in its environment) writes the same declaration into the console's inbox
+   (`runs/<instance>/<slug>/outcomes/phase-NN.json`, printed on stderr); a running Phase Console with `--allow-run`
+   picks it up, parks the phase `waiting` and resumes THAT session at the window — a hand-driven session can
+   declare its wait and close. Plans avoid the park
    entirely by splitting build ∥ verify-later behind a Gate-check — `references/plan-format.md`.
    **Stopping with work still left — nothing wrong, just out of budget or context:** under a supervisor
    a clean exit with an `in-progress` handoff reads as a failed phase and buys a closeout that is forbidden
@@ -302,7 +311,8 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
    Outstanding section naming exactly what remains; (3) declare it —
    `bash scripts/phase-outcome.sh <slug> <N> partial --reason <budget|context|other>`; (4) stop. The
    supervisor reads `partial` as *work in progress, resume me* and continues THIS session (or boards a
-   fresh one with a resume brief) by itself. `partial` is for work that remains; `waiting-external` is for
+   fresh one with a resume brief) by itself. (Unsupervised, the same file reaches the console's inbox and
+   the console boards the phase again with a resume of your session.) `partial` is for work that remains; `waiting-external` is for
    a clock you don't control; `blocked`/`needs-human` are for things a machine cannot settle.
 
 5. **Stop & hand off, or batch.** If the proof is waiting on an external clock, use the

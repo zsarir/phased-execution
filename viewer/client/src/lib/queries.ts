@@ -26,7 +26,7 @@ import {
 import {
   api,
   type AccountsState, type ConsoleState, type InboxQuery, type NotificationScope, type PlanDetail,
-  type PlanSummary, type TerminalState, type McpState,
+  type PlanSummary, type TerminalState, type McpState, type SessionRegistryView,
 } from './api';
 import { isClosed } from './closure';
 import { SSE_EVENTS, onSse, type SseEvent } from './sse';
@@ -54,6 +54,10 @@ export const keys = {
   gate: (slug: string, phase: number | string) => ['plan', slug, 'gate', String(phase)] as const,
   stats: () => ['stats'] as const,
   terminal: () => ['terminal'] as const,
+  /** The session-presence registry — every Claude session the hook reported for this instance. */
+  sessionRegistry: () => ['sessions', 'registry'] as const,
+  /** Is the session-presence hook in `~/.claude/settings.json`? */
+  hooksStatus: () => ['hooks-status'] as const,
   approvals: () => ['approvals'] as const,
   runs: () => ['runs'] as const,
   run: (slug: string) => ['run', slug] as const,
@@ -183,6 +187,13 @@ const patchSessions: Effect['patch'] = (client, data) => {
   }
 };
 
+
+/** The `foreign` list the server appends to every `sessions` event — the registry, written straight into the cache. */
+const patchPresence: Effect['patch'] = (client, data) => {
+  if (Array.isArray(data.foreign)) {
+    client.setQueryData<SessionRegistryView>(keys.sessionRegistry(), { sessions: data.foreign as SessionRegistryView['sessions'] });
+  }
+};
 export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
   /* ---- the repo moved under us ---- */
   // Queue and runs ride along: lock files live under docs/handoffs, so a
@@ -215,7 +226,9 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
      the nav badges in the same tick, and there is nothing to ask for that the
      payload does not already carry. Invalidation stays as the belt to that
      braces — `/api/terminal` also answers `available` and the flags. */
-  sessions: { invalidate: [keys.terminal()], patch: patchSessions },
+  // The registry rides the same event: the server appends `foreign` — every
+  // hook-reported session with its presence — to each `sessions` emission.
+  sessions: { invalidate: [keys.terminal(), keys.sessionRegistry()], patch: (client, data) => { patchSessions(client, data); patchPresence(client, data); } },
 
   /* ---- autopilot ----
      A run starting, finishing, or having a phase land changes the board too:
@@ -333,6 +346,16 @@ export function useMcpCatalog(query: string, enabled = true) {
     enabled,
     placeholderData: keepPreviousData,
   });
+}
+
+/** Every Claude session the presence hook reported for this instance — a person's, an agent's, a lane's — with its presence. */
+export function useSessionRegistry(enabled = true) {
+  return useQuery({ queryKey: keys.sessionRegistry(), queryFn: api.sessionRegistry, enabled });
+}
+
+/** The session-presence hook's presence in `~/.claude/settings.json`. */
+export function useHooksStatus(enabled = true) {
+  return useQuery({ queryKey: keys.hooksStatus(), queryFn: api.hooksStatus, enabled });
 }
 
 /** Where a one-click desktop launcher would land on the server's platform. */

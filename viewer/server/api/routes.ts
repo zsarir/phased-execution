@@ -9,7 +9,8 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { PhaseClaimedError, RecoveryBusyError, type Service } from '../service.ts';
+import { HookPayloadError, HookRateError, PhaseClaimedError, RecoveryBusyError, type Service } from '../service.ts';
+import { classify as classifyAccess } from './access.ts';
 import { agentEnabled, checkRoot, listDirs } from '../config.ts';
 import { buildAgentLaunch } from '../agent.ts';
 import { parseRecoveryRequest, type RecoveryFacts } from '../recovery.ts';
@@ -362,6 +363,36 @@ export async function handleApi(
     return true;
   }
 
+  /* ---------------- the session-presence hook ---------------- */
+  if (path === '/hooks/session') {
+    // The caller is `scripts/session-hook.sh`, run by Claude Code for ANY
+    // session on this machine — there is no run, so no run token; it is not a
+    // browser, so no console header or origin. What it has instead: it is on
+    // this machine. The console binds to 127.0.0.1, so every socket is
+    // loopback; the one other way in is the `--remote` proxy, and a request
+    // that arrived through it (the proxy's identity header, or a non-local
+    // Host) is refused — presence forged from a phone could release a lock a
+    // real session holds. Then the service caps the body and the rate.
+    if (req.method !== 'POST') { json(res, 405, { error: 'POST only' }); return true; }
+    const remote = req.socket?.remoteAddress ?? '';
+    const loopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1' || remote === '';
+    const verdict = classifyAccess(req, service.flags);
+    if (!loopback || !verdict.ok || verdict.scope !== 'local') {
+      log.warn('hook.session-rejected', { reason: !loopback ? 'not loopback' : 'not local', remote });
+      json(res, 403, { error: 'session presence is accepted from this machine only' });
+      return true;
+    }
+    try {
+      const record = service.ingestSessionEvent(await readBody(req));
+      json(res, 200, { ok: true, session: { sessionId: record.sessionId, presence: service.sessions.presence(record.sessionId) } });
+    } catch (error) {
+      if (error instanceof HookPayloadError) json(res, 400, { error: error.message });
+      else if (error instanceof HookRateError) json(res, 429, { error: error.message });
+      else throw error;
+    }
+    return true;
+  }
+
   /* ---------------- live updates ---------------- */
   if (path === '/events') {
     res.writeHead(200, {
@@ -439,6 +470,36 @@ export async function handleApi(
   try {
     /* ---------------- session + source directory ---------------- */
     if (head === 'state' && req.method === 'GET') { json(res, 200, service.state()); return true; }
+
+    /* ---------------- session presence: the registry + the hook installer ---------------- */
+    // `GET /api/sessions/registry`: every Claude session the hook reported for
+    // this instance, with its presence and the plan+phase it works. Reading it
+    // needs no flag — seeing who is in your repository is display.
+    if (head === 'sessions' && rest[0] === 'registry' && req.method === 'GET') {
+      json(res, 200, { sessions: service.sessionViews() });
+      return true;
+    }
+    // `GET /api/hooks-install`: is the session-presence hook in ~/.claude/settings.json?
+    // `POST /api/hooks-install {action: install|uninstall}`: write it (or take it out) —
+    // a write OUTSIDE the console's own state, so `--allow-writes` gates it.
+    if (head === 'hooks-install') {
+      if (req.method === 'GET') { json(res, 200, service.hooksStatus()); return true; }
+      if (req.method === 'POST') {
+        const refused = guardWrite(req, service);
+        if (refused) { json(res, 403, { error: refused }); return true; }
+        const body = await readBody(req) as { action?: string };
+        const action = body.action === 'uninstall' ? 'uninstall' : body.action === 'install' ? 'install' : null;
+        if (!action) { json(res, 400, { error: 'action must be install or uninstall' }); return true; }
+        try {
+          json(res, 200, action === 'install' ? service.installSessionHook() : service.uninstallSessionHook());
+        } catch (error) {
+          json(res, 409, { error: (error as Error).message });
+        }
+        return true;
+      }
+      json(res, 405, { error: 'GET or POST' });
+      return true;
+    }
 
     if (head === 'fs' && req.method === 'GET') {
       json(res, 200, listDirs(url.searchParams.get('path') ?? ''));

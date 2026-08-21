@@ -13,6 +13,8 @@
 //   phase-console remove [instance]      forget a STOPPED console's registry row
 //                                        (its state directories stay put)
 //   phase-console install-skill          copy the skill where Claude Code reads it
+//   phase-console install-hooks          add the session-presence hook to ~/.claude/settings.json
+//   phase-console uninstall-hooks        take it out again · hooks-status: is it there?
 //
 // [instance] is an id, a name, or a project's directory name — or `--instance
 // <sel>`. With none, the console for the directory you are standing in.
@@ -146,6 +148,55 @@ if (['install-skill', '--install-skill'].includes(args[0])) {
 }
 if (['uninstall-skill', '--uninstall-skill'].includes(args[0])) {
   process.exit(uninstallSkill());
+}
+
+// ---- the session-presence hook -----------------------------------------------
+// `install-hooks` writes three entries (SessionStart, SessionEnd, Stop) into
+// the user's ~/.claude/settings.json — merge, never clobber; idempotent — so
+// every Claude session on this machine reports itself to the console that owns
+// its directory; `uninstall-hooks` takes exactly those out; `hooks-status` says
+// which is true (exit 0 installed, 1 not). The same module the Settings card
+// uses, imported off `root` like instances.mjs; a packed install ships a
+// type-stripped .js beside the .ts, and that one is preferred because node
+// refuses to strip types under node_modules.
+async function hooksVerb(verb, rest) {
+  const js = join(root, 'viewer', 'server', 'hooks-install.js');
+  const ts = join(root, 'viewer', 'server', 'hooks-install.ts');
+  let mod;
+  try {
+    mod = await import(pathToFileURL(existsSync(js) ? js : ts).href);
+  } catch (error) {
+    process.stderr.write(`phase-console: could not load the hook installer (${error.message})\n`);
+    return 1;
+  }
+  const at = rest.indexOf('--settings');
+  const settingsPath = at >= 0 ? rest[at + 1] : undefined;
+  const opts = { skillDir: root, ...(settingsPath ? { settingsPath } : {}) };
+  const describe = (status) => {
+    const events = Object.entries(status.events).map(([event, has]) => `${event} ${has ? 'yes' : 'no'}`).join(', ');
+    return `${status.path}: ${status.installed ? 'installed' : status.partial ? 'partially installed' : 'not installed'}`
+      + `${status.stale ? ' (points at another checkout)' : ''}${status.parseError ? ` (file does not parse: ${status.parseError})` : ''}`
+      + ` — ${events}`;
+  };
+  try {
+    if (verb === 'hooks-status') {
+      const status = mod.hooksStatus(opts);
+      process.stdout.write(`${describe(status)}\n`);
+      return status.installed ? 0 : 1;
+    }
+    const out = verb === 'install-hooks' ? mod.installHooks(opts) : mod.uninstallHooks(opts);
+    process.stdout.write(`${out.changed ? (verb === 'install-hooks' ? 'installed' : 'removed') : 'nothing to change'} — ${describe(out.status)}\n`);
+    if (verb === 'install-hooks' && out.changed) {
+      process.stdout.write('Sessions started from now on report to the console that owns their directory; open ones do not until they restart.\n');
+    }
+    return 0;
+  } catch (error) {
+    process.stderr.write(`phase-console: ${error.message}\n`);
+    return 1;
+  }
+}
+if (['install-hooks', 'uninstall-hooks', 'hooks-status'].includes(args[0])) {
+  process.exit(await hooksVerb(args[0], args.slice(1)));
 }
 
 // ---- agent + lifecycle verbs -----------------------------------------------

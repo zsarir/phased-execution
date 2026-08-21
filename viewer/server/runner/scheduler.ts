@@ -93,6 +93,15 @@ export type Holder = {
    * hear otherwise.
    */
   leaseUntil?: number;
+  /** The holding session's id (`session=`), when the lock names one. */
+  session?: string;
+  /**
+   * What the session registry says about that session: `live` — a person (or
+   * another console) is in it right now, so this is a queue to wait in, not a
+   * lease to outlive; `unknown` — no hook reports it, lease rules apply. An
+   * `ended` session's lock never reaches a Holder: it lapses at once.
+   */
+  presence?: 'live' | 'unknown';
 };
 
 export type QueueEntry = {
@@ -125,6 +134,8 @@ export type LockView = {
    * blocking the moment it lapses.
    */
   leaseUntil?: number;
+  /** `session=` from the lock file — the key the registry answers presence for. */
+  session?: string;
 };
 
 export type SchedulerDeps = {
@@ -172,6 +183,15 @@ export type SchedulerDeps = {
    * hold either way.
    */
   guard?: () => boolean;
+  /**
+   * Presence of the session a lock names (Phase 5). `ended` — the session
+   * registry saw its SessionEnd (or its process is gone): the lock is debris
+   * and stops blocking NOW, lease or no lease, exactly as a lapsed lease does;
+   * `live` — the holder is named as a live session on the queue; `unknown` —
+   * nothing is known and lease rules decide. Synchronous like every other
+   * answer an admission check reads. Absent: every lock is `unknown`.
+   */
+  presence?: (lock: LockView) => 'live' | 'ended' | 'unknown';
 };
 
 export type SchedulerSnapshot = {
@@ -605,6 +625,7 @@ export class Scheduler {
 
       const scope = this.scopeOfLock(lock);
       if (!scopesIntersect(scope, entry.scope)) continue;
+      const presence = this.presenceOf(lock);
       holders.push({
         kind: 'lock',
         slug: lock.slug,
@@ -613,6 +634,8 @@ export class Scheduler {
         scope,
         overlaps: intersectingTokens(scope, entry.scope),
         ...(lock.leaseUntil != null ? { leaseUntil: lock.leaseUntil } : {}),
+        ...(lock.session ? { session: lock.session } : {}),
+        ...(presence === 'live' ? { presence } : {}),
       });
     }
 
@@ -656,7 +679,16 @@ export class Scheduler {
    */
   private lockLapsed(lock: LockView): boolean {
     if (lock.expired) return true;
+    // A lock whose SESSION has ended is debris the moment it ends — the
+    // registry knows before the lease does. (Phase 5 presence semantics.)
+    if (this.presenceOf(lock) === 'ended') return true;
     return lock.leaseUntil != null && lock.leaseUntil <= this.now();
+  }
+
+  /** The registry's word on the lock's session; `unknown` when it has none. */
+  private presenceOf(lock: LockView): 'live' | 'ended' | 'unknown' {
+    if (!lock.session || !this.deps.presence) return 'unknown';
+    try { return this.deps.presence(lock); } catch { return 'unknown'; }
   }
 
   /**
