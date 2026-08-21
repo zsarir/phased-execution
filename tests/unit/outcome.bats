@@ -83,3 +83,22 @@ setup() {
   [ "$status" -eq 0 ]
   grep -q '"resume_after": "20[0-9][0-9]-' "$PE_OUTCOME_FILE"
 }
+
+@test "outcome: partial writes the exact JSON — work remains, resume me" {
+  run pe_outcome demo 5 partial --reason budget
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "outcome recorded: demo phase 5 = partial"
+  expected='{
+  "version": 1,
+  "slug": "demo",
+  "phase": 5,
+  "status": "partial",
+  "reason": "budget",
+  "watch": [],
+  "written_at": "2026-08-10T21:10:03Z"
+}'
+  [ "$(cat "$PE_OUTCOME_FILE")" = "$expected" ]
+  # The wait flags still belong to waiting-external only.
+  run pe_outcome demo 5 partial --wait-minutes 10
+  [ "$status" -eq 2 ]
+}

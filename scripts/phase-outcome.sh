@@ -7,7 +7,12 @@
 #
 # Usage: phase-outcome.sh <slug> <phase> <status> [--reason TEXT] [--watch REF]...
 #                         [--wait-minutes N | --until ISO8601]
-#   status: complete | waiting-external | blocked | needs-human
+#   status: complete | waiting-external | blocked | needs-human | partial
+#   partial   "work remains, resume me" — declared when the session must stop
+#             before the exit criteria without anything being wrong (its
+#             budget, its context); the runner resumes the session instead of
+#             reading the clean exit as a failed phase. --reason conventionally
+#             names why: budget | context | other
 #   --wait-minutes / --until  only with waiting-external (absent -> the runner's
 #                             default window); mutually exclusive
 #   --watch   repeatable (max 8); free-form refs — conventional forms:
@@ -23,7 +28,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'usage: phase-outcome.sh <slug> <phase> <complete|waiting-external|blocked|needs-human>' >&2
+  echo 'usage: phase-outcome.sh <slug> <phase> <complete|waiting-external|blocked|needs-human|partial>' >&2
   echo '                        [--reason TEXT] [--watch REF]... [--wait-minutes N | --until ISO8601]' >&2
   exit 2
 }
@@ -33,8 +38,8 @@ slug="${1:-}"; phase="${2:-}"; status="${3:-}"
 shift 3
 
 case "$phase" in ''|*[!0-9]*) echo "phase must be a number, got: $phase" >&2; exit 2 ;; esac
-case "$status" in complete|waiting-external|blocked|needs-human) : ;; *)
-  echo "invalid status: $status (want complete|waiting-external|blocked|needs-human)" >&2; exit 2 ;; esac
+case "$status" in complete|waiting-external|blocked|needs-human|partial) : ;; *)
+  echo "invalid status: $status (want complete|waiting-external|blocked|needs-human|partial)" >&2; exit 2 ;; esac
 
 # JSON string sanitizer, bash 3.2 + BSD sed: control chars (newlines included)
 # become spaces, then backslash and quote are escaped. Defined before the arg

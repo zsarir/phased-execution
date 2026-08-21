@@ -46,6 +46,10 @@ type Repo = {
   doneList: () => number[];
   setGate: (phase: number, text: string) => void;
   setStuck: (phase: number) => void;
+  /** A handoff exists for the phase and reads in-progress (the board lists it so). */
+  setInProgress: (phase: number) => void;
+  /** Every not-done phase is ready at once — a graph with no edges. */
+  setParallel: (yes: boolean) => void;
   setLockRefused: (yes: boolean) => void;
   setLockLapsed: (yes: boolean) => void;
   /** Make `claim` refuse as a foreign takeover — the keepalive's lock-lost case. */
@@ -82,14 +86,15 @@ case "$mode" in
     # on demand is what makes the gap between "the loop checked for a pause" and
     # "the loop started a phase" long enough to press a button inside.
     [ -f "$S/slow-board" ] && sleep 1
-    d=""; r=""; w=""; s=""; found=0
+    d=""; r=""; w=""; s=""; i=""; found=0
     for p in ${PHASES.join(' ')}; do
       if grep -qx "$p" "$S/done" 2>/dev/null; then d="$d$p,"
       elif grep -qx "$p" "$S/stuck" 2>/dev/null; then s="$s$p,"
-      elif [ "$found" -eq 0 ]; then r="$r$p,"; found=1
+      elif grep -qx "$p" "$S/inprog" 2>/dev/null; then i="$i$p,"; found=1
+      elif [ "$found" -eq 0 ] || [ -f "$S/parallel" ]; then r="$r$p,"; found=1
       else w="$w$p,"; fi
     done
-    echo "done: \${d%,}"; echo "in-progress: "; echo "stuck: \${s%,}"
+    echo "done: \${d%,}"; echo "in-progress: \${i%,}"; echo "stuck: \${s%,}"
     echo "ready: \${r%,}"; echo "waiting: \${w%,}"
     ;;
   --gate-status)
@@ -142,6 +147,8 @@ echo "VALIDATE OK"
     doneList: () => readFileSync(join(state, 'done'), 'utf8').split('\n').filter(Boolean).map(Number),
     setGate: (phase, text) => writeFileSync(join(state, `gate-${phase}`), `${text}\n`),
     setStuck: (phase) => writeFileSync(join(state, 'stuck'), `${phase}\n`),
+    setInProgress: (phase) => writeFileSync(join(state, 'inprog'), `${phase}\n`),
+    setParallel: (yes) => yes ? writeFileSync(join(state, 'parallel'), '') : rmSync(join(state, 'parallel'), { force: true }),
     setLockRefused: (yes) => yes ? writeFileSync(join(state, 'lock-refused'), '') : rmSync(join(state, 'lock-refused'), { force: true }),
     setLockLapsed: (yes) => yes ? writeFileSync(join(state, 'lock-lapsed'), '') : rmSync(join(state, 'lock-lapsed'), { force: true }),
     setClaimRefuse: (yes) => yes ? writeFileSync(join(state, 'claim-refuse'), '') : rmSync(join(state, 'claim-refuse'), { force: true }),
@@ -3185,4 +3192,464 @@ test('sessions carry PE_MCP_SERVERS from the registry — and nothing when no re
   assert.deepEqual(bareEnvs, [undefined, undefined, undefined],
     'no registry wired means the advisory stays off — absent, not empty');
   bare.cleanup();
+});
+
+/* ------------------------------------------------------------------ *
+ * The ladder in the loop: re-board by rung, brief by situation
+ *
+ * Phase 2 of console-zero-touch-autopilot. `interrupted` and `failed` records
+ * stop being terminal: the loop classifies them (runner/situation.ts), climbs
+ * one rung (runner/ladder.ts) through its own vehicles, and boards the phase
+ * with the brief the rung names — fresh, resume, unblock, continue, closeout.
+ * Every case here is one of the measured specimens or an exit criterion.
+ * ------------------------------------------------------------------ */
+
+/**
+ * A git repository at the root, so the working tree can answer "clean". The
+ * stub's own files (scripts, the done list, the plan) are ignored; `keep` names
+ * paths that SHOULD show as work.
+ */
+function gitInit(root: string, keep: string[] = []): void {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+  git('init', '-q');
+  writeFileSync(join(root, '.gitignore'), ['*', ...keep.map((path) => `!${path}`), ''].join('\n'));
+  git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
+}
+
+/** A session that works whichever brief boarded it: fresh boot, RESUMING, UNBLOCK. */
+function briefedSession(
+  r: Repo, log: { phase: number; brief: string; resume?: string; prompt: string }[],
+  behave: (phase: number, call: number) => 'done' | 'nothing' = () => 'done',
+): SpawnFn {
+  let calls = 0;
+  return async (request: SpawnRequest) => {
+    calls++;
+    const m = /(BOOT|RESUMING|UNBLOCK) phase (\d+)/.exec(request.prompt);
+    const phase = Number(m?.[2]);
+    log.push({ phase, brief: m?.[1] ?? '?', resume: request.resume, prompt: request.prompt });
+    if (behave(phase, calls) === 'done') r.markDone(phase);
+    return ok({ sessionId: `sess-${phase}` });
+  };
+}
+
+const journalOrder = (events: { event: string; data: Record<string, unknown> }[], names: string[]): number[] =>
+  names.map((name) => events.findIndex((e) => e.event === 'run:journal' && e.data.event === name));
+
+test('ladder: a resumed run whose only open record is interrupted with no work boards that phase fresh — no press', async () => {
+  const r = repo();
+  try {
+    gitInit(r.root);
+    // The P12 specimen: a session that died during bootstrap, the console
+    // gone with it; `interrupted`, no handoff, a clean tree.
+    const stale = newRun({ slug: 'demo', root: r.root });
+    stale.status = 'parked';
+    stale.phases['1'] = {
+      phase: 1, status: 'interrupted', attempts: 1, costUsd: 1.44,
+      note: 'the console stopped while phase 1 was running (pid 999)',
+    };
+    saveRun(stale);
+
+    const log: { phase: number; brief: string; resume?: string; prompt: string }[] = [];
+    const { instance, events } = runner(r, briefedSession(r, log));
+    await instance.start({ slug: 'demo', root: r.root, resumeRunId: stale.id, autonomy: 'keep-going' });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.deepEqual(log.map((l) => l.phase), [1, 2, 3], 'phase 1 boarded on the first tick, then the rest');
+    assert.equal(log[0].brief, 'BOOT', 'fresh = the engine prompt, nothing appended');
+    assert.doesNotMatch(log[0].prompt, /RESUMING|What happened on the previous/, 'a never-started phase carries no history');
+    assert.equal(log[0].resume, undefined, 'no dead session is resumed');
+    assert.equal(state.status, 'finished');
+    const situations = journalled(events, 'phase.situation');
+    assert.equal(situations[0].situation, 'never-started');
+    const rungs = journalled(events, 'phase.rung');
+    assert.equal(rungs[0].rung, 'reboard-fresh');
+    assert.equal(rungs[0].brief, 'fresh');
+    const [sit, rung, start] = journalOrder(events, ['phase.situation', 'phase.rung', 'phase.start']);
+    assert.ok(sit >= 0 && sit < rung && rung < start, 'journal: phase.situation → phase.rung → phase.start');
+    assert.equal(journalled(events, 'phase.start')[0].brief, 'fresh');
+    assert.equal(state.recoveries?.['1']?.rungs?.[0]?.rung, 'reboard-fresh', 'the climb is accounted on the run');
+    assert.equal(journalled(events, 'phase.closeout').length, 0, 'nothing was spent finding out');
+  } finally { r.cleanup(); }
+});
+
+test('ladder: interrupted over a tree git cannot read is work-in-progress — no session, so it boards with the RESUMING brief', async () => {
+  const r = repo(); // not a git repository: the tree is unreadable
+  try {
+    const stale = newRun({ slug: 'demo', root: r.root });
+    stale.status = 'parked';
+    stale.phases['1'] = { phase: 1, status: 'interrupted', attempts: 1, costUsd: 2, note: 'the console stopped' };
+    saveRun(stale);
+
+    const log: { phase: number; brief: string; resume?: string; prompt: string }[] = [];
+    const { instance, events } = runner(r, briefedSession(r, log));
+    await instance.start({ slug: 'demo', root: r.root, resumeRunId: stale.id, autonomy: 'keep-going', autoRecover: true });
+    await instance.wait();
+
+    assert.equal(journalled(events, 'phase.situation')[0].situation, 'work-in-progress');
+    const rung = journalled(events, 'phase.rung')[0];
+    assert.equal(rung.rung, 'reboard-resume-brief', 'the own session is gone; the next rung is the brief');
+    assert.equal(rung.brief, 'resume');
+    assert.equal(log[0].brief, 'BOOT', 'the engine prompt still leads');
+    assert.match(log[0].prompt, /RESUMING phase 1/);
+    assert.match(log[0].prompt, /Handoff: none has been written/);
+    assert.match(log[0].prompt, /Working tree:.*could not be read/);
+    assert.doesNotMatch(log[0].prompt, /do not start new work/i, 'that sentence belongs to the closeout, never to a resume');
+    assert.equal(instance.current()!.status, 'finished');
+  } finally { r.cleanup(); }
+});
+
+test('ladder: a failed record with an in-progress handoff and a session left boards as `continue` — --resume plus the continue instruction', async () => {
+  const r = repo();
+  try {
+    r.setInProgress(1);
+    const stale = newRun({ slug: 'demo', root: r.root });
+    stale.status = 'halted';
+    stale.phases['1'] = { phase: 1, status: 'failed', attempts: 1, costUsd: 40, sessionId: 'sess-old', said: 'handed off in-progress deliberately' };
+    saveRun(stale);
+
+    const log: { phase: number; brief: string; resume?: string; prompt: string }[] = [];
+    const { instance, events } = runner(r, briefedSession(r, log));
+    await instance.start({ slug: 'demo', root: r.root, resumeRunId: stale.id, autonomy: 'keep-going', autoRecover: true });
+    await instance.wait();
+
+    assert.equal(journalled(events, 'phase.situation')[0].situation, 'work-in-progress');
+    const rung = journalled(events, 'phase.rung')[0];
+    assert.equal(rung.rung, 'resume-own-session');
+    assert.equal(rung.brief, 'continue');
+    assert.equal(rung.sessionId, 'sess-old');
+    assert.equal(log[0].resume, 'sess-old', 'the phase\'s own session is continued');
+    assert.equal(log[0].brief, 'RESUMING', 'no engine boot text — the session has it');
+    assert.match(log[0].prompt, /a handoff exists for phase 1 and reads "in-progress"/);
+    assert.match(log[0].prompt, /handed off in-progress deliberately/, 'the last words ride along');
+    assert.doesNotMatch(log[0].prompt, /do not start new work/i);
+    assert.equal(journalled(events, 'phase.start')[0].brief, 'continue');
+    assert.equal(instance.current()!.status, 'finished');
+  } finally { r.cleanup(); }
+});
+
+test('ladder: a stuck board with an unknown blocker gets ONE unblock brief; the second time the phase parks with an errand and the run keeps driving', async () => {
+  const r = repo();
+  try {
+    r.setParallel(true);
+    r.setStuck(1);
+    const outstanding = 'The migration renames a column and the two callers disagree about the new name; nobody decided.';
+    const log: { phase: number; brief: string; resume?: string; prompt: string }[] = [];
+    // Phase 1's unblock session does not unblock; 2 and 3 do their work.
+    const spawn = briefedSession(r, log, (phase) => (phase === 1 ? 'nothing' : 'done'));
+    const { instance, events } = runner(r, spawn, undefined, undefined, {
+      handoffFor: (_slug, phase) => phase === 1 ? { exists: true, status: 'blocked', outstanding } : { exists: false },
+    });
+    await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', autoRecover: true });
+    await instance.wait();
+
+    const state = instance.current()!;
+    const unblocks = log.filter((l) => l.phase === 1);
+    assert.equal(unblocks.length, 1, 'exactly one unblock session, never a loop');
+    assert.equal(unblocks[0].brief, 'BOOT', 'the engine prompt leads, the brief follows');
+    assert.match(unblocks[0].prompt, /UNBLOCK phase 1/);
+    assert.match(unblocks[0].prompt, /nobody decided/, 'the Outstanding text is in the brief');
+    assert.match(unblocks[0].prompt, /needs-human --reason/, 'the errand escape hatch is named');
+    assert.doesNotMatch(unblocks[0].prompt, /do not start new work/i);
+    const rungs = journalled(events, 'phase.rung').filter((entry) => entry.rung === 'unblock-session');
+    assert.equal(rungs.length, 1);
+    assert.equal(rungs[0].brief, 'unblock');
+    const situations = journalled(events, 'phase.situation').map((entry) => entry.situation);
+    assert.ok(situations.every((key) => key === 'blocked-declared:unknown'), `classified as blocked-declared:unknown (${situations.join(', ')})`);
+    const errands = journalled(events, 'phase.errand');
+    assert.equal(errands.length, 1, 'the second exhaustion writes ONE errand');
+    assert.equal(errands[0].situation, 'blocked-declared:unknown');
+    assert.equal(state.phases['1'].status, 'parked');
+    assert.ok(state.recoveries?.['1']?.errand, 'the errand is on the run, for the one card');
+    assert.equal(state.phases['2'].status, 'done');
+    assert.equal(state.phases['3'].status, 'done');
+    assert.equal(journalled(events, 'run.halt').filter((h) => h.kind === 'phase-blocked').length, 0, 'no immediate phase-blocked halt');
+    assert.equal(state.consecutiveFailures, 0, 'a phase parked for a person did not fail twice');
+    assert.match(state.halt?.reason ?? '', /phase 1 needs you/);
+  } finally { r.cleanup(); }
+});
+
+test('ladder: a credential blocker parks with an errand at once — no session spent; a lock blocker goes back to the queue', async () => {
+  const r = repo();
+  try {
+    r.setParallel(true);
+    r.setStuck(1);
+    const log: { phase: number; brief: string; resume?: string; prompt: string }[] = [];
+    const { instance, events } = runner(r, briefedSession(r, log), undefined, undefined, {
+      handoffFor: (_slug, phase) => phase === 1
+        ? { exists: true, status: 'blocked', outstanding: 'Needs a credential nobody on this machine holds: the registry token for the CI mirror.' }
+        : { exists: false },
+    });
+    await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', autoRecover: true });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.equal(log.filter((l) => l.phase === 1).length, 0, 'no session was spent on a blocker only a person can settle');
+    assert.equal(journalled(events, 'phase.situation')[0].situation, 'blocked-declared:credential');
+    assert.equal(journalled(events, 'phase.errand')[0].situation, 'blocked-declared:credential');
+    assert.equal(state.phases['1'].status, 'parked');
+    assert.equal(state.phases['2'].status, 'done');
+  } finally { r.cleanup(); }
+
+  const r2 = repo();
+  try {
+    r2.setStuck(1);
+    const log: { phase: number; brief: string; resume?: string; prompt: string }[] = [];
+    // The unblock session for a LOCK blocker is the queue: the phase re-boards
+    // and admission waits on the holder. Here the lock is free, so it boards.
+    const { instance, events } = runner(r2, briefedSession(r2, log), undefined, undefined, {
+      handoffFor: (_slug, phase) => phase === 1
+        ? { exists: true, status: 'blocked', outstanding: 'Phase lock held by mobin@laptop — the tree is theirs until they release it.' }
+        : { exists: false },
+    });
+    await instance.start({ slug: 'demo', root: r2.root, onlyPhases: [1], autoRecover: true });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.equal(journalled(events, 'phase.situation')[0].situation, 'blocked-declared:lock');
+    assert.equal(journalled(events, 'phase.rung')[0].rung, 'queue');
+    assert.equal(journalled(events, 'phase.errand').length, 0, 'a lock is not a person\'s errand');
+    assert.equal(log.filter((l) => l.phase === 1).length, 1, 'it boarded once the lock was free');
+    assert.equal(state.phases['1'].status, 'done');
+  } finally { r2.cleanup(); }
+});
+
+test('ladder: a `partial` outcome is work-in-progress at once — the phase re-boards as `continue` of its own session', async () => {
+  const r = repo();
+  try {
+    const log: { phase: number; brief: string; resume?: string; prompt: string }[] = [];
+    let calls = 0;
+    const spawn: SpawnFn = async (request) => {
+      calls++;
+      const m = /(BOOT|RESUMING) phase (\d+)/.exec(request.prompt);
+      log.push({ phase: Number(m?.[2]), brief: m?.[1] ?? '?', resume: request.resume, prompt: request.prompt });
+      if (calls === 1) {
+        // "I did real work and my budget is nearly spent — resume me."
+        fileOutcome(request, { phase: 1, status: 'partial', reason: 'budget' });
+        return ok({ sessionId: 'sess-p', resultText: 'handing off in-progress, resume me' });
+      }
+      r.markDone(1);
+      return ok({ sessionId: 'sess-p' });
+    };
+    const { instance, events } = runner(r, spawn);
+    await instance.start({ slug: 'demo', root: r.root, onlyPhases: [1], autoRecover: true });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.deepEqual(journalled(events, 'phase.outcome').map((o) => o.status), ['partial']);
+    assert.deepEqual(journalled(events, 'phase.outcome-partial'), [{ reason: 'budget', climbed: true }]);
+    assert.equal(journalled(events, 'phase.situation')[0].situation, 'work-in-progress');
+    const rung = journalled(events, 'phase.rung')[0];
+    assert.equal(rung.rung, 'resume-own-session');
+    assert.equal(rung.brief, 'continue');
+    assert.equal(log.length, 2);
+    assert.equal(log[1].resume, 'sess-p', 'the same session continues');
+    assert.match(log[1].prompt, /RESUMING phase 1/);
+    assert.equal(journalled(events, 'phase.closeout').length, 0, 'no closeout nudge for a declared partial');
+    assert.equal(journalled(events, 'run.halt').length, 0);
+    assert.equal(state.phases['1'].status, 'done');
+    assert.equal(state.status, 'finished');
+  } finally { r.cleanup(); }
+});
+
+test('ladder: start({reboard}) boards the named brief and journals the request', async () => {
+  const r = repo();
+  try {
+    const stale = newRun({ slug: 'demo', root: r.root });
+    stale.status = 'halted';
+    stale.phases['1'] = { phase: 1, status: 'failed', attempts: 2, costUsd: 3, sessionId: 'sess-r' };
+    saveRun(stale);
+
+    const log: { phase: number; brief: string; resume?: string; prompt: string }[] = [];
+    const { instance, events } = runner(r, briefedSession(r, log));
+    await instance.start({
+      slug: 'demo', root: r.root, resumeRunId: stale.id, onlyPhases: [1],
+      reboard: [{ phase: 1, situation: 'work-in-progress', rung: 'resume-own-session', sessionId: 'sess-r', by: 'converge' }],
+    });
+    await instance.wait();
+
+    const asked = journalled(events, 'phase.reboard-requested')[0];
+    assert.equal(asked.brief, 'continue', 'the default brief for the rung, given a session');
+    assert.equal(asked.by, 'converge');
+    assert.equal(log[0].resume, 'sess-r');
+    assert.match(log[0].prompt, /RESUMING phase 1/);
+    assert.equal(journalled(events, 'phase.rung').length, 0, 'the caller accounts the rung; the runner only boards');
+    assert.equal(instance.current()!.phases['1'].status, 'done');
+  } finally { r.cleanup(); }
+});
+
+/* ---------------- the defect list ---------------- */
+
+test('defects: an expired wait on a stuck board is no livelock — the run does not re-enter waiting on a past clock, the phase resumes', async () => {
+  const r = repo();
+  try {
+    r.setStuck(1);
+    const stale = newRun({ slug: 'demo', root: r.root });
+    stale.status = 'paused';
+    stale.onlyPhases = [1];
+    stale.phases['1'] = {
+      phase: 1, status: 'waiting', attempts: 1, costUsd: 1, sessionId: 'sess-w',
+      parkedUntil: new Date(Date.now() - 60_000).toISOString(), parkReason: 'the image build', waits: 1,
+    };
+    saveRun(stale);
+
+    const resumes: (string | undefined)[] = [];
+    const spawn: SpawnFn = async (request) => {
+      resumes.push(request.resume);
+      assert.match(request.prompt, /wait window you declared/, 'the elapsed-window prompt, in the same session');
+      r.markDone(1);
+      return ok({ sessionId: 'sess-w' });
+    };
+    const { instance, events } = runner(r, spawn);
+    await instance.start({ slug: 'demo', root: r.root, resumeRunId: stale.id, onlyPhases: [1] });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.deepEqual(resumes, ['sess-w'], 'the expired wait boarded — stuck is no longer invisible to the candidate set');
+    assert.equal(journalled(events, 'run.waiting-external').length, 0, 'the run never re-entered waiting on a clock that had passed');
+    assert.notEqual(state.status, 'waiting');
+    assert.equal(state.phases['1'].status, 'done');
+  } finally { r.cleanup(); }
+});
+
+test('defects: a verification card that goes unanswered parks the phase and the run — the streak is untouched', async () => {
+  const r = repo();
+  try {
+    const { Approvals } = await import('../server/runner/approvals.ts');
+    const notRun = { ok: false, reason: 'nothing runnable (1 fragment left for a human)', ran: [], notRun: [{ text: 'look at the dashboard', reason: 'prose' }] };
+    const { instance, events } = runner(r, workingSession(r), undefined, undefined, {
+      approvals: new Approvals(), verify: async () => notRun, verifyAnswerMs: 60, origin: 'http://127.0.0.1:4123',
+    });
+    // The card's timer is unref'd (a pending approval must never keep the
+    // console alive); in a test nothing else holds the loop open, so hold it.
+    const keepAlive = setInterval(() => {}, 500);
+    try {
+      await instance.start({ slug: 'demo', root: r.root, onlyPhases: [1], autonomy: 'keep-going' });
+      await instance.wait();
+    } finally { clearInterval(keepAlive); }
+
+    const state = instance.current()!;
+    assert.equal(state.phases['1'].status, 'parked', 'parked, not failed');
+    assert.match(state.phases['1'].note ?? '', /went unanswered/);
+    assert.equal(state.consecutiveFailures, 0, 'nobody answering is not the phase failing');
+    assert.equal(state.status, 'parked');
+    assert.match(state.halt?.reason ?? '', /verification card went unanswered/);
+    assert.equal(journalled(events, 'phase.verify-unanswered').length, 1);
+    assert.equal(journalled(events, 'run.halt').filter((h) => h.kind === 'needs-human').length, 0, 'no needs-human halt, no streak');
+  } finally { r.cleanup(); }
+});
+
+test('defects: every verification lead missing at verify time parks exactly as boarding would — no card, no verify-failed halt', async () => {
+  const r = repo();
+  try {
+    const skipped = [{ command: 'rg -n TODO', lead: 'rg', reason: '`rg` is not installed on the verification PATH' }];
+    const unrunnable = {
+      ok: false, reason: 'all 1 command(s) are unrunnable here — leads not on the verification PATH: rg',
+      ran: [], notRun: skipped.map((s) => ({ text: s.command, reason: s.reason })), skipped,
+    };
+    const { instance, events } = runner(r, workingSession(r), undefined, undefined, { verify: async () => unrunnable });
+    await instance.start({ slug: 'demo', root: r.root, autonomy: 'halt-on-everything' });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.equal(state.phases['1'].status, 'parked');
+    assert.match(state.phases['1'].note ?? '', /§Verification cannot run on this machine/);
+    assert.equal(journalled(events, 'phase.verify-unrunnable').length, 1);
+    assert.notEqual(state.phases['1'].status, 'awaiting-verification', 'no card was raised');
+    assert.equal(journalled(events, 'run.halt').filter((h) => h.kind === 'verify-failed').length, 0);
+    // The run parks with the same sentence — the board already reads done, so
+    // a parked record in a driving loop would have been reconciled to done on
+    // the next tick, and an unverified phase would have passed in silence.
+    assert.equal(state.status, 'parked');
+    assert.match(state.halt?.reason ?? '', /§Verification cannot run on this machine/);
+    assert.equal(state.consecutiveFailures, 0);
+  } finally { r.cleanup(); }
+});
+
+test('defects: the belt-check backs off against a stale store — at most a handful of re-boards in five seconds, doubling', async () => {
+  const r = repo();
+  try {
+    r.setLockRefused(true);
+    const seen: number[] = [];
+    const scheduler = new Scheduler({ locks: () => [] }); // a store that never learns of the lock
+    const { instance, events } = runner(r, workingSession(r, seen), undefined, undefined, { scheduler });
+    // Every timer in the runner and the scheduler is unref'd; hold the loop open
+    // for the seven seconds this takes.
+    const keepAlive = setInterval(() => {}, 500);
+    try {
+      const started = instance.start({ slug: 'demo', root: r.root, onlyPhases: [1] });
+      setTimeout(() => r.setLockRefused(false), 5_500);
+      await started;
+      await instance.wait();
+    } finally { clearInterval(keepAlive); scheduler.close(); }
+
+    const races = journalled(events, 'phase.lock-race');
+    assert.ok(races.length >= 2 && races.length <= 4, `a backoff, not a spin: ${races.length} re-boards`);
+    assert.deepEqual(races.slice(0, 3).map((race) => race.backoffMs), [1000, 2000, 4000].slice(0, races.length));
+    assert.deepEqual(seen, [1], 'and the phase boarded once the holder released');
+    assert.equal(instance.current()!.phases['1'].lockBackoffMs, undefined, 'the backoff resets on a successful claim');
+  } finally { r.cleanup(); }
+});
+
+test('defects: the no-handoff halt quotes the PHASE session, not the closeout that failed after it', async () => {
+  const r = repo();
+  try {
+    gitInit(r.root, ['scratch.txt']);
+    writeFileSync(join(r.root, 'scratch.txt'), 'work the session did');
+    let calls = 0;
+    const spawn: SpawnFn = async () => {
+      calls++;
+      return ok({ resultText: calls === 1 ? 'Phase complete! (no handoff though)' : 'I could not write the handoff either' });
+    };
+    const { instance } = runner(r, spawn);
+    await instance.start({ slug: 'demo', root: r.root, onlyPhases: [1], autonomy: 'keep-going' });
+    await instance.wait();
+
+    const state = instance.current()!;
+    assert.equal(calls, 2, 'the phase, then one closeout');
+    assert.equal(state.halt?.kind, 'no-handoff');
+    assert.match(state.halt?.reason ?? '', /Phase complete!/, 'the words that explain the missing handoff');
+    assert.doesNotMatch(state.halt?.reason ?? '', /I could not write/);
+    assert.match(state.phases['1'].said ?? '', /Phase complete!/);
+    assert.match(state.phases['1'].closeout?.said ?? '', /I could not write/, 'the closeout\'s words are kept, separately');
+  } finally { r.cleanup(); }
+});
+
+test('defects: a freeze escalation with another lane still open leaves the halt that lane wrote alone', async () => {
+  const r = repo();
+  let pid = 0;
+  const held = realChildSession(r, (p) => { pid = p; }, false);
+  let releaseTwo: () => void = () => {};
+  const twoHeld = new Promise<void>((resolve) => { releaseTwo = resolve; });
+  r.setParallel(true);
+  const spawn: SpawnFn = async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    if (phase === 1) return held.spawn(request);
+    // A second lane with NO pid — between admission and a session that
+    // never reports one — held open while phase 1 is frozen.
+    await twoHeld;
+    r.markDone(phase);
+    return ok();
+  };
+  const { instance } = runner(r, spawn, undefined, undefined, { maxParallel: 2 });
+  try {
+    await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', maxParallel: 2 });
+    await held.inSession;
+    await sleepMs(150); // let lane 2 board too
+
+    assert.equal(instance.freeze('test', 1), true);
+    assert.ok(pid, 'the frozen lane has a real child');
+    const state = instance.current()!;
+    state.halt = { at: new Date().toISOString(), reason: 'another lane stopped the run', phase: 2 };
+    (instance as unknown as { escalateFreeze(): void }).escalateFreeze();
+
+    assert.equal(instance.current()!.halt?.reason, 'another lane stopped the run', 'the other lane\'s halt stands');
+    assert.notEqual(instance.current()!.status, 'paused', 'a run with an open lane is not paused');
+    assert.equal(instance.current()!.phases['1'].status, 'pending', 'the frozen phase itself is checkpointed');
+  } finally {
+    held.release();
+    releaseTwo();
+    await instance.wait();
+    r.cleanup();
+  }
 });

@@ -181,11 +181,17 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    actually done — stop and surface that rather than building on an unfinished base (earlier-numbered phases
    may legitimately be incomplete; rely on the board, not phase numbers).
    **If the board shows this phase as `in-progress` or `stuck` and the lock is yours-or-stale**, you are
-   RESUMING an interrupted session (a died console, a usage-limit stop, a manual pause) — recovery, not a
-   restart: read `git status` and `git diff` FIRST; anything uncommitted is the interrupted session's work.
-   Never `git stash`, `git checkout --` or `git reset` it away. Re-claim the lock (`--force` only when
-   `status` says the lease expired), then continue from where it stopped to the exit criteria — a usage-limit
-   stop says nothing about the work, so fix nothing on account of it. Then check the plan's
+   RESUMING an interrupted session (a died console, a usage-limit stop, a manual pause, a session that
+   declared `partial`) — recovery, not a restart: read `git status` and `git diff` FIRST; anything
+   uncommitted is the interrupted session's work. Never `git stash`, `git checkout --` or `git reset` it
+   away. Re-claim the lock (`--force` only when `status` says the lease expired), then continue from where
+   it stopped to the exit criteria — a usage-limit stop says nothing about the work, so fix nothing on
+   account of it. (This RESUMING path is exactly what the autopilot drives by itself: a phase it finds
+   unfinished boards with a **resume brief** appended to its boot prompt — the handoff's status, the
+   uncommitted paths, the last verification, the last session's words — or continues its own session
+   with the same instruction; a phase whose handoff reads `blocked` gets ONE **unblock brief**, explicitly
+   allowed to do the unblocking work. The brief is the supervisor's snapshot; the repository wins.) Then
+   check the plan's
    `## Session budget` target model against the model you're *actually* running — if they differ, recompute
    the budget from `references/sizing.md` and re-batch accordingly. **Then check scope, then claim
    (concurrency guard):** `git pull`, read the phase's scope
@@ -290,6 +296,14 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
    --watch <ref>`; (4) stop. The supervisor parks the phase and resumes THIS session when the window
    elapses. (An interactive session may instead simply keep the turn and wait.) Plans avoid the park
    entirely by splitting build ∥ verify-later behind a Gate-check — `references/plan-format.md`.
+   **Stopping with work still left — nothing wrong, just out of budget or context:** under a supervisor
+   a clean exit with an `in-progress` handoff reads as a failed phase and buys a closeout that is forbidden
+   from doing the work. Instead: (1) commit what is done; (2) write the handoff `in-progress` with the
+   Outstanding section naming exactly what remains; (3) declare it —
+   `bash scripts/phase-outcome.sh <slug> <N> partial --reason <budget|context|other>`; (4) stop. The
+   supervisor reads `partial` as *work in progress, resume me* and continues THIS session (or boards a
+   fresh one with a resume brief) by itself. `partial` is for work that remains; `waiting-external` is for
+   a clock you don't control; `blocked`/`needs-human` are for things a machine cannot settle.
 
 5. **Stop & hand off, or batch.** If the proof is waiting on an external clock, use the
    §External-waits protocol above — under a supervisor, `phase-outcome.sh … waiting-external`

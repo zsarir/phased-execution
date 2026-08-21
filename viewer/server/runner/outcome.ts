@@ -21,7 +21,15 @@ import { join } from 'node:path';
 
 import { runDir } from './state.ts';
 
-export type PhaseOutcomeStatus = 'complete' | 'waiting-external' | 'blocked' | 'needs-human';
+/**
+ * `partial` — "work remains; resume me" — is the one a session declares when
+ * it must stop before the exit criteria (its budget, its context) without
+ * anything being WRONG: the runner reads it as situation `work-in-progress`
+ * at once and the ladder's first rung continues the session, where the clean
+ * exit used to read as a failed phase and buy a closeout that could not do
+ * the work. `reason` conventionally names why: `budget`, `context`, `other`.
+ */
+export type PhaseOutcomeStatus = 'complete' | 'waiting-external' | 'blocked' | 'needs-human' | 'partial';
 
 export type PhaseOutcome = {
   version: 1;
@@ -35,7 +43,7 @@ export type PhaseOutcome = {
   written_at: string;
 };
 
-const STATUSES: readonly string[] = ['complete', 'waiting-external', 'blocked', 'needs-human'];
+const STATUSES: readonly string[] = ['complete', 'waiting-external', 'blocked', 'needs-human', 'partial'];
 
 /** Where a given attempt's outcome file lives, keyed by run and phase. */
 export function outcomeFileFor(root: string, slug: string, runId: string, phase: number): string {

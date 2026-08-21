@@ -70,9 +70,9 @@ import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from
 import { Journal } from './runner/journal.ts';
 import {
   autoResolveRun, childrenOf, latestRun, listRuns, loadRun, phaseRecord, pidAlive,
-  reconcileRecordsAgainstBoard, resolveRunsAgainst, saveRun,
+  reconcileRecordsAgainstBoard, resetForRetry, resolveRunsAgainst, saveRun,
   slugsNeedingBoard, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, isMcpPolicy, mcpReasonText,
-  type McpPolicy, type PreflightWarning, type RunState, type VerifySummary,
+  type BoardingBrief, type McpPolicy, type PreflightWarning, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import { outcomeFileFor, readOutcome } from './runner/outcome.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
@@ -588,7 +588,9 @@ export function autoRecoveryClass(
 type DriveVehicle =
   | { kind: 'retry' }
   | { kind: 'session'; mode: RecoverMode; instruction?: string }
-  | { kind: 'agent'; cls: RecoveryClass };
+  | { kind: 'agent'; cls: RecoveryClass }
+  /** The runner's own re-board with a brief (`start({resumeRunId, reboard})`). */
+  | { kind: 'reboard'; brief: BoardingBrief; escalate?: 'model' };
 
 /** What `maybeAutoRecover` answers — launched or not, and what it read. */
 export type AutoRecoverResult = {
@@ -599,7 +601,7 @@ export type AutoRecoverResult = {
   situation?: string;
   label?: string;
   rung?: string;
-  vehicle?: 'retry' | 'session' | 'agent';
+  vehicle?: 'retry' | 'session' | 'agent' | 'reboard';
 };
 
 export class Service {
@@ -786,6 +788,19 @@ export class Service {
       // how a session this console never started (a human in a terminal, a
       // bash worker) gets a say in what the autopilot is allowed to begin.
       locks: () => this.allLocks(),
+      // The entry's OWN phase, read live off disk: the one holder the store's
+      // watcher-debounced view can lag on (a same-phase claim written seconds
+      // ago). Without it admission granted, the boarding belt-check refused,
+      // and the loop re-boarded ~1 Hz until the store caught up.
+      liveLock: (slug, phase) => {
+        const handoffsDir = this.root?.handoffsDir;
+        if (!handoffsDir || this.store?.get(slug)?.plan?.closed) return null;
+        const lock = readLock(handoffsDir, slug, phase);
+        return lock ? {
+          slug, phase: lock.phase, owner: lock.owner, expired: lock.expired, scope: lock.scope,
+          ...(lock.leaseUntil != null ? { leaseUntil: lock.leaseUntil } : {}),
+        } : null;
+      },
       // A lock with no `scope=` line: recover what the plan says that phase
       // touches rather than reading it as `all`. See `SchedulerDeps.scopeFor`.
       scopeFor: (slug, phase) => this.scopeOf(slug, phase),
@@ -1063,6 +1078,21 @@ export class Service {
       approvals: this.approvals,
       scheduler: this.scheduler,
       maxParallel: () => this.flags.maxSessions,
+      // The store's handoff for a phase — status and Outstanding — for the
+      // loop's own situation classifier and the re-board briefs. The board's
+      // word already says `stuck`/`in-progress`; this is what it SAYS.
+      handoffFor: (slug, phase) => {
+        const record = this.store?.get(slug);
+        const handoff = record ? handoffFor(record, phase) : undefined;
+        return handoff
+          ? { exists: true, status: handoff.status, outstanding: handoff.outstanding }
+          : { exists: false };
+      },
+      // The ladder's caps and the unblock switch — the same preferences the
+      // healer reads, so the loop's climbs and the healer's count against one
+      // budget.
+      ladderCaps: () => ladderCaps(this.prefs),
+      unblockAttempts: () => this.prefs.unblockAttempts !== false,
       origin: `http://${flags.host}:${flags.port}`,
       // The registry ids, so the runner's own engine calls (its validate.sh in
       // confirm(), its board reads) carry PE_MCP_SERVERS like the service's do.
@@ -3761,15 +3791,8 @@ export class Service {
     // operator means by it: clear the failure AND continue the run, under
     // normal admission.
     const edited = this.editStoredRun(slug, (state) => {
-      const record = phaseRecord(state, phase);
-      record.status = 'pending';
-      record.note = undefined;
-      record.endedAt = undefined;
-      delete record.preflight;
-      delete record.mcpDegraded;
-      // See `Runner.retry`: a lock-cap park keeps its clock otherwise, and the
-      // retry re-parks on the same expired arithmetic.
-      record.lockWaitSince = undefined;
+      // The ONE reset, shared with `Runner.retry` — the two had drifted twice.
+      resetForRetry(phaseRecord(state, phase));
       state.consecutiveFailures = 0;
       state.halt = null;
     });
@@ -3833,7 +3856,7 @@ export class Service {
 
     // The most recent run that actually reached this phase — recovery acts on a
     // real record, never on an invented one.
-    const target = listRuns(root, slug)
+    const target = listRuns(root, slug, this.liveRunIds())
       .find((run) => run.phases[String(phase)]);
     if (!target) throw new Error(`No run of ${slug} has a record for phase ${phase}.`);
 
@@ -3984,7 +4007,7 @@ export class Service {
     const root = this.root?.path;
     if (!root) return { ok: false, status: 409, error: 'No source directory is open.' };
     const state = this.runners.get(slug)?.current()
-      ?? listRuns(root, slug).find((run) => run.phases[String(phase)]);
+      ?? listRuns(root, slug, this.liveRunIds()).find((run) => run.phases[String(phase)]);
     const record = state?.phases[String(phase)];
     const verification = record?.verification;
     if (!state || !record || !verification) {
@@ -4311,7 +4334,9 @@ export class Service {
       }
       case 'unblock-session': {
         if (this.prefs.unblockAttempts === false) return null;
-        if (!resumable) return null;
+        // No session left: the runner boards fresh with the unblock brief
+        // (the engine's boot prompt + the Outstanding text + "you MAY do the work").
+        if (!resumable) return { kind: 'reboard', brief: 'unblock' };
         return {
           kind: 'session', mode: 'resume',
           instruction: 'You declared this phase BLOCKED. This is ONE bounded unblock session: you are explicitly '
@@ -4333,9 +4358,14 @@ export class Service {
         return agent ? { kind: 'agent', cls: 'plan-repair' } : null;
       case 'stale-claim-takeover':
         return agent && this.prefs.staleClaimTakeover !== false ? { kind: 'agent', cls: 'stale-claim-takeover' } : null;
-      // Landing with the runner re-board vehicles (Phase 2), the convergence
-      // loop (Phase 3) and the resource ladder (Phase 4): not drivable yet.
+      // The runner's own re-board with a RESUMING brief: the engine's boot
+      // prompt plus the evidence (handoff, uncommitted paths, last
+      // verification, last words). Through `start({resumeRunId, reboard})`,
+      // never a second orchestration.
       case 'reboard-resume-brief':
+        return { kind: 'reboard', brief: 'resume', ...(rung.params?.escalate === 'model' ? { escalate: 'model' as const } : {}) };
+      // Landing with the convergence loop (Phase 3) and the resource ladder
+      // (Phase 4): not drivable yet.
       case 'plan-repair-script':
       case 'switch-account':
       case 'switch-model':
@@ -5050,6 +5080,31 @@ export class Service {
           settleRung(slot, 'failed', undefined, (error as Error)?.message ?? String(error));
           try { saveRun(state); } catch { /* best effort */ }
         });
+      return answer();
+    }
+
+    /* The runner's own re-board WITH A BRIEF: resume the run with the phase
+     * reset and hinted, and let boarding assemble the resume/unblock brief.
+     * `start({reboard})` does not account the rung — this healer did, above. */
+    if (vehicle.kind === 'reboard') {
+      if (!this.flags.allowRun) return no('the runner re-board needs --allow-run', { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
+      climb();
+      const record = state.phases[key];
+      void this.startRun(slug, {
+        resumeRunId: state.id,
+        reboard: [{
+          phase, situation: situation.key, rung: rung.vehicle, brief: vehicle.brief,
+          ...(record?.sessionId ?? record?.resumeSessionId ? { sessionId: record?.sessionId ?? record?.resumeSessionId } : {}),
+          ...(vehicle.escalate ? { escalate: vehicle.escalate } : {}),
+          by: 'auto-recovery',
+        }],
+        ...(state.onlyPhases?.length ? { onlyPhases: state.onlyPhases } : {}),
+        skills: state.skills ?? [],
+      }).catch((error) => {
+        log.warn('run.auto-recovery-failed', { slug, phase, error });
+        settleRung(slot, 'failed', undefined, (error as Error)?.message ?? String(error));
+        try { saveRun(state); } catch { /* best effort */ }
+      });
       return answer();
     }
 

@@ -17,7 +17,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { homedir, hostname, userInfo } from 'node:os';
 
-import { failureContext, MAX_FAILURE_CONTEXT_BYTES } from '../server/runner/failure-context.ts';
+import {
+  failureContext, resumeBrief, resumeInstruction, unblockBrief, MAX_BRIEF_BYTES, MAX_FAILURE_CONTEXT_BYTES,
+} from '../server/runner/failure-context.ts';
 
 const red = (partial: Record<string, unknown> = {}) => ({
   phase: 4,
@@ -172,4 +174,74 @@ test('the insert is built only from the record it was handed', () => {
   // Stronger than a blocklist and needs no private strings: an insert is made of
   // the caller's own facts, so no absolute path may appear in it at all.
   assert.doesNotMatch(text, /(?:^|\s)\/[A-Za-z0-9._-]+\//, 'an absolute path reached the prompt');
+});
+
+/* ------------------------------------------------------------------ *
+ * The re-board briefs: RESUMING and UNBLOCK
+ * ------------------------------------------------------------------ */
+
+const resumable = {
+  phase: 7, slug: 'demo', scriptsDir: '/skill/scripts', attempts: 1,
+  handoff: { exists: true, status: 'in-progress', outstanding: '- the PR description\n- re-run the e2e suite' },
+  work: { did: true, why: '.: 3 uncommitted paths, 1 commit since the phase started', dirty: 3, commits: 1, paths: ['src/a.ts', 'src/b.ts', 'docs/x.md'] },
+  verification: { ok: false, reason: '`npm test` exited 1', ran: [{ command: 'npm test', ok: false, code: 1, output: 'FAIL e2e\n  timeout' }], notRun: [] },
+  said: 'stopping here — budget nearly spent; the e2e suite still needs a re-run',
+};
+
+test('the RESUMING brief carries the handoff, the uncommitted paths, the last verification and the last words — and never the closeout sentence', () => {
+  const text = resumeBrief(resumable);
+  assert.match(text, /^RESUMING phase 7/);
+  assert.match(text, /a handoff exists for phase 7 and reads "in-progress"/);
+  assert.match(text, /re-run the e2e suite/, 'the Outstanding section rides along');
+  assert.match(text, /uncommitted: src\/a\.ts, src\/b\.ts, docs\/x\.md/);
+  assert.match(text, /\$ npm test/);
+  assert.match(text, /exit 1/);
+  assert.match(text, /budget nearly spent/);
+  assert.match(text, /phase-outcome\.sh demo 7 partial --reason/, 'the partial declaration is named for the next stop');
+  assert.match(text, /the repository is right/);
+  assert.doesNotMatch(text, /do not start new work/i);
+  assert.ok(Buffer.byteLength(text) <= MAX_BRIEF_BYTES);
+});
+
+test('a continue instruction replaces the RESUMING header but keeps the evidence', () => {
+  const text = resumeBrief(resumable, 'Carry on exactly where you stopped.');
+  assert.match(text, /^Carry on exactly where you stopped\./);
+  assert.doesNotMatch(text, /RESUMING phase 7 — this phase/);
+  assert.match(text, /uncommitted: src\/a\.ts/);
+  assert.equal(resumeInstruction(resumable).includes('RESUMING phase 7'), true);
+});
+
+test('the UNBLOCK brief leads with the Outstanding text, allows the work, names the errand escape hatch, and never says do-not-start', () => {
+  const text = unblockBrief({
+    phase: 3, slug: 'demo', scriptsDir: '/skill/scripts',
+    handoff: { exists: true, status: 'blocked', outstanding: 'The column rename is undecided; the two callers disagree.' },
+    work: { did: false, why: '.: clean tree, 0 commits since the phase started' },
+  });
+  assert.match(text, /^UNBLOCK phase 3/);
+  assert.match(text, /explicitly allowed — asked — to do the work/);
+  assert.match(text, /The column rename is undecided/);
+  assert.match(text, /phase-outcome\.sh demo 3 needs-human --reason/);
+  assert.match(text, /Working tree: clean/);
+  assert.doesNotMatch(text, /do not start new work/i);
+  // The Outstanding block is load-bearing and appears once, not once in the
+  // instruction and again in the evidence.
+  assert.equal(text.split('The column rename is undecided').length - 1, 1);
+});
+
+test('an UNBLOCK brief with an empty Outstanding says so instead of inventing a blocker', () => {
+  const text = unblockBrief({ phase: 3, handoff: { exists: true, status: 'blocked' } });
+  assert.match(text, /Outstanding section is empty/);
+  assert.match(text, /phase-outcome\.sh <slug> 3 needs-human/, 'unknown slug/scripts degrade to placeholders, never to a broken command');
+});
+
+test('a brief over budget sheds evidence, never the instruction', () => {
+  const text = resumeBrief({
+    ...resumable,
+    handoff: { exists: true, status: 'in-progress', outstanding: 'x'.repeat(3_000) },
+    verification: { ok: false, reason: 'red', ran: [{ command: 'npm test', ok: false, code: 1, output: 'y'.repeat(5_000) }], notRun: [] },
+    said: 'z'.repeat(4_000),
+  });
+  assert.ok(Buffer.byteLength(text) <= MAX_BRIEF_BYTES);
+  assert.match(text, /^RESUMING phase 7/);
+  assert.match(text, /Read `git status` and `git diff` FIRST/);
 });

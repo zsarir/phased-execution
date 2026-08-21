@@ -132,10 +132,13 @@ agree: the plan's own verification commands pass, `validate.sh` still passes, an
 **The outcome protocol.** A session can declare how it ended instead of leaving the runner to guess
 from a clean exit: `scripts/phase-outcome.sh <slug> <N> <status>` writes one atomic JSON file to the
 path the runner injects as `PE_OUTCOME_FILE`, and the runner reads, journals and consumes it on
-exit. Four statuses — `complete` (advisory; the board still decides), `waiting-external` (the work
+exit. Five statuses — `complete` (advisory; the board still decides), `waiting-external` (the work
 needs an external clock: a CI build, a PR auto-merge, a deploy window), `blocked` (with a
-`lock:<slug>/<N>` watch ref it re-queues; otherwise it halts with the session's own reason), and
-`needs-human` (parks the run for a person, not counted as a failure). Every prompt the runner sends
+`lock:<slug>/<N>` watch ref it re-queues; otherwise the blocker statement decides — see the ladder
+below), `needs-human` (parks the run for a person with the errand recorded, not counted as a
+failure), and `partial` ("work remains, resume me": the session had to stop — budget, context —
+without anything being wrong; the runner reads it as work in progress and continues the session
+instead of nudging a closeout that may not do the work). Every prompt the runner sends
 carries the unattended-session contract naming this — including the fact that `ScheduleWakeup`,
 `Monitor` and backgrounded watchers do not survive a `-p` turn ending. A **Stop hook** enforces it,
 belt-and-braces: a session about to end with neither a handoff on the board nor a declared outcome
@@ -149,6 +152,26 @@ to verify and close out, or re-file the wait. When every startable phase is park
 waits with the soonest clock (`waitUntil`) — restart-safe: a console reboot re-arms it exactly like
 a usage-window sleep. Caps make the wait honest: 4 waits and 8 hours parked per phase, then a
 `waiting-external-timeout` halt naming the watch refs.
+
+**The ladder in the loop.** `interrupted` and `failed` records are not terminal any more. At the top
+of every drive tick, after reconcile, the runner **classifies** each of them — and each phase whose
+handoff exists but is not complete — against the board, the handoff, the lock and the working tree
+(`runner/situation.ts`: `never-started`, `work-in-progress`, `done-unrecorded`, `verify-red`,
+`blocked-declared:<sub>`, …), climbs one rung of the remediation ladder (`runner/ladder.ts`, the same
+history and caps the healer uses) through its own vehicles, and boards the phase with the **brief**
+the rung names: `fresh` (the engine prompt alone — a never-started phase), `resume` (the prompt plus
+a RESUMING block: handoff status, uncommitted paths, last verification, last words), `unblock` (the
+prompt plus the handoff's Outstanding text and "you MAY do the work; if the blocker is an operator's,
+declare `needs-human` with the exact errand" — ONE bounded session), `continue` / `closeout` (the
+phase's own session, `--resume`). A blocked handoff therefore no longer halts at once: a lock
+sub-kind re-queues, `credential`/`gate` park with an **errand** immediately, `unknown` gets one unblock
+session and then the errand. Exhaustion parks the phase with the errand — one named ask, journalled
+`phase.errand` — and the run keeps driving whatever else is ready. Journal vocabulary:
+`phase.situation` → `phase.rung` → `phase.brief` → `phase.start`, `phase.errand`,
+`phase.ladder-deferred` (a rung remains that only the healer's agent can drive). The healer reaches
+the same vehicle from outside the loop through `startRun({resumeRunId, reboard: [{phase, situation,
+rung, brief}]})`. Opt-in is the run's own auto-recovery switch; a never-started phase re-boards fresh
+regardless, because that is the run doing its job.
 
 **The board is live, not per-lane.** The docs watcher pokes running loops, so a handoff written by a
 manual session mid-run is seen NOW rather than when a lane settles; a reconcile pass at the top of

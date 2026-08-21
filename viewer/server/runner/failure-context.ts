@@ -79,6 +79,29 @@ export type FailureFacts =
  * session cannot tell a stale report from a live one.
  */
 export function failureContext(record: FailureFacts, halt?: string | null): string {
+  const blocks = failureBlocks(record, halt);
+
+  // A record with nothing on it gets no insert at all. Appending a bare header
+  // that says "here is what happened" followed by nothing is worse than saying
+  // nothing: it reads as "the last attempt failed silently".
+  if (!blocks.some((block) => block.text.trim())) return '';
+
+  const header = {
+    text: [
+      `What happened on the previous attempt(s) of phase ${record.phase} — verify against the`,
+      'repository; where they disagree the repository is right.',
+    ].join('\n'),
+  };
+
+  return assemble([header, ...blocks], MAX_FAILURE_CONTEXT_BYTES);
+}
+
+/**
+ * The evidence paragraphs, without the header — shared by the retry insert
+ * above and the re-board briefs below, so a failing command is quoted the same
+ * way whichever prompt carries it. Ordered by drop rank (see `failureContext`).
+ */
+export function failureBlocks(record: FailureFacts, halt?: string | null): Block[] {
   const blocks: Block[] = [];
 
   if (halt?.trim()) {
@@ -133,17 +156,142 @@ export function failureContext(record: FailureFacts, halt?: string | null): stri
     });
   }
 
-  // A record with nothing on it gets no insert at all. Appending a bare header
-  // that says "here is what happened" followed by nothing is worse than saying
-  // nothing: it reads as "the last attempt failed silently".
-  if (!blocks.some((block) => block.text.trim())) return '';
+  return blocks;
+}
 
+/* ------------------------------------------------------------------ *
+ * The re-board briefs — RESUMING and UNBLOCK
+ *
+ * What the runner appends to the engine's boot prompt (or sends to the phase's
+ * own session) when the ladder boards a phase that has history: `resume` for
+ * unfinished work on disk, `unblock` for a handoff that declares the phase
+ * blocked. Same shape as the retry insert — the engine's text is never
+ * rewritten, the brief follows it — and the same rule about evidence: it is a
+ * snapshot, the repository wins, and it is shed before the instruction is.
+ *
+ * Neither brief ever says "do not start new work". That sentence belongs to
+ * the closeout, and it was the closeout's brief that looped three times on a
+ * phase whose cure was to DO the work ($13, measured).
+ * ------------------------------------------------------------------ */
+
+/** A brief is larger than the retry insert (it carries the Outstanding text) and still an insert. */
+export const MAX_BRIEF_BYTES = 6 * 1024;
+const OUTSTANDING_MAX_BYTES = 1_500;
+const MAX_DIRTY_PATHS = 12;
+
+/** Everything a brief may quote. Every field is a fact somebody read; absent means unknown. */
+export type BriefFacts = FailureFacts & {
+  slug?: string;
+  /** The handoff as the store reads it; `exists: false` when none was written. */
+  handoff?: { exists: boolean; status?: string; outstanding?: string };
+  /** The working tree's answer (`situation.ts` `workEvidence`) plus the first uncommitted paths, when read. */
+  work?: { did: boolean | null; why: string; dirty?: number; commits?: number; paths?: string[] };
+  /** Where `scripts/` lives, for the outcome commands a brief quotes. Absent: a relative `scripts/` path. */
+  scriptsDir?: string;
+  /** The run's halt reason FOR THIS PHASE, when the caller has one. */
+  halt?: string | null;
+};
+
+const outcomeScript = (facts: BriefFacts): string =>
+  `bash ${facts.scriptsDir ?? 'scripts'}/phase-outcome.sh ${facts.slug ?? '<slug>'} ${facts.phase}`;
+
+/**
+ * The evidence paragraphs a re-board brief carries: the handoff, what it left
+ * Outstanding, the working tree, then the retry insert's own blocks (the
+ * failing commands, the unrun fragments, the last words, the attempt count).
+ */
+export function briefEvidence(facts: BriefFacts): Block[] {
+  const blocks: Block[] = [];
+  const handoff = facts.handoff;
+  if (handoff) {
+    blocks.push({
+      text: handoff.exists
+        ? `Handoff: a handoff exists for phase ${facts.phase} and reads "${oneLine(handoff.status ?? 'unknown', 40)}".`
+        : `Handoff: none has been written for phase ${facts.phase} yet.`,
+      drop: 70,
+    });
+    if (handoff.outstanding?.trim()) {
+      blocks.push({
+        text: ['Outstanding, as the handoff left it:', '', indent(tail(handoff.outstanding.trim(), OUTSTANDING_MAX_BYTES))].join('\n'),
+        drop: 45,
+      });
+    }
+  }
+  const work = facts.work;
+  if (work) {
+    let line: string;
+    if (work.did === null) line = `Working tree: ${oneLine(work.why, 200)}.`;
+    else if (!work.did) line = `Working tree: clean — ${oneLine(work.why, 200)}.`;
+    else {
+      const paths = (work.paths ?? []).slice(0, MAX_DIRTY_PATHS);
+      const more = (work.dirty ?? paths.length) - paths.length;
+      line = `Working tree: ${oneLine(work.why, 200)}`
+        + (paths.length ? ` — uncommitted: ${paths.join(', ')}${more > 0 ? ` (+${more} more)` : ''}` : '')
+        + '.';
+    }
+    blocks.push({ text: line, drop: 65 });
+  }
+  blocks.push(...failureBlocks(facts, facts.halt));
+  return blocks;
+}
+
+/** The RESUMING instruction — SKILL.md Mode 2 step 2, as the autopilot drives it. */
+export function resumeInstruction(facts: BriefFacts): string {
+  return [
+    `RESUMING phase ${facts.phase} — this phase was started before and is NOT finished. You are`,
+    'CONTINUING it, not starting it over. Read `git status` and `git diff` FIRST: anything uncommitted',
+    'is an earlier session\'s work on this very phase — never `git stash`, `git checkout --` or',
+    '`git reset` it away. Re-claim the phase lock (`--force` only when `status` says the lease expired),',
+    'then carry the phase to its exit criteria (the handoff\'s Outstanding section, when there is one,',
+    'says what is left), run the plan\'s §Verification, commit the changed files with explicit paths, and',
+    'write the handoff `complete`. If you must stop with work still left (budget, context), write the',
+    'handoff `in-progress` and declare it so the supervisor resumes you instead of reading a failure:',
+    `    ${outcomeScript(facts)} partial --reason <budget|context|other>`,
+  ].join('\n');
+}
+
+/**
+ * The boot-prompt insert for a `resume` boarding — or, with `instruction`,
+ * the whole prompt for an own-session `continue`: the instruction, then the
+ * evidence under a header that says the repository wins.
+ */
+export function resumeBrief(facts: BriefFacts, instruction: string = resumeInstruction(facts)): string {
   const header = {
     text: [
-      `What happened on the previous attempt(s) of phase ${record.phase} — verify against the`,
-      'repository; where they disagree the repository is right.',
+      'What the supervisor knows about the earlier attempt(s) — verify against the repository;',
+      'where they disagree the repository is right.',
     ].join('\n'),
   };
+  return assemble([{ text: instruction }, header, ...briefEvidence(facts)], MAX_BRIEF_BYTES);
+}
 
-  return assemble([header, ...blocks], MAX_FAILURE_CONTEXT_BYTES);
+/** The UNBLOCK instruction — one bounded session, explicitly allowed to do the work. */
+export function unblockInstruction(facts: BriefFacts): string {
+  return [
+    `UNBLOCK phase ${facts.phase} — the handoff for this phase declares it BLOCKED, and this is ONE`,
+    'bounded unblock session. You are explicitly allowed — asked — to do the work that unblocks it',
+    'yourself wherever a machine can: build what is unbuilt, fix what is red, finish what is partial,',
+    're-run what timed out. Read `git status` and `git diff` FIRST and never discard earlier work.',
+    'If the blocker is genuinely an operator\'s — a credential nobody on this machine holds, a',
+    'person\'s approval, a third party, a manual gate — do not improvise around it: declare exactly',
+    'what is needed and from whom, then stop:',
+    `    ${outcomeScript(facts)} needs-human --reason "<the exact errand: what, from whom>"`,
+    'Otherwise carry the phase to its exit criteria, run the plan\'s §Verification, commit the changed',
+    'files with explicit paths, and write the handoff `complete`.',
+  ].join('\n');
+}
+
+/** The boot-prompt insert for an `unblock` boarding: instruction, the Outstanding text, the evidence. */
+export function unblockBrief(facts: BriefFacts): string {
+  const outstanding = facts.handoff?.outstanding?.trim();
+  const blocks: Block[] = [{ text: unblockInstruction(facts) }];
+  // Load-bearing, not droppable: the Outstanding text IS what the session is
+  // being asked to act on. Capped at source instead.
+  blocks.push({
+    text: outstanding
+      ? ['The handoff\'s Outstanding section, as it was left:', '', indent(tail(outstanding, OUTSTANDING_MAX_BYTES))].join('\n')
+      : 'The handoff declares the phase blocked but its Outstanding section is empty — read the handoff itself for the blocker.',
+  });
+  const rest = briefEvidence({ ...facts, handoff: facts.handoff ? { ...facts.handoff, outstanding: undefined } : facts.handoff });
+  return assemble([...blocks, ...rest], MAX_BRIEF_BYTES);
 }

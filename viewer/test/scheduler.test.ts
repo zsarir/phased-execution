@@ -505,3 +505,31 @@ test('a guard flip lands on the next poll — queued work is re-judged, not stra
   s.release(held);
   s.close();
 });
+
+/* ------------------------------------------------------------------ *
+ * The live lock read and the belt-check's observation
+ * ------------------------------------------------------------------ */
+
+test('a same-phase foreign lock the store has not scanned yet still blocks, read live off disk', async () => {
+  let onDisk: LockView | null = {
+    slug: 'a', phase: 1, owner: 'mobin@laptop', expired: false, scope: ['api'], leaseUntil: Date.now() + 60_000,
+  };
+  const s = new Scheduler({
+    max: 8,
+    locks: () => [],                       // the store's view: nothing
+    liveLock: (slug, phase) => (slug === 'a' && phase === 1 ? onDisk : null),
+  });
+  const admission = s.admit({ slug: 'a', phase: 1, runId: 'r1', scope: ['api'] });
+  await tick();
+  assert.equal(await pending(admission), true, 'admission waits on the lock the belt-check would otherwise have found');
+  const entry = s.snapshot().entries[0];
+  assert.equal(entry.waitingOn[0]?.kind, 'lock');
+  assert.equal(entry.waitingOn[0]?.owner, 'mobin@laptop');
+
+  onDisk = null; // the holder released
+  s.poll();
+  await tick();
+  assert.equal(await pending(admission), false, 'and admits the moment the file is gone');
+  s.release(await admission);
+  s.close();
+});

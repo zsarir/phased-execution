@@ -650,3 +650,51 @@ test('Recover & continue names the step: the phase, what it reads as, and the ru
       report.steps.join(' | '));
   } finally { cleanup(); }
 });
+
+test('a work-in-progress phase with no session left re-boards through the runner WITH the resume brief — the reboard vehicle', async () => {
+  // The 2026-08-13 P2 shape, minus the session: unfinished work on disk, no
+  // transcript to resume. The ladder's first rung (own session) is not
+  // available; the second is the runner's own re-board with a RESUMING brief,
+  // driven through `startRun({resumeRunId, reboard})` — never a closeout that
+  // may not do the work, never a bare needs-you.
+  const { root, cleanup } = scratch();
+  try {
+    gitInit(root);
+    writeFileSync(join(root, 'half-done.txt'), 'the work, unfinished');
+    const svc = service(root, { allowAgent: false });
+    const minted = stubMint(svc);
+    const state = newRun({ slug: 'alpha', root, autoRecover: true });
+    state.status = 'parked';
+    state.activePhase = null;
+    state.halt = { at: new Date().toISOString(), reason: 'nothing left to run on its own — phase 1 is interrupted' };
+    const record = phaseRecord(state, 1);
+    record.status = 'interrupted';
+    record.note = 'the console stopped while phase 1 was running';
+    record.attempts = 1;
+    saveRun(state);
+
+    const starts: Array<Record<string, unknown>> = [];
+    (svc as never as { startRun: (slug: string, options: Record<string, unknown>) => Promise<unknown> })
+      .startRun = async (_slug: string, options: Record<string, unknown>) => { starts.push(options); return null; };
+
+    const out = await svc.maybeAutoRecover('alpha');
+    assert.equal(out.launched, true, out.reason);
+    assert.equal(out.phase, 1);
+    assert.equal(out.situation, 'work-in-progress');
+    assert.equal(out.rung, 'reboard-resume-brief');
+    assert.equal(out.vehicle, 'reboard');
+    assert.equal(minted.length, 0, 'no agent');
+    assert.equal(starts.length, 1);
+    assert.equal(starts[0].resumeRunId, state.id);
+    const reboard = starts[0].reboard as Array<Record<string, unknown>>;
+    assert.equal(reboard.length, 1);
+    assert.equal(reboard[0].phase, 1);
+    assert.equal(reboard[0].situation, 'work-in-progress');
+    assert.equal(reboard[0].rung, 'reboard-resume-brief');
+    assert.equal(reboard[0].brief, 'resume');
+    assert.equal(reboard[0].sessionId, undefined, 'nothing to resume — the brief is the whole bridge');
+
+    const disk = loadRun(root, 'alpha', state.id, null)!;
+    assert.equal(disk.recoveries?.['1']?.rungs?.[0]?.rung, 'reboard-resume-brief', 'the healer accounts the rung; start({reboard}) does not double-count');
+  } finally { cleanup(); }
+});

@@ -273,14 +273,51 @@ export type PhaseRecord = {
    * writing a handoff — recorded so a second attempt cannot happen by accident,
    * and so the panel can say a closeout was tried and what came of it.
    */
-  closeout?: { at: string; ok: boolean; sessionId?: string; note?: string };
+  closeout?: {
+    at: string; ok: boolean; sessionId?: string; note?: string;
+    /**
+     * The closeout session's own closing words. Kept HERE, never written over
+     * `said` below: the halt that follows a failed closeout quotes the PHASE
+     * session (the words that explain why no handoff was written), and the
+     * closeout's "I could not" used to overwrite them before the halt read them.
+     */
+    said?: string;
+  };
   /**
    * The session's own closing words. When a phase exits clean and changes
    * nothing this is the only account of why, and it used to live solely in the
    * journal — so the halt said "no handoff was written" and the reason it was
    * not written took a manual dig through NDJSON to recover.
+   *
+   * The PHASE session's words — a wait-resume or an operator-instructed resume
+   * is the same session continuing and may update it; a closeout's words go to
+   * `closeout.said`.
    */
   said?: string;
+  /**
+   * When the CURRENT attempt's boarding started (ISO) — rewritten per boarding,
+   * unlike `startedAt`, which is set once at the phase's first boarding and is
+   * the commit window `producedWork` measures from. The outcome protocol's
+   * staleness guard (`readOutcome` `notBefore`) reads THIS one: an outcome file
+   * written by an earlier attempt must never speak for the next.
+   */
+  attemptStartedAt?: string;
+  /**
+   * How the ladder asked this phase to board next (`runner.ts` boarding picks
+   * the brief by it). Written by the drive loop's own classification, by
+   * `closed()` on a stuck board, by a `partial` outcome, or by a caller of
+   * `start({reboard})` (the convergence loop); consumed — deleted — the moment
+   * the session spawns, and cleared by an operator Retry (`resetForRetry`),
+   * which always means a fresh boot.
+   */
+  boardingHint?: BoardingHint;
+  /**
+   * The boarding belt-check's backoff against a foreign lock the scheduler's
+   * store-fed view has not caught up with. Doubles 1 s → 30 s per refused
+   * boarding so the loop re-boards at most once per half minute against a
+   * stale store instead of ~1 Hz; reset on a successful claim.
+   */
+  lockBackoffMs?: number;
   /**
    * When a `waiting` park elapses and the runner re-checks / resumes. Absolute
    * ISO so a console outage does the right thing on boot: an expired clock
@@ -349,6 +386,35 @@ export type Errand = {
   need: string;
   how: string;
   at: string;
+};
+
+/** The briefs boarding can assemble for a phase the ladder re-boards. */
+export const BOARDING_BRIEFS = ['fresh', 'resume', 'unblock', 'continue', 'closeout'] as const;
+export type BoardingBrief = (typeof BOARDING_BRIEFS)[number];
+
+/**
+ * How the ladder asked a phase to board. `situation` (`id:sub`) and `rung`
+ * (the vehicle) are the journal's vocabulary and the rung history's identity;
+ * `brief` is what boarding assembles:
+ *
+ *   `fresh`     the engine's boot prompt and nothing else (never-started)
+ *   `resume`    the boot prompt + a runner-appended RESUMING evidence block
+ *   `unblock`   the boot prompt + the handoff's Outstanding + "you MAY do the work"
+ *   `continue`  `--resume` the phase's own session with a continue instruction
+ *   `closeout`  `--resume` the phase's own session with the closeout procedure
+ *
+ * `sessionId` is what `continue`/`closeout` resume; `instruction` rides the
+ * own-session briefs; `escalate` asks boarding for the next model step.
+ */
+export type BoardingHint = {
+  situation: string;
+  rung: string;
+  brief: BoardingBrief;
+  sessionId?: string;
+  instruction?: string;
+  escalate?: 'model';
+  at: string;
+  by?: string;
 };
 
 /**
@@ -898,6 +964,32 @@ export function phaseRecord(state: RunState, phase: number): PhaseRecord {
 }
 
 /**
+ * Clear a phase's terminal state so the loop will pick it up again — the ONE
+ * reset, used by `Runner.retry` (a live loop) and `Service.retryPhase` (a
+ * stored run) alike. The two used to carry their own copies and drifted twice:
+ * a retried phase kept showing the preflight and the missing servers of an
+ * attempt that was no longer going to happen, and the lock-cap clock survived
+ * into the retry so it parked again instantly.
+ *
+ * Everything the last boarding concluded goes: the note, the end time, the
+ * preflight, the degraded servers, the lock-wait clock (Retry means the wait
+ * starts over), and the ladder's boarding hint — an operator's Retry is a
+ * fresh boot by definition. What stays is history: attempts, cost, session
+ * ids, verification, the situation cache.
+ */
+export function resetForRetry(record: PhaseRecord): void {
+  record.status = 'pending';
+  record.note = undefined;
+  record.endedAt = undefined;
+  delete record.preflight;
+  delete record.preflightDetail;
+  delete record.mcpDegraded;
+  delete record.boardingHint;
+  record.lockWaitSince = undefined;
+  delete record.lockBackoffMs;
+}
+
+/**
  * Write the checkpoint atomically — rename is the only step a reader can see —
  * and durably: the file is fsync'd before the rename and the directory after,
  * so a power cut can lose at most the newest write, never leave a torn one.
@@ -998,8 +1090,12 @@ export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
         + `(${frozen.map((child) => `pid ${child.pid} — phase ${child.phase}`).join('; ')}), `
         + 'or stop them and run the phases again.';
     state.status = 'parked';
+    // The same shape `Runner.adopt` writes for the same fact — ONE orphan
+    // kind, so the recovery model and the situation classifier read the two
+    // paths identically (the read-path one used to be kindless).
     state.halt ??= {
       at,
+      kind: 'orphaned-session',
       reason: frozen.length
         ? frozenAdvice + (running.length
           ? ` Meanwhile ${running.length === 1 ? 'a session is' : `${running.length} sessions are`}`

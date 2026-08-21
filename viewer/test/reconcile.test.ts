@@ -27,7 +27,7 @@ import { join } from 'node:path';
 
 import {
   reconcileRun, reconcileRecordsAgainstBoard, newRun, phaseRecord, saveRun, loadRun,
-  listRuns, latestRun, runDir, IN_FLIGHT, type RunState,
+  listRuns, latestRun, runDir, resetForRetry, IN_FLIGHT, type RunState,
 } from '../server/runner/state.ts';
 
 function scratchRoot(): { root: string; cleanup: () => void } {
@@ -388,4 +388,48 @@ test('a restart mid-park reconciles to paused with the clock and the waiting rec
     assert.match(state.finishedReason ?? '', /external work/,
       'the pause explains itself as a park, not a usage limit');
   } finally { dir.cleanup(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * One orphan shape, one reset
+ * ------------------------------------------------------------------ */
+
+test('a child that outlived its console is an orphaned-session halt on the read path too — the same kind adopt() writes', () => {
+  const { root, cleanup } = scratchRoot();
+  try {
+    const state = crashedRun(root, {
+      child: { pid: process.pid, phase: 12, sessionId: 'abc', startedAt: new Date().toISOString() },
+    });
+    assert.equal(reconcileRun(state, null), true);
+    assert.equal(state.status, 'parked');
+    assert.equal(state.halt?.kind, 'orphaned-session', 'the read path used to write a kindless halt for the same fact');
+    assert.match(state.halt?.reason ?? '', /still running \(pid/);
+  } finally { cleanup(); }
+});
+
+test('resetForRetry is the single reset: it clears what the last boarding concluded and keeps the history', () => {
+  const state = newRun({ slug: 'demo', root: '/tmp/x', model: 'opus' });
+  const record = phaseRecord(state, 3);
+  Object.assign(record, {
+    status: 'failed', note: 'did not verify', endedAt: '2026-08-21T10:00:00Z', attempts: 2, costUsd: 4.5,
+    sessionId: 'sess-3', preflight: ['a warning'], preflightDetail: [{ kind: 'human-check', message: 'x' }],
+    mcpDegraded: [{ id: 'github', reason: 'needs-auth' }], lockWaitSince: '2026-08-21T09:00:00Z', lockBackoffMs: 8000,
+    boardingHint: { situation: 'verify-red', rung: 'resume-own-session', brief: 'continue', at: '2026-08-21T10:01:00Z' },
+    verification: { ok: false, reason: 'red', ran: [], notRun: [] },
+  });
+  resetForRetry(record);
+  assert.equal(record.status, 'pending');
+  assert.equal(record.note, undefined);
+  assert.equal(record.endedAt, undefined);
+  assert.equal(record.preflight, undefined);
+  assert.equal(record.preflightDetail, undefined);
+  assert.equal(record.mcpDegraded, undefined);
+  assert.equal(record.lockWaitSince, undefined, 'Retry means the lock wait starts over');
+  assert.equal(record.lockBackoffMs, undefined);
+  assert.equal(record.boardingHint, undefined, 'an operator\'s Retry is a fresh boot by definition');
+  // History stays: it is what the next brief and the ladder read.
+  assert.equal(record.attempts, 2);
+  assert.equal(record.costUsd, 4.5);
+  assert.equal(record.sessionId, 'sess-3');
+  assert.ok(record.verification);
 });

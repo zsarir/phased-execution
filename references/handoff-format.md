@@ -50,7 +50,10 @@ what is done, what is uncommitted, and (for a usage-limit stop) when the window 
 covers an **external wait** (a CI build, a PR auto-merge, a deploy window): write the `in-progress`
 handoff *before* stopping, and — under a supervising runner — also declare the wait machine-readably with
 `scripts/phase-outcome.sh <slug> <N> waiting-external …` so the autopilot parks and resumes the session
-instead of reading the stop as a failure. The status vocabulary itself is unchanged
+instead of reading the stop as a failure. A stop with **work still left** but nothing wrong (budget,
+context) is the same marker plus `scripts/phase-outcome.sh <slug> <N> partial --reason
+<budget|context|other>` — the autopilot reads it as work in progress and continues the session (or
+boards a fresh one with a resume brief) by itself. The status vocabulary itself is unchanged
 (`complete | in-progress | blocked | pending`): `waiting` is a **runner** phase state, never a handoff
 status. `pending` / `TBD`
 are valid in `INDEX.md` rows for phases not yet written (added by hand — the script only scaffolds phases

@@ -152,6 +152,15 @@ export type SchedulerDeps = {
   /** Called whenever the queue or the grant set changed. Drives `run:queue`. */
   onChange?: (snapshot: SchedulerSnapshot) => void;
   /**
+   * A phase's lock read LIVE off disk — the entry's own slug+phase — for the
+   * one holder the store-fed `locks()` can lag on: a same-phase foreign claim
+   * written seconds ago. Synchronous like `locks()`, for the same reason (an
+   * await between deciding and granting is the window an admission check may
+   * not open); one small file per queue entry per scan. Absent: the belt-check
+   * in the runner is the only live read, and it backs off instead of spinning.
+   */
+  liveLock?: (slug: string, phase: number) => LockView | null | undefined;
+  /**
    * The repository guard — whether CROSS-RUN scope conflicts block admission.
    * Read per call, like `max`, so a preference flip lands on the next poll.
    * Absent means on: serializing overlapping runs is the safe state and must
@@ -548,7 +557,7 @@ export class Scheduler {
     }
 
     const own = autopilotOwner(entry.runId);
-    for (const lock of this.deps.locks?.() ?? []) {
+    for (const lock of this.locksFor(entry)) {
       if (this.lockLapsed(lock)) continue;
       // Our own run's locks. Its other lanes claimed them, and the grants above
       // already speak for those.
@@ -590,6 +599,23 @@ export class Scheduler {
     }
 
     return holders;
+  }
+
+  /**
+   * Every lock the scan weighs for one entry: the store's view, plus the
+   * entry's own phase read live off disk (`liveLock`) where the store holds no
+   * row for that slug+phase — a store that IS current wins, a store that lags
+   * is corrected for the one lock that matters most to this entry.
+   */
+  private locksFor(entry: Waiting): LockView[] {
+    const stored = [...(this.deps.locks?.() ?? [])];
+    if (entry.phase == null || !this.deps.liveLock) return stored;
+    const key = `${entry.slug}:${entry.phase}`;
+    if (stored.some((lock) => `${lock.slug}:${lock.phase}` === key)) return stored;
+    let live: LockView | null | undefined;
+    try { live = this.deps.liveLock(entry.slug, entry.phase); } catch { live = null; }
+    if (live) stored.push(live);
+    return stored;
   }
 
   /**

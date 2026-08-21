@@ -25,7 +25,7 @@
 
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 
@@ -33,15 +33,25 @@ import { log } from '../log.ts';
 import { onShutdown, offShutdown } from '../lifecycle.ts';
 import { run as engineRun, readMemoryBlock, readGateStatus, readLint, readText, type Board } from '../engine.ts';
 import { mcpDirective, skillDirective } from '../skills.ts';
-import { classify, fallbackChain, limitBucket, nextModel, type Disposition } from './errors.ts';
+import { classify, fallbackChain, limitBucket, nextModel, MODEL_FALLBACK, type Disposition } from './errors.ts';
 import { markFor, spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
 import { extractCommands, resolveLead, unresolvableLeads, verifyPhase } from './verify.ts';
 import { loadVerifyEnv, type VerifyEnv } from './verify-env.ts';
-import { failureContext } from './failure-context.ts';
+import {
+  failureContext, resumeBrief, resumeInstruction, unblockBrief, type BriefFacts,
+} from './failure-context.ts';
+import {
+  classifySituation, collectEvidence, parseLockStatus, situation as situationOf, workEvidence,
+  type EvidenceDeps, type PhaseEvidence, type Situation,
+} from './situation.ts';
+import {
+  accountRung, errandFor, nextRung, rungKey, rungsFor, type LadderCaps, type Rung,
+} from './ladder.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
-  PHASE_IN_FLIGHT, reconcileRecordsAgainstBoard, mcpReasonText,
-  type Autonomy, type ChildRef, type HaltKind, type McpDegradation, type McpPolicy,
+  PHASE_IN_FLIGHT, reconcileRecordsAgainstBoard, mcpReasonText, resetForRetry,
+  type Autonomy, type BoardingBrief, type BoardingHint, type ChildRef, type Errand, type HaltKind,
+  type McpDegradation, type McpPolicy,
   type OnLimitPolicy, type PhaseOptions, type PhaseRecord, type PreflightWarning,
   type RunState, type PhaseStatus, type RunStatus, type VerifySummary,
 } from './state.ts';
@@ -245,6 +255,23 @@ export type RunnerDeps = {
   portTranscript?: (sessionId: string, fromAccount: string | undefined, toAccount: string | undefined) => boolean;
   onEvent?: RunnerEvent;
   /**
+   * The store's parsed handoff for a phase — its status and its Outstanding
+   * section — for the situation classifier and the re-board briefs. Absent in
+   * harnesses; the board's own word (`stuck` / `in-progress`) still speaks.
+   */
+  handoffFor?: (slug: string, phase: number) =>
+    { exists?: boolean; status?: string; outstanding?: string } | null | undefined;
+  /** The ladder's caps (Settings ▸ Automation). Absent = the shipped defaults. */
+  ladderCaps?: () => Partial<LadderCaps>;
+  /**
+   * Whether ONE bounded unblock session may be spent on a phase whose handoff
+   * declares it blocked (the `unblockAttempts` preference). Absent = yes. Off
+   * means the errand is written at once — the operator asked to be asked.
+   */
+  unblockAttempts?: () => boolean;
+  /** Verification-card answer window override — tests only; defaults to `VERIFY_ANSWER_MS`. */
+  verifyAnswerMs?: number;
+  /**
    * The MCP registry's enabled ids, for `PE_MCP_SERVERS` on the runner's own
    * engine calls — the same fact `Service.engineOpts` already passes on the
    * service side, threaded here so the runner's `validate.sh` in `confirm()`
@@ -300,6 +327,30 @@ export type StartOptions = {
    */
   qa?: boolean;
   attachDefaultSkills?: boolean;
+  /**
+   * Resume only: re-board these phases by rung. Each record is reset to
+   * `pending` with a `boardingHint` — boarding then assembles the named brief
+   * — and the loop drives it under normal admission. This is the seam the
+   * convergence loop (Phase 3) acts through: one orchestration, never a
+   * second. The CALLER accounts the rung (`recoveries[phase].rungs`); the
+   * runner journals `phase.reboard-requested` and boards.
+   */
+  reboard?: ReboardRequest[];
+};
+
+/** One re-board asked of `start({resumeRunId, reboard})`. */
+export type ReboardRequest = {
+  phase: number;
+  /** The `id:sub` situation key the rung was chosen for. */
+  situation: string;
+  /** The rung vehicle (`ladder.ts` `RungVehicle`). */
+  rung: string;
+  /** Which brief boarding assembles; defaults by rung (`briefForRung`). */
+  brief?: BoardingBrief;
+  sessionId?: string;
+  instruction?: string;
+  escalate?: 'model';
+  by?: string;
 };
 
 /** The three ways to move a stuck phase forward without starting it over. */
@@ -371,6 +422,59 @@ export const LOCK_WAIT_CAP_MS = 2 * 60 * 60_000;
  * it must not fire while the holder is alive and working).
  */
 export const LEASE_REFRESH_MS = 10 * 60_000;
+/**
+ * The boarding belt-check's backoff against a foreign lock the scheduler's
+ * store-fed view has not caught up with: 1 s, doubling, capped here. The
+ * scheduler owns the real wait (it now reads the entry's own lock file live —
+ * see `SchedulerDeps.liveLock`); this bounds the re-board rate for a harness
+ * or a console whose store is slower than its belt-check, which used to spin
+ * three bash subprocesses a second.
+ */
+export const LOCK_BACKOFF_MAX_MS = 30_000;
+
+/**
+ * Record statuses the drive loop's own ladder pass classifies. `interrupted`
+ * and `failed` used to be SETTLED full stop — a resumed run whose only open
+ * record was one of them parked at once, and the only way forward was a press.
+ * `pending` joins the list ONLY for phases the board reads `stuck` or
+ * `in-progress` (a handoff exists and is not complete): a ready+pending phase
+ * is an ordinary candidate and needs no classification.
+ */
+const LADDER_STATUSES: readonly PhaseStatus[] = ['interrupted', 'failed'];
+
+/** The default brief for a rung, when a `start({reboard})` caller names none. */
+export function briefForRung(rung: string, hasSession: boolean): BoardingBrief {
+  switch (rung) {
+    case 'reboard-resume-brief': return 'resume';
+    case 'resume-own-session': return hasSession ? 'continue' : 'resume';
+    case 'unblock-session': return 'unblock';
+    case 'closeout-own-session': return hasSession ? 'closeout' : 'resume';
+    default: return 'fresh';
+  }
+}
+
+/**
+ * One step UP the model chain for an `escalate: model` rung — the reverse of
+ * `nextModel`, which demotes. Null at the top (or for a model the chain does
+ * not know); the CLI's own in-process fallback still applies on the way down.
+ */
+export function escalateModel(model?: string): string | null {
+  if (!model) return null;
+  const short = MODEL_FALLBACK.find((m) => model.includes(m));
+  if (!short) return null;
+  const index = MODEL_FALLBACK.indexOf(short);
+  return index > 0 ? MODEL_FALLBACK[index - 1] : null;
+}
+
+/** The instruction a `fix-verification` continue carries (situation verify-red). */
+function fixVerificationInstruction(phase: number): string {
+  return [
+    `Phase ${phase}'s §Verification is RED. Read the failing command(s) and their output below, fix the`,
+    'cause, re-run the verification until it is green, then commit with explicit paths and write the',
+    'handoff `complete`. Read `git status` and `git diff` FIRST — anything uncommitted is your own',
+    'earlier work; never stash, checkout or reset it away.',
+  ].join('\n');
+}
 
 /**
  * The contract an unattended session cannot be assumed to infer, stated where
@@ -405,6 +509,10 @@ function unattendedDirective(scriptsDir: string, slug: string, phase: number): s
     '  then stop; the supervisor queues the retry for when the lock frees.',
     '- Need a person (an MCP sign-in, a manual gate, credentials)? Declare it and stop:',
     `      bash ${scriptsDir}/phase-outcome.sh ${slug} ${phase} needs-human --reason "<what and why>"`,
+    '- Must stop with WORK STILL LEFT (your budget or context is nearly spent)? Commit what is done,',
+    '  write the handoff `in-progress`, then declare it so the supervisor RESUMES you instead of',
+    '  reading a failed phase:',
+    `      bash ${scriptsDir}/phase-outcome.sh ${slug} ${phase} partial --reason <budget|context|other>`,
     '- Never end the turn silently waiting. Declare an outcome or finish the closeout.',
     '  Ending your turn with words like "waiting for the build" and NO declared outcome',
     '  reads as a FAILED phase and stops the run.',
@@ -645,6 +753,14 @@ export class Runner {
   private pendingResolutions: { phase: number; outcome: 'done' | 'no-defect'; by: string }[] = [];
   /** Per-phase pokes armed at `parkedUntil`, so a live loop resumes a wait on time. */
   private parkPokes = new Map<number, NodeJS.Timeout>();
+  /**
+   * What the loop's ladder pass last judged, per phase, as a fingerprint of the
+   * record and the board. A record the ladder left standing (deferred, or
+   * nothing to climb) is not re-classified — and re-journalled — every tick;
+   * it is looked at again when its status, its attempt count or the board's
+   * word about it changes. Cleared on start and on retry.
+   */
+  private ladderSeen = new Map<number, string>();
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
@@ -990,6 +1106,32 @@ export class Runner {
 
     this.journal = new Journal(this.state.root, this.state.slug, this.state.id);
     this.transcript = new Transcript(this.state.root, this.state.slug, this.state.id);
+    this.ladderSeen.clear();
+
+    // Re-boards asked of this resume (the convergence loop's seam): the record
+    // is reset and hinted here, journalled, and boards under normal admission
+    // like any candidate. Only on a resume — a fresh run has no history to
+    // re-board — and only for phases the run knows.
+    if (state && options.reboard?.length) {
+      for (const ask of options.reboard) {
+        const record = phaseRecord(this.state, ask.phase);
+        if (PHASE_IN_FLIGHT.includes(record.status)) continue;
+        const hint: BoardingHint = {
+          situation: ask.situation, rung: ask.rung,
+          brief: ask.brief ?? briefForRung(ask.rung, Boolean(ask.sessionId)),
+          ...(ask.sessionId ? { sessionId: ask.sessionId } : {}),
+          ...(ask.instruction ? { instruction: ask.instruction } : {}),
+          ...(ask.escalate ? { escalate: ask.escalate } : {}),
+          at: new Date().toISOString(),
+          ...(ask.by ? { by: ask.by } : {}),
+        };
+        this.reboardWith(record, hint);
+        this.record('phase.reboard-requested', {
+          situation: hint.situation, rung: hint.rung, brief: hint.brief,
+          sessionId: hint.sessionId ?? null, by: ask.by ?? 'console',
+        }, ask.phase);
+      }
+    }
 
     // Both refusals cost about a second and save a session each. The auth one
     // saves considerably more than that: without it an expired login is
@@ -1397,6 +1539,7 @@ export class Runner {
     // stretch of the same phase, not a new one.
     record.status = 'running';
     record.startedAt ??= new Date().toISOString();
+    record.attemptStartedAt = new Date().toISOString();
     this.persist();
     this.emit('phase', { phase, status: 'running', model: record.model ?? state.model });
     this.emit('run', { state });
@@ -1812,10 +1955,14 @@ export class Runner {
     lane.pid = null;
     this.syncMirror();
     this.syncFreezeMirror();
-    // Only when this was the last thing running. With another lane still live,
-    // writing `paused` here would tell the console the run had stopped while a
-    // session carried on editing under it.
-    if (!this.lanes.size || [...this.lanes.values()].every((other) => other.pid == null)) {
+    // Only when this was the last thing running. With another lane still
+    // OPEN — live or not yet spawned or itself checkpointed — writing `paused`
+    // here would tell the console the run had stopped while a session carried
+    // on under it, and nulling the halt would erase a stop another lane wrote.
+    // The old test was "every other lane has no pid", which a lane between
+    // admission and spawn, or one just checkpointed, passes.
+    const others = [...this.lanes.values()].filter((other) => other !== lane);
+    if (!others.length) {
       state.status = 'paused';
       state.halt = null;
     } else {
@@ -2259,20 +2406,13 @@ export class Runner {
   retry(phase: number): void {
     if (!this.state) return;
     const record = phaseRecord(this.state, phase);
-    record.status = 'pending';
-    record.note = undefined;
-    // Everything the last boarding concluded, cleared — the stored-run Retry in
-    // the service has always done this and the live one had drifted, so a
-    // retried phase kept showing the preflight and the missing servers of an
-    // attempt that is no longer going to happen.
-    delete record.preflight;
-    delete record.mcpDegraded;
-    // The lock clock especially. It is only cleared on a SUCCESSFUL claim
-    // (`lockWaitSince = undefined` after the belt-check), so a phase parked by
-    // the two-hour lock-wait cap kept its original timestamp: the retry
-    // re-derived `waitedMs` from it, found it still over the cap, and parked
-    // again instantly. Retry has to mean the wait starts over.
-    record.lockWaitSince = undefined;
+    // The ONE reset — `state.ts` `resetForRetry`, shared with the stored-run
+    // Retry in the service. The two used to carry their own copies and
+    // drifted twice (a retried phase kept the preflight and the missing
+    // servers of an attempt that was no longer going to happen; the lock-cap
+    // clock survived into the retry and re-parked it instantly).
+    resetForRetry(record);
+    this.ladderSeen.delete(phase);
     this.state.consecutiveFailures = 0;
     this.state.halt = null;
     this.record('phase.retry-requested', {}, phase);
@@ -2423,16 +2563,39 @@ export class Runner {
         // in the caller keeps one definition of "ready" (the engine's).
         const asked = state.onlyPhases?.length ? new Set(state.onlyPhases) : null;
         const nowIso = new Date().toISOString();
+
+        // The ladder's own pass, after reconcile and before the candidate set:
+        // records the last boarding settled badly (`interrupted`, `failed`) and
+        // phases whose handoff exists but is not complete are CLASSIFIED
+        // (runner/situation.ts) and, when a rung this runner can drive exists,
+        // reset to `pending` with a boarding hint — so a resumed run whose only
+        // open record is an interrupted never-started phase boards it fresh on
+        // this very tick, and a failed phase with unfinished work on disk
+        // resumes its own session, with nobody pressing anything.
+        await this.climbLadder(board, asked);
+
         // A waiting-external phase whose window has elapsed re-boards through
         // the normal lanes — but from the board's point of view it may read
         // `in-progress` (the session wrote the durable pause marker before
         // parking), which `board.ready` never lists. So expired waits join the
         // candidate set explicitly, and unexpired ones are filtered out below.
+        // `stuck` is in the list too: a session that wrote a `blocked` handoff
+        // AND declared a wait used to be a phase that was never a candidate
+        // yet always "waiting" — the run re-entered `waiting` with a past
+        // clock forever (the measured livelock). Its own session is resumed
+        // exactly like the in-progress shape.
         const expiredWaits = Object.values(state.phases)
           .filter((r) => r.status === 'waiting' && r.parkedUntil && r.parkedUntil <= nowIso)
           .map((r) => r.phase)
-          .filter((p) => board.states[p] === 'ready' || board.states[p] === 'in-progress');
-        const candidates = [...new Set([...board.ready, ...expiredWaits])]
+          .filter((p) => board.states[p] === 'ready' || board.states[p] === 'in-progress' || board.states[p] === 'stuck');
+        // Phases the ladder (or a `start({reboard})`) asked to board: `pending`
+        // with a hint, on a board that does not read done — `in-progress` and
+        // `stuck` included, which `board.ready` never lists.
+        const hinted = Object.values(state.phases)
+          .filter((r) => r.status === 'pending' && r.boardingHint)
+          .map((r) => r.phase)
+          .filter((p) => ['ready', 'in-progress', 'stuck'].includes(board.states[p] ?? ''));
+        const candidates = [...new Set([...board.ready, ...expiredWaits, ...hinted])]
           .filter((p) => !asked || asked.has(p))
           .filter((p) => !SETTLED.includes(phaseRecord(state, p).status))
           .filter((p) => {
@@ -2456,8 +2619,13 @@ export class Runner {
         // sleep) — instead of halting a plan that is merely early. Checked
         // before the scoped-run ending, or a run scoped to a waiting phase
         // would declare itself finished mid-wait.
+        // Only waits whose clock is still AHEAD: an expired one is either a
+        // candidate above, or — when its board state cannot board (`waiting`,
+        // `done`) — not a reason to hold the run on a clock that has passed.
+        // Counting expired waits here was the other half of the livelock: the
+        // run went back to `waiting` with a `waitUntil` in the past.
         const waitingRecords = Object.values(state.phases)
-          .filter((r) => r.status === 'waiting' && r.parkedUntil)
+          .filter((r) => r.status === 'waiting' && r.parkedUntil && r.parkedUntil > nowIso)
           .filter((r) => !asked || asked.has(r.phase));
         if (!candidates.length && waitingRecords.length) {
           const soonest = [...waitingRecords].map((r) => r.parkedUntil!).sort()[0];
@@ -2522,10 +2690,20 @@ export class Runner {
             // hid behind "waiting on a gate or an earlier phase", and both
             // read as dead ends (reported twice, with two real plans).
             const readyRecords = board.ready.map((p) => ({ p, record: phaseRecord(state, p) }));
+            // Phases the ladder parked with an ERRAND — one named ask for a
+            // person, written after every automatic rung was tried or when the
+            // situation was a person's from the start. Named first: they are
+            // the doors that exist, whatever the board reads for them.
+            const errands = Object.entries(state.recoveries ?? {})
+              .filter(([key, slot]) => slot.errand && /^\d+$/.test(key)
+                && state.phases[key]?.status === 'parked' && (!asked || asked.has(Number(key))))
+              .map(([key, slot]) => ({ p: Number(key), errand: slot.errand! }));
+            const errandPhases = new Set(errands.map((e) => e.p));
             const held = [
-              ...readyRecords.map(({ p, record }) =>
+              ...errands.map(({ p, errand }) => `phase ${p} needs you — ${errand.need} (${errand.how})`),
+              ...readyRecords.filter(({ p }) => !errandPhases.has(p)).map(({ p, record }) =>
                 `phase ${p} is ${record.status}${record.note ? ` (${record.note})` : ''}`),
-              ...board.stuck.map((p) =>
+              ...board.stuck.filter((p) => !errandPhases.has(p)).map((p) =>
                 `phase ${p}'s handoff is marked blocked — its Outstanding section says why`),
             ].join('; ');
 
@@ -2536,6 +2714,7 @@ export class Runner {
             const verificationParked = readyRecords.filter(({ record }) =>
               record.status === 'parked' && Runner.VERIFICATION_PARK.test(record.note ?? ''));
             const remedies: string[] = [];
+            if (errands.length) remedies.push('a phase parked with an errand takes that errand, then Retry');
             if (readyRecords.some(({ record }) => record.status === 'gated')) {
               remedies.push('Gates need your confirmation (then Retry re-checks them)');
             }
@@ -2779,6 +2958,11 @@ export class Runner {
     // own session, never a fresh boot — its context is the whole point.
     // Decided here, before anything rewrites the status.
     const resuming = record.status === 'waiting';
+    // The ladder's instruction for this boarding, if it left one. Read here for
+    // the same reason, and consumed (deleted) only when the session actually
+    // spawns, so a boarding abandoned at the gate, the queue or a preflight
+    // park keeps its hint for the next tick.
+    const hint = resuming ? undefined : record.boardingHint;
 
     /* ---- arrived from the queue into a run that stopped wanting it ----
      * The wait inside `admit()` can be minutes. A halt from another lane, an
@@ -2868,12 +3052,18 @@ export class Runner {
         }
         record.status = 'queued';
         record.note = `queued behind ${holder} — ${status.stdout.trim().slice(0, 160)}`;
-        this.record('phase.lock-race', { holder, detail: record.note }, phase);
+        // Back off, doubling to a half-minute cap: the store's watcher-debounced
+        // lock view can lag what the script just read off disk, and at a flat
+        // one-second floor this re-boarded at ~1 Hz (three bash subprocesses a
+        // second, measured) until the store caught up. The scheduler owns the
+        // real wait — and reads this very phase's lock file live on every scan
+        // (`SchedulerDeps.liveLock`), so in the console this window is one
+        // refusal wide; the backoff bounds a harness or a console without it.
+        const backoffMs = Math.min(LOCK_BACKOFF_MAX_MS, (record.lockBackoffMs ?? 0) * 2 || 1_000);
+        record.lockBackoffMs = backoffMs;
+        this.record('phase.lock-race', { holder, detail: record.note, backoffMs }, phase);
         this.emit('phase', { phase, status: 'queued', note: record.note });
-        // A one-second floor keeps the loop from spinning while the store's
-        // watcher-debounced lock view catches up with what the script just
-        // read off disk. The scheduler owns the real wait from here.
-        await this.sleep(1_000);
+        await this.sleep(backoffMs);
         return true;
       }
       // Guard off: the operator has said cross-actor scope conflicts are
@@ -2882,6 +3072,7 @@ export class Runner {
       this.record('phase.lock-ignored', { holder, note: 'the repo guard is off' }, phase);
     }
     record.lockWaitSince = undefined;
+    delete record.lockBackoffMs;
     // The child holds the lock; the supervisor keeps its lease alive. A live
     // 47-minute session must never silently lose its 30-minute claim mid-work.
     this.armLeaseTimer(lane, owner);
@@ -2982,13 +3173,35 @@ export class Runner {
     // A wait-resume replaces the engine's boot text — the session already has
     // the whole boot context; what it needs is the elapsed-window instruction.
     // Everything appended after (git strategy, directives) applies to both.
-    const base = resuming
+    // A ladder hint picks one of the five briefs instead (`composeBrief`):
+    // `fresh` is the engine text alone, `resume`/`unblock` append a brief to
+    // it, `continue`/`closeout` resume the phase's own session and carry no
+    // engine text — the session has it — unless that session cannot be
+    // resumed, in which case they degrade to the self-contained `resume`.
+    let base = resuming
       ? waitResumePrompt(state.slug, phase, record.parkReason, record.watch)
       : engineText;
-    const prompt = base + (context ? `\n\n${context}\n` : '') + git
+    let failureInsert = context;
+    let resumeId: string | undefined;
+    let cappedTurns: number | undefined;
+    if (hint) {
+      const composed = await this.composeBrief(phase, board, hint, engineText);
+      base = composed.prompt;
+      resumeId = composed.resume;
+      cappedTurns = composed.maxTurns;
+      // The briefs carry the failure evidence themselves; a second copy of it
+      // after them would be the same log quoted twice.
+      failureInsert = '';
+      this.record('phase.brief', {
+        brief: composed.brief, asked: hint.brief, situation: hint.situation, rung: hint.rung,
+        resume: resumeId ?? null, bytes: Buffer.byteLength(composed.prompt),
+        ...(composed.degraded ? { degraded: composed.degraded } : {}),
+      }, phase);
+    }
+    const prompt = base + (failureInsert ? `\n\n${failureInsert}\n` : '') + git
       + skillDirective(extraSkills) + mcpDirective(ownMcp, mcp.degraded)
       + unattendedDirective(this.deps.scriptsDir, state.slug, phase);
-    if (context) this.record('phase.retry-context', { bytes: Buffer.byteLength(context) }, phase);
+    if (failureInsert) this.record('phase.retry-context', { bytes: Buffer.byteLength(failureInsert) }, phase);
     if (extraSkills.length) this.record('phase.skills', { skills: [...new Set(extraSkills)] }, phase);
 
     /* ---- the last chance to not start ----
@@ -3027,12 +3240,28 @@ export class Runner {
       }, phase);
     }
     record.status = 'running';
-    record.startedAt = new Date().toISOString();
+    // `startedAt` is the PHASE's first start — the commit window `producedWork`
+    // measures from, which a second boarding must not move forward past the
+    // first attempt's commits. `attemptStartedAt` is THIS boarding's, and is
+    // what the outcome file's staleness guard compares against.
+    const boardedAt = new Date().toISOString();
+    record.startedAt ??= boardedAt;
+    record.attemptStartedAt = boardedAt;
+    // The hint is spent: the session it asked for is about to exist.
+    if (hint) delete record.boardingHint;
+    if (resumeId) record.resumeSessionId = resumeId;
     // The phase is now genuinely starting: the active-phase pointer follows
     // the lane table (the mirror rule), written here and nowhere earlier.
     this.syncMirror();
     record.model = record.model ?? chosen.model;
     record.effort = record.effort ?? chosen.effort;
+    if (hint?.escalate === 'model') {
+      const stronger = escalateModel(record.model);
+      if (stronger && stronger !== record.model) {
+        this.record('phase.model-escalated', { from: record.model, to: stronger, rung: hint.rung }, phase);
+        record.model = stronger;
+      }
+    }
     this.record('phase.start', {
       model: record.model, effort: record.effort ?? null,
       // Where each choice came from, so a phase that ran on an unexpected model
@@ -3041,14 +3270,18 @@ export class Runner {
       ...(chosen.tools?.length ? { tools: chosen.tools } : {}),
       ...(chosen.permissionMode ? { permissionMode: chosen.permissionMode } : {}),
       title: board.states[phase],
+      ...(hint ? { brief: hint.brief, situation: hint.situation, rung: hint.rung } : {}),
+      ...(resuming ? { waitResume: true } : {}),
     }, phase);
     this.emit('phase', { phase, status: 'running', model: record.model, effort: record.effort });
 
     /* ---- the session, with the error policy driving retries ---- */
     const settled = await this.attempt(phase, prompt, record.model!, owner, lane, chosen, {
       // A wait-resume is a continuation, not the phase: capped like a closeout
-      // so a session that misreads the ask and starts new work runs out.
-      ...(resuming ? { maxTurns: CLOSEOUT_MAX_TURNS } : {}),
+      // so a session that misreads the ask and starts new work runs out. A
+      // `closeout` brief is capped the same way, for the same reason; a
+      // `continue` is the phase itself and is not.
+      ...(resuming ? { maxTurns: CLOSEOUT_MAX_TURNS } : cappedTurns ? { maxTurns: cappedTurns } : {}),
       mcp,
     });
     if (!settled.carryOn) { await this.release(phase, owner); return false; }
@@ -3667,6 +3900,30 @@ export class Runner {
       ...(verification.skipped?.length ? { skipped: verification.skipped } : {}),
     }, phase);
 
+    // Every command's lead is missing from this machine: nothing ran, nothing
+    // was proven either way. Boarding parks on exactly this fact before a
+    // session is spent (`preflightVerification`); when it is only discovered
+    // here — a harness-injected verifier, a PATH that changed mid-phase — the
+    // disposition is the SAME park, with the same sentence, not a twelve-hour
+    // card asking a person to vouch for checks a machine simply lacks.
+    if (!verification.ran.length && verification.skipped?.length) {
+      const leads = [...new Set(verification.skipped.map((entry) => entry.lead))].join(', ');
+      record.status = 'parked';
+      record.note = `phase ${phase}'s §Verification cannot run on this machine — every command's lead `
+        + `is missing from the PATH (${leads}). Fix the PATH (re-run deploy/agent.sh install from a `
+        + 'full shell), rewrite the bullet with what exists, or Repair with AI, then Retry.';
+      record.endedAt = new Date().toISOString();
+      this.record('phase.verify-unrunnable', { leads: leads.split(', '), skipped: verification.skipped.length }, phase);
+      this.emit('phase', { phase, status: 'parked', note: record.note });
+      // The RUN parks too, as the card's timeout does: the board already reads
+      // done (the session wrote its handoff), so a parked record left in a
+      // driving loop would be reconciled to done on the very next tick — an
+      // unverified phase passing silently. A person (or a PATH fix and a
+      // Retry) settles it; Continue afterwards lets the board's word stand.
+      this.park(record.note, phase);
+      return false;
+    }
+
     // A command that ran and failed is a verdict. A verification that could not
     // be run is not — it is an unanswered question, and answering it with
     // "failed" is how this run ended up stopped on a phase nothing had actually
@@ -4157,7 +4414,7 @@ export class Runner {
     // clock still blocks — on the live run this replaces, the nudge was
     // answered in the same holding pattern, thirty seconds later, and halted.
     if (declared) {
-      const routed = this.routeOutcome(phase, declared);
+      const routed = await this.routeOutcome(phase, declared, board);
       if (routed) return routed;
     }
 
@@ -4165,20 +4422,13 @@ export class Runner {
     // a fact, not missing paperwork. Twelve real halts called this "no handoff
     // was written" while sessions wrote three-paragraph rebuttals into the
     // reason, and four closeout resumes looped on phases whose brief forbade
-    // the work that would unblock them. Name it what it is and spawn nothing.
+    // the work that would unblock them. It is not an immediate halt either:
+    // the situation decides (`blocked-declared` and its sub-kind) — a lock
+    // queues, a credential or a gate parks with an errand at once, an unknown
+    // blocker gets ONE bounded unblock session, and only a ladder with nothing
+    // left for this runner halts the old way.
     if (board.states[phase] === 'stuck') {
-      record.status = 'failed';
-      record.note = record.said ? condenseSaid(record.said) : 'the handoff declares this phase blocked';
-      state.consecutiveFailures++;
-      this.halt(
-        `phase ${phase}'s handoff declares it blocked`
-        + (record.said ? ` — it signed off: "${condenseSaid(record.said)}"` : '')
-        + '. Its Outstanding section says what is missing; clear that, then Retry '
-        + '(or resume the session with an instruction once the blocker is gone).',
-        phase,
-        'phase-blocked',
-      );
-      return 'halted';
+      return this.closedBlocked(phase, board, null);
     }
 
     const attempt = await this.closeout(phase, board.states[phase] ?? 'unknown');
@@ -4188,11 +4438,12 @@ export class Runner {
       // it the same way.
       const late = this.takeOutcome(phase);
       if (late) {
-        const routed = this.routeOutcome(phase, late);
+        const routed = await this.routeOutcome(phase, late, board);
         if (routed) return routed;
       }
       board = await this.board();
       if (board.states[phase] === 'done') return 'done';
+      if (board.states[phase] === 'stuck') return this.closedBlocked(phase, board, null);
     }
 
     record.status = 'failed';
@@ -4217,7 +4468,9 @@ export class Runner {
    * Returns the disposition `closed()` should report, or null to fall through
    * (a `complete` declaration is advisory — the board decides).
    */
-  private routeOutcome(phase: number, declared: PhaseOutcome): 'waiting' | 'halted' | null {
+  private async routeOutcome(
+    phase: number, declared: PhaseOutcome, board: Board,
+  ): Promise<'waiting' | 'halted' | null> {
     const state = this.state!;
     const record = phaseRecord(state, phase);
     switch (declared.status) {
@@ -4238,30 +4491,103 @@ export class Runner {
           this.emit('phase', { phase, status: 'pending', note: record.note });
           return 'waiting';
         }
-        record.status = 'failed';
-        record.note = declared.reason;
-        state.consecutiveFailures++;
-        this.halt(
-          `phase ${phase} declared itself blocked: ${declared.reason ?? 'no reason recorded'}`
-          + (declared.watch.length ? ` (watching ${declared.watch.join(', ')})` : ''),
-          phase,
-          'phase-blocked',
-        );
-        return 'halted';
+        // The declaration is evidence for the situation — its reason and
+        // watch refs decide the sub-kind — and the ladder decides what
+        // happens: one unblock session, a queue, or an errand.
+        return this.closedBlocked(phase, board, declared);
       }
-      case 'needs-human':
+      case 'needs-human': {
         record.status = 'parked';
         record.note = declared.reason ?? 'the session asked for a person';
+        record.endedAt = new Date().toISOString();
         this.record('phase.outcome-needs-human', { reason: declared.reason ?? null }, phase);
-        this.emit('phase', { phase, status: 'parked', note: record.note });
+        // The one card: the session named the errand itself, so it is
+        // recorded as one — what is needed, in its words, and how to move on.
+        const slot = ((state.recoveries ??= {})[String(phase)] ??= { attempts: 0, lastAt: record.endedAt });
+        slot.errand = {
+          phase, situation: 'blocked-declared:unknown', at: record.endedAt,
+          tried: (slot.rungs ?? []).map((r) => `${r.rung}${r.outcome ? ` → ${r.outcome}` : ''}`),
+          need: record.note,
+          how: 'Settle it, then Retry the phase (or resume its session with an instruction).',
+        };
+        this.record('phase.errand', { ...slot.errand }, phase);
+        this.emit('phase', { phase, status: 'parked', note: record.note, errand: slot.errand });
         // The approvals-timeout vocabulary: nothing is wrong with the work,
         // the question is open, and the phase retries the moment someone
         // answers. Not counted against the failure budget.
         this.park(`phase ${phase} needs a person: ${record.note}`, phase);
         return 'halted';
+      }
+      case 'partial': {
+        // "Work remains; resume me." The session said so in the one channel
+        // the supervisor reads, so the situation is `work-in-progress` AT
+        // ONCE — no evidence gathering, no closeout nudge, no halt — and the
+        // ladder's first rung for it is the phase's own session, continued.
+        // Bounded like every climb: the caps turn a session that declares
+        // partial forever into an errand, never an infinite loop.
+        const why = [
+          `the session declared partial${declared.reason ? ` (${declared.reason})` : ''} — work remains, resume it`,
+        ];
+        const climbed = await this.climb(record, board, 'outcome', {
+          situation: situationOf('work-in-progress', why),
+          sessionId: record.sessionId,
+        });
+        this.record('phase.outcome-partial', { reason: declared.reason ?? null, climbed }, phase);
+        // Climbed: pending + hint, boards next tick. Not climbed: the ladder
+        // parked it with an errand (or deferred it as failed); either way the
+        // run carries on with its other candidates.
+        if (!climbed && record.status !== 'parked') {
+          record.status = 'failed';
+          record.note = `declared partial${declared.reason ? ` (${declared.reason})` : ''}, and the ladder has nothing left for this runner`;
+          record.endedAt = new Date().toISOString();
+        }
+        return 'waiting';
+      }
       case 'complete':
         return null;
     }
+  }
+
+  /**
+   * A phase whose handoff (or declared outcome) says it is blocked. The
+   * situation classifier reads the blocker STATEMENT — the Outstanding text,
+   * the declared reason, the watch refs, the session's words — and the ladder
+   * answers: `blocked-declared:lock` re-queues, `:credential`/`:gate` park
+   * with an errand at once (no session spent), `:unknown` gets ONE bounded
+   * unblock session, and a ladder with nothing left for this runner falls to
+   * the old `phase-blocked` halt, which the service's healer can still act on
+   * with a vehicle this loop does not have.
+   */
+  private async closedBlocked(
+    phase: number, board: Board, declared: PhaseOutcome | null,
+  ): Promise<'waiting' | 'halted'> {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+    const climbed = await this.climb(record, board, 'closed', {
+      declared: declared
+        ? { status: declared.status, reason: declared.reason, watch: declared.watch, writtenAt: declared.written_at }
+        : null,
+    });
+    if (climbed) return 'waiting';
+    // Parked with an errand, or re-queued behind a lock: the run carries on.
+    if (record.status === 'parked' || record.status === 'pending' || record.status === 'queued') return 'waiting';
+
+    record.status = 'failed';
+    record.note = declared?.reason ?? (record.said ? condenseSaid(record.said) : 'the handoff declares this phase blocked');
+    record.endedAt = new Date().toISOString();
+    state.consecutiveFailures++;
+    this.halt(
+      declared
+        ? `phase ${phase} declared itself blocked: ${declared.reason ?? 'no reason recorded'}`
+          + (declared.watch.length ? ` (watching ${declared.watch.join(', ')})` : '')
+        : `phase ${phase}'s handoff declares it blocked`
+          + (record.said ? ` — it signed off: "${condenseSaid(record.said)}"` : '')
+          + '. Its Outstanding section says what is missing; clear that, then Retry '
+          + '(or resume the session with an instruction once the blocker is gone).',
+      phase,
+      'phase-blocked',
+    );
+    return 'halted';
   }
 
   /**
@@ -4399,16 +4725,21 @@ export class Runner {
     state.spentUsd += outcome.costUsd;
     record.costUsd += outcome.costUsd;
     record.turns = (record.turns ?? 0) + outcome.turns;
-    if (outcome.resultText) record.said = outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200);
+    // The closeout's words live on the closeout, never over `record.said`: the
+    // halt that follows a failed closeout quotes the PHASE session — the words
+    // that explain why no handoff was written — and the closeout's "I could
+    // not" used to overwrite them before the halt read them.
+    const closeoutSaid = outcome.resultText ? outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200) : undefined;
     record.closeout = {
       at: started,
       ok: classify(outcome.signal).kind === 'ok',
       sessionId: record.sessionId,
       note: worked.why,
+      ...(closeoutSaid ? { said: closeoutSaid } : {}),
     };
     this.record('phase.closeout-done', {
       ok: record.closeout.ok, costUsd: outcome.costUsd, turns: outcome.turns,
-      said: record.said,
+      said: closeoutSaid,
     }, phase);
 
     return { ran: true, note: 'the runner asked its session to finish the closeout' };
@@ -4430,16 +4761,22 @@ export class Runner {
       return { did: true, why: `a handoff exists for phase ${phase} but reads "${boardState}"` };
     }
 
-    if (await this.git(['status', '--porcelain'])) {
-      return { did: true, why: 'the working tree has uncommitted changes' };
-    }
-
+    // The tree's answer, asked per directory in the phase's SCOPE and with
+    // submodule pointers ignored (`situation.ts` `workEvidence`). The root's
+    // own `git status` was a false witness on a docs hub: permanently dirty
+    // with submodule pointers, its log full of other phases' handoff commits
+    // — a never-started phase read as "uncommitted changes" and bought a
+    // $3.32 closeout for work that did not exist (measured, P12).
     const record = phaseRecord(state, phase);
-    if (record.startedAt && await this.git(['log', '--oneline', `--since=${record.startedAt}`])) {
-      return { did: true, why: 'the phase committed but wrote no handoff' };
-    }
-
-    return { did: false, why: 'the session changed nothing on disk' };
+    const work = await workEvidence(
+      (args) => this.gitOrNull(args), record.startedAt ?? null, await this.scopeDirs(phase));
+    if (work.did === true) return { did: true, why: work.why };
+    if (work.did === false) return { did: false, why: `the session changed nothing on disk (${work.why})` };
+    // Unreadable is not "nothing": but a closeout only runs on POSITIVE
+    // evidence — a session resumed to record work that may not exist is the
+    // loop this guard was written against. The ladder reads the same fact as
+    // `work-in-progress` / `done-unrecorded` and decides with more context.
+    return { did: false, why: work.why };
   }
 
   /* ---------------------------------------------------------------- *
@@ -4462,7 +4799,9 @@ export class Runner {
     const record = phaseRecord(state, phase);
     const path = this.outcomePath(phase);
     const declared = readOutcome(path, {
-      slug: state.slug, phase, notBefore: record.startedAt,
+      // THIS attempt's start, never the phase's first: a file written by an
+      // earlier attempt must not speak for the one that just ended.
+      slug: state.slug, phase, notBefore: record.attemptStartedAt ?? record.startedAt,
     });
     consumeOutcome(path);
     if (declared) {
@@ -4686,10 +5025,31 @@ export class Runner {
           body: verification.ran.map((r) => `$ ${r.command}\n${r.output || '(no output)'}`).join('\n\n'),
         }] : []),
       ],
-    }, VERIFY_ANSWER_MS);
+    }, this.deps.verifyAnswerMs ?? VERIFY_ANSWER_MS);
 
     const outcome = await decided;
     this.record('phase.human-verified', { decision: outcome.decision, by: outcome.by, reason: outcome.reason }, phase);
+
+    // Nobody answered, or the run ended under the card. Neither is a person
+    // saying the checks failed — it is the same "nobody is awake" the tool
+    // card's timeout means, and it takes the same disposition (`Service.
+    // decideToolUse` → `park`): the phase parks with the question standing,
+    // the streak is untouched, and the run parks for a person instead of
+    // counting an unanswered card as a failure. It used to be `failed` plus a
+    // streak increment, so two quiet evenings halted a plan with
+    // `failure-streak` about work nobody had found fault with.
+    if (outcome.by === 'timeout' || outcome.by === 'run ended') {
+      record.status = 'parked';
+      record.note = `${verification.notRun.length} verification check(s) need a person and the card `
+        + `${outcome.by === 'timeout' ? 'went unanswered' : 'was still up when the run ended'} — `
+        + 'confirm them on the phase page (Verify), then Retry.';
+      record.endedAt = new Date().toISOString();
+      this.record('phase.verify-unanswered', { by: outcome.by, notRun: verification.notRun.length }, phase);
+      this.emit('phase', { phase, status: 'parked', note: record.note });
+      this.park(`phase ${phase}'s verification card went unanswered: ${verification.notRun.length} `
+        + 'check(s) only a person can make', phase);
+      return false;
+    }
 
     if (outcome.decision === 'allow') {
       record.verification = {
@@ -4709,6 +5069,370 @@ export class Runner {
       'needs-human',
     );
     return false;
+  }
+
+  /* ---------------------------------------------------------------- *
+   * The ladder in the loop — classify, climb, brief
+   *
+   * The runner's own vehicles for the remediation ladder (`runner/ladder.ts`):
+   * a fresh re-board, a re-board with a RESUMING or UNBLOCK brief appended to
+   * the engine's boot prompt, the phase's own session continued, the phase's
+   * own session asked to close out, and the queue behind a lock. Every other
+   * rung (a fresh briefed agent, a plan-repair script, the resource walls) is
+   * the service's — this loop skips them and leaves the record for the healer
+   * that runs when the run stops. One ladder, one history
+   * (`recoveries[phase].rungs`), whichever of the two climbs.
+   * ---------------------------------------------------------------- */
+
+  /**
+   * The drive loop's ladder pass. Which phases: records the last boarding
+   * settled badly (`interrupted`, `failed`), and phases whose handoff exists
+   * but is not complete (`stuck`, `in-progress` on the board) that this run
+   * has not boarded. Not: anything in flight, anything already hinted, a
+   * phase the board reads done (reconcile closed it) or waiting (its deps are
+   * not done), and not the same unchanged record twice in a row.
+   */
+  private async climbLadder(board: Board, asked: Set<number> | null): Promise<void> {
+    const state = this.state!;
+    const wordOf = (p: number) => board.states[p] ?? 'unknown';
+    const phases = new Set<number>();
+    for (const record of Object.values(state.phases)) {
+      if (LADDER_STATUSES.includes(record.status)) phases.add(record.phase);
+    }
+    for (const p of [...board.stuck, ...board.inProgress]) {
+      const record = state.phases[String(p)];
+      if (!record || record.status === 'pending') phases.add(p);
+    }
+    for (const phase of [...phases].sort((a, b) => a - b)) {
+      if (asked && !asked.has(phase)) continue;
+      if (wordOf(phase) === 'done' || wordOf(phase) === 'waiting') continue;
+      if (this.lanes.has(phase)) continue;
+      const record = phaseRecord(state, phase);
+      if (record.boardingHint) continue;
+      if (record.status === 'pending' && !['stuck', 'in-progress'].includes(wordOf(phase))) continue;
+      if (record.status !== 'pending' && !LADDER_STATUSES.includes(record.status)) continue;
+      const fingerprint = [record.status, wordOf(phase), record.attempts, record.endedAt ?? '', record.note ?? ''].join('|');
+      if (this.ladderSeen.get(phase) === fingerprint) continue;
+      this.ladderSeen.set(phase, fingerprint);
+      try {
+        await this.climb(record, board, 'drive');
+      } catch (error) {
+        log.warn('runner.ladder', { slug: state.slug, phase, error });
+      }
+    }
+  }
+
+  /**
+   * Classify one phase and climb its ladder one rung, through this runner's
+   * own vehicles. True when the record was reset to `pending` with a boarding
+   * hint (it is a candidate now); false when the ladder parked it with an
+   * errand, deferred it (a rung remains that only the service can drive), or
+   * had nothing to climb.
+   *
+   * `preset.situation` skips the evidence gathering — a declared `partial`
+   * outcome IS the evidence; `preset.declared` feeds a declaration into it.
+   */
+  private async climb(
+    record: PhaseRecord, board: Board, by: string,
+    preset: { situation?: Situation; declared?: PhaseEvidence['declared']; sessionId?: string } = {},
+  ): Promise<boolean> {
+    const state = this.state!;
+    const phase = record.phase;
+    const now = new Date().toISOString();
+    const evidence = preset.situation ? null : await this.evidenceOf(phase, board, preset.declared ?? null);
+    const situation = preset.situation ?? classifySituation(evidence!);
+    record.situation = { key: situation.key, at: now, why: situation.why };
+    this.record('phase.situation', {
+      situation: situation.key, sub: situation.sub ?? null, label: situation.label, why: situation.why, by,
+    }, phase);
+
+    if (situation.actor === 'wait' || situation.actor === 'none') return false;
+    // The ladder is the run's healing opt-in (the launch dialog's "heal halts"
+    // switch, on by default), with ONE exemption: a never-started phase
+    // boarding fresh is not healing, it is the run doing its job — and it is
+    // the measured dead end this pass exists for.
+    if (!state.autoRecover && situation.id !== 'never-started') {
+      this.record('phase.ladder-skipped', { situation: situation.key, reason: 'auto-recovery is off for this run' }, phase);
+      return false;
+    }
+
+    const slot = ((state.recoveries ??= {})[String(phase)] ??= { attempts: 0, lastAt: now });
+    const history = slot.rungs ?? [];
+    const runHistory = Object.values(state.recoveries).flatMap((entry) => entry.rungs ?? []);
+    const caps = this.deps.ladderCaps?.() ?? {};
+    const unblockOk = this.deps.unblockAttempts?.() !== false;
+    const sessionId = preset.sessionId ?? record.sessionId ?? record.resumeSessionId;
+    const hintOf = (rung: Rung) => this.hintFor(phase, rung, situation, evidence, sessionId, now, by);
+    // Two questions: is there ANY rung left (caps, history, the table), and is
+    // there one THIS runner can drive. Only the first being "no" is exhaustion.
+    const any = nextRung({ situation: situation.key, history, runHistory, caps });
+    const mine = nextRung({
+      situation: situation.key, history, runHistory, caps,
+      available: (rung) => hintOf(rung) !== null,
+    });
+
+    if (mine.ok) {
+      const hint = hintOf(mine.rung)!;
+      // Recorded BEFORE the spend, so a console that dies mid-boarding still
+      // remembers it climbed — `attempts`/`lastAt` move with it for the
+      // readers that predate rungs.
+      accountRung(slot, {
+        situation: situation.key, rung: mine.rung.vehicle, params: mine.rung.params, at: now, note: mine.rung.label,
+      });
+      this.reboardWith(record, hint);
+      this.record('phase.rung', {
+        situation: situation.key, rung: mine.rung.vehicle, params: mine.rung.params ?? null,
+        brief: hint.brief, vehicle: 'runner', attempt: slot.attempts, by,
+        ...(hint.sessionId ? { sessionId: hint.sessionId } : {}),
+      }, phase);
+      this.emit('phase', { phase, status: record.status, situation: situation.key, rung: mine.rung.vehicle, brief: hint.brief });
+      this.persist();
+      return true;
+    }
+
+    const table = rungsFor(situation.key);
+    const tried = new Set(history.map((r) => rungKey(r.situation, { vehicle: r.rung as Rung['vehicle'], params: r.params })));
+    const untried = table.filter((rung) => !tried.has(rungKey(situation.key, rung)));
+    const switchedOff = (rung: Rung) => rung.vehicle === 'unblock-session' && !unblockOk;
+    const exhausted = !any.ok || situation.actor === 'person' || (untried.length > 0 && untried.every(switchedOff));
+    if (exhausted) {
+      const reason = !any.ok ? any.reason
+        : situation.actor === 'person' ? `${situation.label} is a person's to settle`
+          : 'the unblock session is switched off on this console';
+      this.parkWithErrand(record, situation, slot, reason, by);
+      return false;
+    }
+    // Deferred: a rung remains for a vehicle this loop does not have (a fresh
+    // briefed agent, a repair script). The record stands as it is; the
+    // service's healer climbs it when the run stops.
+    this.record('phase.ladder-deferred', {
+      situation: situation.key, reason: mine.reason, remaining: untried.map((rung) => rung.vehicle),
+    }, phase);
+    return false;
+  }
+
+  /** Park a phase with the ONE ask for a person the ladder leaves behind. */
+  private parkWithErrand(
+    record: PhaseRecord, situation: Situation,
+    slot: NonNullable<RunState['recoveries']>[string], reason: string, by: string,
+  ): void {
+    const errand: Errand = errandFor(situation.key, slot.rungs ?? [], record.phase);
+    slot.errand = errand;
+    record.status = 'parked';
+    record.note = `${situation.label} — ${errand.need}`;
+    record.endedAt ??= errand.at;
+    // Not counted against the failure budget: a phase that needs a person is
+    // not a phase that failed twice.
+    this.record('phase.errand', { ...errand, label: situation.label, reason, by }, record.phase);
+    this.emit('phase', { phase: record.phase, status: 'parked', note: record.note, errand });
+    this.persist();
+  }
+
+  /** Which of this runner's vehicles a rung maps to, as the hint boarding reads — or null. */
+  private hintFor(
+    phase: number, rung: Rung, situation: Situation, evidence: PhaseEvidence | null,
+    sessionId: string | undefined, at: string, by: string,
+  ): BoardingHint | null {
+    const base = { situation: situation.key, rung: rung.vehicle, at, by };
+    switch (rung.vehicle) {
+      case 'reboard-fresh':
+        return { ...base, brief: 'fresh' };
+      case 'queue':
+        // Back to the queue behind the lock; a handoff on disk means the
+        // session that boards should read it as a resume.
+        return { ...base, brief: evidence?.handoff.exists ? 'resume' : 'fresh' };
+      case 'reboard-resume-brief':
+        return { ...base, brief: 'resume', ...(rung.params?.escalate === 'model' ? { escalate: 'model' as const } : {}) };
+      case 'resume-own-session':
+        if (!sessionId) return null;
+        return {
+          ...base, brief: 'continue', sessionId,
+          ...(rung.params?.mode === 'fix-verification' ? { instruction: fixVerificationInstruction(phase) } : {}),
+        };
+      case 'unblock-session':
+        if (this.deps.unblockAttempts?.() === false) return null;
+        return { ...base, brief: 'unblock', ...(sessionId ? { sessionId } : {}) };
+      case 'closeout-own-session':
+        if (!sessionId) return null;
+        return { ...base, brief: 'closeout', sessionId };
+      default:
+        // Agent rungs, the repair script, the resource walls: not this loop's.
+        return null;
+    }
+  }
+
+  /** Reset a record for the boarding the ladder chose, and leave the hint on it. */
+  private reboardWith(record: PhaseRecord, hint: BoardingHint): void {
+    resetForRetry(record);
+    record.boardingHint = hint;
+    // The queue rung is a lock wait: the two-hour cap measures from here.
+    if (hint.rung === 'queue') record.lockWaitSince ??= hint.at;
+    this.ladderSeen.delete(record.phase);
+  }
+
+  /**
+   * The facts the situation classifier weighs, gathered from what this runner
+   * has: the board already read, the store's handoff (through `handoffFor`,
+   * else the board's own word about it), the lock as `phase-lock.sh status`
+   * prints it, the working tree per scope directory, and the record.
+   */
+  private async evidenceOf(
+    phase: number, board: Board, declared: PhaseEvidence['declared'],
+  ): Promise<PhaseEvidence> {
+    const state = this.state!;
+    const own = autopilotOwner(state.id);
+    const ours = (owner: string) => owner === own || /^(autopilot|console)\//.test(owner);
+    const deps: EvidenceDeps = {
+      root: state.root,
+      handoff: (slug, p) => {
+        const stored = this.deps.handoffFor?.(slug, p);
+        if (stored && stored.exists !== false) return { status: stored.status, outstanding: stored.outstanding };
+        // Without the store — or when it lags the engine — the board's word
+        // still says whether a handoff exists and what it reads.
+        const word = board.states[p];
+        if (word === 'stuck') return { status: 'blocked' };
+        if (word === 'in-progress') return { status: 'in-progress' };
+        return null;
+      },
+      lock: async (slug, p) => {
+        try {
+          const out = await this.script('phase-lock.sh', [slug, 'status', String(p)]);
+          return parseLockStatus(out.stdout, ours);
+        } catch { return null; }
+      },
+      repos: (_slug, p) => this.scopeDirs(p),
+      git: (args) => this.gitOrNull(args),
+      declared: () => declared,
+      now: () => this.now(),
+    };
+    return collectEvidence(deps, state.slug, phase, state, board.states);
+  }
+
+  /**
+   * The directories under the root the phase's Repos column names and that
+   * exist — where the working tree is asked about THIS phase's work. `all`,
+   * or names that are not here, fall back to the root itself.
+   */
+  private async scopeDirs(phase: number): Promise<string[]> {
+    const state = this.state!;
+    let names: string[] = [];
+    try { names = [...((await this.deps.phaseRepos?.(state.slug, phase)) ?? [])]; } catch { names = []; }
+    if (!names.length || names.includes('all')) return ['.'];
+    const dirs = names.filter((name) =>
+      name && name !== '.' && !name.includes('..') && !name.startsWith('/') && existsSync(join(state.root, name)));
+    return dirs.length ? dirs : ['.'];
+  }
+
+  /** The first uncommitted paths across the scope directories, for a brief. */
+  private async dirtyPaths(dirs: string[], limit = 12): Promise<string[]> {
+    const paths: string[] = [];
+    for (const dir of dirs) {
+      const prefix = dir === '.' ? [] : ['-C', dir];
+      const out = await this.gitOrNull([...prefix, 'status', '--porcelain', '--ignore-submodules=all']);
+      if (!out) continue;
+      for (const line of out.split('\n')) {
+        if (!line.trim()) continue;
+        const path = line.slice(3).trim();
+        paths.push(dir === '.' ? path : `${dir}/${path}`);
+        if (paths.length >= limit) return paths;
+      }
+    }
+    return paths;
+  }
+
+  /** Everything a re-board brief may quote about this phase. */
+  private async briefFacts(phase: number, board: Board): Promise<BriefFacts> {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+    const evidence = await this.evidenceOf(phase, board, null);
+    const paths = evidence.work.did ? await this.dirtyPaths(await this.scopeDirs(phase)) : [];
+    return {
+      phase,
+      slug: state.slug,
+      scriptsDir: this.deps.scriptsDir,
+      attempts: record.attempts,
+      verification: record.verification,
+      lint: record.lint,
+      said: record.said,
+      halt: state.halt?.phase === phase ? state.halt.reason : null,
+      handoff: evidence.handoff,
+      work: { ...evidence.work, ...(paths.length ? { paths } : {}) },
+    };
+  }
+
+  /**
+   * Assemble the prompt a hinted boarding sends. `fresh` is the engine's text
+   * alone; `resume`/`unblock` append their brief to it; `continue`/`closeout`
+   * resume the phase's own session and carry no engine text — unless that
+   * session cannot be resumed here, in which case they DEGRADE to the
+   * self-contained `resume` rather than sending a continuation to a session
+   * that has no context to continue from.
+   */
+  private async composeBrief(
+    phase: number, board: Board, hint: BoardingHint, engineText: string,
+  ): Promise<{ prompt: string; brief: BoardingBrief; resume?: string; maxTurns?: number; degraded?: string }> {
+    const state = this.state!;
+    const record = phaseRecord(state, phase);
+    const facts = await this.briefFacts(phase, board);
+    const wantsSession = hint.brief === 'continue' || hint.brief === 'closeout' || (hint.brief === 'unblock' && Boolean(hint.sessionId));
+    const resume = wantsSession ? this.resumableSession(record, hint.sessionId) : undefined;
+    let brief = hint.brief;
+    let degraded: string | undefined;
+    if ((hint.brief === 'continue' || hint.brief === 'closeout') && !resume) {
+      degraded = hint.sessionId
+        ? `session ${hint.sessionId} cannot be resumed under this account — boarding fresh with the resume brief`
+        : 'no session to resume — boarding fresh with the resume brief';
+      brief = 'resume';
+      this.record('phase.brief-degraded', { asked: hint.brief, reason: degraded }, phase);
+    }
+    switch (brief) {
+      case 'fresh':
+        return { prompt: engineText, brief };
+      case 'resume':
+        return { prompt: `${engineText}\n\n${resumeBrief(facts)}`, brief, ...(degraded ? { degraded } : {}) };
+      case 'unblock':
+        return resume
+          ? { prompt: unblockBrief(facts), brief, resume }
+          : { prompt: `${engineText}\n\n${unblockBrief(facts)}`, brief };
+      case 'continue':
+        return { prompt: resumeBrief(facts, hint.instruction ?? resumeInstruction(facts)), brief, resume };
+      case 'closeout':
+        return {
+          prompt: closeoutPrompt(state.slug, phase, board.states[phase] ?? 'unknown',
+            state.gitMode === 'new-branch' ? `pe/${state.slug}` : undefined),
+          brief, resume, maxTurns: CLOSEOUT_MAX_TURNS,
+        };
+    }
+  }
+
+  /**
+   * The session id `--resume` can actually reach under the run's account, or
+   * undefined. The transcript lives in the config dir of the account that
+   * WROTE it; under a different one it is carried over first, and when it
+   * cannot be, a self-contained boot beats a resume that finds nothing.
+   */
+  private resumableSession(record: PhaseRecord, sessionId: string | undefined): string | undefined {
+    if (!sessionId) return undefined;
+    const state = this.state!;
+    if ((record.sessionAccountId ?? 'default') === (state.accountId ?? 'default')) return sessionId;
+    const ported = this.deps.portTranscript?.(sessionId, record.sessionAccountId, state.accountId) ?? false;
+    this.record('phase.transcript-port', {
+      sessionId, from: record.sessionAccountId ?? 'default', to: state.accountId ?? 'default', ported,
+    }, record.phase);
+    return ported ? sessionId : undefined;
+  }
+
+  /** Read-only git against the run's root; null when git could not answer (the evidence reader's contract). */
+  private gitOrNull(args: string[]): Promise<string | null> {
+    const state = this.state!;
+    return new Promise((resolve) => {
+      execFile('git', args, {
+        cwd: state.root,
+        timeout: 15_000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, NO_COLOR: '1', TERM: 'dumb', GIT_OPTIONAL_LOCKS: '0' },
+      }, (error, stdout) => resolve(error ? null : String(stdout)));
+    });
   }
 
   /* ---------------------------------------------------------------- *
