@@ -17,7 +17,9 @@
 
 import type { QueryClient } from '@tanstack/react-query';
 import { ApiError, api, type TerminalState } from './api';
+import { isPhone } from './media';
 import { keys } from './queries';
+import { estimateTerminalSize } from './terminal';
 import { navigate } from '../router';
 import { toast } from '../components/ui';
 import type { QaProfile } from './qa';
@@ -50,6 +52,8 @@ export async function startQa(
   try {
     const ticket = await api.agentTicket({
       intent: 'qa',
+      // A size for the pty to be born at — the pane refits on open.
+      ...estimateTerminalSize(isPhone()),
       ...rest,
       // `''` from a select means "this machine's default", which is an omission
       // rather than a value the server should validate.

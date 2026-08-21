@@ -85,7 +85,49 @@ describe('per-page mobile fixes stay fixed', () => {
 
   it('the terminal scrollback is contained — a flick must not rubber-band the shell', () => {
     const css = readFileSync(join(SRC, 'views', 'terminal', 'terminal.css'), 'utf8');
-    expect(css).toMatch(/\.xterm-viewport\s*\{\s*overscroll-behavior:\s*contain/);
+    // xterm 6: fingers land on `.xterm-scrollable-element`; `.xterm-viewport`
+    // is an empty ground behind the screen, and a rule on it contains nothing.
+    expect(css).toMatch(/\.xterm-scrollable-element\s*\{\s*overscroll-behavior:\s*contain/);
+    expect(css).not.toMatch(/\.xterm-viewport\s*\{[^}]*(overscroll-behavior|touch-action)/);
+    // Scrollbar styling likewise — the viewport no longer scrolls.
+    expect(css).not.toMatch(/\.xterm-viewport::-webkit-scrollbar/);
+  });
+
+  it('the terminal key bar is a grid, never a scroller, and never a touch listener', () => {
+    // Code, not prose: the file's own comment names the old scroller to explain the ban.
+    const keybar = readFileSync(join(SRC, 'views', 'terminal', 'keybar.tsx'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(keybar).not.toMatch(/overflow-x-auto/);
+    expect(keybar).not.toMatch(/addEventListener\(['"]touch/);
+    expect(keybar).not.toMatch(/onTouch(Start|End)=/);
+    expect(keybar).toMatch(/touch-action:manipulation/);
+  });
+
+  it('nothing under src/ attaches a NON-PASSIVE touchstart (the listener that cancels a scroll it sits on)', () => {
+    for (const path of walk(SRC)) {
+      const text = readFileSync(path, 'utf8');
+      const match = /addEventListener\(\s*['"]touchstart['"][^)]*passive:\s*false/.exec(text);
+      expect(match, `${path} attaches a non-passive touchstart`).toBeNull();
+    }
+  });
+
+  it('dialogs, sheets and alerts size by --app-height — never dvh, which ignores the iOS keyboard', () => {
+    for (const name of ['dialog.tsx', 'alert-dialog.tsx']) {
+      const text = readFileSync(join(SRC, 'components', 'ui', name), 'utf8');
+      // Classes, not prose: a `dvh` inside an arbitrary-value bracket.
+      expect(text, `${name} sizes by dvh`).not.toMatch(/\[[^\]]*\bdvh\b[^\]]*\]/);
+      expect(text).toMatch(/--app-height/);
+    }
+  });
+
+  it('toasts sit above the keyboard and above every bottom bar, never at bottom-0', () => {
+    const toast = readFileSync(join(SRC, 'components', 'ui', 'toast.tsx'), 'utf8');
+    expect(toast).toMatch(/--app-height/);
+    expect(toast).toMatch(/--bottom-bars/);
+    expect(toast).not.toMatch(/fixed inset-x-0 bottom-0/);
+    // The bars that register: the shell's tab bar and the terminal's bottom row.
+    expect(readFileSync(join(SRC, 'shell', 'phone.tsx'), 'utf8')).toMatch(/useBottomBar/);
+    expect(readFileSync(join(SRC, 'views', 'terminal', 'pane.tsx'), 'utf8')).toMatch(/useBottomBar/);
   });
 
   it('the tab strip never calls scrollIntoView — it scrolls every ancestor, and live SSE renders made the run page crawl', () => {

@@ -72,6 +72,8 @@ export function EndedBanner({
           >
             <RotateCcw size={14} aria-hidden /> Resume here
           </Button>
+          {/* Said, not only titled: a finger cannot hover a disabled button. */}
+          {atCap && <span className="text-2xs text-ink-faint">close a live session first</span>}
           <CopyButton text={`claude --resume ${resumeId}`} label="Copy resume command" />
         </>
       )}

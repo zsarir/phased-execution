@@ -92,7 +92,15 @@ const DOT: Record<ToastKind, string> = {
 
 /**
  * Mounted once by the shell. The viewport sits above everything (`--z-toast`)
- * and clears the phone's tab bar and home indicator.
+ * and above every bar along the bottom edge — the tab bar, the terminal's key
+ * bar and composer — and stays visible with the software keyboard open.
+ *
+ * `fixed` anchors to the LAYOUT viewport, which on iOS does not shrink for
+ * the keyboard, so `bottom: 0` was under the keyboard and over the key bar.
+ * `--app-height` is the visual height the shell lays out against, so
+ * `100% − --app-height` is the keyboard's share of the layout viewport (0
+ * where the layout viewport shrank with it, as on Android); `--bottom-bars` is
+ * the measured sum of the bars registered with `registerBottomBar`.
  */
 export function Toaster() {
   const items = useToasts();
@@ -128,7 +136,8 @@ export function Toaster() {
       ))}
       <ToastPrimitive.Viewport
         className={cn(
-          'pointer-events-none fixed inset-x-0 bottom-0 z-(--z-toast) m-0 flex list-none flex-col gap-2 p-3',
+          'pointer-events-none fixed inset-x-0 z-(--z-toast) m-0 flex list-none flex-col gap-2 p-3',
+          'bottom-[calc(100%-var(--app-height,100%)+var(--bottom-bars,0px))]',
           'pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]',
           // Above the tab bar on a phone; bottom-right on a desktop.
           'md:inset-x-auto md:right-0 md:w-[min(24rem,calc(100vw-1.5rem))]',

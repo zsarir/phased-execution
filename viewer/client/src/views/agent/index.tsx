@@ -19,16 +19,19 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Bot, Plus, Sparkles, X } from 'lucide-react';
 import { planHref } from '@shared/routes.js';
 import { api, type TerminalTicket } from '@/lib/api';
+import { usePhone } from '@/lib/media';
 import { keys, useAutoReadNotifications, useConsoleState, usePlans, useTerminals } from '@/lib/queries';
-import { cn } from '@/lib/cn';
+import { estimateTerminalSize } from '@/lib/terminal';
 import { navigate, type Route } from '@/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // Through `pane`, deliberately — see the re-export note there: a second
 // importable module in this shared chunk renames it and precaches xterm.
-// SessionControls included: it is shared with the terminal route, so a direct
-// import from BOTH views is exactly the second facade that renames the chunk.
+// SessionControls and the strip included: they are shared with the terminal
+// route, so a direct import from BOTH views is exactly the second facade that
+// renames the chunk.
 import {
-  EndedBanner, SessionControls, SessionGone, SessionVitals, TerminalPane, sessionStateNote,
+  EndedBanner, SESSION_HINTS, SessionControls, SessionGone, SessionStrip, SessionVitals, TerminalPane,
+  sessionStateNote,
 } from '../terminal/pane';
 import { Launcher, type LaunchBody } from './launcher';
 import { MODE_TITLE, modeName } from './modes';
@@ -36,6 +39,7 @@ import { NewPlanWizardButton } from './wizard';
 
 export default function AgentView({ route }: { route: Route }) {
   const client = useQueryClient();
+  const phone = usePhone();
   const [size, setSize] = useState<{ cols: number; rows: number }>();
   const { data: state } = useConsoleState();
   const allowed = state?.allowAgent === true;
@@ -74,7 +78,9 @@ export default function AgentView({ route }: { route: Route }) {
 
   async function launch(body: LaunchBody) {
     try {
-      const ticket = await api.agentTicket(body);
+      // The size the pane will settle on, so the CLI is not born at 80×24
+      // and laid out for a window it is not in; the pane corrects it on open.
+      const ticket = await api.agentTicket({ ...body, ...estimateTerminalSize(phone) });
       seed(ticket);
       refresh();
       navigate(`agent/${ticket.sessionId}`);
@@ -163,62 +169,39 @@ export default function AgentView({ route }: { route: Route }) {
 
   /* ---------------- the page ---------------- */
 
+  const capNote = atCap
+    ? `The limit is ${terminals?.limit ?? 8} running sessions across shells and agents — `
+      + 'close one first (ended ones do not count).'
+    : undefined;
+
   return (
     <Frame>
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-rule bg-ground-deep px-2 py-1.5">
-        {sessions.map((session) => {
-          const active = session.id === open?.id;
-          return (
-            <span
-              key={session.id}
-              className={cn(
-                'flex shrink-0 items-center rounded border',
-                active ? 'border-rule-strong bg-surface-raised' : 'border-rule bg-surface',
-              )}
-            >
-              <button
-                type="button"
-                aria-current={active ? 'page' : undefined}
-                onClick={() => navigate(`agent/${session.id}`)}
-                className={cn(
-                  'min-h-(--tap-min) max-w-56 truncate px-3 text-sm',
-                  active ? 'text-ink' : 'text-ink-muted hover:text-ink',
-                )}
-              >
-                {session.label}
-                {sessionStateNote(session) && (
-                  <span className="ml-1.5 text-2xs text-ink-faint">{sessionStateNote(session)}</span>
-                )}
-              </button>
-              <button
-                type="button"
-                aria-label={`Close ${session.label}`}
-                onClick={() => void close(session.id)}
-                className="flex size-(--tap-min) items-center justify-center text-ink-faint hover:text-ink"
-              >
-                <X size={14} aria-hidden />
-              </button>
-            </span>
-          );
-        })}
-
-        <Button
-          size="sm"
-          className="ml-1 min-h-(--tap-min) shrink-0"
-          disabled={atCap}
-          title={atCap
-            ? `The limit is ${terminals?.limit ?? 8} running sessions across shells and agents — `
-              + 'close one first (ended ones do not count)'
-            : 'Configure and start a new Claude session'}
-          onClick={() => navigate('agent')}
-        >
-          <Plus size={14} aria-hidden /> New
-        </Button>
-
-        <span className="shrink-0"><NewPlanWizardButton allowAgent={allowed} /></span>
-
-        {open && (
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+      {/* The strip: tabs on a desktop, the open session + a chevron on a phone
+          (the sheet behind it lists every session and carries the controls,
+          the launch record and the wizard). */}
+      <SessionStrip
+        kind="claude"
+        sessions={sessions.map((session) => ({
+          id: session.id, label: session.label, note: sessionStateNote(session),
+        }))}
+        activeId={open?.id}
+        onSelect={(id) => navigate(`agent/${id}`)}
+        onClose={(id) => void close(id)}
+        note={capNote}
+        actions={(
+          <Button
+            size="sm"
+            className="ml-1 min-h-(--tap-min) shrink-0"
+            disabled={atCap}
+            title={capNote ?? 'Configure and start a new Claude session'}
+            onClick={() => navigate('agent')}
+          >
+            <Plus size={14} aria-hidden /> New
+          </Button>
+        )}
+        more={<span className="shrink-0"><NewPlanWizardButton allowAgent={allowed} /></span>}
+        details={open && (
+          <>
             {/* Freeze / Continue / Stop — the lane verbs, for THIS session. */}
             <SessionControls session={open} />
             {/* Plan · phase · elapsed · ETA — the four facts that say what this
@@ -243,9 +226,10 @@ export default function AgentView({ route }: { route: Route }) {
             <Chip mono className="hidden md:inline-flex" title={open.cwd}>
               {(size ?? open).cols}×{(size ?? open).rows}
             </Chip>
-          </div>
+          </>
         )}
-      </div>
+        hints={[...SESSION_HINTS, MODE_TITLE]}
+      />
 
       {gone ? (
         <SessionGone kind="claude" />
@@ -268,6 +252,7 @@ export default function AgentView({ route }: { route: Route }) {
             onSession={refresh}
             onSize={setSize}
             onEnded={refresh}
+            composer
           />
         </>
       ) : (

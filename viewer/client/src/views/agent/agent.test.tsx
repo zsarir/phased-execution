@@ -13,6 +13,8 @@
  *   (the isFetching bounce regression, inherited from the terminal page).
  * - Only claude-kind sessions appear here; the cap counts both kinds.
  * - An ended session offers `claude --resume <id>` — button and copyable.
+ * - Every mint carries a `cols/rows` for the pty to be born at, and the
+ *   strip is a tab list.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -58,6 +60,8 @@ vi.mock('../terminal/pane', async () => ({
   // Also real, and re-exported through the pane facade in production, so the
   // mock must carry it too.
   ...(await import('./session-controls')),
+  // The strip and its hints — real, the tab list is under test here.
+  ...(await import('../terminal/strip')),
   TerminalPane: (props: { sessionId: string }) => {
     pane(props.sessionId);
     return <div data-testid="pane">{props.sessionId}</div>;
@@ -93,6 +97,17 @@ const TERMINALS: TerminalState = {
 function mount(node: React.ReactElement) {
   const client = new QueryClient(queryClientConfig);
   return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
+}
+
+/** A mint carries the size the pane will settle on, inside the server's clamps. */
+function expectSized(body: { cols?: unknown; rows?: unknown } | undefined) {
+  expect(body).toBeDefined();
+  expect(body!.cols).toEqual(expect.any(Number));
+  expect(body!.rows).toEqual(expect.any(Number));
+  expect(body!.cols as number).toBeGreaterThanOrEqual(20);
+  expect(body!.cols as number).toBeLessThanOrEqual(500);
+  expect(body!.rows as number).toBeGreaterThanOrEqual(5);
+  expect(body!.rows as number).toBeLessThanOrEqual(200);
 }
 
 async function openPage(route = { segments: ['agent'], query: {}, path: 'agent' }) {
@@ -178,9 +193,14 @@ describe('the launcher', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /start session/i }));
 
-    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith({
+    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith(expect.objectContaining({
       model: 'opus', effort: 'max', permissionMode: '', prompt: 'say hello',
-    }));
+    })));
+    // …plus the size: the CLI is born laid out for the window it is in.
+    expectSized(agentTicket.mock.calls[0]?.[0]);
+    expect(Object.keys(agentTicket.mock.calls[0][0]).sort()).toEqual(
+      ['cols', 'effort', 'model', 'permissionMode', 'prompt', 'rows'],
+    );
     await waitFor(() => expect(window.location.hash).toBe('#/agent/a1'));
     await waitFor(() => expect(screen.getByTestId('pane')).toHaveTextContent('a1'));
 
@@ -257,6 +277,13 @@ describe('sessions', () => {
     expect(await screen.findByRole('button', { name: /^new$/i })).toBeDisabled();
   });
 
+  it('the strip is a tab list of claude sessions only', async () => {
+    await openPage({ segments: ['agent', 'c1'], query: {}, path: 'agent/c1' });
+    await screen.findByRole('tablist');
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Claude: hello']);
+    expect(screen.getByRole('tab', { name: /claude: hello/i })).toHaveAttribute('data-state', 'active');
+  });
+
   it('New goes to the launcher, never straight to a pty', async () => {
     await openLive('#/agent/c1');
     fireEvent.click(await screen.findByRole('button', { name: /^new$/i }));
@@ -274,9 +301,10 @@ describe('sessions', () => {
     // rather than a moment it had ~30 seconds to catch.
     expect(await screen.findByText(/exited cleanly/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /resume here/i }));
-    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith({
+    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith(expect.objectContaining({
       resume: '00000000-0000-4000-8000-000000000000',
-    }));
+    })));
+    expectSized(agentTicket.mock.calls[0]?.[0]);
   });
 
   it('reports a failed session as failed, and offers to clear the record', async () => {
@@ -334,9 +362,11 @@ describe('the plan wizard', () => {
     // server defaults a plan intent to plan mode, and the select this form
     // used to offer was the one hole left in that rule — `auto` here launched
     // an authoring session that could write a plan nobody approved.
-    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith({
+    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith(expect.objectContaining({
       intent: 'plan', brief: 'Ship a cart API.', model: 'opus', effort: 'max',
-    }));
+    })));
+    expectSized(agentTicket.mock.calls[0]?.[0]);
+    expect(agentTicket.mock.calls[0][0]).not.toHaveProperty('permissionMode');
     await waitFor(() => expect(window.location.hash).toBe('#/agent/a1'));
     expect(onClose).toHaveBeenCalled();
   });

@@ -1,13 +1,16 @@
 /**
- * The terminal's background, taken back from xterm.
+ * The terminal's ground and gestures, taken back from xterm — against the DOM
+ * xterm 6 actually builds.
  *
- * `@xterm/xterm/css/xterm.css` pins `.xterm .xterm-viewport` to
- * `background-color: #000`, and the DOM renderer never writes an inline
- * background over it — it only paints cells that carry one, so every default
- * cell shows that black through. The symptom is specific and misleading: the
- * *foreground* follows the theme (the rows really do get `--ink`), so the
- * terminal looks like it half-understood the toggle rather than like a
- * stylesheet winning.
+ * `.xterm` holds two children: `.xterm-viewport`, an EMPTY, absolutely
+ * positioned div behind everything whose `background-color: #000` (pinned in
+ * `@xterm/xterm/css/xterm.css`) shows through every default cell, and
+ * `.xterm-scrollable-element`, which wraps `.xterm-screen` and owns the real
+ * scrollbar (`> .scrollbar > .slider`). A finger or a wheel lands on the
+ * scrollable element; the viewport scrolls nothing any more. Two of the
+ * previous rules here — scrollbar styling on the viewport, gesture containment
+ * on the viewport — addressed a node nothing touches and did nothing; they are
+ * rewritten below against the elements that exist.
  *
  * Two things about how this is written:
  *
@@ -15,38 +18,31 @@
  *   `@layer components` would lose outright — unlayered styles beat layered
  *   ones no matter the order — and matching xterm's specificity exactly would
  *   leave the outcome to import order inside a lazily-loaded chunk. `.phase-term
- *   .xterm .xterm-viewport` wins on specificity alone, whichever loads first.
+ *   .xterm …` wins on specificity alone, whichever loads first.
  * - **`var(--ground-deep)`, not a value read in JavaScript.** The whole palette
  *   is `light-dark()`, so a CSS reference repaints on the theme toggle by
  *   itself. The JS theme handed to xterm still carries the same colour, because
  *   that is what inverse video and selection are drawn against.
  */
 
+/* The ground behind the screen: still the viewport div, still black by default. */
 .phase-term .xterm .xterm-viewport {
   background-color: var(--ground-deep);
 }
 
-/* The scrollbar in the viewport, so it does not read as a black gutter. */
-.phase-term .xterm .xterm-viewport::-webkit-scrollbar {
-  width: 10px;
-}
-
-.phase-term .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+/* The scrollbar xterm 6 draws itself, so it does not read as a black gutter. */
+.phase-term .xterm .xterm-scrollable-element > .scrollbar > .slider {
   background-color: var(--rule-strong);
   border-radius: 5px;
 }
 
 /* Mid-scrollback flicks stay in the terminal: on this route the shell does
-   not scroll, and an escaped gesture rubber-bands the document on iOS.
-   `pan-x` only — the viewport is a scroll PROXY under the screen canvas, so
-   native vertical panning can never reach it anyway; the pane's own touch
-   handler turns vertical drags into `scrollLines`, and declaring pan-y here
-   would let the browser start a native pan whose touchmove is no longer
-   cancelable, fighting that handler mid-gesture. Horizontal stays native:
-   the host scrolls sideways past the phone's 80-column floor. */
-.phase-term .xterm .xterm-viewport {
+   not scroll, and an escaped gesture rubber-bands the document on iOS. The
+   pane's host declares `touch-action` (pan-x and pinch-zoom); vertical drags
+   are the pane's own touch handler turning moves into `scrollLines`, because
+   xterm has no native touch scrolling. */
+.phase-term .xterm .xterm-scrollable-element {
   overscroll-behavior: contain;
-  touch-action: pan-x;
 }
 
 /* Size the terminal to its own columns rather than the host: past the phone's
@@ -55,4 +51,15 @@
 .phase-term .xterm {
   width: max-content;
   min-width: 100%;
+}
+
+/* iOS zooms the page when a focused field's font is under 16px, and xterm
+   writes the terminal's own font size onto its hidden textarea inline — so a
+   smaller terminal font (the A− key) would zoom the page on the next focus.
+   Pinned on coarse pointers only; the IME composition view is a separate
+   element and keeps the terminal's size. */
+@media (pointer: coarse) {
+  .phase-term .xterm .xterm-helper-textarea {
+    font-size: max(var(--text-input), 1em) !important;
+  }
 }

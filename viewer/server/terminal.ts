@@ -676,7 +676,7 @@ export class Terminals {
       if (isBinary) return;
       let parsed: unknown;
       try { parsed = JSON.parse(String(data)); } catch { return; }
-      this.onClientMessage(session, parsed);
+      this.onClientMessage(session, parsed, wire);
     });
 
     wire.on('error', (error: Error) => { log.warn('terminal.socket', { id: session.id, error }); });
@@ -691,9 +691,16 @@ export class Terminals {
     this.say('attached', session);
   }
 
-  private onClientMessage(session: Session, parsed: unknown): void {
+  private onClientMessage(session: Session, parsed: unknown, wire: Wire): void {
     if (!parsed || typeof parsed !== 'object') return;
     const message_ = parsed as { t?: unknown; d?: unknown; cols?: unknown; rows?: unknown };
+
+    // The client's heartbeat. A browser cannot see WebSocket ping/pong frames,
+    // and a socket a phone carried into the background can be dead without
+    // the browser noticing; this answer is how the client tells a quiet
+    // session from a dead one. It touches nothing — not the pty, not the
+    // session's clocks — so a client pinging every 30 s changes no record.
+    if (message_.t === 'ping') { send(wire, JSON.stringify({ t: 'pong' })); return; }
 
     if (message_.t === 'i' && typeof message_.d === 'string') {
       if (session.exited) return;

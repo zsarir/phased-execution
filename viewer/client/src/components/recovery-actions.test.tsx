@@ -11,6 +11,7 @@ vi.mock('@/lib/media', () => ({
   usePhone: () => false,
   useNarrow: () => false,
   useTouch: () => true,
+  isPhone: () => true,
 }));
 
 const { recheck, recover } = vi.hoisted(() => ({

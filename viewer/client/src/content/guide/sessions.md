@@ -12,6 +12,12 @@ Reopening reattaches to it, scrollback and all.
 The cap of **8** counts live processes only, so records of finished work never crowd out a new
 session.
 
+## On a phone
+
+The Agent and Terminal pages work under a thumb: a fixed key bar with the keys a phone keyboard lacks,
+a composer for agent sessions, a pty born at the size of your screen, and reconnects that happen by
+themselves. **Mobile setup ▸ Driving a session from the phone** walks through it.
+
 ## Ended is not gone
 
 A session that exits stays in the list with its exit status until you dismiss it, and for an agent

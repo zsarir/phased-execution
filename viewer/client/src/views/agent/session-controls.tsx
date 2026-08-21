@@ -50,12 +50,17 @@ export function SessionControls({ session }: { session: TerminalSession }) {
       });
   };
 
+  // Thumb-sized on touch in both directions: the group's buttons are short
+  // words ("Stop"), and height alone is not a tap target.
+  const touch = '[@media(hover:none)]:min-w-(--tap-min)';
+
   return (
     <ButtonGroup aria-label={`${session.label} session controls`}>
       {frozen ? (
         <Button
           size="sm"
           variant="ghost"
+          className={touch}
           disabled={disabled}
           title={`Frozen by ${frozen.by}, ${elapsed(Date.now() - frozen.at)} ago — continues mid-token, in the same process`}
           onClick={() => act('thaw', () => api.sessionThaw(session.id),
@@ -67,6 +72,7 @@ export function SessionControls({ session }: { session: TerminalSession }) {
         <Button
           size="sm"
           variant="ghost"
+          className={touch}
           disabled={disabled || Boolean(session.stopping)}
           title={session.stopping
             ? 'A stop is already in flight'
@@ -80,7 +86,7 @@ export function SessionControls({ session }: { session: TerminalSession }) {
 
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogTrigger asChild>
-          <Button size="sm" variant="danger" disabled={disabled || Boolean(session.stopping)}>
+          <Button size="sm" variant="danger" className={touch} disabled={disabled || Boolean(session.stopping)}>
             {busy === 'stop' || session.stopping ? 'Stopping…' : 'Stop'}
           </Button>
         </AlertDialogTrigger>

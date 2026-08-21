@@ -23,17 +23,18 @@
 
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { TerminalSquare, Plus, X } from 'lucide-react';
+import { TerminalSquare, Plus } from 'lucide-react';
 import { api } from '@/lib/api';
 import { keys, useAutoReadNotifications, useConsoleState, useTerminals } from '@/lib/queries';
-import { cn } from '@/lib/cn';
 import { navigate, type Route } from '@/router';
 import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // Through `./pane`, deliberately — see the re-export note there: a second
 // importable module in this shared chunk renames it and precaches xterm.
-// SessionControls through the pane facade too — a second importable module in
-// the shared chunk renames it and precaches xterm (see the note in pane.tsx).
-import { EndedBanner, SessionControls, SessionGone, SessionVitals, TerminalPane } from './pane';
+// SessionControls and the strip through the pane facade too, for the same
+// reason (see the note in pane.tsx).
+import {
+  EndedBanner, SESSION_HINTS, SessionControls, SessionGone, SessionStrip, SessionVitals, TerminalPane,
+} from './pane';
 
 export default function TerminalView({ route }: { route: Route }) {
   const client = useQueryClient();
@@ -169,58 +170,37 @@ export default function TerminalView({ route }: { route: Route }) {
 
   /* ---------------- the page ---------------- */
 
+  const capNote = atCap
+    ? `The limit is ${terminals?.limit ?? 8} running sessions across shells and agents — `
+      + 'close one first (ended ones do not count).'
+    : undefined;
+
   return (
     <Frame>
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-rule bg-ground-deep px-2 py-1.5">
-        {sessions.map((session) => {
-          const active = session.id === open?.id;
-          return (
-            <span
-              key={session.id}
-              className={cn(
-                'flex shrink-0 items-center rounded border',
-                active ? 'border-rule-strong bg-surface-raised' : 'border-rule bg-surface',
-              )}
-            >
-              <button
-                type="button"
-                aria-current={active ? 'page' : undefined}
-                onClick={() => navigate(`terminal/${session.id}`)}
-                className={cn(
-                  'min-h-(--tap-min) px-3 text-sm',
-                  active ? 'text-ink' : 'text-ink-muted hover:text-ink',
-                )}
-              >
-                {session.label}
-                {session.exited && <span className="ml-1.5 text-2xs text-ink-faint">ended</span>}
-              </button>
-              <button
-                type="button"
-                aria-label={`Close ${session.label}`}
-                onClick={() => void closeShell(session.id)}
-                className="flex size-(--tap-min) items-center justify-center text-ink-faint hover:text-ink"
-              >
-                <X size={14} aria-hidden />
-              </button>
-            </span>
-          );
-        })}
-
-        <Button
-          size="sm"
-          className="ml-1 min-h-(--tap-min) shrink-0"
-          disabled={atCap}
-          title={atCap
-            ? `The limit is ${terminals?.limit ?? 8} running sessions across shells and agents — `
-              + 'close one first (ended ones do not count)'
-            : 'Open a new shell in the source directory'}
-          onClick={() => void openShell()}
-        >
-          <Plus size={14} aria-hidden /> New
-        </Button>
-
-        {open && (
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+      {/* The strip: tabs on a desktop, the open shell + a chevron on a phone
+          (the sheet behind it lists every shell, and carries the controls). */}
+      <SessionStrip
+        kind="shell"
+        sessions={sessions.map((session) => ({
+          id: session.id, label: session.label, note: session.exited ? 'ended' : null,
+        }))}
+        activeId={open?.id}
+        onSelect={(id) => navigate(`terminal/${id}`)}
+        onClose={(id) => void closeShell(id)}
+        note={capNote}
+        actions={(
+          <Button
+            size="sm"
+            className="ml-1 min-h-(--tap-min) shrink-0"
+            disabled={atCap}
+            title={capNote ?? 'Open a new shell in the source directory'}
+            onClick={() => void openShell()}
+          >
+            <Plus size={14} aria-hidden /> New
+          </Button>
+        )}
+        details={open && (
+          <>
             {/* Freeze / Continue / Stop — the lane verbs, for THIS shell. */}
             <SessionControls session={open} />
             {/* Plan · phase · elapsed (· ETA when the session names a phase) —
@@ -229,9 +209,10 @@ export default function TerminalView({ route }: { route: Route }) {
             <Chip mono className="hidden shrink-0 md:inline-flex" title={open.cwd}>
               {(size ?? open).cols}×{(size ?? open).rows}
             </Chip>
-          </div>
+          </>
         )}
-      </div>
+        hints={SESSION_HINTS}
+      />
 
       {gone ? (
         <SessionGone kind="shell" />

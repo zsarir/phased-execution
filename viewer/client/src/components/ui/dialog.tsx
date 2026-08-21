@@ -25,8 +25,11 @@ export function DialogContent({
       <DialogPrimitive.Overlay className={scrim} />
       <DialogPrimitive.Content
         className={cn(
-          'fixed left-1/2 top-1/2 z-(--z-scrim) w-[min(34rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2',
-          'max-h-[min(42rem,calc(100dvh-2rem))] overflow-y-auto overscroll-contain',
+          // Centred in, and bounded by, `--app-height` — the visual viewport
+          // the shell lays out against — never `dvh`, which on iOS ignores the
+          // software keyboard and left the wizard's buttons under it.
+          'fixed left-1/2 top-[calc(var(--app-height,100%)/2)] z-(--z-scrim) w-[min(34rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2',
+          'max-h-[min(42rem,calc(var(--app-height,100%)-2rem))] overflow-y-auto overscroll-contain',
           'rounded-lg border border-rule bg-surface p-4 shadow-card',
           className,
         )}
@@ -76,7 +79,10 @@ export function SheetContent({
       <DialogPrimitive.Overlay className={scrim} />
       <DialogPrimitive.Content
         className={cn(
-          'fixed inset-x-0 bottom-0 z-(--z-scrim) max-h-[85dvh] overflow-y-auto overscroll-contain',
+          // Rides up with the keyboard (`100% − --app-height` is its share of
+          // the layout viewport a fixed element is positioned in), and never
+          // taller than 85% of what is actually visible.
+          'fixed inset-x-0 bottom-[calc(100%-var(--app-height,100%))] z-(--z-scrim) max-h-[calc(var(--app-height,100%)*0.85)] overflow-y-auto overscroll-contain',
           'rounded-t-lg border-t border-rule bg-surface pb-safe shadow-card',
           'data-[state=open]:animate-rise',
           className,

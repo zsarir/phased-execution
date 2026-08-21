@@ -19,7 +19,9 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Sparkles } from 'lucide-react';
 import { api, type TerminalState } from '@/lib/api';
+import { usePhone } from '@/lib/media';
 import { keys, useConsoleState, useSkills } from '@/lib/queries';
+import { estimateTerminalSize } from '@/lib/terminal';
 import { navigate } from '@/router';
 import {
   Button, Dialog, DialogClose, DialogContent, DialogFooter, toast, type ButtonProps,
@@ -56,6 +58,7 @@ export function NewPlanWizardButton({ allowAgent, variant = 'action' }: {
 
 export function NewPlanWizard({ onClose }: { onClose: () => void }) {
   const client = useQueryClient();
+  const phone = usePhone();
   const { data: state } = useConsoleState();
   const rootOpen = Boolean(state?.root?.path);
   const { data: skills } = useSkills(rootOpen);
@@ -80,6 +83,9 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
         brief: brief.trim(),
         model,
         effort,
+        // The size the pane will settle on — the CLI lays its first screen
+        // out for the window it is actually in (the pane corrects on open).
+        ...estimateTerminalSize(phone),
         // No `permissionMode`: the omission IS the choice. The server defaults
         // a plan intent to plan mode (`agent.ts` — the phase list is the
         // decision), and the select this form used to offer was the one hole

@@ -66,6 +66,26 @@ export interface Prefs {
    * so component state would re-lock the map on the person actually using it.
    */
   mapPanZoom: boolean;
+  /**
+   * Terminal font, as steps off the base (16px on a phone, 14px on a desktop)
+   * — the key bar's A−/A+. Steps rather than a size, so one preference is
+   * right on both kinds of screen.
+   */
+  terminalFontStep: number;
+  /**
+   * xterm's accessibility tree (a live region per row). A preference, not a
+   * detection: no web API says a screen reader is in use, and the tree is not
+   * free on a chatty TUI.
+   */
+  terminalScreenReader: boolean;
+  /**
+   * Render the terminal with `@xterm/addon-webgl` (DOM renderer otherwise, and
+   * on any context loss). Off by default on purpose: under a CDP-driven
+   * Chromium the addon painted NOTHING at devicePixelRatio ≥ 2 — every
+   * retina Mac and every phone — and a blank terminal shipped live is worse
+   * than a slower one. Flip it once a real retina device has shown text.
+   */
+  terminalWebgl: boolean;
 }
 
 // A key added here is safe for a browser carrying the old client's settings:
@@ -92,6 +112,9 @@ const DEFAULTS: Prefs = {
   runsGroup: false,
   runsConsole: false,
   mapPanZoom: false,
+  terminalFontStep: 0,
+  terminalScreenReader: false,
+  terminalWebgl: false,
 };
 
 /** Read-only view of the shipped defaults, so a test can pin one without

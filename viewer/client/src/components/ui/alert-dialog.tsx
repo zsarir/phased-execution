@@ -36,7 +36,10 @@ export function AlertDialogContent({
       <AlertDialogPrimitive.Overlay className="fixed inset-0 z-(--z-scrim) bg-ground-deep/70 backdrop-blur-[2px]" />
       <AlertDialogPrimitive.Content
         className={cn(
-          'fixed left-1/2 top-1/2 z-(--z-scrim) w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2',
+          // Centred in `--app-height` (what is visible above the keyboard),
+          // never in `dvh` — see dialog.tsx.
+          'fixed left-1/2 top-[calc(var(--app-height,100%)/2)] z-(--z-scrim) w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2',
+          'max-h-[calc(var(--app-height,100%)-2rem)] overflow-y-auto overscroll-contain',
           'rounded-lg border border-rule bg-surface p-4 shadow-card',
           className,
         )}

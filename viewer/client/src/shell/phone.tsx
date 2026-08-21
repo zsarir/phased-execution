@@ -1,5 +1,7 @@
+import { useRef } from 'react';
 import { Bell, MoreHorizontal } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useBottomBar } from '@/lib/viewport';
 import { usePrefs, type Theme } from '@/lib/prefs';
 import { Button, ButtonGroup, Chip, Sheet, SheetContent } from '@/components/ui';
 import { navigate } from '@/router';
@@ -93,9 +95,13 @@ export function TabBar({
   onMore: () => void;
 }) {
   const current = activeNavId(head);
+  // A bottom bar: toasts stack above it rather than over it.
+  const bar = useRef<HTMLElement>(null);
+  useBottomBar(bar);
 
   return (
     <nav
+      ref={bar}
       aria-label="Main"
       className="grid grid-flow-col auto-cols-fr border-t border-rule bg-ground-deep pb-safe px-safe"
     >

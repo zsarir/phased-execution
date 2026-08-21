@@ -173,6 +173,29 @@ served.
 | Your `--remote` hostname, a login not on the list | **403.** Someone else on your network. |
 | Any other `Host` | **421.** This is what a DNS-rebinding page arrives with. |
 
+## Driving a session from the phone
+
+Once the console is on your phone, the **Agent** and **Terminal** pages are built for a thumb:
+
+- **The key bar** under the terminal is a fixed two-row grid — `Esc` `Tab` `⇧Tab` `^C` `Ctrl` over
+  `↑` `↓` `←` `→` `Paste` — and never scrolls: every key is on the screen, a swipe across it types
+  nothing, a tap sends exactly one key, and the terminal keeps focus without moving. `Ctrl` is
+  sticky: tap it, then a letter on the keyboard. The `⋯` key flips to a second page — `Home` `End`
+  `PgUp` `PgDn` `Del`, then `A−` / `A+` (the terminal's font size; the page still pinch-zooms, but a
+  bigger font is usually what you meant) and `^L` `^D` `^R`.
+- **The composer** above the key bar, on agent sessions, is where a message to Claude is typed:
+  one line, autocorrect and capitalisation off, and **Send** writes it with its Enter. Typing
+  straight into the terminal still works; the composer is for sentences.
+- **Size and reconnects take care of themselves.** The pty is created at the size your screen
+  actually has and is told once, not fifteen times, when the keyboard opens or the phone rotates. A
+  connection that drops — the phone locking, the app in the background — comes back on its own,
+  with *Reconnecting… (n)* while it does; the console keeps the session and its scrollback, so
+  nothing is lost while the socket is away.
+- **The session list** is the bar above the terminal: the open session and a chevron. Tap it for
+  every session, Freeze / Continue / Stop, the clock, and *New plan with AI*.
+- In portrait the terminal keeps 80 columns and pans sideways under a finger; landscape gives the
+  columns outright.
+
 ## Let Claude Code do all of it
 
 If you would rather not run the steps above by hand, paste this in and answer its questions:

@@ -14,6 +14,7 @@ vi.mock('@/lib/media', () => ({
   usePhone: () => true,
   useNarrow: () => true,
   useTouch: () => true,
+  isPhone: () => true,
 }));
 
 import { App } from '@/App';
@@ -66,9 +67,23 @@ beforeEach(() => {
 });
 
 describe('the phone shell', () => {
-  it('hides the tab bar while a text field has focus, and brings it back on blur', async () => {
+  it('hides the tab bar while a SOFTWARE keyboard is up — focus AND the viewport giving up room — and brings it back on blur', async () => {
+    // A mutable visual viewport, installed before the shell mounts: the
+    // shell mirrors it into --app-height and reads the keyboard's share.
+    const listeners = new Set<() => void>();
+    const vv = {
+      height: 844, width: 390, offsetTop: 0, offsetLeft: 0, scale: 1,
+      addEventListener: (_type: string, fn: () => void) => { listeners.add(fn); },
+      removeEventListener: (_type: string, fn: () => void) => { listeners.delete(fn); },
+      fire: () => { for (const fn of listeners) fn(); },
+    };
+    Object.defineProperty(window, 'visualViewport', { configurable: true, writable: true, value: vv });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 844 });
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
     mount();
     expect(await screen.findByRole('navigation', { name: 'Main' })).toBeInTheDocument();
+    await act(async () => { await frame(); });
 
     const textarea = document.createElement('textarea');
     document.body.appendChild(textarea);
@@ -76,12 +91,21 @@ describe('the phone shell', () => {
       textarea.focus();
       textarea.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
     });
+    // Focus alone is a hardware keyboard, or a field on a desktop: the tab
+    // bar stays. (This used to hide it — and hid it for a Bluetooth keyboard.)
+    expect(screen.getByRole('navigation', { name: 'Main' })).toBeInTheDocument();
+
+    // The software keyboard opens: the visual viewport shrinks by ~300px.
+    vv.height = 520;
+    await act(async () => { vv.fire(); await frame(); });
     expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull();
 
     await act(async () => {
       textarea.blur();
       textarea.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      vv.height = 844;
+      vv.fire();
+      await frame();
     });
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeInTheDocument();
     textarea.remove();

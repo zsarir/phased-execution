@@ -12,6 +12,7 @@ vi.mock('@/lib/media', () => ({
   usePhone: () => true,
   useNarrow: () => true,
   useTouch: () => true,
+  isPhone: () => true,
 }));
 
 import { InfoTip, TooltipProvider } from './tooltip';

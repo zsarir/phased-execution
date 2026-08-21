@@ -243,6 +243,23 @@ test('input reaches the pty and a resize reaches the ioctl', async () => {
   terminals.close();
 });
 
+test('a ping is answered with a pong, and touches nothing', async () => {
+  const { terminals, ptys } = registry();
+  const minted = await terminals.mint() as { token: string };
+  const session = terminals.consume(minted.token);
+  const wire = fakeWire();
+  terminals.attach(session as never, wire as never);
+
+  // The client's heartbeat: a browser cannot see WebSocket ping/pong frames,
+  // so the link asks in the envelope and a silent socket is told apart from a
+  // quiet session by this answer. The pty hears nothing about it.
+  wire.say(JSON.stringify({ t: 'ping' }));
+  assert.deepEqual(wire.control().map((c) => c.t), ['hello', 'pong']);
+  assert.deepEqual(ptys[0].written, []);
+  assert.deepEqual(ptys[0].resized, []);
+  terminals.close();
+});
+
 test('a nonsense frame is ignored rather than interpreted', async () => {
   const { terminals, ptys } = registry();
   const minted = await terminals.mint() as { token: string };

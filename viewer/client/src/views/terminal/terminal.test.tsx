@@ -12,7 +12,8 @@
  *   send someone to the wrong one.
  * - **No shell opens as a side effect of navigating.** Under StrictMode a mount
  *   that spawned a pty would spawn two.
- * - **The key bar sends real byte sequences** and does not steal focus.
+ * - **The strip is a tab list**, and the composer sends a line with its Enter
+ *   (the key bar has its own file: `keybar.test.tsx`).
  * - **The nav entry is gated but the route is not** — a deep link from a phone
  *   must explain itself, not resolve to the dashboard.
  */
@@ -23,7 +24,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClientConfig } from '@/lib/queries';
 import { visibleNav } from '@/shell/nav';
 import type { ConsoleState, TerminalState } from '@/lib/api';
-import { applyCtrl, KeyBar } from './keybar';
+import { Composer } from './composer';
 
 /* ------------------------------------------------------------------ *
  * Mocks
@@ -67,6 +68,8 @@ vi.mock('./pane', async () => ({
   // Also real, for the same reason — and re-exported through the pane facade
   // in production, so the mock must carry it too.
   ...(await import('../agent/session-controls')),
+  // The strip and its hints, likewise real: the tab list is under test here.
+  ...(await import('./strip')),
   TerminalPane: (props: { sessionId: string }) => {
     pane(props.sessionId);
     return <div data-testid="pane">{props.sessionId}</div>;
@@ -270,106 +273,68 @@ describe('sessions', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * The key bar
+ * The strip and the composer
  * ------------------------------------------------------------------ */
 
-describe('the key bar', () => {
-  it('sends the sequences a shell actually expects', async () => {
-    const sent: string[] = [];
-    render(<KeyBar onSend={(d) => sent.push(d)} ctrl={false} onCtrl={() => {}} onPaste={() => {}} />);
+describe('the strip', () => {
+  it('is a tab list — Radix owns the roving focus, ui/tabs the scroll-into-view', async () => {
+    const second = { ...SESSION, id: 'def456', label: 'Terminal 2' };
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [SESSION, second] });
+    await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
 
-    fireEvent.click(screen.getByRole('button', { name: /escape/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^tab/i }));
-    fireEvent.click(screen.getByRole('button', { name: /shift-tab/i }));
-    fireEvent.click(screen.getByRole('button', { name: /interrupt/i }));
-    fireEvent.click(screen.getByRole('button', { name: /up — previous command/i }));
-
-    // ⇧Tab is CSI Z, the backtab — in a claude session it cycles permission
-    // modes, which a phone keyboard cannot otherwise type.
-    expect(sent).toEqual(['\x1b', '\t', '\x1b[Z', '\x03', '\x1b[A']);
+    const list = await screen.findByRole('tablist');
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Terminal 1', 'Terminal 2']);
+    expect(tabs[0]).toHaveAttribute('data-state', 'active');
+    // Every tab is thumb-sized, and the strip is the ui/tabs strip (hidden
+    // scrollbar, fade) — not a hand-rolled overflow row.
+    for (const tab of tabs) expect(tab.className).toMatch(/min-h-\(--tap-min\)/);
+    expect(list.className).toMatch(/scrollbar-width:none/);
   });
 
-  it('holds focus rather than dismissing the keyboard', () => {
-    render(<KeyBar onSend={() => {}} ctrl={false} onCtrl={() => {}} onPaste={() => {}} />);
-    const escape = screen.getByRole('button', { name: /escape/i });
-    // A key that blurred the terminal would arrive at nothing.
-    const prevented = !fireEvent.mouseDown(escape);
-    expect(prevented).toBe(true);
-  });
-
-  it('registers touchstart natively, because React\'s root listener is passive', () => {
-    // ⚠️ The whole reason this is asserted: `preventDefault()` inside an
-    // `onTouchStart` prop does nothing but log — React attaches wheel/touch* to
-    // its root as passive. Same trap as `useMapView` in components/dag.tsx.
-    const listeners: { on: HTMLElement; type: string; options: unknown }[] = [];
-    const original = HTMLDivElement.prototype.addEventListener;
-    HTMLDivElement.prototype.addEventListener = function patched(
-      this: HTMLElement, type: string, fn: never, options: never,
-    ) {
-      listeners.push({ on: this, type, options });
-      return original.call(this, type, fn, options);
-    } as typeof original;
-
-    try {
-      render(<KeyBar onSend={() => {}} ctrl={false} onCtrl={() => {}} onPaste={() => {}} />);
-    } finally {
-      HTMLDivElement.prototype.addEventListener = original;
-    }
-
-    // Filtered to the bar itself: React attaches its own passive `touchstart`
-    // to the render container, which is a div too — and mistaking that one for
-    // ours is exactly the confusion this test exists to prevent.
-    const touch = listeners.find(
-      (l) => l.type === 'touchstart' && l.on.getAttribute?.('role') === 'toolbar',
-    );
-    expect(touch, 'the key bar must attach touchstart itself').toBeTruthy();
-    expect(touch?.options).toMatchObject({ passive: false });
-  });
-
-  it('shows Ctrl as armed so a sticky modifier is not invisible', () => {
-    const { rerender } = render(
-      <KeyBar onSend={() => {}} ctrl={false} onCtrl={() => {}} onPaste={() => {}} />,
-    );
-    // Exact: `/ctrl/i` also matches the `^C` key, whose label is "Interrupt (Ctrl-C)".
-    expect(screen.getByRole('button', { name: 'Ctrl' })).toHaveAttribute('aria-pressed', 'false');
-    rerender(<KeyBar onSend={() => {}} ctrl onCtrl={() => {}} onPaste={() => {}} />);
-    expect(screen.getByRole('button', { name: 'Ctrl' })).toHaveAttribute('aria-pressed', 'true');
+  it('switching tabs navigates to the session', async () => {
+    const second = { ...SESSION, id: 'def456', label: 'Terminal 2' };
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [SESSION, second] });
+    await openLive('#/terminal/abc123');
+    await screen.findByRole('tablist');
+    // Radix activates on mousedown (automatic activation), then click follows.
+    const tab = screen.getByRole('tab', { name: 'Terminal 2' });
+    fireEvent.mouseDown(tab);
+    fireEvent.click(tab);
+    await waitFor(() => expect(window.location.hash).toBe('#/terminal/def456'));
   });
 });
 
-describe('the key bar under a finger', () => {
-  // The bar's native touchstart preventDefault (which keeps the iOS keyboard
-  // up) also cancels the synthetic click — so activation must ride touchend,
-  // or every key is dead on the very device the bar exists for.
-  it('fires from touchend, not only from click', () => {
+describe('the composer', () => {
+  it('sends the line WITH its Enter — text + \\r — and clears for the next one', () => {
     const sent: string[] = [];
-    render(<KeyBar onSend={(d) => sent.push(d)} ctrl={false} onCtrl={() => {}} onPaste={() => {}} />);
-    fireEvent.touchEnd(screen.getByRole('button', { name: 'Escape' }));
-    expect(sent).toEqual(['\x1b']);
+    render(<Composer onSend={(data) => sent.push(data)} />);
+    const input = screen.getByRole('textbox', { name: /message/i });
+    // A command line, not prose: nothing may rewrite it on the way in.
+    expect(input).toHaveAttribute('autocapitalize', 'off');
+    expect(input).toHaveAttribute('autocorrect', 'off');
+    expect(input).toHaveAttribute('spellcheck', 'false');
+    expect(input).toHaveAttribute('enterkeyhint', 'send');
+
+    const send = screen.getByRole('button', { name: /send/i });
+    expect(send).toBeDisabled();
+    fireEvent.change(input, { target: { value: 'run the tests' } });
+    expect(send).not.toBeDisabled();
+    fireEvent.click(send);
+    expect(sent).toEqual(['run the tests\r']);
+    expect(input).toHaveValue('');
   });
 
-  it('arms Ctrl from touchend too', () => {
-    const armed: boolean[] = [];
-    render(<KeyBar onSend={() => {}} ctrl={false} onCtrl={(next) => armed.push(next)} onPaste={() => {}} />);
-    fireEvent.touchEnd(screen.getByRole('button', { name: 'Ctrl' }));
-    expect(armed).toEqual([true]);
-  });
-});
-
-describe('applyCtrl', () => {
-  it('maps a letter to its control code', () => {
-    expect(applyCtrl('c')).toBe('\x03');
-    expect(applyCtrl('C')).toBe('\x03');
-    expect(applyCtrl('d')).toBe('\x04');
-    expect(applyCtrl('z')).toBe('\x1a');
-  });
-
-  it('passes an escape sequence through untouched', () => {
-    // An arrow key arrives as three bytes. Transforming it would break the very
-    // keys the bar exists to provide.
-    expect(applyCtrl('\x1b[A')).toBe(null);
-    expect(applyCtrl('')).toBe(null);
-    expect(applyCtrl('1')).toBe(null);
+  it('Enter in the field submits, and a blank line sends nothing', () => {
+    const sent: string[] = [];
+    render(<Composer onSend={(data) => sent.push(data)} />);
+    const input = screen.getByRole('textbox', { name: /message/i });
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.submit(input.closest('form')!);
+    expect(sent).toEqual([]);
+    fireEvent.change(input, { target: { value: 'y' } });
+    fireEvent.submit(input.closest('form')!);
+    expect(sent).toEqual(['y\r']);
   });
 });
 

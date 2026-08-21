@@ -56,6 +56,11 @@ export function useMediaQuery(query: string): boolean {
 /** True when the rail no longer fits — the shell swaps to top bar + tab bar. */
 export const usePhone = (): boolean => useMediaQuery(`(max-width: ${BP_SHELL - 1}px)`);
 
+/** The same answer for code that runs outside React — a mint from a plain function. */
+export const isPhone = (): boolean => (typeof window !== 'undefined' && Boolean(window.matchMedia)
+  ? window.matchMedia(`(max-width: ${BP_SHELL - 1}px)`).matches
+  : false);
+
 /** True when there is room for one column only. */
 export const useNarrow = (): boolean => useMediaQuery(`(max-width: ${BP_PHONE - 1}px)`);
 

@@ -16,7 +16,9 @@
 
 import type { QueryClient } from '@tanstack/react-query';
 import { ApiError, api, type TerminalState } from './api';
+import { isPhone } from './media';
 import { keys } from './queries';
+import { estimateTerminalSize } from './terminal';
 import { navigate } from '../router';
 import { toast } from '../components/ui';
 import type { RecoveryClass } from './recovery';
@@ -50,7 +52,8 @@ export async function startRecovery(
   request: StartRecoveryRequest,
 ): Promise<string | undefined> {
   try {
-    const ticket = await api.agentTicket({ intent: 'recovery', ...request });
+    // A size for the pty to be born at — the pane refits on open.
+    const ticket = await api.agentTicket({ intent: 'recovery', ...estimateTerminalSize(isPhone()), ...request });
     // Seed from the ticket so the sessions card and the nav badge are right on
     // the very next render, then invalidate — the same two rules every other
     // session the console opens follows.
