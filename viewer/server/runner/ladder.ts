@@ -327,6 +327,7 @@ export type RecoverySlot = {
   lastOutcome?: 'fixed' | 'no-defect' | 'superseded' | 'failed';
   rungs?: RungRecord[];
   errand?: Errand;
+  bootResumes?: number;
 };
 
 /**

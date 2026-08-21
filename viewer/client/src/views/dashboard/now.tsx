@@ -172,6 +172,22 @@ const NEEDS_AGENT = 'Agent sessions are disabled. Restart the console with --all
  * plan-wide rather than phase-scoped — which is exactly what `undefined` means
  * downstream.
  */
+/**
+ * The one ask a person is left with, when the ladder wrote one: what is needed
+ * and how to give it, per phase — then the run-level errand. The card's first
+ * sentence, ahead of the halt's own words, because it is the sentence that says
+ * what to DO. Minimal here; the full surface is the phase's Ways-forward panel.
+ */
+export function errandText(run: RunState): string | undefined {
+  const phased = Object.entries(run.recoveries ?? {})
+    .filter(([key, slot]) => slot.errand && /^\d+$/.test(key))
+    .map(([, slot]) => slot.errand!)
+    .sort((a, b) => a.phase - b.phase);
+  const all = [...phased, ...(run.errand ? [run.errand] : [])];
+  if (!all.length) return undefined;
+  return all.map((e) => `${e.phase ? `phase ${e.phase} needs you — ` : ''}${e.need} (${e.how})`).join(' · ');
+}
+
 function haltPhase(run: RunState): number | undefined {
   return run.halt?.phase ?? run.activePhase ?? undefined;
 }
@@ -328,7 +344,7 @@ export function demands({
       id: `parked-${run.id}`,
       icon: <AlertTriangle size={15} aria-hidden />,
       label: `${run.slug} parked`,
-      detail: run.halt?.reason ?? run.finishedReason ?? 'Every remaining phase needs a person.',
+      detail: errandText(run) ?? run.halt?.reason ?? run.finishedReason ?? 'Every remaining phase needs a person.',
       href: planHref(run.slug, 'run'),
       tone: 'bad',
       actions: [

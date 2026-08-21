@@ -765,6 +765,27 @@ export type RunState = {
    */
   reopenedAt?: string | null;
   /**
+   * Who last stopped this run — the operator (Stop, Pause, a freeze that
+   * escalated into a checkpoint) or the system (a halt or park the loop
+   * wrote, a usage-window sleep, a console shutdown, a crash reconciled at
+   * the next read). The one bit the convergence loop needs that the status
+   * does not carry: `paused` after a deliberate Pause and `paused` after a
+   * console restart look identical on disk, and only one of them may be
+   * picked up again without anyone asking. Cleared when the run starts
+   * again. Absent on records written before it existed — readers treat those
+   * as the operator's when the status is a pause and as the system's
+   * otherwise (`converge.ts` `stoppedByOperator`).
+   */
+  stoppedBy?: 'operator' | 'system';
+  /**
+   * The one open ask for a person at RUN level — a stop with no phase to
+   * hang it on (a sign-in, an unreadable plan, a killed lane the operator has
+   * asked not to resume by itself). Per-phase errands live on
+   * `recoveries[phase].errand`; this is the run-wide one the recover verb
+   * answers with when nothing else can. Cleared when the run starts again.
+   */
+  errand?: Errand | null;
+  /**
    * Recovery bookkeeping, keyed by phase number as a string (`plan` for a
    * plan-wide repair). `attempts` counts sessions the console launched BY
    * ITSELF — bumped at launch, so a console that dies mid-recovery still
@@ -793,6 +814,15 @@ export type RunState = {
     rungs?: RungRecord[];
     /** The one open ask for a person, when the ladder is exhausted; cleared when the phase moves. */
     errand?: Errand;
+    /**
+     * How many times the convergence loop resumed this phase's own session
+     * after a console restart killed its lane. Bounded (`converge.ts`
+     * `MAX_BOOT_RESUMES`): a lane killed by three restarts in a row is a
+     * console problem a person should hear about, not a loop to run forever.
+     * Deliberately NOT a ladder rung — a restart is not a remediation, and a
+     * resume the console owes the run must not spend the phase's rung budget.
+     */
+    bootResumes?: number;
   }>;
   /**
    * The run heals itself: an auto-recoverable halt launches the fix agent, and
@@ -1021,6 +1051,21 @@ export function saveRun(state: RunState): void {
  * ------------------------------------------------------------------ */
 
 /**
+ * The note every killed-lane record carries, whichever path wrote it —
+ * `reconcileRun` (a crash found at the next read), `Runner.adopt` (a resume
+ * finding dead children) and the console's own shutdown checkpoint. ONE
+ * sentence shape, so the convergence loop can recognise the lanes a console
+ * restart killed without a second vocabulary; `CONSOLE_STOPPED_NOTE` is the
+ * reader every one of them answers to.
+ */
+export const CONSOLE_STOPPED_NOTE = /^the console stopped while phase \d+ was /;
+
+export function consoleStoppedNote(phase: number, was?: string, suffix?: string): string {
+  const doing = was === 'awaiting-verification' ? 'waiting to be verified' : 'running';
+  return `the console stopped while phase ${phase} was ${doing}${suffix ? ` ${suffix}` : ''}`;
+}
+
+/**
  * Which runs are genuinely being driven right now.
  *
  * A single id was the whole answer while one `Runner` existed. With a pool
@@ -1063,6 +1108,10 @@ export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
   if (!IN_FLIGHT.includes(state.status)) return false;
 
   const at = new Date().toISOString();
+  // Whether the OPERATOR had asked this run to stop before the console died —
+  // a stop or pause in flight, or a pause armed. That intent outlives the
+  // crash: the convergence loop must not pick the run back up on their behalf.
+  const askedToStop = state.status === 'stopping' || state.status === 'pausing' || Boolean(state.pause);
 
   // The dangerous case: the console went away but its child did not. That
   // session is still editing the working tree, unobserved. Say so precisely —
@@ -1109,6 +1158,7 @@ export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
             + 'Let them finish or stop them, then continue this run.',
       phase: frozen.length ? frozen[0].phase : first.phase,
     };
+    state.stoppedBy = 'system';
     return true;
   }
 
@@ -1140,6 +1190,7 @@ export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
       record.status = 'pending';
       record.resumeSessionId ??= record.sessionId;
     }
+    state.stoppedBy = 'system';
     return true;
   }
 
@@ -1155,6 +1206,9 @@ export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
   // so it finalizes to the `halted` its drive loop never got to write.
   // `interrupted` remains the word for "nothing recorded why".
   state.status = state.status === 'halting' ? 'halted' : 'interrupted';
+  // A stop the operator had asked for stays theirs; everything else — a
+  // crash, a kill, a console that went away — is the system's to pick up.
+  state.stoppedBy = askedToStop ? 'operator' : 'system';
   state.child = null;
   // Every lane, not only the mirror — a leftover `children` entry would keep
   // presenting a dead session as live on every page that reads the map.
@@ -1172,8 +1226,7 @@ export function reconcileRun(state: RunState, liveRunId?: LiveRuns): boolean {
     if (!PHASE_IN_FLIGHT.includes(record.status)) continue;
     const was = record.status;
     record.status = 'interrupted';
-    record.note ??= `the console stopped while phase ${record.phase} was `
-      + (was === 'awaiting-verification' ? 'waiting to be verified' : 'running');
+    record.note ??= consoleStoppedNote(record.phase, was);
     record.endedAt ??= at;
     // The session survives the console that was watching it. Keeping its id
     // here is what makes the difference between offering to CONTINUE this phase

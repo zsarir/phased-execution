@@ -23,7 +23,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { HealthIssue, RunState, TerminalSession } from '@/lib/api';
-import { AttentionRow, demands, issueHref, type Demand, type DemandAction } from './now';
+import { AttentionRow, demands, errandText, issueHref, type Demand, type DemandAction } from './now';
 
 const halted = (over: Partial<RunState> = {}): RunState => ({
   id: 'r1', slug: 'alpha', status: 'halted',
@@ -311,5 +311,28 @@ describe('the attention row', () => {
     // An anchor wrapping a button is invalid, and it is exactly why nothing
     // actionable could live in these cards before.
     expect(container.querySelectorAll('a button')).toHaveLength(0);
+  });
+});
+
+describe('a parked run with errands', () => {
+  it('leads with the errand — what is needed and how — ahead of the halt\'s own words', () => {
+    const run = {
+      id: 'r9', slug: 'gamma', status: 'parked',
+      halt: { at: '', reason: 'nothing left to run on its own — phase 4 is parked' },
+      recoveries: {
+        '4': {
+          attempts: 1, lastAt: '',
+          errand: { phase: 4, situation: 'blocked-declared:credential', tried: [], need: 'The SSH key the session named.', how: 'Provide it where the handoff says, then Retry.', at: '' },
+        },
+      },
+    } as unknown as RunState;
+    const items = demands({ approvals: 0, runs: [run], unread: 0, expiredLocks: [] });
+    const card = only(items, 'parked-r9');
+    expect(card.detail).toMatch(/phase 4 needs you — The SSH key the session named\. \(Provide it/);
+    expect(errandText(run)).toMatch(/phase 4 needs you/);
+    expect(errandText(halted())).toBeUndefined();
+    // A run-level errand (no phase to hang it on) reads without the phase prefix.
+    const runLevel = { ...run, id: 'r10', recoveries: {}, errand: { phase: 0, situation: 'resource-wall:auth', tried: [], need: 'A signed-in account.', how: 'Sign in, then Continue.', at: '' } } as unknown as RunState;
+    expect(errandText(runLevel)).toBe('A signed-in account. (Sign in, then Continue.)');
   });
 });

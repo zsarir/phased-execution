@@ -49,7 +49,7 @@ import {
 } from './ladder.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
-  PHASE_IN_FLIGHT, reconcileRecordsAgainstBoard, mcpReasonText, resetForRetry,
+  PHASE_IN_FLIGHT, reconcileRecordsAgainstBoard, mcpReasonText, resetForRetry, consoleStoppedNote,
   type Autonomy, type BoardingBrief, type BoardingHint, type ChildRef, type Errand, type HaltKind,
   type McpDegradation, type McpPolicy,
   type OnLimitPolicy, type PhaseOptions, type PhaseRecord, type PreflightWarning,
@@ -761,6 +761,12 @@ export class Runner {
    * word about it changes. Cleared on start and on retry.
    */
   private ladderSeen = new Map<number, string>();
+  /**
+   * Set by the console's shutdown checkpoint: the stop about to land on the
+   * lanes is the SYSTEM's, not the operator's — the run is stamped so the
+   * convergence loop may pick it back up at the next boot.
+   */
+  private shuttingDown = false;
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
@@ -1037,6 +1043,10 @@ export class Runner {
       // dismissed) — a real run halted twice and said nothing the second time.
       this.state.resolved = null;
       this.state.reopenedAt = null;
+      // Whoever stopped it last, the run is being started again now — and the
+      // run-level errand was about that stop.
+      delete this.state.stoppedBy;
+      delete this.state.errand;
       const blocked = this.adopt(this.state);
       if (blocked) { this.persist(); return this.state; }
       // An operator pressing Start/Continue is a person back in the loop — the
@@ -1146,6 +1156,7 @@ export class Runner {
     const refusal = preflight(this.state.root) ?? (auth.loggedIn ? null : authRefusal(auth.detail));
     if (refusal) {
       this.state.status = 'parked';
+      this.state.stoppedBy = 'system';
       this.state.halt = { at: new Date().toISOString(), reason: refusal, kind: 'run-preflight' };
       this.record('run.preflight-refused', { reason: refusal });
       this.persist();
@@ -1704,6 +1715,7 @@ export class Runner {
         kind: 'orphaned-session',
       };
       for (const child of alive) phaseRecord(state, child.phase).status = 'running';
+      state.stoppedBy = 'system';
       this.record('run.adopt.alive', {
         pids: alive.map((child) => child.pid), phases: alive.map((child) => child.phase),
       }, first.phase);
@@ -1964,6 +1976,8 @@ export class Runner {
     const others = [...this.lanes.values()].filter((other) => other !== lane);
     if (!others.length) {
       state.status = 'paused';
+      // The freeze was the operator's act; its escalation is their stop.
+      state.stoppedBy = 'operator';
       state.halt = null;
     } else {
       this.syncFrozenStatus();
@@ -2069,6 +2083,7 @@ export class Runner {
         // word "interrupted" every single time — the one fact it was for.
         const was = this.state.status;
         this.state.status = 'interrupted';
+        this.state.stoppedBy = 'operator';
         this.state.child = null;
         this.state.pause = null;
         this.state.halt ??= { at: new Date().toISOString(), reason: 'stopped by the operator', phase: this.state.activePhase ?? undefined };
@@ -2328,6 +2343,7 @@ export class Runner {
     const at = phase ?? this.state.activePhase;
     this.state.halt = { at: new Date().toISOString(), reason, ...(at !== null ? { phase: at } : {}) };
     this.state.status = 'parked';
+    this.state.stoppedBy = 'system';
     // Not counted against the failure budget: nobody being awake is not the
     // phase going wrong twice.
     this.state.consecutiveFailures = 0;
@@ -2489,7 +2505,17 @@ export class Runner {
           if (await draining()) continue;
           state.status = 'paused';
           state.pause = null;
-          state.finishedReason ??= 'stopped by the operator';
+          if (this.shuttingDown) {
+            // The console is going away under a run that was working. Said
+            // so, and stamped as the system's stop: the convergence loop picks
+            // it up at the next boot (`resumeAtBoot`), which it would never do
+            // for a stop the operator asked for.
+            state.stoppedBy = 'system';
+            state.finishedReason ??= 'the console shut down while this run was working — it continues by itself once the console is back';
+          } else {
+            state.stoppedBy = 'operator';
+            state.finishedReason ??= 'stopped by the operator';
+          }
           break;
         }
         if (state.status === 'pausing') {
@@ -2498,6 +2524,7 @@ export class Runner {
           // it means after all of them.
           if (await draining()) continue;
           state.status = 'paused';
+          state.stoppedBy = 'operator';
           this.record('run.paused', { afterPhase: state.pause?.afterPhase ?? null });
           state.finishedReason = state.pause?.afterPhase != null
             ? `paused by ${state.pause.by} after phase ${state.pause.afterPhase} finished`
@@ -2556,6 +2583,9 @@ export class Runner {
         // done HERE, halts anchored to it clear, and the loop never spends a
         // session on work somebody already did.
         this.applyReconcile(board);
+        // A lock-cap park re-arms the moment the lock it waited on is gone —
+        // the docs watcher wakes this tick on the release. See `rearmLockCapParks`.
+        await this.rearmLockCapParks(board);
 
         const outstanding = [...board.ready, ...board.waiting, ...board.inProgress, ...board.stuck];
         // A run asked for specific phases is finished when THOSE are settled —
@@ -2631,6 +2661,7 @@ export class Runner {
           const soonest = [...waitingRecords].map((r) => r.parkedUntil!).sort()[0];
           const names = waitingRecords.map((r) => r.phase).sort((a, b) => a - b).join(', ');
           state.status = 'waiting';
+          state.stoppedBy = 'system';
           state.waitUntil = soonest;
           state.finishedReason = `waiting on external work — phase${waitingRecords.length === 1 ? '' : 's'} `
             + `${names} parked (${waitingRecords.map((r) => r.parkReason).filter(Boolean).join('; ') || 'declared waits'}); `
@@ -2670,6 +2701,7 @@ export class Runner {
 
         if (!candidates.length) {
           state.status = outstanding.length ? 'parked' : 'finished';
+          if (outstanding.length) state.stoppedBy = 'system'; else delete state.stoppedBy;
           state.finishedReason = outstanding.length
             ? undefined
             : `every phase of ${state.slug} is done.`;
@@ -3668,10 +3700,21 @@ export class Runner {
       // pauses the whole run, which is exactly what this stop is not.
       if (lane.stopped) return this.settleStoppedLane(lane, phase);
 
-      // An operator stop is not a failure to diagnose — we caused it.
+      // An operator stop is not a failure to diagnose — we caused it. A
+      // console SHUTDOWN lands here too (`checkpointForShutdown` aborts the
+      // lanes), and must not be written as the operator's: the note takes the
+      // killed-lane shape the convergence loop resumes at boot, the session
+      // id is kept for the `--resume`, and `stoppedBy` says which it was.
       if (this.stopRequested || this.abort?.signal.aborted) {
         record.status = 'interrupted';
-        record.note = 'stopped by the operator';
+        if (this.shuttingDown) {
+          record.note = consoleStoppedNote(phase);
+          record.resumeSessionId ??= record.sessionId;
+          state.stoppedBy = 'system';
+        } else {
+          record.note = 'stopped by the operator';
+          state.stoppedBy = 'operator';
+        }
         state.status = 'paused';
         return { carryOn: false, completed: false };
       }
@@ -4867,6 +4910,41 @@ export class Runner {
     }
   }
 
+  /**
+   * A phase parked at the two-hour lock cap re-arms by itself once the lock it
+   * waited on is gone.
+   *
+   * The park was honest — a dead-but-unexpired claim must not hold a lane for
+   * ever — but it used to be TERMINAL: `parked` is settled, so the phase never
+   * boarded again for the life of the run, and the only remedy was a person's
+   * Retry long after the holder had released. The holder releasing is exactly
+   * the event the wait was for, and the docs watcher already wakes this loop
+   * on it. The stopped-run half of the same promise — the loop ended with the
+   * park as the last word — lives in the convergence loop (`converge.ts`,
+   * `lock-cap-rearm`).
+   */
+  private async rearmLockCapParks(board: Board): Promise<void> {
+    const state = this.state!;
+    const own = autopilotOwner(state.id);
+    for (const record of Object.values(state.phases)) {
+      if (record.status !== 'parked' || !LOCK_CAP_PARK_NOTE.test(record.note ?? '')) continue;
+      if (board.states[record.phase] === 'done') continue;
+      let free = false;
+      try {
+        const status = await this.script('phase-lock.sh', [state.slug, 'status', String(record.phase)]);
+        const expired = status.stdout.includes('EXPIRED');
+        const holder = expired ? undefined : /held by (\S+)/.exec(status.stdout)?.[1];
+        free = !holder || holder === own;
+      } catch { free = false; }
+      if (!free) continue;
+      const was = record.note;
+      resetForRetry(record);
+      this.record('phase.lock-cap-rearmed', { was, note: 'the lock it waited on is gone — the wait starts over' }, record.phase);
+      this.emit('phase', { phase: record.phase, status: record.status });
+      this.persist();
+    }
+  }
+
   /** Poke the drive loop when a park's window elapses, so the resume is on time. */
   private armParkPoke(phase: number, untilIso: string): void {
     this.clearParkPoke(phase);
@@ -5587,6 +5665,7 @@ export class Runner {
     // the halt is a fact the moment it happens, the "stopped" claim only when
     // nothing is running any more.
     state.status = this.lanes.size ? 'halting' : 'halted';
+    state.stoppedBy = 'system';
     // `kind` is the machine-readable class the auto-recovery classifier reads;
     // the sentence stays for people, and old records simply never have one.
     state.halt = { at: new Date().toISOString(), reason, phase, ...(kind ? { kind } : {}) };
@@ -5667,6 +5746,7 @@ export class Runner {
     });
     this.persist();
     if (!this.livePhases().length && !this.childPid) return;
+    this.shuttingDown = true;
     this.abort?.abort();
     await this.driving;
     this.persist();

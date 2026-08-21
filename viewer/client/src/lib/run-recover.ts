@@ -38,8 +38,8 @@ export async function runRecoverVerb(
       // then the outcome in its own tone.
       const report = await api.runRecover(slug);
       for (const step of report.steps) toast(step, 'ok');
-      toast(report.detail, report.outcome === 'needs-you' ? 'warn' : 'ok');
-      return report.outcome !== 'needs-you';
+      toast(report.detail, report.outcome === 'errand' ? 'warn' : 'ok');
+      return report.outcome !== 'errand';
     }
     if (verb === 'mcp-continue') await api.runMcpContinue(slug);
     else if (phase == null) throw new Error('this action needs a phase');

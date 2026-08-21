@@ -16,7 +16,24 @@ import {
 import { parseScope } from '../../shared/scope.js';
 import { extractCommands } from '../runner/verify.ts';
 
-export type PlanContext = { record: PlanRecord; board: Board; qaMode: QaMode };
+/**
+ * The slice of a run record the health analysis reads. Structural rather than
+ * the runner's own `RunState` so this module stays a reader of files on disk,
+ * never of the loop; the service fills it from `listRuns`.
+ */
+export type RunView = {
+  id: string;
+  status: string;
+  phases: Record<string, { phase: number; status: string }>;
+};
+
+export type PlanContext = {
+  record: PlanRecord;
+  board: Board;
+  qaMode: QaMode;
+  /** The plan's runs, newest first — optional, for the record-vs-board checks. */
+  runs?: readonly RunView[];
+};
 
 export type ReadyItem = {
   slug: string;
@@ -258,7 +275,7 @@ export function isClosedStatus(raw?: string): boolean {
  */
 export const PROGRESS_ISSUE_KINDS = new Set([
   'stale-handoff', 'qa-fail', 'missing-handoff', 'depends-drift', 'index-drift', 'stale-lock', 'no-handoff-dir',
-  'verification-unrunnable',
+  'verification-unrunnable', 'record-ahead-of-board',
 ]);
 
 /**
@@ -360,6 +377,28 @@ export function healthIssues(ctx: PlanContext): HealthIssue[] {
 
   for (const lock of record.locks) {
     if (lock.expired) add('info', 'stale-lock', `Phase ${lock.phase} lock by ${lock.owner} has expired`, lock.phase);
+  }
+
+  // A run record that reads `done` over a board that does not: the run's word
+  // has run AHEAD of the plan's — a handoff reverted or re-opened by hand, a
+  // phase file moved, a board the engine now reads differently. Never
+  // rewritten (the record is the run's own history, and reconcile only ever
+  // moves records FORWARD to done), so it is raised here instead — once per
+  // phase, on the newest run that says so. Skipped when the engine could not
+  // read the board at all: an empty board is not evidence of anything.
+  if (ctx.runs?.length && !board.error) {
+    const ahead = new Set<number>();
+    for (const run of ctx.runs) {
+      for (const rec of Object.values(run.phases)) {
+        if (rec.status !== 'done' || ahead.has(rec.phase) || !known.has(rec.phase)) continue;
+        if (board.done.includes(rec.phase)) continue;
+        ahead.add(rec.phase);
+        add('warning', 'record-ahead-of-board',
+          `Phase ${rec.phase} reads done on run ${run.id} but the board reads `
+          + `${board.states[rec.phase] ?? 'unknown'} — the handoff moved after the run closed it`,
+          rec.phase);
+      }
+    }
   }
 
   if (plan.phased && !record.handoffDir && board.done.length > 0) {

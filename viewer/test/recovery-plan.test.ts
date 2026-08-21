@@ -180,10 +180,13 @@ test('a needs-you carries the errand when the ladder wrote one — need and how,
     });
     try {
       const report = await svc.recoverPlan('alpha');
-      assert.equal(report.outcome, 'needs-you');
+      assert.equal(report.outcome, 'errand', 'an unresolvable stop is an errand, never a bare needs-you');
       assert.ok(report.steps.some((step) => /phase 2 reads Declared blocked · credential/.test(step)), report.steps.join(' | '));
-      assert.match(report.detail, /needs a person — needed: .*credential/i);
+      assert.match(report.detail, /Needed: .*credential/i);
       assert.match(report.detail, /How: /);
+      assert.equal(report.errand?.situation, 'blocked-declared:credential', 'the Errand body rides the answer');
+      assert.equal(report.errand?.phase, 2);
+      assert.ok(report.errand?.need && report.errand?.how);
       assert.equal(report.run?.recoveries?.['2']?.errand?.situation, 'blocked-declared:credential');
     } finally { svc.close(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -202,8 +205,9 @@ test('what only a person can settle comes back named, never blindly retried', as
     });
     try {
       const report = await svc.recoverPlan('alpha');
-      assert.equal(report.outcome, 'needs-you');
-      assert.match(report.detail, /not auto-recoverable|needs a person|auto-recovery/i);
+      assert.equal(report.outcome, 'errand');
+      assert.match(report.detail, /not auto-recoverable|needs a person|auto-recovery|Needed:/i);
+      assert.ok(report.errand, 'the errand body is always there on an errand outcome');
     } finally { svc.close(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

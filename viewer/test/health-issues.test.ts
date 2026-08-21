@@ -84,3 +84,22 @@ test('a phase without runnable verification is a warning, scoped away from done 
     .filter((issue) => issue.kind === 'verification-unrunnable');
   assert.equal(closed.length, 0);
 });
+
+test('a done record over a not-done board is a record-ahead-of-board warning — once per phase, on the newest run, dropped by closure', () => {
+  const runs = [
+    { id: 'r2', status: 'halted', phases: { '2': { phase: 2, status: 'done' } } },
+    { id: 'r1', status: 'finished', phases: { '2': { phase: 2, status: 'done' }, '3': { phase: 3, status: 'done' } } },
+  ];
+  const open = healthIssues({ ...(ctx('active', []) as object), runs } as never)
+    .filter((issue) => issue.kind === 'record-ahead-of-board');
+  assert.deepEqual(open.map((issue) => [issue.phase, issue.severity]), [[2, 'warning'], [3, 'warning']]);
+  assert.match(open[0].message, /run r2/, 'the newest run that says so is the one named');
+  // The board catching up ends it; a closed plan drops it with the other progress kinds.
+  assert.equal(healthIssues({ ...(ctx('active', [2, 3]) as object), runs } as never)
+    .filter((issue) => issue.kind === 'record-ahead-of-board').length, 0);
+  assert.equal(healthIssues({ ...(ctx('complete', []) as object), runs } as never)
+    .filter((issue) => issue.kind === 'record-ahead-of-board').length, 0);
+  assert.ok(PROGRESS_ISSUE_KINDS.has('record-ahead-of-board'));
+  // And no runs at all is no issue, never a throw.
+  assert.equal(healthIssues(ctx('active', [])).filter((issue) => issue.kind === 'record-ahead-of-board').length, 0);
+});

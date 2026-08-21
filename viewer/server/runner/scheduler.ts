@@ -204,6 +204,32 @@ export function autopilotOwner(runId: string): string {
   return `autopilot/${runId}`;
 }
 
+/** The run id an autopilot-owned lock names, or null for any other owner. */
+export function autopilotRunId(owner: string): string | null {
+  const m = /^autopilot\/([0-9a-f]{8})$/.exec(owner);
+  return m ? m[1] : null;
+}
+
+/**
+ * Locks held by autopilot owners whose runs are known to be dead — DEBRIS.
+ *
+ * A run's lanes claim `autopilot/<runId>` and release on their way out; a
+ * console that dies mid-lane leaves the claim behind, unexpired for up to the
+ * lease, and every other actor — this console's own queue included — waits on
+ * a holder that will never release. The queue already skips LAPSED locks by
+ * the clock; this is the other half: a claim whose owner is a run nobody is
+ * driving is free the moment that is known, lease or no lease. Only OWN-shaped
+ * owners are ever considered — a person's or another console's claim is never
+ * debris to us, however dead it looks. The convergence loop (`converge.ts`)
+ * releases what this names, through the runner's own release semantics.
+ */
+export function debrisLocks(locks: readonly LockView[], deadRunIds: ReadonlySet<string>): LockView[] {
+  return locks.filter((lock) => {
+    const runId = autopilotRunId(lock.owner);
+    return runId !== null && deadRunIds.has(runId);
+  });
+}
+
 type Waiting = QueueEntry & {
   resolve: (grant: ScopeGrant) => void;
   reject: (error: Error) => void;
@@ -499,6 +525,11 @@ export class Scheduler {
   /** Is anything of this run's already granted? Used by the same-slug guard. */
   granted(runId: string): ScopeGrant[] {
     return [...this.grants.values()].filter((grant) => grant.runId === runId);
+  }
+
+  /** The locks in this scheduler's view held by dead autopilot runs. See `debrisLocks`. */
+  debris(deadRunIds: ReadonlySet<string>): LockView[] {
+    return debrisLocks(this.deps.locks?.() ?? [], deadRunIds);
   }
 
   close(): void {

@@ -50,6 +50,16 @@ export type Flags = {
    */
   allowRun: boolean;
   /**
+   * The convergence loop's AUTOMATIC triggers — boot, docs change, the
+   * periodic sweep, the minute after a halt (`server/converge.ts`). On by
+   * default from the command line (`--no-converge` turns it off); read as off
+   * when absent, which is what a bare harness constructs — so a test that
+   * drives the healer by hand is never raced by a boot pass it did not ask
+   * for. The operator's own Recover & continue press converges regardless.
+   * Needs `--allow-run` to do anything: the loop only ever acts through runs.
+   */
+  converge?: boolean;
+  /**
    * A third decision again, not a wider reading of the other two. `--allow-run`
    * spawns a supervised agent inside a policy this console enforces;
    * `--allow-terminal` hands over an unsupervised shell, where the policy is
@@ -347,6 +357,7 @@ export function parseFlags(argv: string[], instance: Instance = INSTANCE): Flags
     open: process.env.PHASE_CONSOLE_NO_OPEN !== '1',
     allowWrites: false,
     allowRun: false,
+    converge: true,
     allowTerminal: false,
     allowAgent: false,
     allowAccounts: false,
@@ -369,6 +380,7 @@ export function parseFlags(argv: string[], instance: Instance = INSTANCE): Flags
     else if (arg === '--no-open') flags.open = false;
     else if (arg === '--allow-writes') flags.allowWrites = true;
     else if (arg === '--allow-run') flags.allowRun = true;
+    else if (arg === '--no-converge') flags.converge = false;
     else if (arg === '--allow-terminal') flags.allowTerminal = true;
     else if (arg === '--allow-agent') flags.allowAgent = true;
     else if (arg === '--allow-accounts') flags.allowAccounts = true;
@@ -542,6 +554,8 @@ function printHelp(): void {
   --no-open         do not open the browser
   --allow-writes    enable the guarded write verbs (scaffold, QA record, locks)
   --allow-run       enable the autopilot: spawn \`claude -p\` sessions per phase
+  --no-converge     keep the autopilot's convergence loop (boot / change / timer /
+                    after-halt passes over stopped runs) off; Recover & continue still works
   --allow-terminal  enable the Terminal page: a real shell over a WebSocket,
                     running as you, with no policy in front of it
   --allow-agent     enable the Agent page: interactive \`claude\` sessions in the

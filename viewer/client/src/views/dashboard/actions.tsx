@@ -59,7 +59,7 @@ export function useDemandActions(runs: readonly RunState[]): {
             if (!slug) throw new Error('That run is no longer on the board — reload.');
             const report = await api.runRecover(slug);
             for (const step of report.steps) toast(step, 'ok');
-            toast(report.detail, report.outcome === 'needs-you' ? 'warn' : 'ok');
+            toast(report.detail, report.outcome === 'errand' ? 'warn' : 'ok');
             break;
           }
           case 'mcp-continue': {

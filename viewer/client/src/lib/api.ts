@@ -1127,6 +1127,15 @@ export interface RunState {
   resolved?: RunResolution | null;
   /** A person put the card back; the board resolver leaves it alone from then on. */
   reopenedAt?: string | null;
+  /**
+   * Who last stopped the run — the operator (Stop, Pause, an escalated
+   * freeze) or the system (a halt or park the loop wrote, a console shutdown,
+   * a crash found at boot). The convergence loop picks up only the system's
+   * stops. Absent on runs written before the field existed.
+   */
+  stoppedBy?: 'operator' | 'system';
+  /** The run-level ask for a person, when a stop has no phase to hang it on. */
+  errand?: Errand | null;
   /** Recovery bookkeeping, keyed by phase (`plan` for a plan-wide repair).
    * `lastOutcome` is the verdict the server has always written and this type
    * never carried — `no-defect` ("looked, found nothing wrong") was invisible
@@ -1134,6 +1143,16 @@ export interface RunState {
   recoveries?: Record<string, {
     attempts: number; lastAt: string; lastReason?: string; fixed?: boolean;
     lastOutcome?: 'fixed' | 'no-defect' | 'superseded' | 'failed';
+    /** The ladder's own history for this phase — every rung climbed, in order. */
+    rungs?: {
+      situation: string; rung: string; at: string;
+      params?: Record<string, string | number | boolean>; costUsd?: number;
+      outcome?: 'running' | 'fixed' | 'no-defect' | 'superseded' | 'failed'; note?: string;
+    }[];
+    /** The one open ask for a person, when the ladder is exhausted. */
+    errand?: Errand;
+    /** Resumes after console restarts killed this phase's lane (bounded). */
+    bootResumes?: number;
   }>;
   /** Present when the run heals its own auto-recoverable halts. */
   autoRecover?: { attempts: number };
@@ -1146,6 +1165,20 @@ export interface RunResolution {
   reason: string;
   by?: string;
   note?: string;
+}
+
+/**
+ * What a person is asked for, ONCE, when the ladder for a phase is exhausted
+ * or the situation is intrinsically human: the situation, what was tried (so
+ * nobody tries it again by hand), what is needed, and how to give it.
+ */
+export interface Errand {
+  phase: number;
+  situation: string;
+  tried: string[];
+  need: string;
+  how: string;
+  at: string;
 }
 
 /**
@@ -1714,8 +1747,10 @@ export const api = {
   /** Set the run to `continue` and retry every phase the MCP preflight parked. */
   runMcpContinue: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/mcp-continue`, {}),
   runRecover: (slug: string) => post<{
-    outcome: 'running' | 'resumed' | 'recovering' | 'needs-you' | 'nothing-to-do';
+    outcome: 'running' | 'resumed' | 'recovering' | 'errand' | 'nothing-to-do';
     detail: string; steps: string[]; run: RunState | null;
+    /** The one ask for a person, when the outcome is `errand`. */
+    errand?: Errand;
   }>(`/api/run/${q(slug)}/recover`, {}),
   runVerifyCommand: (slug: string, phase: number, command: string) =>
     post<{ ok: true; sessionId: string; token: string; expiresAt: number }>(

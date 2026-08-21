@@ -51,6 +51,8 @@ type Repo = {
   /** Every not-done phase is ready at once — a graph with no edges. */
   setParallel: (yes: boolean) => void;
   setLockRefused: (yes: boolean) => void;
+  /** The same, for ONE phase — the others read free. */
+  setLockRefusedFor: (phase: number, yes: boolean) => void;
   setLockLapsed: (yes: boolean) => void;
   /** Make `claim` refuse as a foreign takeover — the keepalive's lock-lost case. */
   setClaimRefuse: (yes: boolean) => void;
@@ -127,6 +129,7 @@ if [ "\${2:-}" = "status" ]; then
   # the bug the runner had.
   if [ -f "$S/lock-lapsed" ]; then echo "phase \${3:-?}: held by someone/else since now, lease until then (EXPIRED — free to take over)"
   elif [ -f "$S/lock-refused" ]; then echo "phase \${3:-?}: held by someone/else since now, lease until later"
+  elif [ -f "$S/lock-refused-\${3:-}" ]; then echo "phase \${3:-?}: held by someone/else since now, lease until later"
   else echo "phase \${3:-?}: free"; fi
   exit 0
 fi
@@ -150,6 +153,9 @@ echo "VALIDATE OK"
     setInProgress: (phase) => writeFileSync(join(state, 'inprog'), `${phase}\n`),
     setParallel: (yes) => yes ? writeFileSync(join(state, 'parallel'), '') : rmSync(join(state, 'parallel'), { force: true }),
     setLockRefused: (yes) => yes ? writeFileSync(join(state, 'lock-refused'), '') : rmSync(join(state, 'lock-refused'), { force: true }),
+    setLockRefusedFor: (phase, yes) => yes
+      ? writeFileSync(join(state, `lock-refused-${phase}`), '')
+      : rmSync(join(state, `lock-refused-${phase}`), { force: true }),
     setLockLapsed: (yes) => yes ? writeFileSync(join(state, 'lock-lapsed'), '') : rmSync(join(state, 'lock-lapsed'), { force: true }),
     setClaimRefuse: (yes) => yes ? writeFileSync(join(state, 'claim-refuse'), '') : rmSync(join(state, 'claim-refuse'), { force: true }),
     setLintFail: (yes) => yes ? writeFileSync(join(state, 'lint-fail'), '') : rmSync(join(state, 'lint-fail'), { force: true }),
@@ -3652,4 +3658,77 @@ test('defects: a freeze escalation with another lane still open leaves the halt 
     await instance.wait();
     r.cleanup();
   }
+});
+
+/* ---------------- the lock-cap re-arm ---------------- */
+
+test('a lock-cap park re-arms by itself when the lock it waited out is gone — no Retry', async () => {
+  const r = repo();
+  try {
+    r.setParallel(true);
+    r.setLockRefusedFor(1, true);
+    // Phase 1 has already queued three hours behind its lock — the cap is two —
+    // so its first boarding parks it honestly. Phase 2's session then releases
+    // the lock (standing in for the holder finishing), and the NEXT tick has
+    // to pick phase 1 back up on its own: the park used to be terminal, and
+    // the only remedy a person's Retry after the holder had long released.
+    const stale = newRun({ slug: 'demo', root: r.root, model: 'opus' });
+    stale.status = 'paused';
+    phaseRecord(stale, 1).lockWaitSince = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+    saveRun(stale);
+
+    const boarded: number[] = [];
+    const spawn: SpawnFn = async (request) => {
+      const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)?.[1]);
+      boarded.push(phase);
+      if (phase === 2) r.setLockRefusedFor(1, false);
+      r.markDone(phase);
+      return ok();
+    };
+    const scheduler = new Scheduler({ locks: () => [] });
+    const { instance, events } = runner(r, spawn, undefined, undefined, { scheduler });
+    await instance.start({ slug: 'demo', root: r.root, resumeRunId: stale.id });
+    await instance.wait();
+    scheduler.close();
+
+    const state = instance.current()!;
+    assert.ok(journalled(events, 'phase.lock-wait-capped').length, 'the cap park happened first');
+    assert.ok(journalled(events, 'phase.lock-cap-rearmed').length, 'then the re-arm, by itself');
+    assert.equal(state.phases['1'].status, 'done');
+    assert.equal(state.status, 'finished');
+    assert.ok(boarded.includes(1) && boarded.indexOf(1) > boarded.indexOf(2), `phase 1 boarded after phase 2 released the lock: ${boarded.join(',')}`);
+  } finally { r.cleanup(); }
+});
+
+test('a console shutdown stamps the run as the system\'s stop and writes the killed-lane note; an operator stop stays theirs', async () => {
+  const r = repo();
+  try {
+    // A session that hangs until its signal is cut: the shutdown path aborts
+    // it, the operator-stop path aborts it the same way — only the bookkeeping
+    // must differ.
+    const hang: SpawnFn = (request) => new Promise((resolve) => {
+      request.signal?.addEventListener('abort', () => resolve(ok({ sessionId: 'sess-hang', signal: { subtype: 'error_during_execution', code: 143, text: 'terminated' } })), { once: true });
+    });
+    const { instance } = runner(r, hang);
+    await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await (instance as never as { checkpointForShutdown: () => Promise<void> }).checkpointForShutdown();
+    await instance.wait();
+    const shut = instance.current()!;
+    assert.equal(shut.status, 'paused');
+    assert.equal(shut.stoppedBy, 'system', 'the console going away is not the operator');
+    assert.match(shut.phases['1'].note ?? '', /^the console stopped while phase 1 was running/);
+    assert.equal(shut.phases['1'].resumeSessionId, 'sess-hang', 'kept for the --resume at boot');
+    assert.match(shut.finishedReason ?? '', /console shut down/);
+
+    const second = runner(r, hang);
+    await second.instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await second.instance.stop();
+    await second.instance.wait();
+    const stopped = second.instance.current()!;
+    assert.equal(stopped.status, 'paused');
+    assert.equal(stopped.stoppedBy, 'operator');
+    assert.equal(stopped.phases['1'].note, 'stopped by the operator');
+  } finally { r.cleanup(); }
 });

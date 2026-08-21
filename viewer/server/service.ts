@@ -18,6 +18,9 @@ import {
   type Flags, type Prefs, type RootCheck,
 } from './config.ts';
 import { Store, handoffFor, lockFor, qaFor, readLock, type PlanRecord } from './store.ts';
+import {
+  ConvergeScheduler, convergePlan, HALT_DELAY_MS, type ConvergeDeps, type ConvergeReport, type ConvergeTrigger,
+} from './converge.ts';
 import { planWrite, runWrite } from './writes.ts';
 import {
   run, invalidate, readMemoryBlock, readQaMode, readSessionPlan, readLint, readGateStatus,
@@ -71,8 +74,8 @@ import { Journal } from './runner/journal.ts';
 import {
   autoResolveRun, childrenOf, latestRun, listRuns, loadRun, phaseRecord, pidAlive,
   reconcileRecordsAgainstBoard, resetForRetry, resolveRunsAgainst, saveRun,
-  slugsNeedingBoard, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, isMcpPolicy, mcpReasonText,
-  type BoardingBrief, type McpPolicy, type PreflightWarning, type RunState, type VerifySummary,
+  slugsNeedingBoard, runDir, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, isMcpPolicy, mcpReasonText,
+  type BoardingBrief, type Errand, type McpPolicy, type PreflightWarning, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import { outcomeFileFor, readOutcome } from './runner/outcome.ts';
 import { readTranscript, transcriptFile, type TranscriptEntry } from './runner/transcript.ts';
@@ -604,6 +607,24 @@ export type AutoRecoverResult = {
   vehicle?: 'retry' | 'session' | 'agent' | 'reboard';
 };
 
+/**
+ * The situation a phase-less stop most plausibly is — for the one errand the
+ * recover verb answers with when no record can be classified.
+ */
+function situationOfHalt(halt: RunState['halt']): string {
+  switch (halt?.kind) {
+    case 'plan-lint': case 'plan-unreadable': case 'verification-preflight': return 'plan-broken';
+    case 'run-preflight': return 'resource-wall:auth';
+    case 'budget': return 'resource-wall:budget';
+    case 'models-exhausted': return 'resource-wall:model';
+    case 'mcp-preflight': return 'mcp-unavailable';
+    case 'needs-human': case 'phase-blocked': return 'blocked-declared';
+    case 'verify-failed': return 'verify-red';
+    case 'no-handoff': return 'done-unrecorded';
+    default: return 'unknown';
+  }
+}
+
 export class Service {
   readonly flags: Flags;
   prefs: Prefs;
@@ -675,6 +696,14 @@ export class Service {
   private degradedAnnounced = new Set<string>();
   /** Admission control shared by every runner in the pool. See `scheduler.ts`. */
   readonly scheduler: Scheduler;
+  /** The convergence loop's clock — boot, change, timer, halt, button. See `converge.ts`. */
+  readonly converger: ConvergeScheduler;
+  /**
+   * Settles when this `open()`'s boot work is done: queued runs re-adopted and
+   * the convergence loop's boot pass over every plan complete. What a harness
+   * awaits instead of guessing how long the console takes to look around.
+   */
+  bootSettled: Promise<void> = Promise.resolve();
   readonly approvals: Approvals;
   readonly push: Push;
   readonly notifications: Notifications;
@@ -814,6 +843,18 @@ export class Service {
         queued: snapshot.queued,
         throttledUntil: snapshot.throttledUntil,
         throttledAccounts: snapshot.throttledAccounts,
+      }),
+    });
+    // The convergence loop. Its passes go through `convergeNow` (which builds
+    // the deps from this service's own store, board cache, runner pool and
+    // healer); its clock is the real one unless a harness swaps it first.
+    this.converger = new ConvergeScheduler({
+      run: (slug, trigger, lastNoop) => this.convergeNow(slug, trigger, lastNoop),
+      slugs: () => this.convergeSlugs(),
+      everyMs: () => this.prefs.convergeEveryMs,
+      onReport: (report) => this.emit('run:converge', {
+        slug: report.slug, trigger: report.trigger, at: report.at, launched: report.launched,
+        actions: report.actions.map((action) => action.kind),
       }),
     });
     this.accounts = new Accounts({
@@ -1629,7 +1670,16 @@ export class Service {
     this.watcher.start([check.plansDir, check.handoffsDir]);
     void this.refreshRepoInfo();
     void this.warm();
-    void this.readoptQueued();
+    // The convergence loop: the boot pass once the queued re-adoption is done (a
+    // queued run must be live before the loop reads it), then the sweep clock.
+    this.bootSettled = this.readoptQueued()
+      .catch((error) => log.warn('run.readopt-failed', { error }))
+      .then(async () => {
+        if (!this.convergeAutomatic()) return;
+        this.converger.start();
+        await this.converger.boot(this.convergeSlugs());
+      })
+      .catch((error) => log.warn('converge.boot-failed', { error }));
     return check;
   }
 
@@ -1700,32 +1750,30 @@ export class Service {
   /** One armed clock per plan: the newest reset time wins, restarts survive. */
   private limitResumeTimers = new Map<string, NodeJS.Timeout>();
 
-  /** One pending auto-recovery per plan — debounce, not queue. */
-  private autoRecoverTimers = new Map<string, NodeJS.Timeout>();
-
   /**
-   * A halt schedules one auto-recovery attempt, a minute out, per plan.
+   * A stop asks the convergence loop for a pass a minute out, per plan.
    *
    * The delay is the point, not an implementation detail: the halt event fires
    * while the run is still draining its lanes, the operator may be watching
    * and about to act themselves, and a console that spawns an agent the same
    * second something breaks is a console nobody can get ahead of. When the
-   * timer fires `maybeAutoRecover` re-reads everything — the run may have been
-   * continued, stopped or fixed by hand in the meantime, and every one of
-   * those wins.
+   * pass runs it re-reads everything — the run may have been continued,
+   * stopped or fixed by hand in the meantime, and every one of those wins.
+   * (The healer this used to arm directly, `maybeAutoRecover`, is now the
+   * loop's `heal` step; `converge.ts` has the trigger matrix.)
    */
-  private scheduleAutoRecover(slug: string, delayMs = 60_000): void {
-    if (this.autoRecoverTimers.has(slug)) return;
-    const timer = setTimeout(() => {
-      this.autoRecoverTimers.delete(slug);
-      void this.maybeAutoRecover(slug)
-        .then((out) => {
-          if (!out.launched && out.reason) log.info('run.auto-recover-skipped', { slug, reason: out.reason });
-        })
-        .catch((error) => log.warn('run.auto-recover-failed', { slug, error }));
-    }, delayMs);
-    timer.unref?.();
-    this.autoRecoverTimers.set(slug, timer);
+  private scheduleAutoRecover(slug: string, delayMs = HALT_DELAY_MS): void {
+    if (!this.convergeAutomatic()) return;
+    this.converger.request(slug, 'halt', delayMs);
+  }
+
+  /**
+   * May the loop run without being asked? The capability that makes any of it
+   * real (`--allow-run`), and the switch (`--no-converge`, or a harness that
+   * never set it). The operator's press is not gated here.
+   */
+  private convergeAutomatic(): boolean {
+    return this.flags.converge === true && this.flags.allowRun;
   }
 
   private armLimitResume(slug: string, state: RunState): void {
@@ -1772,8 +1820,7 @@ export class Service {
     if (this.accountsEmitTimer) clearTimeout(this.accountsEmitTimer);
     for (const timer of this.limitResumeTimers.values()) clearTimeout(timer);
     this.limitResumeTimers.clear();
-    for (const timer of this.autoRecoverTimers.values()) clearTimeout(timer);
-    this.autoRecoverTimers.clear();
+    this.converger.close();
     this.watcher.stop();
     // Nothing is admitted after this point, and every pending admission is
     // rejected rather than left holding a promise nobody will settle.
@@ -2051,12 +2098,12 @@ export class Service {
     if (!state.halt && this.notifiedRun.get(state.id) === 'halted') {
       this.retractHalt(state, 'the board moved past the halt', { push: false });
     }
-    // A halt is also the auto-recovery trigger — scheduled and debounced here,
-    // decided entirely by `maybeAutoRecover` when the timer fires: the run may
-    // have been continued, fixed by hand, or opted out by then. The
-    // verification-preflight park is the one parked shape that qualifies.
-    if (state.halt && (state.status === 'halted'
-      || (state.status === 'parked' && state.halt.kind === 'verification-preflight'))) {
+    // A stop is also the convergence trigger — a pass a minute out, decided
+    // entirely by the loop when it runs: the run may have been continued,
+    // fixed by hand or opted out by then. Every stopped shape, not only the
+    // halted and verification-parked ones — the loop reads the situation and
+    // leaves alone what it must (an operator's stop, a resolved run).
+    if (state.status === 'halted' || state.status === 'parked' || state.status === 'interrupted') {
       this.scheduleAutoRecover(state.slug);
     }
     // Dedupe on the run *and* its status. Keying on the run alone — which this
@@ -2232,6 +2279,9 @@ export class Service {
     // settled — hours, on a one-lane run.
     if (paths.some((p) => p.includes('/.locks/'))) this.scheduler.poll();
     for (const slug of slugs) this.runners.get(slug)?.noteDocsChanged();
+    // …and the convergence loop, debounced: a handoff written by hand, a lock
+    // released, a plan edited — any of them may be what a stopped run waited on.
+    if (this.convergeAutomatic()) for (const slug of slugs) this.converger.request(slug, 'change');
 
     if (!slugs.length) return;
     this.announce('changed', {
@@ -2587,7 +2637,13 @@ export class Service {
 
   private async context(record: PlanRecord): Promise<PlanContext> {
     const [board, qaMode] = await Promise.all([this.board(record.slug), this.qaMode(record.slug)]);
-    return { record, board, qaMode };
+    // The plan's runs ride along for the record-vs-board check (`healthIssues`
+    // `record-ahead-of-board`): a run file is the only place a phase can read
+    // done while the board does not.
+    const runs = this.root && record.plan?.phased
+      ? listRuns(this.root.path, record.slug, this.liveRunIds()).map((run) => ({ id: run.id, status: run.status, phases: run.phases }))
+      : [];
+    return { record, board, qaMode, runs };
   }
 
   private toSummary(ctx: PlanContext): PlanSummary {
@@ -3560,6 +3616,7 @@ export class Service {
     return this.editStoredRun(slug, (state) => {
       if (!IN_FLIGHT.includes(state.status)) return;
       state.status = 'interrupted';
+      state.stoppedBy = 'operator';
       state.child = null;
       state.pause = null;
       state.halt ??= { at: new Date().toISOString(), reason: 'stopped by the operator', phase: state.activePhase ?? undefined };
@@ -3594,6 +3651,7 @@ export class Service {
     return this.editStoredRun(slug, (state) => {
       if (!IN_FLIGHT.includes(state.status)) return;
       state.status = 'pausing';
+      state.stoppedBy = 'operator';
       state.pause = { requestedAt: new Date().toISOString(), afterPhase: state.activePhase, by };
     });
   }
@@ -3888,10 +3946,12 @@ export class Service {
    * settle comes back named, never blindly retried.
    */
   async recoverPlan(slug: string): Promise<{
-    outcome: 'running' | 'resumed' | 'recovering' | 'needs-you' | 'nothing-to-do';
+    outcome: 'running' | 'resumed' | 'recovering' | 'errand' | 'nothing-to-do';
     detail: string;
     steps: string[];
     run: RunState | null;
+    /** The one ask for a person, when the outcome is `errand`. */
+    errand?: Errand;
   }> {
     const steps: string[] = [];
     const root = this.root?.path;
@@ -3954,42 +4014,157 @@ export class Service {
       };
     }
 
-    /* 3. A real halt: arm bounded auto-recovery and run the healer once, now. */
+    /* 3. A real halt: arm bounded auto-recovery and CONVERGE NOW — the same
+     * pass the unattended loop runs (debris, killed lanes, the healer's
+     * classify-and-climb), with the pins off because this IS the operator's
+     * press. Anything only a person can settle comes back as the one Errand —
+     * what is needed and how to give it — never a bare "needs you". */
     if (!state.autoRecover) {
       this.editStoredRun(slug, (stored) => { stored.autoRecover = { attempts: 2 }; });
       steps.push('armed auto-recovery on this run (2 bounded attempts per phase)');
       journal.append('run.plan-recover', { step: 'armed', attempts: 2 });
     }
-    const attempt = await this.maybeAutoRecover(slug);
-    const after = latestRun(root, slug, this.liveRunIds()) ?? state;
-    // The step is named: which phase, what it reads as, which rung — so the
-    // answer is never a bare "needs-you" about nothing in particular.
-    if (attempt.phase != null && attempt.label) {
-      const vehicleWords = attempt.vehicle === 'retry' ? 're-boarding it fresh through the runner'
-        : attempt.vehicle === 'session' ? 'resuming its own session through the runner'
-          : attempt.vehicle === 'agent' ? 'briefing a fresh agent'
-            : null;
-      steps.push(`phase ${attempt.phase} reads ${attempt.label}`
-        + (attempt.launched && vehicleWords ? ` — ${vehicleWords}${attempt.rung ? ` (rung ${attempt.rung})` : ''}` : ''));
+    const report = await this.converger.converge(slug, 'button');
+    // A pass that found the run already live — a boot pass or the halt's own
+    // minute beat the press to it — is a run being recovered, not a refusal.
+    const nowLive = this.liveRunner(slug);
+    if (nowLive && !report?.launched) {
+      steps.push('the run is already being driven — the loop got there first');
+      journal.append('run.plan-recover', { step: 'already-live' });
+      return {
+        outcome: 'recovering', steps,
+        detail: 'The run is already being recovered by the console. You will be notified with the verdict either way.',
+        run: nowLive.current(),
+      };
     }
-    if (attempt.launched) {
+    const after = latestRun(root, slug, this.liveRunIds()) ?? state;
+    const heal = report?.outcomes.find((o) => o.action.kind === 'heal')?.heal;
+    const relaunch = report?.outcomes.find((o) => o.action.kind === 'relaunch' && o.ok)?.action;
+    if (relaunch?.kind === 'relaunch') {
+      steps.push(`continuing the run — ${relaunch.why.join('; ') || 'the stop was the console\'s own'}`);
+    }
+    // The step is named: which phase, what it reads as, which rung — so the
+    // answer is never about nothing in particular.
+    if (heal?.phase != null && heal.label) {
+      const vehicleWords = heal.vehicle === 'retry' ? 're-boarding it fresh through the runner'
+        : heal.vehicle === 'reboard' ? 're-boarding it through the runner with a brief'
+          : heal.vehicle === 'session' ? 'resuming its own session through the runner'
+            : heal.vehicle === 'agent' ? 'briefing a fresh agent'
+              : null;
+      steps.push(`phase ${heal.phase} reads ${heal.label}`
+        + (heal.launched && vehicleWords ? ` — ${vehicleWords}${heal.rung ? ` (rung ${heal.rung})` : ''}` : ''));
+    }
+    if (report?.launched) {
       steps.push('launched the recovery — the run continues by itself when the board reads fixed');
-      journal.append('run.plan-recover', { step: 'launched', phase: attempt.phase ?? null, situation: attempt.situation ?? null, rung: attempt.rung ?? null, vehicle: attempt.vehicle ?? null });
+      journal.append('run.plan-recover', {
+        step: 'launched', phase: heal?.phase ?? null, situation: heal?.situation ?? null,
+        rung: heal?.rung ?? null, vehicle: heal?.vehicle ?? null, relaunch: Boolean(relaunch),
+      });
       return {
         outcome: 'recovering', steps,
         detail: 'A bounded recovery is running. You will be notified with the verdict either way.',
         run: after,
       };
     }
-    journal.append('run.plan-recover', { step: 'needs-you', reason: attempt.reason ?? null, phase: attempt.phase ?? null, situation: attempt.situation ?? null });
-    const errand = attempt.phase != null ? after.recoveries?.[String(attempt.phase)]?.errand : undefined;
+    // Nothing launched: the ONE errand. The pass's own (written or standing),
+    // else the healer's anchor phase's, else one composed from what the healer
+    // refused on — and, with no phase to hang it on at all, from the halt.
+    const phaseErrand = report?.errands[0]
+      ?? (heal?.phase != null
+        ? (after.recoveries?.[String(heal.phase)]?.errand
+          ?? (heal.situation ? errandFor(heal.situation, after.recoveries?.[String(heal.phase)]?.rungs ?? [], heal.phase) : undefined))
+        : undefined);
+    const errand = phaseErrand ?? after.errand ?? errandFor(situationOfHalt(after.halt), [], after.halt?.phase ?? 0);
+    if (!phaseErrand && !after.errand) {
+      // A run-level stop with no phase behind it keeps its ask on the run.
+      this.editStoredRunById(slug, after.id, (stored) => { stored.errand = errand; });
+    }
+    journal.append('run.plan-recover', { step: 'errand', reason: heal?.reason ?? null, phase: errand.phase, situation: errand.situation });
     return {
-      outcome: 'needs-you', steps,
-      detail: errand
-        ? `${attempt.reason ?? 'This stop needs a person.'}. This stop needs a person — needed: ${errand.need} How: ${errand.how}`
-        : (attempt.reason ?? 'This stop needs a person.'),
-      run: after,
+      outcome: 'errand', steps, errand,
+      detail: `${heal?.reason ?? 'This stop needs a person'}. Needed: ${errand.need} How: ${errand.how}`,
+      run: latestRun(root, slug, this.liveRunIds()) ?? after,
     };
+  }
+
+  /* ---------------------------------------------------------------- *
+   * The convergence loop — see converge.ts
+   * ---------------------------------------------------------------- */
+
+  /** The plans a sweep visits: open, phased, and with at least one run recorded. */
+  convergeSlugs(): string[] {
+    if (!this.root?.ok || !this.convergeAutomatic()) return [];
+    const root = this.root.path;
+    return (this.store?.list() ?? [])
+      .filter((record) => record.plan?.phased && !record.plan.closed && existsSync(runDir(root, record.slug)))
+      .map((record) => record.slug);
+  }
+
+  /** One pass of the loop for one plan — what the scheduler calls. Null when it cannot run here. */
+  async convergeNow(slug: string, trigger: ConvergeTrigger, lastNoop: string | null = null): Promise<ConvergeReport | null> {
+    if (!this.root?.ok) return null;
+    // The automatic triggers need the capability that makes any of it real; the
+    // operator's own press still gets an answer — its refusals are named.
+    if (!this.flags.allowRun && trigger !== 'button') return null;
+    return convergePlan(this.convergeDeps(), slug, trigger, lastNoop);
+  }
+
+  /** The last pass per plan, for the Pulse. */
+  convergeReports(): ConvergeReport[] { return [...this.converger.reports.values()]; }
+
+  private convergeDeps(): ConvergeDeps {
+    const journals = new Map<string, Journal>();
+    return {
+      runs: (slug) => this.runsFor(slug),
+      live: () => this.liveRunIds(),
+      board: async (slug) => {
+        try {
+          const board = await this.board(slug);
+          return board.error ? null : board.states;
+        } catch { return null; }
+      },
+      locks: (slug) => this.allLocks().filter((lock) => lock.slug === slug),
+      prefs: () => ({ resumeAtBoot: this.prefs.resumeAtBoot }),
+      heal: (slug) => this.maybeAutoRecover(slug),
+      startRun: (slug, options) => this.startRun(slug, options),
+      editRun: (slug, runId, apply) => this.editStoredRunById(slug, runId, apply),
+      releaseLock: (slug, phase, owner) => this.releaseDebrisLock(slug, phase, owner),
+      journal: (slug, runId, event, data, phase) => {
+        if (!this.root) return;
+        const key = `${slug}/${runId}`;
+        let journal = journals.get(key);
+        if (!journal) { journal = new Journal(this.root.path, slug, runId); journals.set(key, journal); }
+        journal.append(event, data, phase);
+      },
+      locksChanged: (slug) => {
+        // The store's lock view lags the disk by a watcher debounce, and the
+        // queue may be waiting on exactly this lock. Refresh, then poll.
+        const handoffsDir = this.root?.handoffsDir;
+        if (handoffsDir) this.store?.refresh([join(handoffsDir, slug, '.locks')]);
+        this.scheduler.poll();
+      },
+    };
+  }
+
+  /**
+   * Release a lock as the owner the lock file names — the runner's own release
+   * (`phase-lock.sh release --owner autopilot/<runId>`, `--git` never passed),
+   * for claims of runs this console knows are dead. Deliberately not
+   * `releaseLock`: that is the operator's write-class verb with its force
+   * semantics; this frees what the autopilot itself left behind, under the
+   * capability that let it claim in the first place.
+   */
+  private async releaseDebrisLock(slug: string, phase: number, owner: string): Promise<{ ok: boolean; detail?: string }> {
+    if (!this.flags.allowRun) return { ok: false, detail: 'releasing autopilot debris needs --allow-run' };
+    try {
+      const out = await run(this.engineOpts(), 'phase-lock.sh', [slug, 'release', String(phase), '--owner', owner]);
+      const text = (out.stdout + out.stderr).trim();
+      const ok = out.code === 0 || /no lock|not held|free/i.test(text);
+      log.info('lock.debris-released', { slug, phase, owner, ok, code: out.code });
+      return { ok, ...(text ? { detail: text.slice(0, 200) } : {}) };
+    } catch (error) {
+      return { ok: false, detail: (error as Error)?.message ?? String(error) };
+    }
   }
 
   /**

@@ -122,7 +122,9 @@ data is never cached), and a new build is offered as an update toast, applied on
 ## The autopilot
 
 `--allow-run` lets the console spawn agent sessions. It is a separate flag from `--allow-writes` on
-purpose: a write scaffolds a file, a run edits a repository for hours.
+purpose: a write scaffolds a file, a run edits a repository for hours. `--no-converge` keeps the
+convergence loop's automatic passes (boot, docs change, the periodic sweep, the minute after a stop)
+off while leaving Recover & continue working — see *The convergence loop* below.
 
 Each phase is one `claude -p` process, so "clear the session between phases" needs no implementing —
 the process exits and takes its context with it. A phase advances only when three independent checks
@@ -172,6 +174,33 @@ session and then the errand. Exhaustion parks the phase with the errand — one 
 the same vehicle from outside the loop through `startRun({resumeRunId, reboard: [{phase, situation,
 rung, brief}]})`. Opt-in is the run's own auto-recovery switch; a never-started phase re-boards fresh
 regardless, because that is the run doing its job.
+
+**The convergence loop.** Since 2.3.0 the machinery runs without anyone looking (`server/converge.ts`).
+One pass per plan — `planConvergence` (pure) decides, `executeConvergence` acts, `ConvergeScheduler` is
+the clock — runs **at boot** (after queued runs are re-adopted), **on a docs change** (trailing debounce
+2 s), **every `convergeEveryMs`** (Settings ▸ Automation, default 5 min, floor 30 s), **a minute after
+any stop** (the quiet minute the old auto-recovery timer kept; a change inside it does not shorten it),
+and **on Recover & continue** (now, awaited, the pins off — it is the operator's press). What a pass
+does, in order: release **lock debris** — a claim owned by `autopilot/<runId>` of a run nothing is
+driving, expired or not, released as its own owner through `phase-lock.sh release` (`--git` never
+passed) and journalled `run.lock-debris-released`; a person's claim is never debris; **relaunch** a run
+the console's own restart stopped (`stoppedBy: 'system'`): lanes a restart killed re-board through
+`startRun({resumeRunId, reboard})` hinted to **resume their own session** (`brief: continue`; a session
+that cannot be resumed degrades to a fresh boot with the resume block), bounded by `MAX_BOOT_RESUMES` 3
+per phase and journalled `phase.resume-at-boot` — with Settings ▸ Automation ▸ *Resume at boot* off the
+run waits for a person with one errand naming exactly that; a lock-cap park re-arms when the lock it
+waited out is gone (`phase.lock-cap-rearmed`; the live loop does the same at the top of every tick);
+and a shutdown between phases simply continues. Then the **healer** (`maybeAutoRecover`: classify the
+open phases, climb one rung, drive it through the runner) — once per evidence: a pass that healed
+nothing remembers the evidence fingerprint and does not re-read it until something changes. What it
+never touches: a run the **operator** paused or stopped (`stoppedBy: 'operator'` — Pause, Stop, an
+escalated freeze; for records written before the field, any pause), a **resolved** run, a live one, a
+run waiting on its own clock, a `finished` or `queued` one. `--no-converge` keeps the automatic
+triggers off (a bare harness has them off by construction); the operator's press still converges. Every
+pass that acts journals `run.converge` on the run it acted on. `POST /api/run/<slug>/recover` answers
+`outcome: 'errand'` with the `Errand` body — what is needed and how to give it — wherever nothing
+could be launched; there is no bare `needs-you` any more. A `done` record over a board that does not
+read done is a health warning, `record-ahead-of-board`, never rewritten.
 
 **The board is live, not per-lane.** The docs watcher pokes running loops, so a handoff written by a
 manual session mid-run is seen NOW rather than when a lane settles; a reconcile pass at the top of

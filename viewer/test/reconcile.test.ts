@@ -27,7 +27,7 @@ import { join } from 'node:path';
 
 import {
   reconcileRun, reconcileRecordsAgainstBoard, newRun, phaseRecord, saveRun, loadRun,
-  listRuns, latestRun, runDir, resetForRetry, IN_FLIGHT, type RunState,
+  listRuns, latestRun, runDir, resetForRetry, IN_FLIGHT, CONSOLE_STOPPED_NOTE, type RunState,
 } from '../server/runner/state.ts';
 
 function scratchRoot(): { root: string; cleanup: () => void } {
@@ -432,4 +432,27 @@ test('resetForRetry is the single reset: it clears what the last boarding conclu
   assert.equal(record.costUsd, 4.5);
   assert.equal(record.sessionId, 'sess-3');
   assert.ok(record.verification);
+});
+
+test('a crashed run is stamped as the system\'s stop; a stop or pause the operator had asked for stays theirs', () => {
+  const crashed = crashedRun('/tmp/whatever');
+  assert.equal(reconcileRun(crashed, null), true);
+  assert.equal(crashed.stoppedBy, 'system', 'a console that died is not the operator');
+  assert.match(crashed.phases['12'].note ?? '', CONSOLE_STOPPED_NOTE, 'the killed-lane note the convergence loop reads');
+
+  const stopping = crashedRun('/tmp/whatever', { status: 'stopping' });
+  assert.equal(reconcileRun(stopping, null), true);
+  assert.equal(stopping.stoppedBy, 'operator', 'the operator had asked — their intent outlives the crash');
+
+  const pausing = crashedRun('/tmp/whatever', {
+    pause: { requestedAt: new Date().toISOString(), afterPhase: 12, by: 'console' },
+  });
+  assert.equal(reconcileRun(pausing, null), true);
+  assert.equal(pausing.stoppedBy, 'operator');
+
+  // The wait reconciled to paused is the system's too — and pinned by its clock anyway.
+  const waiting = crashedRun('/tmp/whatever', { status: 'waiting', waitUntil: new Date(Date.now() + 60_000).toISOString(), child: null });
+  assert.equal(reconcileRun(waiting, null), true);
+  assert.equal(waiting.status, 'paused');
+  assert.equal(waiting.stoppedBy, 'system');
 });
