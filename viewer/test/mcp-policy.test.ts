@@ -379,3 +379,77 @@ test('the degradation is written to the phase record, not only the journal', asy
     r.cleanup();
   }
 });
+
+/* ------------------------------------------------------------------ *
+ * The require park's clock — continue without the servers, errand recorded
+ * ------------------------------------------------------------------ */
+
+test('a require park has a clock: past it the phase continues without its servers — errand recorded, operator told once — and boards with the session told', async () => {
+  const r = repo();
+  try {
+    const prompts: string[] = [];
+    const configFiles: string[][] = [];
+    const told: { phase: number; servers: string[] }[] = [];
+    const done = join(r.root, '.stub', 'done');
+    const spawn: SpawnFn = async (request: SpawnRequest) => {
+      prompts.push(request.prompt);
+      const phase = /BOOT phase (\d+)/.exec(request.prompt)?.[1];
+      if (phase) writeFileSync(done, `${phase}\n`, { flag: 'a' });
+      return outcome();
+    };
+    const runner = new Runner({
+      scriptsDir: r.scripts,
+      spawn,
+      verificationText: () => '`true`',
+      mcp: mcpDep(configFiles),
+      planMcp: () => [],
+      planMcpPolicy: () => undefined,
+      mcpRequireTimeoutMs: () => 60_000,
+      onMcpRequireTimeout: (_state, phase, result) => { told.push({ phase, servers: result.servers }); },
+    } as never);
+    await runner.start({
+      slug: 'demo', root: r.root, onlyPhases: [1], mcpServers: ['ctx7', 'gh'], mcpPolicy: 'require',
+    } as Parameters<typeof runner.start>[0]);
+    await runner.wait();
+
+    const parked = runner.current()!;
+    assert.equal(parked.phases['1'].status, 'parked');
+    assert.deepEqual(parked.phases['1'].mcpPark?.degraded.map((row) => row.id), ['gh'], 'the park carries what it parked on');
+    assert.ok(parked.phases['1'].mcpPark?.at);
+    assert.equal(parked.halt?.kind, 'mcp-preflight');
+    assert.equal(prompts.length, 0);
+
+    // The clock fires (the service's timer calls this verb).
+    const result = runner.continueMcpPark(1, 'timeout');
+    assert.ok(result);
+    assert.deepEqual(result.servers, ['gh']);
+    const flipped = runner.current()!;
+    assert.equal(flipped.phases['1'].status, 'pending');
+    assert.equal(flipped.phases['1'].boardingHint?.rung, 'mcp-continue');
+    assert.equal(flipped.phases['1'].mcpPark, undefined);
+    assert.equal(flipped.phaseOptions?.['1']?.mcpPolicy, 'continue', 'the phase\'s OWN policy — the level that outranks a plan\'s require');
+    assert.equal(flipped.recoveries?.['1']?.errand?.situation, 'mcp-unavailable');
+    assert.match(flipped.recoveries?.['1']?.errand?.need ?? '', /gh \(needs authentication\).*went ahead without it/);
+    assert.deepEqual(flipped.recoveries?.['1']?.rungs?.map((rung) => `${rung.rung}:${rung.outcome}`), ['wait-heal:failed', 'mcp-continue:running']);
+    assert.deepEqual(told, [{ phase: 1, servers: ['gh'] }], 'the service hears once');
+    assert.equal(runner.continueMcpPark(1, 'timeout'), null, 'a second fire finds nothing to do');
+
+    // The loop had parked; a resume boards the hinted phase without gh, the
+    // run-level `require` notwithstanding, and the session is told which
+    // server is missing.
+    await runner.start({
+      slug: 'demo', root: r.root, resumeRunId: flipped.id, onlyPhases: [1], mcpServers: ['ctx7', 'gh'], mcpPolicy: 'require',
+    } as Parameters<typeof runner.start>[0]);
+    await runner.wait();
+    const after = runner.current()!;
+    assert.equal(after.status, 'finished');
+    assert.equal(after.phases['1'].status, 'done');
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /gh/);
+    assert.deepEqual(after.phases['1'].mcpDegraded?.map((row) => row.id), ['gh']);
+    assert.deepEqual(configFiles.at(-1), ['ctx7'], 'only the reachable server is attached');
+    assert.equal(told.length, 1, 'still once');
+  } finally {
+    r.cleanup();
+  }
+});

@@ -15,7 +15,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  classify, parseResetTime, childEnv, nextModel, type StopSignal,
+  classify, parseResetTime, childEnv, nextModel, resetWaitUntil,
+  RESET_MARGIN_MS, MAX_AUTO_WAIT_MS, type StopSignal,
 } from '../server/runner/errors.ts';
 
 const at = (iso: string) => new Date(iso);
@@ -312,4 +313,33 @@ test('a model limit is a switch-model that names its bucket and reset; capacity 
   const capacity = classify(stop({ text: 'API Error: 529 overloaded_error' }), now);
   assert.equal(capacity.kind, 'switch-model');
   assert.equal(capacity.kind === 'switch-model' ? capacity.bucket : 'set', undefined);
+});
+
+/* ---------------- the first model's window (the resource ladder) ---------------- */
+
+test('resetWaitUntil is the reset plus the margin, inside the auto-wait ceiling', () => {
+  const now = at('2026-01-01T12:00:00Z');
+  const reset = at('2026-01-01T13:00:00Z');
+  const until = resetWaitUntil(reset, now);
+  assert.ok(until);
+  assert.equal(until.getTime(), reset.getTime() + RESET_MARGIN_MS);
+  assert.equal(resetWaitUntil(at('2026-01-02T12:00:01Z'), now), null,
+    'past the ceiling the wait is not worth sleeping on — the runner falls back as before');
+});
+
+test('a reset already behind us answers "now", never a wait into the past', () => {
+  const now = at('2026-01-01T12:00:00Z');
+  const until = resetWaitUntil(at('2026-01-01T10:00:00Z'), now);
+  assert.ok(until);
+  assert.equal(until.getTime(), now.getTime());
+});
+
+test('the ceiling and the margin are the classifier\'s own constants, exported once', () => {
+  assert.equal(MAX_AUTO_WAIT_MS, 12 * 60 * 60 * 1000);
+  assert.equal(RESET_MARGIN_MS, 90_000);
+  // The classifier's own >12h verdict and the helper agree on the edge.
+  const now = at('2026-01-01T12:00:00Z');
+  const edge = new Date(now.getTime() + MAX_AUTO_WAIT_MS - RESET_MARGIN_MS);
+  assert.ok(resetWaitUntil(edge, now), 'exactly at the ceiling still waits');
+  assert.equal(resetWaitUntil(new Date(edge.getTime() + 1), now), null);
 });

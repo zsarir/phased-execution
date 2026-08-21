@@ -414,6 +414,25 @@ export class Accounts {
    * "exclude no one" — the launch-time `auto` pick.
    */
   pickAccount(excluding: string | null | undefined, forModel?: string): string | null {
+    return this.rankAccounts(excluding, forModel)[0] ?? null;
+  }
+
+  /**
+   * Every account such a run COULD continue under, best first — the list
+   * `pickAccount` takes its head from, for callers that must probe before they
+   * trust (the auth preflight tries each in turn with `checkAuthFor`, because
+   * headroom says nothing about whether the login still works).
+   *
+   * The predicate, in full — the account-selection rule the resource ladder
+   * climbs by: not the one being escaped; its shared windows (`five_hour`,
+   * `seven_day`) neither learned-exhausted nor measured at 99%+; for a named
+   * model, its per-model window likewise; and its login not KNOWN broken
+   * (`expired` / `signed-out` as last observed — `unknown` and never-observed
+   * pass, since a setup-token exposes no expiry and a fresh profile has not
+   * been read yet). Ranked by the worse of the two shared utilizations,
+   * ascending; unknown usage scores 50, between the measured.
+   */
+  rankAccounts(excluding: string | null | undefined, forModel?: string): string[] {
     const exclude = excluding === null ? null : excluding ?? DEFAULT_ACCOUNT_ID;
     // A per-model window disqualifies only for the model that would spend it
     // (`seven_day_opus` ↔ an opus run) and never feeds the score: an account
@@ -424,6 +443,10 @@ export class Accounts {
     const ids = [DEFAULT_ACCOUNT_ID, ...this.store.stored().map((m) => m.id)];
     for (const id of ids) {
       if (id === exclude) continue;
+      // A login observed broken is no place to continue: the switch would
+      // spend a session discovering what the registry already knows.
+      const auth = this.auth.get(id);
+      if (auth === 'expired' || auth === 'signed-out') continue;
       const limited = this.limitedUntil(id);
       // Exact shared keys only — a learned `seven_day_opus` must never
       // blanket-disqualify an account for every model.
@@ -441,7 +464,7 @@ export class Accounts {
       candidates.push({ id, score: shared.length ? Math.max(...shared) : 50 });
     }
     candidates.sort((a, b) => a.score - b.score);
-    return candidates[0]?.id ?? null;
+    return candidates.map((c) => c.id);
   }
 
   /** A display name for journals and banners. */

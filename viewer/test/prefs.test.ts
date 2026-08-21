@@ -83,10 +83,17 @@ test('sanitiseAutomation is the single coercion table', () => {
     ladderPerPhaseRungs: 3, ladderPerPhaseUsd: 100, ladderPerRunRungs: 10, ladderPerRunUsd: 400, ladderPerDayUsd: 600,
     unblockAttempts: true, staleClaimTakeover: true, resumeAtBoot: true, autoAccountSwitch: true,
     convergeEveryMs: 300_000,
+    budgetAutoRaisePct: 25, mcpRequireTimeoutMs: 1_800_000,
   });
   // Ladder caps: a finite non-negative number or the default — a string, a
   // negative or NaN must never make the ladder unbounded (or zero).
   assert.equal(sanitiseAutomation({ ladderPerPhaseUsd: 25 }).ladderPerPhaseUsd, 25);
+  // The resource ladder's two numbers follow the same rule; zero is a valid
+  // "off" for both (no raise; wait on `require` indefinitely).
+  assert.equal(sanitiseAutomation({ budgetAutoRaisePct: 0 }).budgetAutoRaisePct, 0, 'zero is a valid "no raise"');
+  assert.equal(sanitiseAutomation({ budgetAutoRaisePct: '50' } as never).budgetAutoRaisePct, 25);
+  assert.equal(sanitiseAutomation({ mcpRequireTimeoutMs: 60_000 }).mcpRequireTimeoutMs, 60_000);
+  assert.equal(sanitiseAutomation({ mcpRequireTimeoutMs: -5 }).mcpRequireTimeoutMs, 1_800_000);
   assert.equal(sanitiseAutomation({ ladderPerPhaseUsd: '25' } as never).ladderPerPhaseUsd, 100);
   assert.equal(sanitiseAutomation({ ladderPerRunRungs: -1 }).ladderPerRunRungs, 10);
   assert.equal(sanitiseAutomation({ ladderPerDayUsd: Number.NaN }).ladderPerDayUsd, 600);

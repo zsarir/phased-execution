@@ -57,6 +57,9 @@ import {
 } from './runner/runner.ts';
 import { Scheduler, type LockView } from './runner/scheduler.ts';
 import {
+  continueMcpParkedRecord, mcpParkDueAt, DEFAULT_MCP_REQUIRE_TIMEOUT_MS, type McpContinueResult,
+} from './runner/mcp-park.ts';
+import {
   classifySituation, collectEvidence, summariseEvidence,
   type EvidenceDeps, type PhaseEvidence, type Situation,
 } from './runner/situation.ts';
@@ -102,6 +105,9 @@ import {
   DEFAULT_DENY, DEFAULT_ASK, DEFAULT_ALLOW, POLICY_PATH,
   type Evidence, type PolicyScope, type PermissionProfile,
 } from './runner/approvals.ts';
+
+/** The longest delay `setTimeout` can hold (2^31 − 1 ms ≈ 24.8 days); past it a clock waits for the next boot. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** One live update, with the id a reconnecting client replays from. */
 export type LiveEvent = { id: number; event: string; data: unknown };
@@ -593,7 +599,9 @@ type DriveVehicle =
   | { kind: 'session'; mode: RecoverMode; instruction?: string }
   | { kind: 'agent'; cls: RecoveryClass }
   /** The runner's own re-board with a brief (`start({resumeRunId, reboard})`). */
-  | { kind: 'reboard'; brief: BoardingBrief; escalate?: 'model' };
+  | { kind: 'reboard'; brief: BoardingBrief; escalate?: 'model' }
+  /** A `require` MCP park past its clock: continue without the servers, errand recorded. */
+  | { kind: 'mcp-continue' };
 
 /** What `maybeAutoRecover` answers — launched or not, and what it read. */
 export type AutoRecoverResult = {
@@ -604,7 +612,7 @@ export type AutoRecoverResult = {
   situation?: string;
   label?: string;
   rung?: string;
-  vehicle?: 'retry' | 'session' | 'agent' | 'reboard';
+  vehicle?: 'retry' | 'session' | 'agent' | 'reboard' | 'mcp-continue';
 };
 
 /**
@@ -1204,6 +1212,14 @@ export class Service {
       // remembers the wall on the account and tells the operator which one.
       accountEnv: (accountId) => this.accounts.envFor(accountId),
       pickAccount: (excluding, forModel) => this.accounts.pickAccount(excluding, forModel),
+      // The resource ladder: the ranked candidates the auth preflight probes
+      // one by one, and the three knobs, read live from prefs so Settings
+      // applies to the next wall rather than the next run.
+      rankAccounts: (excluding, forModel) => this.accounts.rankAccounts(excluding, forModel),
+      autoAccountSwitch: () => this.prefs.autoAccountSwitch !== false,
+      budgetAutoRaisePct: () => this.prefs.budgetAutoRaisePct ?? 25,
+      mcpRequireTimeoutMs: () => this.prefs.mcpRequireTimeoutMs ?? DEFAULT_MCP_REQUIRE_TIMEOUT_MS,
+      onMcpRequireTimeout: (state, phase, result) => this.announceMcpTimeout(state, phase, result),
       // The preflight probe, under the RUN's account env. Signed out, the
       // refusal names the account and the exact command that fixes it —
       // composed here, where the config dir is known, never in the browser.
@@ -1702,6 +1718,9 @@ export class Service {
     if (!this.flags.allowRun || !this.root?.ok) return;
     for (const record of this.store?.list() ?? []) {
       const state = latestRun(this.root.path, record.slug, this.liveRunIds());
+      // A `require` MCP park outlives the console that parked it: its clock
+      // re-arms here for the remainder, or fires at once when it is overdue.
+      if (state) this.armMcpRequireTimersFor(state);
       if (state?.status === 'queued') {
         try {
           log.info('run.readopt-queued', { slug: record.slug, runId: state.id });
@@ -1780,9 +1799,15 @@ export class Service {
     const at = Date.parse(state.waitUntil ?? '');
     if (!Number.isFinite(at)) return;
     const delay = at - Date.now();
-    // The runner's own ceiling, honored here too: a reset half a day out is a
-    // recovery card for a person (who may have another account), not a timer.
-    if (delay > 12 * 60 * 60 * 1000) return;
+    // Whatever clock the run recorded is honoured. The 12-hour ceiling that
+    // used to live here belonged to the runner's old verdict — "a reset half
+    // a day out is a recovery card for a person" — and the runner now makes
+    // that call itself: it switches accounts when one can pay and otherwise
+    // WAITS with the errand on the run, so a weekly window recorded as
+    // `waitUntil` must re-arm, or the restart turns a self-resuming run into
+    // one waiting for a person. Only a delay `setTimeout` cannot hold (24.8
+    // days) is left to the next boot.
+    if (delay > MAX_TIMER_MS) return;
     const existing = this.limitResumeTimers.get(slug);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => { void this.resumeLimitPaused(slug, state.id); }, Math.max(0, delay));
@@ -1820,6 +1845,8 @@ export class Service {
     if (this.accountsEmitTimer) clearTimeout(this.accountsEmitTimer);
     for (const timer of this.limitResumeTimers.values()) clearTimeout(timer);
     this.limitResumeTimers.clear();
+    for (const timer of this.mcpRequireTimers.values()) clearTimeout(timer);
+    this.mcpRequireTimers.clear();
     this.converger.close();
     this.watcher.stop();
     // Nothing is admitted after this point, and every pending admission is
@@ -2085,7 +2112,20 @@ export class Service {
    */
   private onRunnerEvent(event: string, data: unknown): void {
     this.emit(event, data);
-    if (event === 'run:phase') { this.announcePhase(data); return; }
+    if (event === 'run:phase') {
+      // A `require` MCP park starts its clock here — the service owns the
+      // timer because only the service can restart a run the park stopped.
+      const parked = data as { slug?: string; runId?: string; phase?: number; mcpPark?: { at: string } } | undefined;
+      if (parked?.slug && parked.runId && typeof parked.phase === 'number' && parked.mcpPark?.at) {
+        const due = mcpParkDueAt(
+          { status: 'parked', mcpPark: { at: parked.mcpPark.at, degraded: [] } } as never,
+          this.mcpRequireTimeoutMs(),
+        );
+        if (due !== null) this.armMcpRequireTimer(parked.slug, parked.phase, due);
+      }
+      this.announcePhase(data);
+      return;
+    }
     if (event !== 'run:run') return;
 
     const state = (data as { state?: RunState } | undefined)?.state;
@@ -4539,8 +4579,22 @@ export class Service {
       // never a second orchestration.
       case 'reboard-resume-brief':
         return { kind: 'reboard', brief: 'resume', ...(rung.params?.escalate === 'model' ? { escalate: 'model' as const } : {}) };
-      // Landing with the convergence loop (Phase 3) and the resource ladder
-      // (Phase 4): not drivable yet.
+      // The `require` park's two rungs. The wait is the service's TIMER, not
+      // a thing the healer drives (a pass that "waited" would be a no-op the
+      // fingerprint then pins); the continue is driven here only once the
+      // clock has run out — belt and braces for a timer lost to a crash —
+      // and never when the operator set the timeout to 0 (wait indefinitely).
+      case 'wait-heal':
+        return null;
+      case 'mcp-continue': {
+        const due = mcpParkDueAt(record, this.mcpRequireTimeoutMs());
+        return due !== null && due <= Date.now() ? { kind: 'mcp-continue' } : null;
+      }
+      // The resource walls the RUNNER climbs inline at the wall (auth and
+      // usage → switch-account / wait-window, budget → raise-budget, models
+      // → wait-window): by the time a stopped run reaches this healer those
+      // rungs were climbed or refused in the loop, and the errand says so.
+      // The plan-repair script and the external-wait parks are not drivable yet.
       case 'plan-repair-script':
       case 'switch-account':
       case 'switch-model':
@@ -4549,8 +4603,6 @@ export class Service {
       case 'poll-park':
       case 'timed-park':
       case 'recheck-watch':
-      case 'wait-heal':
-      case 'mcp-continue':
         return null;
       default:
         return null;
@@ -5168,6 +5220,20 @@ export class Service {
         refuse(`phase ${c.phase} reads ${c.situation.label} — nothing to climb`, c);
         continue;
       }
+      // A `require` MCP park still on its clock is nobody's to climb: the
+      // timer continues the phase without its servers when the clock runs
+      // out (re-armed here in case the console that parked it is gone), and
+      // `healMcpParks` requeues it sooner if the server heals. Not an errand —
+      // that is written when the clock fires, not while it is running.
+      if (c.situation.id === 'mcp-unavailable') {
+        const due = mcpParkDueAt(record, this.mcpRequireTimeoutMs());
+        if (due !== null && due > Date.now()) {
+          this.armMcpRequireTimer(slug, c.phase, due);
+          refuse(`phase ${c.phase} is parked on an MCP server — it continues without it at `
+            + `${new Date(due).toISOString()} unless the server heals first`, c);
+          continue;
+        }
+      }
       // The run's own per-phase launch cap (the launch dialog's number) and
       // the legacy per-run cap still bound the healer, for the records and
       // readers that predate rungs; the ladder's caps apply on top.
@@ -5255,6 +5321,17 @@ export class Service {
           settleRung(slot, 'failed', undefined, (error as Error)?.message ?? String(error));
           try { saveRun(state); } catch { /* best effort */ }
         });
+      return answer();
+    }
+
+    /* A `require` MCP park past its clock: continue without the servers. No
+     * `climb()` — the flip writes both rungs and the errand itself, and the
+     * journal line below is the healer's own voice. */
+    if (vehicle.kind === 'mcp-continue') {
+      if (!this.flags.allowRun) return no('continuing without the MCP server needs --allow-run', { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
+      journal.append('phase.rung', { situation: situation.key, rung: rung.vehicle, params: null, vehicle: 'mcp-continue', attempt: slot.attempts }, phase);
+      void this.continueMcpParkedPhase(slug, phase, 'auto-recovery')
+        .catch((error) => { log.warn('run.auto-recovery-failed', { slug, phase, error }); });
       return answer();
     }
 
@@ -6042,6 +6119,121 @@ export class Service {
    * Which matters most in exactly the case that motivated all of this — where
    * the MCP park was what halted the run in the first place.
    */
+  /* ---- the `require` park's clock ---- */
+
+  /** One armed clock per (plan, phase): the newest due time wins, restarts survive. */
+  private mcpRequireTimers = new Map<string, NodeJS.Timeout>();
+  /** Announced once per (run, phase): the clock may fire on both sides of a restart. */
+  private mcpTimeoutAnnounced = new Set<string>();
+
+  /** The operator's timeout for a `require` park, in ms; 0 = wait indefinitely. */
+  private mcpRequireTimeoutMs(): number {
+    const value = this.prefs.mcpRequireTimeoutMs;
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : DEFAULT_MCP_REQUIRE_TIMEOUT_MS;
+  }
+
+  /** Arm (or re-arm) the continue-without clock for one parked phase. */
+  private armMcpRequireTimer(slug: string, phase: number, dueAt: number): void {
+    const key = `${slug}:${phase}`;
+    const delay = Math.max(0, dueAt - Date.now());
+    if (delay > MAX_TIMER_MS) return;
+    const existing = this.mcpRequireTimers.get(key);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.mcpRequireTimers.delete(key);
+      void this.continueMcpParkedPhase(slug, phase, 'timeout')
+        .catch((error) => { log.warn('mcp.require-timeout-failed', { slug, phase, error }); });
+    }, delay);
+    timer.unref?.();
+    this.mcpRequireTimers.set(key, timer);
+  }
+
+  /** Every `require` park of a run re-arms its clock — at boot, and for a run that stopped on one. */
+  private armMcpRequireTimersFor(state: RunState): void {
+    const timeout = this.mcpRequireTimeoutMs();
+    for (const record of Object.values(state.phases ?? {})) {
+      const due = mcpParkDueAt(record, timeout);
+      if (due !== null) this.armMcpRequireTimer(state.slug, record.phase, due);
+    }
+  }
+
+  /**
+   * "Continue without these servers" for ONE `require`-parked phase — the
+   * clock's act (`mcpRequireTimeoutMs`), the healer's when a lost clock is
+   * found overdue, or a caller's by name. Live run: the runner's own verb
+   * (flip, wake, announce through the dep). Stopped run: the stored record is
+   * flipped with the same function, journalled in the service's voice, the
+   * halt about it cleared, the operator told once — and the run restarted so
+   * the loop boards the phase under normal admission. Null when the phase is
+   * not (or no longer) such a park; a `timeout` fire against a park that is
+   * not yet due (a newer run parked the same phase) re-arms instead.
+   */
+  async continueMcpParkedPhase(slug: string, phase: number, by = 'timeout'): Promise<McpContinueResult | null> {
+    const key = `${slug}:${phase}`;
+    const armed = this.mcpRequireTimers.get(key);
+    if (armed) { clearTimeout(armed); this.mcpRequireTimers.delete(key); }
+    const runner = this.liveRunner(slug);
+    if (runner) {
+      const record = runner.current()?.phases?.[String(phase)];
+      const due = mcpParkDueAt(record, this.mcpRequireTimeoutMs());
+      if (by === 'timeout' && due !== null && due > Date.now()) { this.armMcpRequireTimer(slug, phase, due); return null; }
+      return runner.continueMcpPark(phase, by);
+    }
+    if (!this.root?.ok) return null;
+    let result: McpContinueResult | null = null;
+    let pending: number | null = null;
+    const edited = this.editStoredRun(slug, (state) => {
+      const record = state.phases?.[String(phase)];
+      const due = mcpParkDueAt(record, this.mcpRequireTimeoutMs());
+      if (by === 'timeout' && due !== null && due > Date.now()) { pending = due; return; }
+      result = continueMcpParkedRecord(state, phase, { by });
+      if (!result) return;
+      // The park was what stopped this run: the halt about it ends here. A
+      // halt about some OTHER phase stands.
+      if (state.halt && (state.halt.kind === 'mcp-preflight' || state.halt.phase === phase)) state.halt = null;
+    });
+    if (pending !== null) { this.armMcpRequireTimer(slug, phase, pending); return null; }
+    if (!edited || !result) return null;
+    const flipped: McpContinueResult = result;
+    const journal = new Journal(this.root.path, slug, edited.id);
+    journal.append('phase.mcp-require-timeout', { servers: flipped.servers, waitedMs: flipped.waitedMs, by }, phase);
+    journal.append('phase.errand', {
+      ...flipped.errand, label: 'MCP server unavailable',
+      reason: `waited ${Math.round(flipped.waitedMs / 60_000)} min under the require policy`, by,
+    }, phase);
+    log.info('mcp.require-timeout', { slug, runId: edited.id, phase, servers: flipped.servers, by });
+    this.announceMcpTimeout(edited, phase, flipped);
+    this.emit('run:state', { state: edited });
+    // Nothing drives a stopped run but a start. `queued` and in-flight runs
+    // (under another process) are left to whoever owns them.
+    if (this.flags.allowRun && !IN_FLIGHT.includes(edited.status) && edited.status !== 'queued') {
+      await this.startRun(slug, {
+        resumeRunId: edited.id,
+        ...(edited.onlyPhases?.length ? { onlyPhases: edited.onlyPhases } : {}),
+        skills: edited.skills ?? [],
+      });
+    }
+    return flipped;
+  }
+
+  /** A `require` park timed out and the phase went ahead: say so, once per run per phase. */
+  private announceMcpTimeout(state: RunState, phase: number, result: McpContinueResult): void {
+    const key = `${state.id}:${phase}`;
+    if (this.mcpTimeoutAnnounced.has(key)) return;
+    this.mcpTimeoutAnnounced.add(key);
+    const one = result.servers.length === 1;
+    const minutes = Math.round(result.waitedMs / 60_000);
+    // `parked` is the category that announced the park; its ending is the
+    // same conversation, so it goes to the same subscribers.
+    this.announce('parked', {
+      title: `Phase ${phase} continues without ${one ? 'an MCP server' : 'some MCP servers'} — ${state.slug}`,
+      body: `${result.servers.join(', ')} did not connect within ${minutes} min under the require policy, so the `
+        + 'phase goes ahead without it and was told to record what it could not do. Sign '
+        + `${one ? 'it' : 'them'} in under Settings ▸ MCP, or drop the name from the plan.`,
+      tag: tagFor('run', 'mcp-timeout', state.slug, String(phase)),
+    }, { slug: state.slug, runId: state.id, phase });
+  }
+
   private async healMcpParks(serverId: string): Promise<void> {
     for (const runner of this.runners.values()) {
       const state = runner.current();
@@ -6377,6 +6569,8 @@ export class Service {
     if (cap(patch.ladderPerRunUsd)) picked.ladderPerRunUsd = patch.ladderPerRunUsd;
     if (cap(patch.ladderPerDayUsd)) picked.ladderPerDayUsd = patch.ladderPerDayUsd;
     if (cap(patch.convergeEveryMs)) picked.convergeEveryMs = patch.convergeEveryMs;
+    if (cap(patch.budgetAutoRaisePct)) picked.budgetAutoRaisePct = patch.budgetAutoRaisePct;
+    if (cap(patch.mcpRequireTimeoutMs)) picked.mcpRequireTimeoutMs = patch.mcpRequireTimeoutMs;
     if (typeof patch.unblockAttempts === 'boolean') picked.unblockAttempts = patch.unblockAttempts;
     if (typeof patch.staleClaimTakeover === 'boolean') picked.staleClaimTakeover = patch.staleClaimTakeover;
     if (typeof patch.resumeAtBoot === 'boolean') picked.resumeAtBoot = patch.resumeAtBoot;

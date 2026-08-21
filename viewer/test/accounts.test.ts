@@ -339,3 +339,31 @@ test('facade: a per-model wall disqualifies only that model, and never blanket-s
   await accounts.remove(spare.id);
   accounts.stop();
 });
+
+test('facade: rankAccounts is the predicate pickAccount takes its head from, and a login known broken is never ranked', async () => {
+  const accounts = makeAccounts();
+  const a = await accounts.addToken('alpha', 'sk-ant-oat01-alphavalue000000');
+  const b = await accounts.addToken('beta', 'sk-ant-oat01-betavalue0000000');
+  // Unknown usage everywhere scores alike: registration order, the machine
+  // login first whenever it is not the one being escaped.
+  assert.deepEqual(accounts.rankAccounts('default'), [a.id, b.id]);
+  assert.equal(accounts.pickAccount('default'), a.id, 'pickAccount is the head of the ranking');
+  assert.deepEqual(accounts.rankAccounts(a.id), ['default', b.id]);
+
+  // A profile nobody has signed in: once read, it is KNOWN signed-out — and a
+  // login known broken is no place to continue, whatever its headroom.
+  const { id: stale } = accounts.beginProfile('stale');
+  await accounts.list();
+  assert.equal(accounts.authStateFor(stale), 'signed-out');
+  assert.ok(!accounts.rankAccounts('default').includes(stale), 'a signed-out login is never ranked');
+  assert.ok(!accounts.rankAccounts(a.id).includes(stale));
+
+  accounts.markLimited(a.id, 'five_hour', new Date(Date.now() + 3_600_000).toISOString());
+  assert.deepEqual(accounts.rankAccounts('default'), [b.id], 'learned-exhausted windows still disqualify');
+  assert.equal(accounts.pickAccount('default'), b.id);
+
+  await accounts.remove(a.id);
+  await accounts.remove(b.id);
+  await accounts.remove(stale);
+  accounts.stop();
+});

@@ -759,6 +759,20 @@ export type Prefs = {
   autoAccountSwitch?: boolean;
   convergeEveryMs?: number;
   /**
+   * The resource ladder — walls the run climbs past by itself before a person
+   * hears about them (`runner.ts`, the `resource-wall:*` rungs).
+   *
+   * - `budgetAutoRaisePct`: a spent run budget is raised ONCE by this
+   *   percentage (default 25), never above `ladderPerRunUsd`; the second
+   *   exhaustion halts with an errand. 0 turns the raise off.
+   * - `mcpRequireTimeoutMs`: how long a phase parked under MCP policy
+   *   `require` waits for its servers before it continues without them — the
+   *   errand is recorded and the operator told once (default 30 min). 0 means
+   *   wait indefinitely, which is what every console did before this existed.
+   */
+  budgetAutoRaisePct?: number;
+  mcpRequireTimeoutMs?: number;
+  /**
    * Which categories the console is allowed to announce **at all** — the switch
    * an operator actually means when they turn a notification off.
    *
@@ -788,6 +802,7 @@ const DEFAULT_PREFS: Prefs = {
   ladderPerPhaseRungs: 3, ladderPerPhaseUsd: 100, ladderPerRunRungs: 10, ladderPerRunUsd: 400, ladderPerDayUsd: 600,
   unblockAttempts: true, staleClaimTakeover: true, resumeAtBoot: true, autoAccountSwitch: true,
   convergeEveryMs: 300_000,
+  budgetAutoRaisePct: 25, mcpRequireTimeoutMs: 1_800_000,
   notify: sanitiseCategories(undefined),
 };
 
@@ -802,7 +817,8 @@ export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
   'attachDefaultSkills' | 'qaByDefault' | 'gitMode' | 'openPrOnComplete' | 'repoGuard'
   | 'autoRecoverByDefault' | 'autoContinueRecovery' | 'mcpPolicy'
   | 'ladderPerPhaseRungs' | 'ladderPerPhaseUsd' | 'ladderPerRunRungs' | 'ladderPerRunUsd' | 'ladderPerDayUsd'
-  | 'unblockAttempts' | 'staleClaimTakeover' | 'resumeAtBoot' | 'autoAccountSwitch' | 'convergeEveryMs'> {
+  | 'unblockAttempts' | 'staleClaimTakeover' | 'resumeAtBoot' | 'autoAccountSwitch' | 'convergeEveryMs'
+  | 'budgetAutoRaisePct' | 'mcpRequireTimeoutMs'> {
   const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback);
   // A cap is a finite, non-negative number or it is the default — a string,
   // a negative or NaN in config.json must never turn the ladder unbounded
@@ -828,6 +844,8 @@ export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
     resumeAtBoot: bool(parsed.resumeAtBoot, true),
     autoAccountSwitch: bool(parsed.autoAccountSwitch, true),
     convergeEveryMs: cap(parsed.convergeEveryMs, 300_000),
+    budgetAutoRaisePct: cap(parsed.budgetAutoRaisePct, 25),
+    mcpRequireTimeoutMs: cap(parsed.mcpRequireTimeoutMs, 1_800_000),
   };
 }
 

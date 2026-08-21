@@ -63,9 +63,9 @@ export type StopSignal = {
 };
 
 /** Past this, sitting and waiting is worse than telling someone. */
-const MAX_AUTO_WAIT_MS = 12 * 60 * 60 * 1000;
+export const MAX_AUTO_WAIT_MS = 12 * 60 * 60 * 1000;
 /** Never come back the instant a window opens — clocks disagree. */
-const RESET_MARGIN_MS = 90_000;
+export const RESET_MARGIN_MS = 90_000;
 
 /* ------------------------------------------------------------------ *
  * Reset-time parsing
@@ -446,4 +446,23 @@ export function nextModel(current?: string): string | null {
 export function fallbackChain(current?: string): string[] {
   const index = rankOf(current);
   return index >= 0 ? MODEL_FALLBACK.slice(index + 1) : [];
+}
+
+/**
+ * When to come back for a window whose reset moment is known: the reset plus
+ * the clock margin — or `null` when that is not a moment worth sleeping to,
+ * because it is further out than `MAX_AUTO_WAIT_MS` (past which waiting is
+ * worse than telling someone). A reset already behind us answers "now": the
+ * window has reopened, there is nothing to wait for, and a wait into the past
+ * is the livelock shape.
+ *
+ * The runner asks this about the FIRST model's window when every model in the
+ * fallback chain is limited: the strongest model's reset is the one worth
+ * waiting for, and the phase retries its own session on it.
+ */
+export function resetWaitUntil(at: Date, now = new Date(), maxWaitMs = MAX_AUTO_WAIT_MS): Date | null {
+  const until = at.getTime() + RESET_MARGIN_MS;
+  if (!Number.isFinite(until)) return null;
+  if (until - now.getTime() > maxWaitMs) return null;
+  return new Date(Math.max(until, now.getTime()));
 }

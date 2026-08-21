@@ -3732,3 +3732,359 @@ test('a console shutdown stamps the run as the system\'s stop and writes the kil
     assert.equal(stopped.phases['1'].note, 'stopped by the operator');
   } finally { r.cleanup(); }
 });
+
+/* ------------------------------------------------------------------ *
+ * The resource ladder — walls the run climbs by itself before anyone hears
+ *
+ * Auth, usage past the 12h ceiling, an exhausted model chain, a spent run
+ * budget, two leaves finishing together on a work branch. Each used to stop
+ * the run for a person; each climbs its first rung here, and the errand is
+ * written only when the rung does not hold.
+ * ------------------------------------------------------------------ */
+
+const ladderJournal = (events: { event: string; data: Record<string, unknown> }[], name: string) =>
+  events
+    .filter((e) => e.event === 'run:journal' && e.data.event === name)
+    .map((e) => (e.data.data ?? {}) as Record<string, unknown>);
+
+test('auth wall: a run pinned to a signed-out account switches at preflight to one that signs in, and boards', async () => {
+  const r = repo();
+  const probed: (string | undefined)[] = [];
+  const envs: (NodeJS.ProcessEnv | undefined)[] = [];
+  const seen: number[] = [];
+  const watching: SpawnFn = async (request) => {
+    envs.push(request.env);
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    seen.push(phase);
+    r.markDone(phase);
+    return ok();
+  };
+  const { instance, events } = runner(r, watching, '`true`', undefined, {
+    accountEnv: async (accountId) => (accountId === 'spare' ? { CLAUDE_CODE_OAUTH_TOKEN: 'tok-spare' } : null),
+    checkAuth: async (accountId) => {
+      probed.push(accountId);
+      return accountId === 'spare'
+        ? { loggedIn: true, checkedAt: '' }
+        : { loggedIn: false, checkedAt: '', detail: `the run is set to pay as ${accountId ?? 'default'} and that login is expired — sign it in` };
+    },
+    rankAccounts: (excluding) => ['stale', 'spare'].filter((id) => id !== excluding),
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', accountId: 'work' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'finished');
+  assert.deepEqual(probed.slice(0, 3), ['work', 'stale', 'spare'], 'the run\'s account first, then each candidate in rank order');
+  assert.equal(state.accountId, 'spare', 'the run now pays as the account that signed in');
+  assert.ok(seen.length > 0);
+  assert.ok(envs.every((env) => env?.CLAUDE_CODE_OAUTH_TOKEN === 'tok-spare'), 'every spawn runs as it');
+  const switched = ladderJournal(events, 'run.account-switched');
+  assert.equal(switched.length, 1);
+  assert.equal(switched[0].from, 'work');
+  assert.equal(switched[0].to, 'spare');
+  assert.deepEqual(switched[0].tried, ['switch-account → stale: not signed in']);
+  assert.equal(state.errand, undefined, 'nobody is asked');
+  r.cleanup();
+});
+
+test('auth wall: with no account that signs in, the run parks run-preflight with the errand naming the sign-in — and the switch is off under the preference', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  const { instance, events } = runner(r, workingSession(r, seen), '`true`', undefined, {
+    checkAuth: async (accountId) => ({
+      loggedIn: false, checkedAt: '',
+      detail: `the run is set to pay as ${accountId ?? 'default'} and that login is expired or signed out — sign it in with claude auth login`,
+    }),
+    rankAccounts: () => ['spare'],
+  });
+  const parked = await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', accountId: 'work' });
+  assert.equal(parked.status, 'parked');
+  assert.equal(parked.halt?.kind, 'run-preflight');
+  assert.equal(seen.length, 0, 'nothing spawned behind the refusal');
+  assert.equal(parked.errand?.situation, 'resource-wall:auth');
+  assert.match(parked.errand?.need ?? '', /pay as work/);
+  assert.match(parked.errand?.how ?? '', /sign it in with claude auth login/);
+  assert.deepEqual(parked.errand?.tried, ['switch-account → spare: not signed in']);
+  assert.deepEqual(ladderJournal(events, 'run.preflight-refused')[0].tried, ['switch-account → spare: not signed in']);
+  assert.equal(ladderJournal(events, 'run.errand').length, 1);
+  r.cleanup();
+
+  // The preference off: the candidate is never even probed.
+  const r2 = repo();
+  const probed: (string | undefined)[] = [];
+  const second = runner(r2, workingSession(r2), '`true`', undefined, {
+    checkAuth: async (accountId) => { probed.push(accountId); return { loggedIn: accountId === 'spare', checkedAt: '' }; },
+    rankAccounts: () => ['spare'],
+    autoAccountSwitch: () => false,
+  });
+  const stayed = await second.instance.start({ slug: 'demo', root: r2.root, autonomy: 'keep-going', accountId: 'work' });
+  assert.equal(stayed.status, 'parked');
+  assert.deepEqual(probed, ['work'], 'the operator asked to be asked');
+  assert.equal(stayed.errand?.situation, 'resource-wall:auth');
+  assert.deepEqual(stayed.errand?.tried, []);
+  r2.cleanup();
+});
+
+test('usage wall past the 12h ceiling: under `wait`, the run moves to an account with headroom instead of stopping for a person', async () => {
+  const r = repo();
+  const spawns: { env?: NodeJS.ProcessEnv; resume?: string }[] = [];
+  const far = Math.floor(Date.now() / 1000) + 20 * 3600;   // 20h out: past the auto-wait ceiling
+  const limited: SpawnFn = async (request) => {
+    spawns.push({ env: request.env, resume: request.resume });
+    if (spawns.length === 1) {
+      return ok({
+        signal: { subtype: 'error_during_execution', code: 1, text: `Claude AI usage limit reached|${far}` },
+        sessionId: 'sess-far',
+      });
+    }
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok({ sessionId: 'sess-far' });
+  };
+  const { instance, events } = runner(r, limited, '`true`', undefined, {
+    accountEnv: async (accountId) => (accountId === 'spare' ? { CLAUDE_CODE_OAUTH_TOKEN: 'tok-spare' } : null),
+    pickAccount: () => 'spare',
+    portTranscript: () => true,
+  });
+  // No onLimit: the default `wait`, which cannot wait 20h — the preference
+  // (on by default) upgrades it to a switch rather than a needs-human halt.
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  const outcome = await Promise.race([
+    instance.wait().then(() => 'finished'),
+    new Promise<string>((resolve) => setTimeout(resolve, 8_000, 'slept')),
+  ]);
+  if (outcome === 'slept') await instance.stop();
+  assert.equal(outcome, 'finished', 'the switch path must not sit out a 20h window');
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'finished');
+  assert.equal(state.accountId, 'spare');
+  assert.equal(spawns[1].resume, 'sess-far', 'the ported transcript is resumed');
+  assert.equal(ladderJournal(events, 'phase.account-switch').length, 1);
+  assert.equal(ladderJournal(events, 'phase.needs-human').length, 0, 'nobody was asked');
+  r.cleanup();
+});
+
+test('usage wall past the 12h ceiling with no account to pay: the run WAITS on the window — restart-safe, the errand says when — instead of halting needs-human', async () => {
+  const r = repo();
+  const far = Math.floor(Date.now() / 1000) + 20 * 3600;
+  let spawns = 0;
+  const limited: SpawnFn = async () => {
+    spawns++;
+    return ok({
+      signal: { subtype: 'error_during_execution', code: 1, text: `Claude AI usage limit reached|${far}` },
+      sessionId: 'sess-far',
+    });
+  };
+  const { instance, events } = runner(r, limited, '`true`', undefined, { pickAccount: () => null });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  // The lane is asleep on a 20h clock: observe the wait, then stop it.
+  const deadline = Date.now() + 5_000;
+  while (instance.current()?.status !== 'waiting' && Date.now() < deadline) await sleep(25);
+  const waiting = instance.current()!;
+  assert.equal(waiting.status, 'waiting');
+  assert.ok(waiting.waitUntil && Date.parse(waiting.waitUntil) > Date.now() + 19 * 3_600_000, 'the clock is the reset itself');
+  assert.equal(waiting.errand?.situation, 'resource-wall:usage');
+  assert.match(waiting.errand?.how ?? '', /waits by itself until .*Settings ▸ Accounts/s);
+  assert.deepEqual(waiting.errand?.tried, ['switch-account → no other account has headroom']);
+  assert.equal(ladderJournal(events, 'phase.needs-human').length, 0);
+  assert.equal(ladderJournal(events, 'run.waiting').length, 1);
+  assert.equal(ladderJournal(events, 'run.errand').length, 1);
+  assert.equal(spawns, 1, 'nothing retried into the wall');
+  await instance.stop();
+  await instance.wait();
+  r.cleanup();
+});
+
+test('usage wall past the ceiling under `pause` keeps its word: checkpoint and stop for a person, with the errand on the run', async () => {
+  const r = repo();
+  const far = Math.floor(Date.now() / 1000) + 20 * 3600;
+  const limited: SpawnFn = async () => ok({
+    signal: { subtype: 'error_during_execution', code: 1, text: `Claude AI usage limit reached|${far}` },
+    sessionId: 'sess-far',
+  });
+  const { instance, events } = runner(r, limited, '`true`', undefined, {
+    pickAccount: () => 'spare',   // available, and deliberately not taken
+  });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onLimit: 'pause' });
+  await instance.wait();
+  const state = instance.current()!;
+  assert.equal(state.status, 'paused');
+  assert.ok(state.waitUntil);
+  assert.equal(state.phases['1'].status, 'pending');
+  assert.equal(state.phases['1'].resumeSessionId, 'sess-far');
+  assert.equal(state.errand?.situation, 'resource-wall:usage');
+  assert.equal(ladderJournal(events, 'phase.account-switch').length, 0, 'pause means a person decides');
+  assert.equal(ladderJournal(events, 'run.limit-paused').length, 1);
+  r.cleanup();
+});
+
+test('models exhausted: the run waits for the FIRST model\'s window, then retries the same session on it', async () => {
+  const r = repo();
+  const T0 = Date.parse('2026-01-01T13:00:00Z');
+  let clock = T0;
+  const spawns: { model?: string; resume?: string }[] = [];
+  const reset = Math.floor((T0 + 60_000) / 1000);   // opus reopens a minute after the start
+  const limited: SpawnFn = async (request) => {
+    spawns.push({ model: request.model, resume: request.resume });
+    clock += 120_000;   // time passes between attempts; by the third the window is behind us
+    if (spawns.length <= 3) {
+      const model = request.model!;
+      const named = `${model[0].toUpperCase()}${model.slice(1)}`;
+      const text = spawns.length === 1
+        ? `You've hit your ${named} limit · Claude AI usage limit reached|${reset}`
+        : `You've hit your ${named} limit`;
+      return ok({ signal: { subtype: 'error_during_execution', code: 1, text, model }, sessionId: `sess-${spawns.length}` });
+    }
+    r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok({ sessionId: 'sess-final' });
+  };
+  const { instance, events } = runner(r, limited, '`true`', undefined, { now: () => new Date(clock) });
+  // Scoped to the one phase, so the spawn list is exactly this phase's story.
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', model: 'opus', onlyPhases: [1] });
+  const outcome = await Promise.race([
+    instance.wait().then(() => 'finished'),
+    new Promise<string>((resolve) => setTimeout(resolve, 8_000, 'slept')),
+  ]);
+  if (outcome === 'slept') await instance.stop();
+  assert.equal(outcome, 'finished');
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'finished');
+  assert.deepEqual(spawns.map((s) => s.model), ['opus', 'sonnet', 'haiku', 'opus'], 'down the chain, then back to the first');
+  assert.equal(spawns[3].resume, 'sess-3', 'the same session, not a fresh boot');
+  assert.deepEqual(ladderJournal(events, 'phase.model-window-wait').map((d) => d.model), ['opus']);
+  assert.equal(ladderJournal(events, 'phase.model-window-retry').length, 1);
+  assert.equal(ladderJournal(events, 'run.halt').length, 0);
+  assert.equal(state.phases['1'].model, 'opus');
+  r.cleanup();
+});
+
+test('models exhausted with no reset on the first model halts as it always did', async () => {
+  const r = repo();
+  let spawns = 0;
+  const limited: SpawnFn = async (request) => {
+    spawns++;
+    const model = request.model!;
+    return ok({
+      signal: { subtype: 'error_during_execution', code: 1, text: `You've hit your ${model[0].toUpperCase()}${model.slice(1)} limit`, model },
+    });
+  };
+  const { instance, events } = runner(r, limited);
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', model: 'opus' });
+  await instance.wait();
+  const state = instance.current()!;
+  assert.equal(state.status, 'halted');
+  assert.equal(state.halt?.kind, 'models-exhausted');
+  assert.equal(spawns, 3);
+  assert.equal(ladderJournal(events, 'phase.model-window-wait').length, 0);
+  r.cleanup();
+});
+
+test('budget wall: a spent run budget is raised once within the cap and journalled; the second exhaustion halts with the errand; a budget at the cap cannot be raised', async () => {
+  // (1) $3, $1 a phase, three phases: the third spends it exactly, the raise
+  // (25% → 3.75) carries the run to finished instead of a halt over nothing.
+  const costly = (r: Repo, seen: number[]): SpawnFn => async (request) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)![1]);
+    seen.push(phase);
+    r.markDone(phase);
+    return ok({ costUsd: 1 });
+  };
+  const r = repo();
+  const seen: number[] = [];
+  const { instance, events } = runner(r, costly(r, seen));
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', runBudgetUsd: 3 });
+  await instance.wait();
+  const state = instance.current()!;
+  assert.equal(state.status, 'finished');
+  assert.deepEqual(seen, [1, 2, 3]);
+  assert.deepEqual(
+    ladderJournal(events, 'run.budget-raised').map((d) => ({ from: d.from, to: d.to, pct: d.pct })),
+    [{ from: 3, to: 3.75, pct: 25 }],
+  );
+  assert.equal(state.runBudgetUsd, 3.75);
+  assert.equal(state.budgetRaise?.from, 3);
+  assert.equal(state.errand, undefined);
+  r.cleanup();
+
+  // (2) $2: spent at phase 2 → raised to 2.5 → phase 3 runs → $3 ≥ 2.5: the
+  // second exhaustion is the halt, with the errand saying the raise was tried.
+  const r2 = repo();
+  const seen2: number[] = [];
+  const second = runner(r2, costly(r2, seen2));
+  await second.instance.start({ slug: 'demo', root: r2.root, autonomy: 'keep-going', runBudgetUsd: 2 });
+  await second.instance.wait();
+  const halted = second.instance.current()!;
+  assert.equal(halted.status, 'halted');
+  assert.equal(halted.halt?.kind, 'budget');
+  assert.match(halted.halt?.reason ?? '', /^the run budget of \$2\.5 is spent \(raised once from \$2\)/);
+  assert.deepEqual(seen2, [1, 2, 3], 'the raise bought the third phase');
+  assert.equal(ladderJournal(second.events, 'run.budget-raised').length, 1, 'raised ONCE');
+  assert.equal(halted.errand?.situation, 'resource-wall:budget');
+  assert.match(halted.errand?.tried[0] ?? '', /raised \$2 → \$2\.5 \(25%\), spent again/);
+  assert.equal(ladderJournal(second.events, 'run.errand').length, 1);
+  r2.cleanup();
+
+  // (3) a budget already at the ladder's per-run USD cap has nowhere to go:
+  // the halt comes at once, and the errand says why no raise happened.
+  const r3 = repo();
+  const seen3: number[] = [];
+  const third = runner(r3, costly(r3, seen3), '`true`', undefined, { ladderCaps: () => ({ perRunUsd: 2 }) });
+  await third.instance.start({ slug: 'demo', root: r3.root, autonomy: 'keep-going', runBudgetUsd: 2 });
+  await third.instance.wait();
+  const capped = third.instance.current()!;
+  assert.equal(capped.status, 'halted');
+  assert.equal(capped.halt?.kind, 'budget');
+  assert.deepEqual(seen3, [1, 2]);
+  assert.equal(ladderJournal(third.events, 'run.budget-raised').length, 0);
+  assert.match(capped.errand?.tried[0] ?? '', /not possible within the \$2 per-run ladder cap/);
+  r3.cleanup();
+});
+
+test('two DAG leaves finishing together on a work-branch run: the last leaf\'s session opens the PR — never a bare run.pr-pending ending', async () => {
+  const r = repo();
+  r.setParallel(true);
+  const spawns: { prompt: string; resume?: string; name?: string }[] = [];
+  const working: SpawnFn = async (request) => {
+    spawns.push({ prompt: request.prompt, resume: request.resume, name: request.name });
+    const boot = /BOOT phase (\d+)/.exec(request.prompt);
+    if (boot) { r.markDone(Number(boot[1])); return ok({ sessionId: `sess-p${boot[1]}` }); }
+    return ok({ resultText: 'pushed pe/demo and opened https://example.invalid/pr/7' });
+  };
+  const { instance, events } = runner(r, working, '`true`', undefined, { maxParallel: 3 });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', gitMode: 'new-branch', openPr: true });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'finished');
+  const boots = spawns.filter((s) => /BOOT phase/.test(s.prompt));
+  assert.equal(boots.length, 3);
+  assert.ok(boots.every((s) => !/Opening the pull request/.test(s.prompt)), 'with three leaves live at once none reads as last');
+  const pr = spawns.filter((s) => /Opening the pull request/.test(s.prompt));
+  assert.equal(pr.length, 1, 'exactly one session is asked to open the PR');
+  assert.match(pr[0].resume ?? '', /^sess-p\d$/, 'and it is a leaf\'s own resumed session');
+  assert.match(pr[0].prompt, /pull request falls to you/);
+  assert.match(pr[0].name ?? '', /pull request$/);
+  assert.equal(ladderJournal(events, 'run.pr-pending').length, 0);
+  assert.equal(ladderJournal(events, 'phase.pr-session-done').length, 1);
+  assert.match(state.finishedReason ?? '', /asked to push pe\/demo and open the pull request/);
+  r.cleanup();
+
+  // When no session can be resumed for it, the honest ending stays: the
+  // branch awaits its PR and the card asks.
+  const r2 = repo();
+  r2.setParallel(true);
+  const failing: SpawnFn = async (request) => {
+    const boot = /BOOT phase (\d+)/.exec(request.prompt);
+    if (boot) { r2.markDone(Number(boot[1])); return ok({ sessionId: `sess-p${boot[1]}` }); }
+    throw new Error('no transcript to resume');
+  };
+  const second = runner(r2, failing, '`true`', undefined, { maxParallel: 3 });
+  await second.instance.start({ slug: 'demo', root: r2.root, autonomy: 'keep-going', gitMode: 'new-branch', openPr: true });
+  await second.instance.wait();
+  const pending = second.instance.current()!;
+  assert.equal(pending.status, 'finished');
+  assert.equal(ladderJournal(second.events, 'run.pr-pending').length, 1);
+  assert.equal(ladderJournal(second.events, 'phase.pr-session-failed').length, 1);
+  assert.match(pending.finishedReason ?? '', /still awaits its PR/);
+  r2.cleanup();
+});

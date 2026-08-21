@@ -257,6 +257,16 @@ export type PhaseRecord = {
    * server connected, cleared on retry — exactly like `preflight`.
    */
   mcpDegraded?: McpDegradation[];
+  /**
+   * The `require` park this record is sitting in: when it began and which
+   * servers it waits for. The resource ladder's clock reads `at` — after
+   * `mcpRequireTimeoutMs` the phase continues without them, with an errand —
+   * and `degraded` is what the errand and the boarding name. Cleared on
+   * retry with the rest of the park (`resetForRetry`). Records written before
+   * this field existed never time out; they wait for a heal or a person, as
+   * they always did.
+   */
+  mcpPark?: { at: string; degraded: McpDegradation[] };
   verification?: VerifySummary;
   /**
    * Where the verification commands actually ran, relative to the run's root
@@ -654,6 +664,14 @@ export type RunState = {
   children?: Record<string, ChildRef>;
   waitUntil: string | null;
   /**
+   * The budget wall's one rung, once climbed: the run budget was raised from
+   * `from` to `to` by `pct` percent (`budgetAutoRaisePct`, within the ladder's
+   * per-run USD cap) when it was first spent. Its presence is what makes the
+   * raise happen ONCE per run — the second exhaustion halts with the errand —
+   * and survives a console restart, which a flag in memory would not.
+   */
+  budgetRaise?: { from: number; to: number; pct: number; at: string };
+  /**
    * Why the run stopped and started asking for a person. `kind` is the
    * machine-readable class (`verify-failed`, `needs-human`, …) written at the
    * halt site so the auto-recovery classifier reads a name instead of parsing
@@ -1014,6 +1032,7 @@ export function resetForRetry(record: PhaseRecord): void {
   delete record.preflight;
   delete record.preflightDetail;
   delete record.mcpDegraded;
+  delete record.mcpPark;
   delete record.boardingHint;
   record.lockWaitSince = undefined;
   delete record.lockBackoffMs;

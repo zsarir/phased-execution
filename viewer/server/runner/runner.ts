@@ -33,7 +33,10 @@ import { log } from '../log.ts';
 import { onShutdown, offShutdown } from '../lifecycle.ts';
 import { run as engineRun, readMemoryBlock, readGateStatus, readLint, readText, type Board } from '../engine.ts';
 import { mcpDirective, skillDirective } from '../skills.ts';
-import { classify, fallbackChain, limitBucket, nextModel, MODEL_FALLBACK, type Disposition } from './errors.ts';
+import {
+  classify, fallbackChain, limitBucket, nextModel, resetWaitUntil, MODEL_FALLBACK, type Disposition,
+} from './errors.ts';
+import { continueMcpParkedRecord, DEFAULT_MCP_REQUIRE_TIMEOUT_MS, type McpContinueResult } from './mcp-park.ts';
 import { markFor, spawnClaude, type SpawnFn, type SpawnHandle, type StreamEvent } from './spawn.ts';
 import { extractCommands, resolveLead, unresolvableLeads, verifyPhase } from './verify.ts';
 import { loadVerifyEnv, type VerifyEnv } from './verify-env.ts';
@@ -45,7 +48,7 @@ import {
   type EvidenceDeps, type PhaseEvidence, type Situation,
 } from './situation.ts';
 import {
-  accountRung, errandFor, nextRung, rungKey, rungsFor, type LadderCaps, type Rung,
+  accountRung, errandFor, nextRung, rungKey, rungsFor, DEFAULT_LADDER_CAPS, type LadderCaps, type Rung,
 } from './ladder.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
@@ -269,6 +272,29 @@ export type RunnerDeps = {
    * means the errand is written at once — the operator asked to be asked.
    */
   unblockAttempts?: () => boolean;
+  /**
+   * The resource ladder's knobs (Settings ▸ Automation), read live so a change
+   * applies to the next wall rather than the next run. Absent = the shipped
+   * defaults: an auth or usage wall switches to an account that can pay, a
+   * spent run budget is raised once by 25% (within the ladder's per-run USD
+   * cap), a `require` MCP park continues without its servers after 30 min.
+   */
+  autoAccountSwitch?: () => boolean;
+  budgetAutoRaisePct?: () => number;
+  mcpRequireTimeoutMs?: () => number;
+  /**
+   * The ranked list `pickAccount` takes its head from — for the auth
+   * preflight, which PROBES each candidate's login before trusting it
+   * (headroom says nothing about whether a login still works). Absent, the
+   * preflight tries `pickAccount`'s one answer.
+   */
+  rankAccounts?: (excluding: string | undefined, forModel?: string) => string[];
+  /**
+   * A `require` MCP park timed out and the phase goes ahead without its
+   * servers. Told to the service so the operator hears ONCE — the errand is
+   * already on the record by the time this fires.
+   */
+  onMcpRequireTimeout?: (state: RunState, phase: number, result: McpContinueResult) => void;
   /** Verification-card answer window override — tests only; defaults to `VERIFY_ANSWER_MS`. */
   verifyAnswerMs?: number;
   /**
@@ -1153,12 +1179,36 @@ export class Runner {
     const auth = this.deps.checkAuth
       ? await this.deps.checkAuth(this.state.accountId)
       : await checkAuth(this.state.root, true);
-    const refusal = preflight(this.state.root) ?? (auth.loggedIn ? null : authRefusal(auth.detail));
+    let refusal = preflight(this.state.root) ?? (auth.loggedIn ? null : authRefusal(auth.detail));
+    let tried: string[] = [];
+    if (refusal && !auth.loggedIn) {
+      // The auth wall's first rung, climbed before anyone is told: a signed-in
+      // account that can pay takes the run. Only when none will does this
+      // become the park it always was — now with the errand named on it.
+      const climbed = await this.switchAccountAtPreflight(auth.detail);
+      tried = climbed.tried;
+      if (climbed.switched) refusal = null;
+    }
     if (refusal) {
       this.state.status = 'parked';
       this.state.stoppedBy = 'system';
       this.state.halt = { at: new Date().toISOString(), reason: refusal, kind: 'run-preflight' };
-      this.record('run.preflight-refused', { reason: refusal });
+      if (!auth.loggedIn) {
+        // The one ask, with what was already tried so nobody repeats it by
+        // hand. `how` is the console's own sign-in sentence when it composed
+        // one (it names the account and the exact command); the generic
+        // errand otherwise.
+        const paying = this.state.accountId ?? 'the machine login';
+        const base = errandFor('resource-wall:auth', tried, 0);
+        const errand: Errand = {
+          ...base,
+          need: `A signed-in Claude account for this run — it is set to pay as ${paying}, whose login is expired or signed out.`,
+          how: auth.detail && /sign|login|setup-token/i.test(auth.detail) ? auth.detail : base.how,
+        };
+        this.state.errand = errand;
+        this.record('run.errand', { ...errand, reason: 'no signed-in account could take the run', by: 'runner' });
+      }
+      this.record('run.preflight-refused', { reason: refusal, ...(tried.length ? { tried } : {}) });
       this.persist();
       log.warn('runner.preflight', { root: this.state.root, reason: refusal });
       return this.state;
@@ -1514,6 +1564,151 @@ export class Runner {
   /** Is the recorded session's transcript where the CURRENT account will look? */
   private transcriptFollows(record: PhaseRecord): boolean {
     return (record.sessionAccountId ?? 'default') === (this.state?.accountId ?? 'default');
+  }
+
+  /**
+   * The auth wall's first rung: move a run whose account will not sign in
+   * onto one that will, before anything is spent. Each candidate is PROBED
+   * in ranking order (`checkAuth` — headroom says nothing about a login) and
+   * the first that answers signed-in takes the run; `tried` names the ones
+   * that did not, for the errand. Off under `autoAccountSwitch: false`, and
+   * impossible without the account-aware probe (the legacy one answers only
+   * for the machine login).
+   */
+  private async switchAccountAtPreflight(detail?: string): Promise<{ switched: boolean; tried: string[] }> {
+    const state = this.state!;
+    const tried: string[] = [];
+    if (this.deps.autoAccountSwitch?.() === false || !this.deps.checkAuth) return { switched: false, tried };
+    const from = state.accountId;
+    const ranked = this.deps.rankAccounts?.(from, state.model)
+      ?? [this.deps.pickAccount?.(from, state.model)].filter((id): id is string => Boolean(id));
+    for (const next of ranked) {
+      if (next === (from ?? 'default')) continue;
+      const probe = await this.deps.checkAuth(next === 'default' ? undefined : next);
+      if (!probe.loggedIn) { tried.push(`switch-account → ${next}: not signed in`); continue; }
+      this.record('run.account-switched', {
+        from: from ?? 'default', to: next, at: 'preflight', reason: 'auth',
+        detail: detail ?? null, tried,
+      });
+      if (next === 'default') delete state.accountId;
+      else state.accountId = next;
+      this.emit('run', { state });
+      return { switched: true, tried };
+    }
+    return { switched: false, tried };
+  }
+
+  /**
+   * Sit out a usage window. `pause` checkpoints the phase and stops for a
+   * person (the `escalateFreeze` shape: phase back to pending with a session
+   * to resume, run paused, reason on the run); `wait` — the default — puts
+   * the RUN to `waiting` on the clock and sleeps. Restart-safe either way:
+   * reconcile keeps `waitUntil`, the service re-arms the resume at boot.
+   *
+   * `errand` is the one ask left on the run while it waits (a reset too far
+   * out and no other account), cleared when the wait ends; `policy` overrides
+   * the run's `onLimit` for a wall the policy does not speak for (a model
+   * window is not the shared window). Answers what the attempt loop does
+   * next: `continue` (the window passed, try again) or `stop` (paused,
+   * aborted, or the run halted meanwhile).
+   */
+  private async waitOutWindow(
+    phase: number, record: PhaseRecord, at: Date, reason: string,
+    opts: { errand?: Errand; policy?: 'wait' | 'pause' } = {},
+  ): Promise<'continue' | 'stop'> {
+    const state = this.state!;
+    const policy = opts.policy ?? ((state.onLimit ?? 'wait') === 'pause' ? 'pause' : 'wait');
+    if (policy === 'pause') {
+      record.status = 'pending';
+      if (record.sessionId) record.resumeSessionId = record.sessionId;
+      state.status = 'paused';
+      state.waitUntil = at.toISOString();
+      state.finishedReason = `usage limit — resets ${at.toLocaleString()}. `
+        + 'Continue now under another account, or wait for the window.';
+      if (opts.errand) {
+        state.errand = opts.errand;
+        this.record('run.errand', { ...opts.errand, reason, by: 'runner' });
+      }
+      this.record('run.limit-paused', { until: state.waitUntil, reason }, phase);
+      this.persist();
+      this.emit('run', { state });
+      return 'stop';
+    }
+
+    state.status = 'waiting';
+    state.waitUntil = at.toISOString();
+    if (opts.errand) {
+      state.errand = opts.errand;
+      this.record('run.errand', { ...opts.errand, reason, by: 'runner' });
+    }
+    this.record('run.waiting', { until: state.waitUntil, reason });
+    this.persist();
+    await this.sleep(Math.max(0, at.getTime() - this.now().getTime()));
+    if (this.abort?.signal.aborted) return 'stop';
+    // A wait can be hours, which makes it the likeliest place for a pause
+    // to be armed — and writing `running` unconditionally is how one got
+    // thrown away. `state.pause` is the durable record of the request;
+    // the status word is derived from it, never the other way round.
+    // Compare-and-set for the same reason as after the queue wait: a
+    // status another lane wrote while this one slept is not this lane's
+    // to overwrite.
+    if (state.status === 'waiting') state.status = this.resumedStatus();
+    state.waitUntil = null;
+    // The ask was about this wait; the wait is over.
+    if (opts.errand && state.errand === opts.errand) delete state.errand;
+    // And a lane woken into a halted run must stand down, not spawn
+    // attempt N+1 hours after the run stopped.
+    if (state.halt) {
+      record.status = 'interrupted';
+      record.note = 'the run halted while this phase waited for a usage window';
+      return 'stop';
+    }
+    return 'continue';
+  }
+
+  /**
+   * The budget wall's first rung: a spent run budget is raised ONCE, by
+   * `budgetAutoRaisePct` and never past the ladder's per-run USD cap, so a
+   * run a few dollars short of done does not stop for a person over the
+   * rounding. Journalled; the second exhaustion is the errand. False when
+   * there is nothing to raise to: already raised, the raise switched off, the
+   * budget at or above the cap, or a raise the run has already overspent.
+   */
+  private raiseBudgetOnce(): boolean {
+    const state = this.state!;
+    if (!state.runBudgetUsd || state.budgetRaise) return false;
+    const pct = this.deps.budgetAutoRaisePct?.() ?? DEFAULT_BUDGET_RAISE_PCT;
+    if (!(pct > 0)) return false;
+    const cap = this.deps.ladderCaps?.().perRunUsd ?? DEFAULT_LADDER_CAPS.perRunUsd;
+    const from = state.runBudgetUsd;
+    const to = Math.round(Math.min(from * (1 + pct / 100), Math.max(cap, from)) * 100) / 100;
+    if (to <= from || to <= state.spentUsd) return false;
+    state.budgetRaise = { from, to, pct, at: new Date().toISOString() };
+    state.runBudgetUsd = to;
+    this.record('run.budget-raised', { from, to, pct, cap, spentUsd: state.spentUsd });
+    this.emit('run', { state });
+    this.persist();
+    return true;
+  }
+
+  /** The budget halt, with the errand naming what was already tried. */
+  private haltOnBudget(): void {
+    const state = this.state!;
+    const raise = state.budgetRaise;
+    const cap = this.deps.ladderCaps?.().perRunUsd ?? DEFAULT_LADDER_CAPS.perRunUsd;
+    const pct = this.deps.budgetAutoRaisePct?.() ?? DEFAULT_BUDGET_RAISE_PCT;
+    const tried = raise
+      ? [`raise-budget → raised $${raise.from} → $${raise.to} (${raise.pct}%), spent again`]
+      : !(pct > 0)
+        ? ['raise-budget → switched off (budgetAutoRaisePct is 0)']
+        : [`raise-budget → not possible within the $${cap} per-run ladder cap`];
+    const errand = errandFor('resource-wall:budget', tried, 0);
+    state.errand = errand;
+    this.record('run.errand', { ...errand, reason: `the run budget of $${state.runBudgetUsd} is spent`, by: 'runner' });
+    this.halt(
+      `the run budget of $${state.runBudgetUsd} is spent${raise ? ` (raised once from $${raise.from})` : ''}`,
+      undefined, 'budget',
+    );
   }
 
   private async resumeWithInstruction(
@@ -2418,6 +2613,37 @@ export class Runner {
     this.record(event, data, phase);
   }
 
+  /**
+   * "Continue without these servers" for ONE `require`-parked phase — by the
+   * clock (`mcpRequireTimeoutMs`, the service's timer) or by the ladder. The
+   * phase's own MCP policy becomes `continue`, the record is reset to board
+   * fresh with the hint on it, the errand is recorded, and the loop is woken
+   * so it boards on the next tick under normal admission. Null when the
+   * phase is not such a park any more (healed, retried, or never parked) —
+   * every caller's race lands here and answers "nothing to do".
+   *
+   * Only a live loop boards it; for a stopped run the service flips the
+   * stored record with the same function and restarts the run.
+   */
+  continueMcpPark(phase: number, by = 'timeout'): McpContinueResult | null {
+    if (!this.state) return null;
+    const result = continueMcpParkedRecord(this.state, phase, { by, now: this.now() });
+    if (!result) return null;
+    this.record('phase.mcp-require-timeout', {
+      servers: result.servers, waitedMs: result.waitedMs, by,
+    }, phase);
+    this.record('phase.errand', {
+      ...result.errand, label: 'MCP server unavailable',
+      reason: `waited ${Math.round(result.waitedMs / 60_000)} min under the require policy`, by,
+    }, phase);
+    this.ladderSeen.delete(phase);
+    this.emit('phase', { phase, status: 'pending', note: null, errand: result.errand, mcpContinue: result.servers });
+    this.persist();
+    this.wake.resolve();
+    this.deps.onMcpRequireTimeout?.(this.state, phase, result);
+    return result;
+  }
+
   /** Clear a phase's terminal state so the loop will pick it up again. */
   retry(phase: number): void {
     if (!this.state) return;
@@ -2558,7 +2784,10 @@ export class Runner {
         }
         if (state.runBudgetUsd && state.spentUsd >= state.runBudgetUsd) {
           if (await draining()) continue;
-          this.halt(`the run budget of $${state.runBudgetUsd} is spent`, undefined, 'budget');
+          // The budget wall's one rung — raise once within the policy cap —
+          // then the errand. `continue` re-enters the loop top with the new cap.
+          if (this.raiseBudgetOnce()) continue;
+          this.haltOnBudget();
           break;
         }
 
@@ -2700,20 +2929,29 @@ export class Runner {
         }
 
         if (!candidates.length) {
+          // Two DAG leaves finishing together means neither read as "last", so
+          // neither was told to open the PR. The last leaf to land is asked
+          // now, in its own session — it holds the branch, the commits and the
+          // context — while the run still reads running; only when no session
+          // can be resumed for it does the branch end "awaiting its PR".
+          let prEnding: string | null = null;
+          if (!outstanding.length && state.gitMode === 'new-branch'
+            && state.openPr !== false && !this.prBlockEmitted) {
+            prEnding = await this.openPrFromLastLeaf();
+          }
           state.status = outstanding.length ? 'parked' : 'finished';
           if (outstanding.length) state.stoppedBy = 'system'; else delete state.stoppedBy;
           state.finishedReason = outstanding.length
             ? undefined
             : `every phase of ${state.slug} is done.`;
-          // Two DAG leaves finishing together means neither read as "last", so
-          // neither was told to open the PR. Saying the branch still awaits one
-          // is the honest ending; inventing a session to do it here is not.
           if (!outstanding.length && state.gitMode === 'new-branch'
             && state.openPr !== false && !this.prBlockEmitted) {
             this.record('run.pr-pending', { branch: `pe/${state.slug}` });
             state.finishedReason = `every phase of ${state.slug} is done. The work branch `
-              + `pe/${state.slug} still awaits its PR — no phase ran as the plan's last, so `
-              + 'push it and open one by hand, or re-run the final phase.';
+              + `pe/${state.slug} still awaits its PR — no phase ran as the plan's last and no `
+              + 'session could be resumed to open it, so push it and open one by hand, or re-run the final phase.';
+          } else if (prEnding) {
+            state.finishedReason = prEnding;
           }
           if (outstanding.length) {
             // Parking with work left is not self-explanatory: every phase this
@@ -3142,8 +3380,14 @@ export class Runner {
     if (mcp.park) {
       record.status = 'parked';
       record.note = mcp.park;
-      this.record('phase.mcp-preflight-parked', { reason: mcp.park }, phase);
-      this.emit('phase', { phase, status: 'parked', note: mcp.park });
+      // The park's clock starts here: past `mcpRequireTimeoutMs` the phase
+      // continues without these servers (`continueMcpPark`), with the errand.
+      record.mcpPark = { at: new Date().toISOString(), degraded: mcp.degraded };
+      const timeoutMs = this.deps.mcpRequireTimeoutMs?.() ?? DEFAULT_MCP_REQUIRE_TIMEOUT_MS;
+      this.record('phase.mcp-preflight-parked', {
+        reason: mcp.park, servers: mcp.degraded.map((row) => row.id), timeoutMs,
+      }, phase);
+      this.emit('phase', { phase, status: 'parked', note: mcp.park, mcpPark: record.mcpPark, timeoutMs });
       return true;
     }
     if (mcp.degraded.length) {
@@ -3360,6 +3604,92 @@ export class Runner {
   /** Whether any phase of this run was handed the PR block. See `run.pr-pending`. */
   private prBlockEmitted = false;
 
+  /** The phase this loop most recently verified green — the last leaf, when the plan ends. */
+  private lastDonePhase: number | null = null;
+
+  /**
+   * Ask the last leaf's own session to push the work branch and open the
+   * pull request — the git-strategy PR block, verbatim, as one more resumed
+   * turn. Two DAG leaves finishing together is how a new-branch run used to
+   * end with `run.pr-pending` and a sentence; the session that landed last
+   * holds the branch, the commits and the context, and is the right one to
+   * finish the job. Answers the run's ending sentence when a session was
+   * spent on it (whatever it then managed — its words are journalled, the
+   * branch's state lives on the remote), null when none could be resumed —
+   * the honest "awaiting its PR" ending stays for that.
+   */
+  private async openPrFromLastLeaf(): Promise<string | null> {
+    const state = this.state!;
+    const branch = `pe/${state.slug}`;
+    const done = Object.values(state.phases)
+      .filter((r) => r.status === 'done' && r.sessionId)
+      .sort((a, b) => (b.endedAt ?? '').localeCompare(a.endedAt ?? ''))
+      .map((r) => r.phase);
+    const candidates = [...new Set([this.lastDonePhase, ...done])].filter((p): p is number => p != null);
+    const phase = candidates.find((p) => {
+      const r = state.phases[String(p)];
+      return Boolean(r?.sessionId) && this.transcriptFollows(r);
+    });
+    if (phase == null) return null;
+    const record = phaseRecord(state, phase);
+    const spawn = this.deps.spawn ?? spawnClaude;
+    const title = this.deps.planTitle?.(state.slug) ?? state.slug;
+    const prompt = `Every phase of ${state.slug} is done now, and yours was the last to land — so the pull `
+      + `request falls to you. Your handoff is written; do not reopen the work.\n\n${prBlockText(branch, title)}`;
+    this.record('phase.pr-session', { sessionId: record.sessionId, branch }, phase);
+    this.emit('phase', { phase, prSession: true });
+
+    let outcome;
+    try {
+      outcome = await spawn({
+        prompt,
+        cwd: state.root,
+        model: record.model ?? state.model,
+        effort: record.effort ?? state.effort,
+        name: `${state.slug} p${phase} pull request`,
+        resume: record.sessionId,
+        // Paperwork, like a closeout: capped so a confused session cannot
+        // re-open the work it was asked only to publish.
+        budgetUsd: state.phaseBudgetUsd === null ? null : Math.max(1, state.phaseBudgetUsd / 4),
+        maxTurns: CLOSEOUT_MAX_TURNS,
+        settings: this.settingsPath ?? undefined,
+        permissionProfile: this.profile(),
+        partialMessages: this.deps.stream?.partialMessages ?? true,
+        subagentText: this.deps.stream?.subagentText ?? true,
+        hookEvents: this.deps.stream?.hookEvents ?? true,
+        onHandle: (handle) => { this.attachHandle(phase, handle); },
+        env: await this.sessionEnv({
+          PE_OWNER: autopilotOwner(state.id),
+          PE_SCOPE: formatScope(await this.scopeFor(phase)),
+          PE_OUTCOME_FILE: this.outcomePath(phase),
+        }),
+        signal: this.abort?.signal,
+        onPid: (pid) => {
+          this.attachPid(phase, pid);
+          this.persist();
+          this.emit('run', { state });
+        },
+        onEvent: (event) => this.onStream(phase, event),
+      });
+    } catch (error) {
+      this.record('phase.pr-session-failed', { error: (error as Error)?.message ?? String(error) }, phase);
+      return null;
+    } finally {
+      this.attachPid(phase, null);
+      this.attachHandle(phase, null);
+    }
+
+    state.spentUsd += outcome.costUsd;
+    record.costUsd += outcome.costUsd;
+    record.turns = (record.turns ?? 0) + outcome.turns;
+    const said = outcome.resultText ? outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200) : undefined;
+    const ok = classify(outcome.signal).kind === 'ok';
+    this.prBlockEmitted = true;
+    this.record('phase.pr-session-done', { ok, costUsd: outcome.costUsd, turns: outcome.turns, said }, phase);
+    return `every phase of ${state.slug} is done. Phase ${phase}'s session was asked to push ${branch} and `
+      + `open the pull request${said ? ` — it said: ${said.slice(0, 300)}` : ''}.`;
+  }
+
   /**
    * The operator's git strategy for this phase's session, or '' — which is the
    * only value a default-branch run ever gets, so every prompt composed before
@@ -3440,20 +3770,7 @@ export class Runner {
       : '';
 
     const title = this.deps.planTitle?.(state.slug) ?? state.slug;
-    const prBlock = pr
-      ? `\n\nOpening the pull request — this is the plan's LAST remaining phase. After the\n`
-        + `handoff is written and verification is green, in EACH scoped repository where\n`
-        + `\`${branch}\` has commits:\n`
-        + `  1. Push the branch: git push -u origin ${branch}\n`
-        + `  2. Open a PR with \`gh pr create\` — base: the repository's default branch,\n`
-        + `     head: ${branch}, title: "${title}", body: a short per-phase summary of\n`
-        + `     what this plan changed (from the handoffs).\n`
-        + `  3. If a PR for \`${branch}\` already exists, do not open a second one — say so\n`
-        + `     instead.\n`
-        + `Record each PR URL in the phase handoff. If pushing or \`gh\` is refused or\n`
-        + `unavailable, do not look for another route: write the exact commands you would\n`
-        + `have run into the handoff and your final message, and finish the phase normally.`
-      : '';
+    const prBlock = pr ? `\n\n${prBlockText(branch, title)}` : '';
 
     this.record('phase.git-strategy', { mode: 'new-branch', branch, worktree, pr }, phase);
 
@@ -3558,6 +3875,11 @@ export class Runner {
     }
     let budget = state.phaseBudgetUsd;
     let maxTurns: number | null = opts.maxTurns ?? null;
+    // The per-model walls this phase met, first first: when the whole chain
+    // is limited, the FIRST model's reset is the one worth waiting for. Once
+    // per phase — a second exhaustion after that wait halts as it always did.
+    const modelWalls: { model: string; at: Date }[] = [];
+    let modelWindowWaited = false;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       // A per-lane stop can land between attempts — during a retry backoff, a
@@ -3756,44 +4078,10 @@ export class Runner {
             this.persist();
             continue;
           }
-          if (policy === 'pause') {
-            // The checkpoint shape `escalateFreeze` established: phase back to
-            // pending with a session to resume, run paused, reason on the run.
-            record.status = 'pending';
-            if (record.sessionId) record.resumeSessionId = record.sessionId;
-            state.status = 'paused';
-            state.waitUntil = disposition.at.toISOString();
-            state.finishedReason = `usage limit — resets ${disposition.at.toLocaleString()}. `
-              + 'Continue now under another account, or wait for the window.';
-            this.record('run.limit-paused', { until: state.waitUntil, reason: disposition.reason }, phase);
-            this.persist();
-            this.emit('run', { state });
-            return { carryOn: false, completed: false };
-          }
-
-          state.status = 'waiting';
-          state.waitUntil = disposition.at.toISOString();
-          this.record('run.waiting', { until: state.waitUntil, reason: disposition.reason });
-          this.persist();
-          await this.sleep(Math.max(0, disposition.at.getTime() - this.now().getTime()));
-          if (this.abort?.signal.aborted) return { carryOn: false, completed: false };
-          // A wait can be hours, which makes it the likeliest place for a pause
-          // to be armed — and writing `running` unconditionally is how one got
-          // thrown away. `state.pause` is the durable record of the request;
-          // the status word is derived from it, never the other way round.
-          // Compare-and-set for the same reason as after the queue wait: a
-          // status another lane wrote while this one slept is not this lane's
-          // to overwrite.
-          if (state.status === 'waiting') state.status = this.resumedStatus();
-          state.waitUntil = null;
-          // And a lane woken into a halted run must stand down, not spawn
-          // attempt N+1 hours after the run stopped.
-          if (state.halt) {
-            record.status = 'interrupted';
-            record.note = 'the run halted while this phase waited for a usage window';
-            return { carryOn: false, completed: false };
-          }
-          continue;
+          // `pause` checkpoints for a person; `wait` sleeps on the clock —
+          // one helper, shared with the walls below.
+          if (await this.waitOutWindow(phase, record, disposition.at, disposition.reason) === 'continue') continue;
+          return { carryOn: false, completed: false };
         }
 
         case 'switch-model': {
@@ -3804,8 +4092,41 @@ export class Runner {
           if (disposition.bucket && disposition.at) {
             this.deps.onAccountLimited?.(state.accountId, disposition.bucket, disposition.at, disposition.reason);
           }
+          // Remember the wall per model. A capacity blip (529) names no reset
+          // and is not remembered: there is nothing to wait for.
+          if (disposition.at && !modelWalls.some((wall) => wall.model === currentModel)) {
+            modelWalls.push({ model: currentModel, at: disposition.at });
+          }
           const next = nextModel(currentModel);
           if (!next) {
+            // Every model is limited. The model wall's one rung: when the
+            // FIRST model's reset is known and near enough to sleep on, wait
+            // for it and retry the same session on that model — the strongest
+            // one the phase was given, not the weakest it fell to. Once per
+            // phase; without a reset (or past the ceiling) this halts as it
+            // always did.
+            const first = modelWalls[0];
+            const until = first && !modelWindowWaited ? resetWaitUntil(first.at, this.now()) : null;
+            if (first && until) {
+              modelWindowWaited = true;
+              this.record('phase.model-window-wait', {
+                model: first.model, until: until.toISOString(), reason: disposition.reason,
+              }, phase);
+              const verdict = await this.waitOutWindow(
+                phase, record, until,
+                `every model is limited; ${first.model}'s window reopens ${until.toLocaleString()}`,
+                { policy: 'wait' },
+              );
+              if (verdict !== 'continue') return { carryOn: false, completed: false };
+              currentModel = first.model;
+              record.model = first.model;
+              modelWalls.length = 0;
+              // The same session, when its transcript is where this account
+              // looks — the phase keeps whatever it had done.
+              resume = record.sessionId && this.transcriptFollows(record) ? record.sessionId : undefined;
+              this.record('phase.model-window-retry', { model: first.model, resume: resume ?? null }, phase);
+              continue;
+            }
             this.halt(`every model is exhausted or at capacity (${disposition.reason})`, phase, 'models-exhausted');
             return { carryOn: false, completed: false };
           }
@@ -3837,11 +4158,30 @@ export class Runner {
             if (disposition.at) {
               this.deps.scheduler?.throttle(disposition.at.getTime(), state.accountId ?? 'default');
             }
-            if ((state.onLimit ?? 'wait') === 'switch'
-              && this.trySwitchAccount(phase, record, disposition.reason, currentModel)) {
+            // The usage wall's first rung. `switch` always could; under
+            // `wait` — which cannot wait this long — `autoAccountSwitch` (on
+            // by default) moves the run to an account that can pay instead of
+            // stopping for a person. `pause` keeps its word and pauses.
+            const policy = state.onLimit ?? 'wait';
+            const wantSwitch = policy === 'switch' || (policy === 'wait' && this.deps.autoAccountSwitch?.() !== false);
+            if (wantSwitch && this.trySwitchAccount(phase, record, disposition.reason, currentModel)) {
               resume = record.sessionId && this.transcriptFollows(record) ? record.sessionId : undefined;
               this.persist();
               continue;
+            }
+            if (disposition.at) {
+              // No account can pay: the run waits on the window ITSELF —
+              // restart-safe, the clock settles it — with the one ask that
+              // would end the wait sooner left on it. Not a person's halt.
+              const base = errandFor('resource-wall:usage', ['switch-account → no other account has headroom'], phase);
+              const errand: Errand = {
+                ...base,
+                how: `The run waits by itself until ${disposition.at.toLocaleString()}. To continue sooner, `
+                  + 'register or sign in another Claude account under Settings ▸ Accounts and switch the run to it.',
+              };
+              const verdict = await this.waitOutWindow(phase, record, disposition.at, disposition.reason, { errand });
+              if (verdict === 'continue') continue;
+              return { carryOn: false, completed: false };
             }
           }
           {
@@ -4015,6 +4355,7 @@ export class Runner {
 
     record.status = 'done';
     record.endedAt = new Date().toISOString();
+    this.lastDonePhase = phase;
     // The honest verdict travels with the record: a phase that passed with
     // checks skipped is not the same fact as one whose every check ran.
     if (verification.skipped?.length) {
@@ -4136,7 +4477,9 @@ export class Runner {
     }
 
     const policy = this.mcpPolicyFor(phase, chosen);
-    if (policy === 'require') return { usable: [], degraded: [], park: this.mcpParkNote(phase, degraded), strict: false };
+    // The park carries what it parked on: the clock that times it out names
+    // those servers to the session and in the errand.
+    if (policy === 'require') return { usable: [], degraded, park: this.mcpParkNote(phase, degraded), strict: false };
 
     const lost = new Set(degraded.map((row) => row.id));
     const usable = ids.filter((id) => !lost.has(id));
@@ -5920,6 +6263,30 @@ function reasonOf(disposition: Disposition): string {
  * Worded for the person who has to fix it. "Authentication failed" describes
  * the machine's experience; what the operator needs is which command, where.
  */
+/** The budget wall's default raise, when no preference reaches the runner. */
+const DEFAULT_BUDGET_RAISE_PCT = 25;
+
+/**
+ * The PR block — what a session is told when it is the one to publish the
+ * work branch. One author, two readers: `gitStrategy` appends it to the
+ * plan's last phase, and `openPrFromLastLeaf` hands it to the last leaf's
+ * session when two leaves finished together and neither read as last.
+ */
+function prBlockText(branch: string, title: string): string {
+  return `Opening the pull request — this is the plan's LAST remaining phase. After the\n`
+    + `handoff is written and verification is green, in EACH scoped repository where\n`
+    + `\`${branch}\` has commits:\n`
+    + `  1. Push the branch: git push -u origin ${branch}\n`
+    + `  2. Open a PR with \`gh pr create\` — base: the repository's default branch,\n`
+    + `     head: ${branch}, title: "${title}", body: a short per-phase summary of\n`
+    + `     what this plan changed (from the handoffs).\n`
+    + `  3. If a PR for \`${branch}\` already exists, do not open a second one — say so\n`
+    + `     instead.\n`
+    + `Record each PR URL in the phase handoff. If pushing or \`gh\` is refused or\n`
+    + `unavailable, do not look for another route: write the exact commands you would\n`
+    + `have run into the handoff and your final message, and finish the phase normally.`;
+}
+
 function authRefusal(detail?: string): string {
   return 'Claude Code is not signed in for this console, so every phase would spend a turn '
     + 'and report success without doing anything. Sign in — the Autopilot page has a button '
