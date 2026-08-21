@@ -9,8 +9,11 @@ Contents: [The real cost model](#the-real-cost-model-why-fresh-sessions-help--an
 
 This is the source of truth for **how big one session should be** (the prose + rationale). The **machine
 values** — the `S=15K M=40K L=90K` weights and the per-model budgets — live in `scripts/sizing.env`, which
-`scripts/phase-graph.sh` sources, so the numbers here and the engine can't drift (F5). Change a number in
-`sizing.env` and keep this doc in step. SKILL.md links here; `--session-plan` uses those same values.
+`scripts/phase-graph.sh` sources, so the numbers here and the engine can't drift (F5). The model **names**
+those numbers are keyed by — which aliases exist, their full ids, which carry the big budget class, and the
+`[1m]` window suffix — live next door in `scripts/models.env`, read by the same engine and by the console.
+Change a number in `sizing.env`, a name in `models.env`, and keep this doc in step. SKILL.md links here;
+`--session-plan` uses those same values.
 
 ## The real cost model (why fresh sessions help — and why not always)
 
@@ -60,6 +63,21 @@ plan records a **target execution model** in its `## Session budget` note (defau
 when the user hasn't said otherwise), and each phase-start re-checks it. If the target is genuinely
 unknown, ask with `AskUserQuestion` ("Which Claude model will run these phases?").
 
+**How a model may be written.** Three spellings resolve to the same model: the **alias** (`fable`, `opus`,
+`sonnet`, `haiku`), the **full id** (`claude-opus-5`), and either of those carrying the **`[1m]` window
+suffix** (`opus[1m]`, `claude-opus-5[1m]`). The mode alias `opusplan` is accepted and passed through
+verbatim. All of them read the same everywhere — the plan's `**Target model:**` line, a phase's
+`- **Model:**` bullet, `--session-plan`, the console — because the vocabulary is one file,
+`scripts/models.env` (F5). `--effort` is a separate axis and takes exactly `low` · `medium` · `high` ·
+`xhigh` · `max`.
+
+**A bare alias is rated by family; a `[1m]` name is rated by window.** The suffix selects a context
+window, not a model: `claude-opus-5[1m]` is still Opus for quota, for escalation and for account matching,
+and only its **budget** differs — which is the whole reason the window has to be written down instead of
+assumed. `[1m]` is available on `fable`, `opus` and `sonnet`; `haiku[1m]` is refused by the API today
+("the long context beta is not yet available for this subscription"), so it isn't offered in pick lists,
+though the name still parses.
+
 ## Step 2 — pick the session budget from the model
 
 **Budget is measured in summed phase *weight*** (the `S/M/L` working-set estimates below), **not raw
@@ -86,13 +104,30 @@ weights under-count reality by ~3×, so a "1M budget" session would blow far pas
 > actually exposes may be smaller by configuration (a 200K effective window is possible even on
 > 1M-capable models, and the session auto-compacts near its limit). The **~200K presets assume a
 > genuinely ≥1M effective window**. Size to the window you actually have — budget ≈ 0.2 × effective
-> window: a 200K effective window → a ~**40K** budget (`--session-plan 40000`).
+> window: a 200K effective window → a ~**40K** budget (`--session-plan 40000`). Writing `opus[1m]` is how
+> you *assert* the 1M window rather than hope for it.
+
+Four budget classes, one `sizing.env` key each:
+
+| Class | `sizing.env` key | Budget (weight) | Matches |
+|---|---|---|---|
+| 1M window | `BUDGET_1M` | **200K** | any name carrying `[1m]` — checked first, so the suffix wins over the family |
+| big | `BUDGET_BIG` | **200K** | `fable` · `opus` · `sonnet` · `mythos` (`MODEL_BIG` in `models.env`) |
+| Haiku | `BUDGET_HAIKU` | **40K** | `haiku` |
+| default | `BUDGET_DEFAULT` | **40K** | unrecognised or unspecified — assume a 200K effective window |
+
+`BUDGET_1M` and `BUDGET_BIG` are both 200K today and are kept apart so they can move independently: a bare
+alias may resolve to a window smaller than 1M — which is precisely why the CLI takes a `[1m]` suffix at
+all — so `BUDGET_1M` is the one rating that is measured rather than assumed. Re-rating the bare aliases
+down would change how every existing plan batches, so it is an operator decision (one edit, `BUDGET_BIG`)
+and not a cleanup.
 
 **Per-phase model selection is a lever too.** You don't have to run every phase on one model. Put hard
 reasoning/architecture phases on Opus or Fable, balanced implementation on Sonnet, and mechanical phases
 (rename sweeps, codegen, boilerplate) on cheap fast Haiku. A phase can name its preferred model in the
-plan; just remember switching models mid-*session* busts the cache, so keep one model per session — a
-wanted model switch is one of the few boundaries that *earns* a fresh session.
+plan — alias, full id, or a `[1m]` variant; just remember switching models mid-*session* busts the
+cache, so keep one model per session — a wanted model switch is one of the few boundaries that *earns*
+a fresh session.
 
 ## Step 3 — right-size and batch
 
@@ -144,7 +179,7 @@ math (kept in sync with `scripts/phase-graph.sh` via `scripts/sizing.env`).
 ### Let the engine propose batches
 
 ```
-scripts/phase-graph.sh <slug> --session-plan opus     # or: haiku · sonnet · fable · a raw number
+scripts/phase-graph.sh <slug> --session-plan opus     # or: haiku · sonnet · fable · 'opus[1m]' (quote it) · a raw number
 ```
 
 It walks the remaining (not-done) phases in dependency order and groups phases into sessions wherever

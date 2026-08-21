@@ -77,7 +77,7 @@ test('empty selections mean the CLI default — no flag at all', () => {
 
 test('every off-list value is refused by name, and nothing is guessed', () => {
   const cases: [Record<string, unknown>, RegExp][] = [
-    [{ model: 'gpt-4' }, /model must be one of/],
+    [{ model: 'gpt-4' }, /model must name a Claude model/],
     [{ effort: 'ultra' }, /effort must be one of/],
     [{ permissionMode: 'bypassPermissions' }, /permission mode must be one of/],
     // `default` is real at the CLI, but the vocabulary is the runner's — the
@@ -100,6 +100,21 @@ test('every off-list value is refused by name, and nothing is guessed', () => {
       assert.equal(built.status, 400, JSON.stringify(body));
       assert.match(built.error, why);
     }
+  }
+});
+
+test('every spelling the CLI takes is accepted, not just the four aliases', () => {
+  // The launcher used to validate against MODEL_FALLBACK — the escalation
+  // ladder — so `claude-opus-5`, the CLI's own documented example, was a 400,
+  // and there was no way at all to ask for the 1M window.
+  for (const model of ['opus', 'claude-opus-5', 'claude-opus-5[1m]', 'opus[1m]', 'opusplan']) {
+    const built = buildAgentLaunch({ kind: 'claude', model, prompt: 'go' }, CTX);
+    assert.equal(built.ok, true, `${model} must be accepted`);
+    if (!built.ok) continue;
+    const argv = built.launch.args;
+    const at = argv.indexOf('--model');
+    assert.ok(at >= 0, `${model} must reach argv`);
+    assert.equal(argv[at + 1], model, 'and reach it byte-for-byte — brackets included');
   }
 });
 

@@ -18,6 +18,8 @@
  * stop and fetch a human.
  */
 
+import { MODELS_ENV_FALLBACK, modelFamily } from './models.ts';
+
 export type Disposition =
   /** Transient; try the same phase again shortly. */
   | { kind: 'retry'; afterMs: number; reason: string }
@@ -416,16 +418,32 @@ export function childEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
  * Models to fall back through, in order, when one is limited or at capacity.
  *
  * Strongest first, because falling back is a demotion: a phase that cannot run
- * on Fable should try Opus before it tries Haiku. Every entry is an alias, so a
- * caller passing a full id (`claude-opus-5`) still matches by substring.
+ * on Fable should try Opus before it tries Haiku.
+ *
+ * The order now comes from `scripts/models.env` (via `MODELS_ENV_FALLBACK`)
+ * rather than being spelled here, because this array used to be TWO things at
+ * once: the escalation ladder, and — imported as `MODELS` by `agent.ts` and
+ * `api/routes.ts` — the list of model names a door would accept. Those are not
+ * the same list. A ladder wants bare aliases in strength order; a door wants to
+ * take every spelling the CLI takes, full ids and `[1m]` variants included.
+ * Conflating them is why `claude-opus-5` was a 400 on one route and a silent
+ * drop on another. Doors now ask `isKnownModel()`; this stays the ladder.
  */
-export const MODEL_FALLBACK = ['fable', 'opus', 'sonnet', 'haiku'];
+export const MODEL_FALLBACK = [...MODELS_ENV_FALLBACK.aliases];
 
-/** Where a model sits in the chain, by alias or by full id. -1 when unknown. */
+/**
+ * Where a model sits in the chain, by alias or by full id. -1 when unknown.
+ *
+ * A `[1m]` variant ranks as its base model on purpose: the suffix selects a
+ * context window, not a different model, so `claude-opus-5[1m]` demotes to
+ * `sonnet` exactly as `opus` does. Escalation and demotion still emit a bare
+ * alias, which means the window preference is dropped at a model switch —
+ * recorded here as known and accepted, since the alternative is asserting that
+ * every model in the ladder offers a 1M window, which the console cannot know.
+ */
 function rankOf(model?: string): number {
-  if (!model) return -1;
-  const short = MODEL_FALLBACK.find((m) => model.includes(m));
-  return short ? MODEL_FALLBACK.indexOf(short) : -1;
+  const family = modelFamily(model);
+  return family ? MODEL_FALLBACK.indexOf(family) : -1;
 }
 
 export function nextModel(current?: string): string | null {

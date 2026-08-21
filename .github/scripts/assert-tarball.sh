@@ -44,6 +44,12 @@ for p in \
   "viewer/shared/recovery-model.js" \
   "viewer/shared/situation-model.js" \
   "viewer/shared/ladder-model.js" \
+  "viewer/shared/attention-model.js" \
+  "viewer/shared/evidence-model.js" \
+  "viewer/server/inbox.ts" \
+  "viewer/server/analysis/spend.ts" \
+  "viewer/server/runner/models.ts" \
+  "scripts/models.env" \
   "viewer/scripts/check-stamp.mjs" \
   "viewer/run" \
   "viewer/package.json" \

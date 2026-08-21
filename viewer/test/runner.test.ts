@@ -1990,13 +1990,34 @@ test('a proper start request reaches the service with its options', async () => 
   assert.equal(options.resumeRunId, undefined);
 });
 
+test('a per-phase model or effort the CLI would not take is a 400, not a silent drop', async () => {
+  // This used to start the run and quietly discard the bad phase's model, so
+  // the phase ran on the run's default and nothing anywhere said so. A value
+  // the operator typed and the console ignored is the worst of the three
+  // possible answers; refusing it is the point of the door.
+  const bad = await call('/api/run/demo/start', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+    body: { phaseOptions: { 2: { model: 'gpt-4' } } },
+  });
+  assert.equal(bad.status, 400);
+  assert.match(String((bad.payload as { error?: string }).error), /phase 2 model/);
+  assert.equal(bad.started.length, 0, 'and no run was created');
+
+  const badEffort = await call('/api/run/demo/start', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+    body: { phaseOptions: { 2: { effort: 'ludicrous' } } },
+  });
+  assert.equal(badEffort.status, 400);
+  assert.match(String((badEffort.payload as { error?: string }).error), /phase 2 effort/);
+});
+
 test('per-phase choices are checked against known values, never passed through', async () => {
   const { started } = await call('/api/run/demo/start', {
     method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
     body: {
       phaseOptions: {
         1: { model: 'fable', effort: 'max' },
-        2: { model: 'gpt-4', effort: 'ludicrous' },          // neither is ours
+        2: { model: 'claude-opus-5[1m]' },                   // a full id + the 1M window
         3: { permissionMode: 'bypassPermissions' },          // never, from here
         4: { tools: ['Read', 'Bash(rm -rf /)', 'Edit'] },    // not a tool name
         '-1': { model: 'opus' },                             // not a phase
@@ -2007,8 +2028,9 @@ test('per-phase choices are checked against known values, never passed through',
   const options = (started[0] as { options: Record<string, unknown> }).options;
   assert.deepEqual(options.phaseOptions, {
     1: { model: 'fable', effort: 'max' },
+    2: { model: 'claude-opus-5[1m]' },
     4: { tools: ['Read', 'Edit'] },
-  }, 'anything unrecognised is dropped, and a phase left with nothing is dropped with it');
+  }, 'every spelling the CLI takes survives; anything else is dropped, and a phase left with nothing goes with it');
   assert.deepEqual(options.skills, ['systematic-debugging', 'plugin:test-first', 'ok-name']);
 });
 
@@ -2034,12 +2056,33 @@ test('a per-phase skills-off survives the door, and a false one leaves no trace'
   });
 });
 
-test('an effort the CLI would silently ignore is dropped at the door', async () => {
-  const { started } = await call('/api/run/demo/start', {
+test('an effort the CLI would silently ignore is refused at the door', async () => {
+  // Was: started the run and dropped the effort, so a typo ran a whole plan at
+  // the wrong one. The CLI itself only warns, which is precisely why this has
+  // to be the layer that refuses.
+  const out = await call('/api/run/demo/start', {
     method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
     body: { effort: 'ludicrous' },
   });
-  assert.equal((started[0] as { options: { effort?: string } }).options.effort, undefined);
+  assert.equal(out.status, 400);
+  assert.match(String((out.payload as { error?: string }).error), /effort must be one of/);
+  assert.equal(out.started.length, 0);
+});
+
+test('a run-level model may be an alias, a full id, or either at 1M', async () => {
+  for (const model of ['opus', 'claude-opus-5', 'claude-opus-5[1m]', 'opus[1m]']) {
+    const { started } = await call('/api/run/demo/start', {
+      method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+      body: { model },
+    });
+    assert.equal((started[0] as { options: { model?: string } }).options.model, model, model);
+  }
+  const bad = await call('/api/run/demo/start', {
+    method: 'POST', allowRun: true, headers: { 'x-phase-console': '1' },
+    body: { model: 'gpt-4' },
+  });
+  assert.equal(bad.status, 400);
+  assert.match(String((bad.payload as { error?: string }).error), /must name a Claude model/);
 });
 
 test('a start request may name the only phases it wants, and they are sanitised', async () => {

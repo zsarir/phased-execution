@@ -48,6 +48,8 @@
     "viewer/shared/recovery-model.js",
     "viewer/shared/situation-model.js",
     "viewer/shared/ladder-model.js",
+    "viewer/shared/attention-model.js",
+    "viewer/shared/evidence-model.js",
     "viewer/scripts/check-stamp.mjs",
     "viewer/client/dist/",
     "viewer/deploy/"

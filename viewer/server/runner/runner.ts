@@ -48,8 +48,9 @@ import {
   type EvidenceDeps, type PhaseEvidence, type Situation,
 } from './situation.ts';
 import {
-  accountRung, errandFor, nextRung, rungKey, rungsFor, DEFAULT_LADDER_CAPS, type LadderCaps, type Rung,
+  accountRung, chargeRung, errandFor, nextRung, rungKey, rungsFor, DEFAULT_LADDER_CAPS, type LadderCaps, type Rung,
 } from './ladder.ts';
+import type { RungRecord } from './state.ts';
 import {
   childrenOf, loadRun, newRun, phaseRecord, saveRun, pidAlive, IN_FLIGHT, SETTLED,
   PHASE_IN_FLIGHT, reconcileRecordsAgainstBoard, mcpReasonText, resetForRetry, consoleStoppedNote,
@@ -266,6 +267,17 @@ export type RunnerDeps = {
     { exists?: boolean; status?: string; outstanding?: string } | null | undefined;
   /** The ladder's caps (Settings ▸ Automation). Absent = the shipped defaults. */
   ladderCaps?: () => Partial<LadderCaps>;
+  /**
+   * Every ladder rung this console climbed TODAY, across every run.
+   *
+   * A dep and not a field, because the per-day cap is the one ladder cap whose
+   * denominator a single run cannot see. `ladderPerDayUsd` is a promise about
+   * the MACHINE — "do not spend more than this healing things today" — and a
+   * runner that counted only its own rungs would let three runs spend the cap
+   * three times over. Absent reads as unknown and therefore uncounted, which
+   * is `nextRung`'s own convention for `dayHistory`.
+   */
+  dayHistory?: () => readonly RungRecord[];
   /**
    * Whether ONE bounded unblock session may be spent on a phase whose handoff
    * declares it blocked (the `unblockAttempts` preference). Absent = yes. Off
@@ -1799,6 +1811,9 @@ export class Runner {
 
     state.spentUsd += outcome.costUsd;
     record.costUsd += outcome.costUsd;
+    // The same dollars, booked a second time against the ladder rung that
+    // caused this attempt — a no-op unless the ladder is what reboarded it.
+    chargeRung(state.recoveries?.[String(record.phase)], outcome.costUsd);
     record.turns = (record.turns ?? 0) + outcome.turns;
     if (outcome.sessionId) record.sessionId = outcome.sessionId;
     if (outcome.resultText) record.said = outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200);
@@ -3775,6 +3790,9 @@ export class Runner {
 
     state.spentUsd += outcome.costUsd;
     record.costUsd += outcome.costUsd;
+    // The same dollars, booked a second time against the ladder rung that
+    // caused this attempt — a no-op unless the ladder is what reboarded it.
+    chargeRung(state.recoveries?.[String(record.phase)], outcome.costUsd);
     record.turns = (record.turns ?? 0) + outcome.turns;
     const said = outcome.resultText ? outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200) : undefined;
     const ok = classify(outcome.signal).kind === 'ok';
@@ -4065,6 +4083,9 @@ export class Runner {
       this.syncMirror();
       state.spentUsd += outcome.costUsd;
       record.costUsd += outcome.costUsd;
+      // See the other attempt-end sites: the rung is charged what its own
+      // attempt spent, and settled later by whoever learns how it ended.
+      chargeRung(state.recoveries?.[String(record.phase)], outcome.costUsd);
       record.turns = (record.turns ?? 0) + outcome.turns;
       // Wall-clock minus whatever the operator held it for. A phase frozen over
       // lunch did not take an extra hour to think. Read off THIS lane: with
@@ -5204,6 +5225,9 @@ export class Runner {
 
     state.spentUsd += outcome.costUsd;
     record.costUsd += outcome.costUsd;
+    // The same dollars, booked a second time against the ladder rung that
+    // caused this attempt — a no-op unless the ladder is what reboarded it.
+    chargeRung(state.recoveries?.[String(record.phase)], outcome.costUsd);
     record.turns = (record.turns ?? 0) + outcome.turns;
     // The closeout's words live on the closeout, never over `record.said`: the
     // halt that follows a failed closeout quotes the PHASE session — the words
@@ -5685,9 +5709,10 @@ export class Runner {
     const hintOf = (rung: Rung) => this.hintFor(phase, rung, situation, evidence, sessionId, now, by);
     // Two questions: is there ANY rung left (caps, history, the table), and is
     // there one THIS runner can drive. Only the first being "no" is exhaustion.
-    const any = nextRung({ situation: situation.key, history, runHistory, caps });
+    const dayHistory = this.deps.dayHistory?.();
+    const any = nextRung({ situation: situation.key, history, runHistory, dayHistory, caps });
     const mine = nextRung({
-      situation: situation.key, history, runHistory, caps,
+      situation: situation.key, history, runHistory, dayHistory, caps,
       available: (rung) => hintOf(rung) !== null,
     });
 

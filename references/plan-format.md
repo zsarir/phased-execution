@@ -102,6 +102,10 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
    `references/conventions.md` §Branches for the branch policy. (The console may override the
    `**Branch:**` line per run with its own work branch — its sessions are told about the mismatch
    and record it in their handoffs; the line here stays authoritative for hand-driven sessions.)
+   **Spelling the model.** The `**Target model:**` value may be an alias (`opus`), a full id
+   (`claude-opus-5`), or either carrying the `[1m]` window suffix (`opus[1m]`, `claude-opus-5[1m]`) — all
+   parse the same. The suffix, not the alias, is what claims the ~200K budget (`references/sizing.md`;
+   the name vocabulary is `scripts/models.env`).
    Example:
    > **Target model:** `claude-opus-5` (1M window) · **Budget:** ~200K weight/session (≈60% of the window) · **Branch:** current branch (no new branch).
    > **Skills (every session):** `design-system`, `some-plugin:test-first`
@@ -171,13 +175,15 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
    ### Phase N — <title>
    - **Goal:** what ships.
    - **Size:** S | M | L   (rough working-set; drives batching — see `references/sizing.md`).
-     Optionally add `- **Model:** <alias>` if this phase wants a specific model, and
+     Optionally add `- **Model:** <model>` if this phase wants a specific model — an alias (`opus`), a
+     full id (`claude-opus-5`), or either with the `[1m]` window suffix (`opus[1m]`) — and
      `- **Effort:** low|medium|high|xhigh|max` if it wants a specific reasoning level. Both are
      machine-read: the Phase Console's autopilot resolves what a phase runs as from the operator's
      choice for that run, then these bullets, then the run's own defaults — **per field**, so naming
-     a model here does not discard an effort, or the reverse. Write the alias anywhere in the line
-     (`**Model:** Opus — the hard reasoning` parses); anything unrecognised is ignored rather than
-     guessed at.
+     a model here does not discard an effort, or the reverse. Write the model anywhere in the line
+     (`**Model:** Opus — the hard reasoning` parses, as does `**Model:** claude-opus-5[1m]`); anything
+     unrecognised is ignored rather than guessed at. A `[1m]` phase is budgeted by its window rather than
+     by its family, so it batches differently — see `references/sizing.md`.
      Add `- **MCP:** \`server\`, \`server\`` when THIS phase needs servers the rest of the plan does
      not — a browser-driving phase wanting `playwright`, a triage phase wanting `sentry`. Backticked
      registry ids, same as the plan-wide line, and **unioned** with it: a phase gets the plan's

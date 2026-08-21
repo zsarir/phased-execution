@@ -16,9 +16,10 @@ import { buildAgentLaunch } from '../agent.ts';
 import { parseRecoveryRequest, type RecoveryFacts } from '../recovery.ts';
 import { parseQaRequest, type QaFacts } from '../qa-session.ts';
 import { isClientDisconnect, log } from '../log.ts';
-import { isEffort, PERMISSION_MODES } from '../runner/spawn.ts';
+import { EFFORTS, isEffort, PERMISSION_MODES } from '../runner/spawn.ts';
 import { isPermissionProfile, type PolicyScope } from '../runner/approvals.ts';
 import { MODEL_FALLBACK as MODELS } from '../runner/errors.ts';
+import { isKnownModel } from '../runner/models.ts';
 import { planWrite, runWrite, openInEditor, WriteError, type WriteRequest } from '../writes.ts';
 import { TERMINAL_PATH, type LaunchSpec } from '../terminal.ts';
 import { tailscaleStatus } from '../tailscale.ts';
@@ -272,6 +273,73 @@ function skillList(value: unknown): string[] | undefined {
 }
 
 /**
+ * A model name from a browser, or the reason it is not one.
+ *
+ * `isKnownModel` and not membership of `MODELS`. `MODELS` is the escalation
+ * ladder — four bare aliases, strongest first — and using it as the door's
+ * allow-list rejected `claude-opus-5`, the spelling the CLI's own `--help`
+ * offers as its example, and `opus[1m]`, the only way to ask for the 1M
+ * window. Worse, the two doors disagreed about the refusal: the agent launcher
+ * answered 400 while a per-phase override was dropped in silence and the phase
+ * ran on the run's default, with nothing anywhere saying so.
+ */
+function modelProblem(value: unknown, field = 'model'): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') return `${field} must be a string.`;
+  if (!isKnownModel(value)) {
+    return `${field} must name a Claude model: an alias (${MODELS.join(', ')}), a full id `
+      + `(claude-opus-5), or either with the 1M window suffix (opus[1m]).`;
+  }
+  return null;
+}
+
+/** An effort level from a browser, or the reason it is not one. */
+function effortProblem(value: unknown, field = 'effort'): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (!isEffort(value)) return `${field} must be one of: ${EFFORTS.join(', ')}.`;
+  return null;
+}
+
+/**
+ * A whole number in range, or the reason it is not one.
+ *
+ * Explicitly rejecting rather than coercing, because `Number(undefined)` is
+ * NaN and `Number('')` is 0 — both of which used to reach the runner as a
+ * setting the operator never chose.
+ */
+function intProblem(value: unknown, field: string, min: number, max: number): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(value);
+  // `max` guarded: it comes from `flags.maxSessions`, and a comparison against
+  // an undefined ceiling is silently `false` — i.e. no ceiling at all, which
+  // is the opposite of what a clamp is for.
+  const ceiling = Number.isFinite(max) ? max : min;
+  if (!Number.isInteger(n) || n < min || n > ceiling) {
+    return `${field} must be a whole number between ${min} and ${ceiling}.`;
+  }
+  return null;
+}
+
+/**
+ * The first thing wrong with a per-phase options object, or null.
+ *
+ * `phaseOptions()` below still filters — defence in depth, since it is what
+ * actually builds the argv — but a filter alone means a typo disappears
+ * quietly. This runs first so the browser is told.
+ */
+function phaseOptionsProblem(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>).slice(0, 500)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as Record<string, unknown>;
+    const problem = modelProblem(item.model, `phase ${key} model`)
+      ?? effortProblem(item.effort, `phase ${key} effort`);
+    if (problem) return problem;
+  }
+  return null;
+}
+
+/**
  * Per-phase choices from a browser.
  *
  * Everything is checked against a known set rather than passed through: these
@@ -287,7 +355,7 @@ function phaseOptions(value: unknown, service: Service): Record<string, PhaseOpt
     if (!raw || typeof raw !== 'object') continue;
     const item = raw as Record<string, unknown>;
     const option: PhaseOptions = {};
-    if (typeof item.model === 'string' && MODELS.includes(item.model)) option.model = item.model;
+    if (typeof item.model === 'string' && isKnownModel(item.model)) option.model = item.model;
     if (isEffort(item.effort)) option.effort = item.effort;
     if (typeof item.permissionMode === 'string'
         && (PERMISSION_MODES as readonly string[]).includes(item.permissionMode)) {
@@ -1117,11 +1185,59 @@ export async function handleApi(
       }
     }
 
+    // What this console has spent, and against which ceilings.
+    //
+    // Above the "no source directory" wall on purpose, like the notification
+    // inbox: a console with no plan directory open has spent nothing, and
+    // "nothing" is a true and renderable answer. A 409 here would put an error
+    // in a header widget that is meant to be quietly correct.
+    if (head === 'spend' && req.method === 'GET') { json(res, 200, service.spend()); return true; }
+
+    /* ---------------- the attention inbox ---------------- */
+    //
+    // Above the wall for the same reason as the notification inbox: a sign-in,
+    // an MCP server that needs authenticating and a failing watcher all need a
+    // person whether or not a plan directory happens to be open.
+    if (head === 'inbox') {
+      // Reads are unguarded like the rest of the read API.
+      if (req.method === 'GET') {
+        json(res, 200, await service.attention(url.searchParams.get('all') === '1'));
+        return true;
+      }
+
+      // Mutations take the cross-site check but NOT `--allow-writes`: an ack is
+      // an annotation on a view, it writes nothing in a repository, and a
+      // read-only console is exactly where someone would want to tidy a list
+      // they cannot otherwise act on.
+      if (req.method === 'POST' && rest[0] === 'ack') {
+        const refusal = guardCsrf(req);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const body = await readBody(req);
+        const id = typeof body.id === 'string' ? body.id.slice(0, 256) : '';
+        if (!id) { json(res, 400, { error: 'pass {"id": "<inbox item id>"}' }); return true; }
+        const by = typeof body.by === 'string' && body.by ? body.by.slice(0, 64) : undefined;
+        json(res, 200, { ok: service.ackInbox(id, by) });
+        return true;
+      }
+
+      if (req.method === 'DELETE' && rest[0] === 'ack') {
+        const refusal = guardCsrf(req);
+        if (refusal) { json(res, 403, { error: refusal }); return true; }
+        const id = url.searchParams.get('id');
+        // No id means no clear-everything. The most destructive reading must
+        // never be the default — the notification inbox pins the same rule.
+        if (!id) { json(res, 400, { error: 'pass ?id=<inbox item id>' }); return true; }
+        json(res, 200, { ok: service.unackInbox(id) });
+        return true;
+      }
+    }
+
     if (!service.store) { json(res, 409, { error: 'No source directory is open.' }); return true; }
 
     /* ---------------- portfolio ---------------- */
     if (head === 'plans' && rest.length === 0) { json(res, 200, await service.summaries()); return true; }
     if (head === 'stats') { json(res, 200, await service.portfolio()); return true; }
+
     if (head === 'search') {
       json(res, 200, service.searchAll(url.searchParams.get('q') ?? ''));
       return true;
@@ -1366,12 +1482,35 @@ export async function handleApi(
 
         switch (verb) {
           case 'start': {
+            // Everything the operator can get wrong, answered before a run
+            // exists. These used to be coerced away one by one — an unknown
+            // model passed straight through to argv, an unknown effort became
+            // `undefined`, a per-phase typo vanished — so the run started,
+            // looked healthy, and simply was not the run that was asked for.
+            const problem = modelProblem(body.model)
+              ?? effortProblem(body.effort)
+              ?? intProblem(body.maxParallel, 'maxParallel', 1, service.flags.maxSessions)
+              ?? intProblem(body.maxConsecutiveFailures, 'maxConsecutiveFailures', 1, 50)
+              ?? phaseOptionsProblem(body.phaseOptions);
+            if (problem) { json(res, 400, { error: problem }); return true; }
+
             const state = await service.startRun(slug, {
-              model: typeof body.model === 'string' ? body.model : undefined,
-              // Checked here rather than passed through: the CLI only *warns*
+              model: typeof body.model === 'string' && body.model ? body.model : undefined,
+              // Checked above rather than passed through: the CLI only *warns*
               // on an unknown effort and carries on at its own default, so a
               // typo would quietly run every phase of a plan at the wrong one.
               effort: isEffort(body.effort) ? body.effort : undefined,
+              // Lanes this run may hold at once. Clamped to the console's own
+              // ceiling as well as validated, because `--max-sessions` is a
+              // machine-level promise about this host and a run may not
+              // outbid it.
+              maxParallel: body.maxParallel === undefined || body.maxParallel === null || body.maxParallel === ''
+                ? undefined
+                : Math.min(Number(body.maxParallel), service.flags.maxSessions || Number(body.maxParallel)),
+              maxConsecutiveFailures: body.maxConsecutiveFailures === undefined
+                || body.maxConsecutiveFailures === null || body.maxConsecutiveFailures === ''
+                ? undefined
+                : Number(body.maxConsecutiveFailures),
               // Flipped with the run defaults (see `runner/state.ts` newRun).
               autonomy: body.autonomy === 'halt-on-everything' ? 'halt-on-everything' : 'keep-going',
               phaseBudgetUsd: numberOrNull(body.phaseBudgetUsd),
@@ -1566,14 +1705,39 @@ export async function handleApi(
             return true;
           }
           case 'settings': {
+            // The same door as `start`, and for the same reason: a settings
+            // patch reaches the very next phase to board, so a value nobody
+            // checked is a value that quietly changes the rest of the run.
+            const problem = modelProblem(body.model)
+              ?? effortProblem(body.effort)
+              ?? intProblem(body.maxParallel, 'maxParallel', 1, service.flags.maxSessions)
+              ?? intProblem(body.maxConsecutiveFailures, 'maxConsecutiveFailures', 1, 50)
+              ?? phaseOptionsProblem(body.phaseOptions);
+            if (problem) { json(res, 400, { error: problem }); return true; }
+
             const run = service.configureRun(slug, {
               ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
+              // `''` is not a failed check here — it is the operator asking for
+              // this machine's own default, which `newRun` stores as no key at
+              // all. An unknown value never reaches this line any more; it 400s
+              // above, where it can still be explained.
               ...('effort' in body ? { effort: isEffort(body.effort) ? body.effort : '' } : {}),
+              // Both already understood by `applySettings`; only the door was
+              // missing, so a browser could not change either mid-run.
+              ...('maxParallel' in body
+                ? { maxParallel: body.maxParallel === null || body.maxParallel === ''
+                    ? 0
+                    : Math.min(Number(body.maxParallel), service.flags.maxSessions || Number(body.maxParallel)) } : {}),
+              ...(typeof body.autoRecover === 'boolean' ? { autoRecover: body.autoRecover } : {}),
               ...(body.autonomy === 'keep-going' || body.autonomy === 'halt-on-everything'
                 ? { autonomy: body.autonomy } : {}),
               ...('phaseBudgetUsd' in body ? { phaseBudgetUsd: numberOrNull(body.phaseBudgetUsd) } : {}),
               ...('runBudgetUsd' in body ? { runBudgetUsd: numberOrNull(body.runBudgetUsd) } : {}),
-              ...('maxConsecutiveFailures' in body
+              // Was a bare `Number(...)`, which turned an absent or empty value
+              // into NaN and a garbage string into NaN too — a run could be
+              // told its failure ceiling was NaN and compare against it forever.
+              ...('maxConsecutiveFailures' in body && body.maxConsecutiveFailures !== null
+                && body.maxConsecutiveFailures !== ''
                 ? { maxConsecutiveFailures: Number(body.maxConsecutiveFailures) } : {}),
               ...('onlyPhases' in body ? { onlyPhases: phaseList(body.onlyPhases) ?? null } : {}),
               ...('phaseOptions' in body ? { phaseOptions: phaseOptions(body.phaseOptions, service) ?? null } : {}),

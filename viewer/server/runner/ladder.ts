@@ -228,6 +228,35 @@ export function accountRung(
   return record;
 }
 
+/**
+ * Book spend against the newest OPEN rung without deciding how it ended.
+ *
+ * Separate from `settleRung` because the two facts arrive at different
+ * moments and from different deciders. What a rung COST is known the instant
+ * its attempt ends — it is that attempt's `outcome.costUsd`. Whether the rung
+ * FIXED anything is known later, and by someone else: the service's healer
+ * re-reads the board once the run stops. Folding the two together is why the
+ * cost half never happened. `Runner.climb` accounted every rung and then had
+ * nowhere to settle it, the service settled with `undefined` at six of seven
+ * sites, and the one exception passed `PhaseRecord.costUsd` — a CUMULATIVE
+ * figure that would over-count the moment a phase climbed twice.
+ *
+ * The consequence was quiet and total: every `RungRecord.costUsd` stayed
+ * absent, `usd()` summed a column of zeros, and `ladderPerDayUsd` — a cap the
+ * launch dialog offers and the docs describe — had never once refused a rung.
+ *
+ * A no-op when the phase has no open rung, which is the common case: an
+ * ordinary first boarding is not a rung, so only ladder-driven attempts are
+ * charged, which is exactly the money the ladder caps are about.
+ */
+export function chargeRung(slot: RecoverySlot | undefined, costUsd?: number): RungRecord | null {
+  if (!slot || typeof costUsd !== 'number' || !Number.isFinite(costUsd) || costUsd === 0) return null;
+  const open = [...(slot.rungs ?? [])].reverse().find((r) => r.outcome === 'running' || r.outcome == null) ?? null;
+  if (!open) return null;
+  open.costUsd = (open.costUsd ?? 0) + costUsd;
+  return open;
+}
+
 /** Settle the newest open rung with how it ended and what it cost. */
 export function settleRung(
   slot: RecoverySlot,

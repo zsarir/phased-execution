@@ -45,9 +45,20 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # scripts/sizing.env (also documented in references/sizing.md); these defaults are
 # a fallback so the script still runs if the file is ever missing.
 SIZE_S=15000; SIZE_M=40000; SIZE_L=90000
-BUDGET_HAIKU=40000; BUDGET_BIG=200000; BUDGET_DEFAULT=40000
+BUDGET_HAIKU=40000; BUDGET_BIG=200000; BUDGET_DEFAULT=40000; BUDGET_1M=200000
 # shellcheck source=/dev/null
 [ -f "$SCRIPT_DIR/sizing.env" ] && . "$SCRIPT_DIR/sizing.env"
+
+# F5, same shape: the MODEL vocabulary — which aliases exist, in what strength
+# order, which of them are in the big budget class, and the window suffix the
+# CLI understands. Canonical values live in scripts/models.env; the console
+# parses the same file (viewer/server/runner/models.ts) and a drift test pins
+# the two readers together.
+MODEL_ALIASES="fable opus sonnet haiku"
+MODEL_BIG="fable opus sonnet mythos"
+MODEL_1M_SUFFIX="[1m]"
+# shellcheck source=/dev/null
+[ -f "$SCRIPT_DIR/models.env" ] && . "$SCRIPT_DIR/models.env"
 
 # F5, same shape: what an attached MCP server costs a phase's working set.
 # Canonical values live in scripts/mcp.env (documented in references/sizing.md).
@@ -856,8 +867,15 @@ verification_cwd_advisories() {
 
 # F6: model named in the plan's "## Session budget" section (empty if none).
 plan_model() {
+  # The alternation is built from models.env rather than spelled here, and the
+  # match keeps whatever surrounds the family word — a full id and the [1m]
+  # window suffix both survive, because resolve_budget needs to see the suffix.
+  # Collapsing "claude-opus-5[1m]" to "opus" is exactly the silent loss this
+  # file exists to stop.
+  local alts
+  alts="$(printf '%s %s' "$MODEL_ALIASES" "$MODEL_BIG" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' '|' | sed 's/|$//')"
   awk 'tolower($0) ~ /^##[[:space:]]+session budget/{f=1;next} /^##[[:space:]]/{f=0} f' "$plan_file" \
-    | grep -ioE 'haiku|opus|sonnet|fable|mythos' | head -1 | tr '[:upper:]' '[:lower:]'
+    | grep -ioE "(claude-)?($alts)(-[0-9a-z.]+)*(\\[1m\\])?" | head -1 | tr '[:upper:]' '[:lower:]'
 }
 
 # Skills directive: backtick-quoted skill names on the canonical
@@ -1082,10 +1100,19 @@ resolve_budget() {  # model alias OR raw token number → per-session budget (F5
     *[!0-9]*) : ;;                 # has a non-digit → treat as a model alias below
     *)        echo "$a"; return ;; # all digits → use verbatim
   esac
+  # The window suffix wins over the family: it selects a context window, and
+  # the budget is a function of the window alone. Quoted so bash 3.2 reads the
+  # brackets literally instead of as a character class.
   case "$a" in
-    *haiku*)                          echo "$BUDGET_HAIKU" ;;
-    *opus*|*sonnet*|*fable*|*mythos*) echo "$BUDGET_BIG" ;;
-    *)                                echo "$BUDGET_DEFAULT" ;;
+    *"$MODEL_1M_SUFFIX"*) echo "$BUDGET_1M"; return ;;
+  esac
+  local m
+  for m in $MODEL_BIG; do
+    case "$a" in *"$m"*) echo "$BUDGET_BIG"; return ;; esac
+  done
+  case "$a" in
+    *haiku*) echo "$BUDGET_HAIKU" ;;
+    *)       echo "$BUDGET_DEFAULT" ;;
   esac
 }
 # Greedy grouping over the REMAINING (not done / not in-flight) phases in table

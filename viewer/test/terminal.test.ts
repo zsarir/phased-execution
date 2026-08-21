@@ -820,7 +820,7 @@ test('a claude ticket is gated by --allow-agent, and refusals spawn nothing', as
     method: 'POST', headers: CONSOLE_HEADERS, body: JSON.stringify({ kind: 'claude', model: 'gpt-4' }),
   });
   assert.equal(model.status, 400);
-  assert.match(model.body, /model must be one of/);
+  assert.match(model.body, /model must name a Claude model/);
   const plan = await http(port, '/api/terminal', {
     method: 'POST', headers: CONSOLE_HEADERS, body: JSON.stringify({ kind: 'claude', intent: 'plan', brief: 'a thing' }),
   });

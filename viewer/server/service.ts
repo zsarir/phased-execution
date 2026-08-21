@@ -50,6 +50,12 @@ import {
   resolveBudget, weightOf, type Sizing, type PhaseAnalysis,
 } from './analysis/graph.ts';
 import { loadGateVocab, gateKindOf, type GateVocab, type GateKind } from './analysis/gates.ts';
+import { rungsToday, spendSummary, type SpendRunView, type SpendView } from './analysis/spend.ts';
+import {
+  buildInbox, inboxIds, pruneAcks, readAcks, removeAck, writeAck,
+  INBOX_ACKS_DIR, type InboxFacts, type InboxView,
+} from './inbox.ts';
+import { deriveEvidence } from '../shared/evidence-model.js';
 import {
   planStats, portfolio, etaSamples, etaFrom, rateFor, phaseEtaFor, healthIssues, isClosedStatus, splitRepos,
   type PlanStats, type Portfolio, type PlanContext, type EtaEstimate, type EtaSample,
@@ -83,7 +89,7 @@ import {
   autoResolveRun, childrenOf, latestRun, listRuns, loadRun, newRun, phaseRecord, pidAlive,
   reconcileRecordsAgainstBoard, resetForRetry, resolveRunsAgainst, saveRun,
   slugsNeedingBoard, runDir, IN_FLIGHT, PHASE_IN_FLIGHT, RESOLVABLE, isMcpPolicy, mcpReasonText,
-  type BoardingBrief, type Errand, type McpPolicy, type PreflightWarning, type RunState, type VerifySummary,
+  type BoardingBrief, type Errand, type McpPolicy, type PreflightWarning, type RungRecord, type RunState, type VerifySummary,
 } from './runner/state.ts';
 import {
   consumeOutcome, inboxOutcomePhase, outcomeFileFor, outcomeInboxDir, readOutcome, type PhaseOutcome,
@@ -208,6 +214,15 @@ export type PhaseView = {
     file: string; status: string; completed?: string; title: string;
     outstanding?: string; skillsUsed: string[]; prompts: number;
   };
+  /**
+   * Claimed versus evidenced (`shared/evidence-model.js`).
+   *
+   * The plan page's whole job is to say what is done, and `done` here has only
+   * ever meant "a handoff says so". This carries the second half of that
+   * sentence — what, if anything, actually ran — so a phase table can show the
+   * difference instead of implying there is none.
+   */
+  proof?: EvidenceView;
 };
 
 export type RouteView = {
@@ -368,6 +383,34 @@ export class RecoveryBusyError extends Error {
   }
 }
 
+/**
+ * What `shared/evidence-model.js` answers: the claim, and whether anything
+ * backs it. Declared here rather than imported from the client, because the
+ * shared module is JS with JSDoc and the server has no typecheck pass to read
+ * it — the client mirrors this in `lib/evidence.ts` and the identity test in
+ * `test/evidence-model.test.ts` is what stops the two drifting.
+ */
+export type EvidenceView = {
+  board: string;
+  handoff: string;
+  verification: string;
+  qa: string;
+  /** Whether the claim is backed. Never named `done`. */
+  evidenced: boolean;
+  why: string[];
+};
+
+/**
+ * Event prefixes that can change what needs a person.
+ *
+ * A list rather than "everything", because `emit` is also how terminal bytes
+ * and pty resizes travel, and a keystroke is not a reason to recompute the
+ * inbox.
+ */
+const INBOX_SOURCES = [
+  'run:', 'approval', 'lock', 'account', 'mcp', 'health', 'plan', 'gate', 'qa', 'environment',
+];
+
 export type PhaseDiagnosis = {
   runId: string;
   phase: number;
@@ -394,6 +437,15 @@ export type PhaseDiagnosis = {
   situation: Situation | null;
   /** The evidence it was decided from, as short lines (`summariseEvidence`). */
   evidence: string[];
+  /**
+   * Claimed versus evidenced (`shared/evidence-model.js`).
+   *
+   * Named `proof` and not `evidence` because `evidence` above is already the
+   * situation classifier's reasoning lines, and the two answer different
+   * questions: those say why the healer chose a rung, this says whether the
+   * phase's own "done" is backed by anything that ran. Never named `done`.
+   */
+  proof: EvidenceView;
 };
 
 /**
@@ -480,16 +532,22 @@ function describeToolInput(input: unknown): string {
 }
 
 /**
- * The model alias inside a plan's `**Model:**` bullet.
+ * The model named inside a plan's `**Model:**` bullet.
  *
  * Plans write these as prose — "`claude-opus-5` (1M window)", "Opus for the
  * hard reasoning", "Haiku — mechanical". Passing that whole string to `--model`
- * would fail, so only a known alias is taken and anything unrecognised is left
- * to the run's default rather than guessed at.
+ * would fail, so only a recognised name is taken and anything else is left to
+ * the run's default rather than guessed at.
+ *
+ * The match keeps the whole model token, not just the family word. It used to
+ * collapse to a bare alias, which meant a plan that carefully asked for
+ * `claude-opus-5[1m]` ran on plain `opus`: the one part of the name the
+ * operator wrote on purpose — the window — was the part thrown away, and the
+ * board then sized the plan's sessions against a window it was not running on.
  */
 export function modelAlias(text?: string): string | undefined {
-  const match = /\b(fable|opus|sonnet|haiku)\b/i.exec(text ?? '');
-  return match ? match[1].toLowerCase() : undefined;
+  const match = /\b(?:claude-)?(?:fable|opus|sonnet|haiku)(?:-[0-9a-z.]+)*(?:\[1m\])?/i.exec(text ?? '');
+  return match ? match[0].toLowerCase() : undefined;
 }
 
 /** The same, for `**Effort:**` — one of the five the CLI accepts, or nothing. */
@@ -678,6 +736,8 @@ export class Service {
   private sessionPlans = new Map<string, Cached<SessionPlan>>();
   private portfolioCache: { generation: number; value: Portfolio } | null = null;
   private etaPoolCache: { at: number; value: EtaPool } | null = null;
+  /** Short-TTL cache behind `runsForSpend()` — see the note there. */
+  private spendPool: { at: number; runs: SpendRunView[] } | null = null;
   private listeners = new Set<LiveListener>();
   private repo: GitRepoInfo = { available: false, dirty: [] };
 
@@ -694,6 +754,17 @@ export class Service {
   private notifiedRun = new Map<string, string>();
   /** Per phase, the last status pushed — a re-render is not a second event. */
   private notifiedPhase = new Map<string, string>();
+  /**
+   * Errands already pushed, keyed `runId:phase:errand.at`.
+   *
+   * Keyed on the errand's own timestamp and not on the phase, because an
+   * errand is re-derived every time the ladder parks the phase again: the same
+   * phase asking the same person for the same thing must push ONCE, but a
+   * genuinely new ask — a later `at` — is a new notification.
+   */
+  private notifiedErrand = new Set<string>();
+  /** Debounce behind `nudgeInbox` — see the note there. */
+  private inboxTimer: ReturnType<typeof setTimeout> | null = null;
   /** Which phases were ready last time, so "became ready" means became. */
   private readySnapshot: Set<string> | null = null;
   /**
@@ -1198,6 +1269,9 @@ export class Service {
       // healer reads, so the loop's climbs and the healer's count against one
       // budget.
       ladderCaps: () => ladderCaps(this.prefs),
+      // The per-day cap's denominator. The runner cannot compute it — it sees
+      // one run, and the cap is about the machine.
+      dayHistory: () => this.dayRungs(),
       unblockAttempts: () => this.prefs.unblockAttempts !== false,
       origin: `http://${flags.host}:${flags.port}`,
       // The registry ids, so the runner's own engine calls (its validate.sh in
@@ -2163,6 +2237,27 @@ export class Service {
     for (const listener of this.listeners) {
       try { listener(event, data, id); } catch { /* a dead client must not stop the others */ }
     }
+    this.nudgeInbox(event);
+  }
+
+  /**
+   * Tell the client its attention inbox may have changed — at most once a beat.
+   *
+   * The inbox is computed on read from a dozen sources, so it has no single
+   * event of its own: an approval, a park, a lock, a sign-in and a health
+   * flip all change it. Rather than teach each of them, anything that could
+   * change it schedules ONE `inbox` tick, which the client answers with a
+   * single fetch. Debounced because a boarding run emits a burst and an inbox
+   * that refetched per event would be the noisiest thing on the wire.
+   */
+  private nudgeInbox(event: string): void {
+    if (event === 'inbox' || !INBOX_SOURCES.some((prefix) => event.startsWith(prefix))) return;
+    if (this.inboxTimer) return;
+    this.inboxTimer = setTimeout(() => {
+      this.inboxTimer = null;
+      this.emit('inbox', { at: new Date().toISOString() });
+    }, 400);
+    this.inboxTimer.unref?.();
   }
 
   /**
@@ -2187,6 +2282,9 @@ export class Service {
         if (due !== null) this.armMcpRequireTimer(parked.slug, parked.phase, due);
       }
       this.announcePhase(data);
+      // `parkWithErrand` puts the errand on this same event; announcing here
+      // rather than at the park keeps the one dedupe in one place.
+      this.announceErrand(data);
       return;
     }
     if (event !== 'run:run') return;
@@ -2299,6 +2397,50 @@ export class Service {
    * told nobody. It is not a failure and not a success, so it gets its own
    * category rather than being smuggled into either.
    */
+  /**
+   * The one ask for a person the ladder leaves behind, pushed once.
+   *
+   * This is the gap the 2.3.0 ladder shipped with: a phase would exhaust its
+   * rungs, park with a perfectly good `Errand {need, how, tried}`, and the
+   * operator would find out by opening the console. The errand was written to
+   * the record, journalled and rendered — and never pushed. A ladder whose
+   * whole promise is "a person is asked once, with an errand" has to do the
+   * asking.
+   *
+   * `needs-you` and not `phase`: this is not progress, it is a request. The
+   * category is the one an operator keeps on when they have turned the rest
+   * off.
+   */
+  private announceErrand(data: unknown): void {
+    const event = data as {
+      slug?: string; runId?: string; phase?: number;
+      errand?: { at?: string; need?: string; how?: string; tried?: string[]; situation?: string };
+    } | undefined;
+    const { slug, runId, phase, errand } = event ?? {};
+    if (!slug || typeof phase !== 'number' || !errand?.need) return;
+
+    const key = `${runId ?? slug}:${phase}:${errand.at ?? ''}`;
+    if (this.notifiedErrand.has(key)) return;
+    this.notifiedErrand.add(key);
+    // The set is per-process and unbounded only in theory; a console that ran
+    // long enough to matter has restarted for other reasons first. Trimmed all
+    // the same, oldest-first, so a very long-lived instance cannot grow it.
+    if (this.notifiedErrand.size > 500) {
+      const oldest = this.notifiedErrand.values().next().value;
+      if (oldest) this.notifiedErrand.delete(oldest);
+    }
+
+    const title = this.store?.get(slug)?.plan?.phases[phase]?.title;
+    this.announce('needs-you', {
+      title: `${slug} · phase ${phase} needs you`,
+      body: errand.need.slice(0, 200),
+      // The how is the actionable half; a push that says only "it is stuck"
+      // makes the operator open the console to learn what to do.
+      ...(errand.how ? { detail: `${errand.how}${title ? ` — ${title}` : ''}`.slice(0, 400) } : {}),
+      tag: tagFor('needs-you', slug, phase),
+    }, { slug, phase, ...(runId ? { runId } : {}) });
+  }
+
   private announcePhase(data: unknown): void {
     const event = data as { slug?: string; phase?: number; status?: string; notRun?: number } | undefined;
     const { slug, phase, status } = event ?? {};
@@ -2820,15 +2962,57 @@ export class Service {
       record.planPath ? lastCommit(this.root.path, record.planPath) : Promise.resolve({}),
     ]);
 
+    // Verification is recorded on a RUN, not on a plan, so the page that says
+    // "done" has to go and look for the proof. One scan for the whole detail,
+    // not one per phase — and the newest record wins, because a phase that was
+    // retried is evidenced by its latest attempt, not its first.
+    const latestRecords = new Map<number, { verification?: unknown; status?: string; attempts?: number; verifiedIn?: string; runId?: string }>();
+    for (const run of listRuns(this.root.path, slug, this.liveRunId())) {
+      for (const [key, rec] of Object.entries(run.phases ?? {})) {
+        const n = Number(key);
+        if (!Number.isInteger(n) || !rec) continue;
+        const prev = latestRecords.get(n);
+        const at = rec.endedAt ?? rec.startedAt ?? '';
+        if (!prev || at >= ((prev as { at?: string }).at ?? '')) {
+          latestRecords.set(n, {
+            verification: rec.verification, status: rec.status, attempts: rec.attempts,
+            verifiedIn: rec.verifiedIn, runId: run.id, ...({ at } as object),
+          });
+        }
+      }
+    }
+    const qaModeNow = (await this.qaMode(slug)).mode;
+
     const phases: PhaseView[] = rows.map((row) => {
       const detail: PhaseDetail | undefined = plan?.phases[row.phase];
       const handoff = handoffFor(record, row.phase);
       const lock = lockFor(record, row.phase);
       const qa = qaFor(record, row.phase);
+      const rec = latestRecords.get(row.phase);
+      const proof = deriveEvidence({
+        phase: row.phase,
+        board: ctx.board.states?.[row.phase],
+        ...(ctx.board.error ? { boardError: ctx.board.error } : {}),
+        // `handoffFor` answers undefined for a phase with no handoff file at
+        // all, which is most of a young plan — the missing `?.` here crashed
+        // every plan detail that had one.
+        handoff: handoff?.exists
+          ? { exists: true, status: handoff.status, ...(handoff.outstanding ? { outstanding: handoff.outstanding } : {}) }
+          : { exists: false },
+        ...(rec?.verification ? { verification: rec.verification as never } : {}),
+        qa: { mode: qaModeNow, ...(qa?.result ? { result: qa.result } : {}) },
+        ...(rec ? { record: {
+          ...(rec.status ? { status: rec.status } : {}),
+          ...(rec.attempts != null ? { attempts: rec.attempts } : {}),
+          ...(rec.verifiedIn ? { verifiedIn: rec.verifiedIn } : {}),
+          ...(rec.runId ? { runId: rec.runId } : {}),
+        } } : {}),
+      });
       return {
         phase: row.phase,
         title: detail?.title || row.title,
         state: ctx.board.states[row.phase] ?? 'waiting',
+        proof,
         size: detail?.size ?? 'M',
         weight: weightOf(detail?.size, this.sizing),
         gated: detail?.gated ?? false,
@@ -4266,6 +4450,10 @@ export class Service {
         if (!journal) { journal = new Journal(this.root.path, slug, runId); journals.set(key, journal); }
         journal.append(event, data, phase);
       },
+      // The third producer of errands. Same channel, same dedupe.
+      announceErrand: (slug, runId, phase, errand) => {
+        if (typeof phase === 'number') this.announceErrand({ slug, runId, phase, errand });
+      },
       locksChanged: (slug) => {
         // The store's lock view lags the disk by a watcher debounce, and the
         // queue may be waiting on exactly this lock. Refresh, then poll.
@@ -4773,6 +4961,28 @@ export class Service {
       actions: recoveryActions(record.status, Boolean(record.sessionId ?? record.resumeSessionId), classified?.situation ?? null),
       situation: classified?.situation ?? null,
       evidence: classified ? summariseEvidence(classified.evidence) : [],
+      // Claimed versus evidenced, from the same four facts the board, the
+      // handoff, the run record and the QA table already hold. The panel that
+      // says "done" is the one place it matters most that "done" is a claim.
+      proof: deriveEvidence({
+        phase,
+        board: board[phase],
+        handoff: (() => {
+          const h = handoffFor(this.store?.get(slug), phase);
+          return h?.exists
+            ? { exists: true, status: h.status, ...(h.outstanding ? { outstanding: h.outstanding } : {}) }
+            : { exists: false };
+        })(),
+        verification: record.verification ?? null,
+        qa: { mode: (await this.qaMode(slug)).mode, ...(qaFor(this.store?.get(slug), phase)?.result
+          ? { result: qaFor(this.store?.get(slug), phase)!.result } : {}) },
+        record: {
+          status: record.status,
+          ...(record.attempts != null ? { attempts: record.attempts } : {}),
+          ...(record.verifiedIn ? { verifiedIn: record.verifiedIn } : {}),
+          runId: run.id,
+        },
+      }),
     };
   }
 
@@ -5647,7 +5857,9 @@ export class Service {
       }
 
       const next = nextRung({
-        situation: c.situation.key, history, runHistory, caps,
+        // The same day budget the runner's own climb counts against, so the
+        // loop's rungs and the healer's cannot each spend it in full.
+        situation: c.situation.key, history, runHistory, caps, dayHistory: this.dayRungs(),
         available: (rung) => this.vehicleForRung(rung, c.situation, record, c.evidence) !== null,
       });
       if (!next.ok) {
@@ -5655,6 +5867,10 @@ export class Service {
           const errand = errandFor(c.situation.key, slot?.rungs ?? [], c.phase);
           (recoveries[key] ??= { attempts: 0, lastAt: errand.at }).errand = errand;
           journal.append('phase.errand', { ...errand }, c.phase);
+          // The healer's errands push on the same channel and through the same
+          // dedupe as the runner's. Which of the two exhausted the ladder is an
+          // implementation detail; being asked twice is not.
+          this.announceErrand({ slug, runId: state.id, phase: c.phase, errand });
         }
         refuse(`phase ${c.phase} reads ${c.situation.label} — ${next.reason}`, c);
         continue;
@@ -5761,7 +5977,12 @@ export class Service {
           if (!after || after.id !== state.id) return;
           const afterSlot = ((after.recoveries ??= {})[key] ??= { attempts: 0, lastAt: now });
           if (after.status === 'parked' && !after.halt) {
-            settleRung(afterSlot, 'fixed', after.phases[key]?.costUsd, 'the board reads fixed');
+            // No cost here any more: `chargeRung` books each attempt's own
+            // spend as it ends. This line passed `PhaseRecord.costUsd`, which
+            // is CUMULATIVE across attempts, so a phase that climbed twice
+            // would have had its whole history added again on the second
+            // settle. Outcome only — the cost half already happened.
+            settleRung(afterSlot, 'fixed', undefined, 'the board reads fixed');
             afterSlot.fixed = true;
             afterSlot.lastOutcome = 'fixed';
             delete afterSlot.lastReason;
@@ -6699,6 +6920,146 @@ export class Service {
         .catch((error) => log.warn('accounts.emit-failed', { error }));
     }, 150);
     this.accountsEmitTimer.unref?.();
+  }
+
+  /**
+   * Everything that needs a person, across everything, in one answer.
+   *
+   * Deliberately NOT named `inbox()`: that method is already the NOTIFICATION
+   * inbox (`notifications.list`), and quietly taking its name would have
+   * broken `GET /api/notifications` with no test to catch it. The two are
+   * different things — that one is a log of what happened, this one is a list
+   * of what is still owed.
+   *
+   * Every gatherer is individually guarded. A console whose MCP registry
+   * cannot be read should still show its errands: an inbox that throws because
+   * one source failed is strictly worse than one missing a row, which is why
+   * every field of `InboxFacts` is optional and absent means "nothing to say".
+   */
+  async attention(all = false): Promise<InboxView> {
+    const ok = async <T>(what: string, get: () => Promise<T> | T, fallback: T): Promise<T> => {
+      try { return await get(); } catch (error) { log.warn('inbox.source-failed', { what, error }); return fallback; }
+    };
+
+    const records = this.store?.list() ?? [];
+    const [runs, accounts, auth, mcp, plans] = await Promise.all([
+      ok('runs', () => this.allRuns(), [] as RunState[]),
+      ok('accounts', () => this.listAccounts(), [] as AccountView[]),
+      ok('auth', () => this.authStatus(), { loggedIn: false } as AuthStatus),
+      ok('mcp', () => this.listMcp(), [] as McpServerView[]),
+      ok('plans', async () => Promise.all(records.map(async (record) => {
+        const ctx = await this.context(record);
+        const phases = (record.plan?.graph ?? []).map((row) => {
+          const detail = record.plan?.phases[row.phase];
+          return {
+            phase: row.phase,
+            title: detail?.title || row.title,
+            state: ctx.board.states[row.phase] ?? 'waiting',
+            gated: detail?.gated ?? false,
+            gateCheck: detail?.gateCheck,
+            gateKind: gateKindOf(detail?.gateCheck, detail?.gated ?? false, this.gateVocab),
+          };
+        });
+        // `gateStatus` shells the engine, so it is asked ONLY for the handful
+        // of phases whose answer can produce a row: gated, and not already
+        // done. On a plan with no gates this costs nothing at all.
+        const gates = await Promise.all(phases
+          .filter((ph) => ph.gated && ph.state !== 'done')
+          .map(async (ph) => [ph.phase, await this.gateStatus(record.slug, ph.phase).catch(() => null)] as const));
+        const gateBy = new Map(gates);
+        return {
+          slug: record.slug,
+          title: record.plan?.title ?? record.slug,
+          closed: this.isClosedPlan(record.slug),
+          updatedAt: record.updatedAt,
+          qaMode: await this.qaMode(record.slug).catch(() => ({ mode: 'off' })),
+          qa: record.qa ?? [],
+          issues: healthIssues(ctx),
+          phases: phases.map((ph) => ({ ...ph, gate: gateBy.get(ph.phase) ?? undefined })),
+        };
+      })), [] as unknown[]),
+    ]);
+
+    const locks = await ok('locks', () => this.allLocks(), [] as LockView[]);
+    const lockPresence: Record<string, 'live' | 'ended' | 'unknown'> = {};
+    for (const lock of locks) {
+      lockPresence[`${lock.slug}:${lock.phase}`] =
+        await ok('lock-presence', () => this.sessions.presenceOfLock(lock), 'unknown' as 'live' | 'ended' | 'unknown');
+    }
+
+    const facts = {
+      runs, approvals: this.approvals.all(), plans, locks, lockPresence,
+      queue: this.queueSnapshot(),
+      accounts, auth, mcp,
+      environment: this.environment.issues,
+      watcher: this.watcher.status(),
+      flags: {
+        allowWrites: this.flags.allowWrites, allowRun: this.flags.allowRun,
+        allowTerminal: this.flags.allowTerminal, allowAgent: this.flags.allowAgent,
+        allowAccounts: this.flags.allowAccounts, allowMcp: this.flags.allowMcp,
+      },
+      acks: readAcks(INBOX_ACKS_DIR),
+    } as unknown as InboxFacts;
+
+    const now = Date.now();
+    const view = buildInbox(facts, now, { all });
+    // An ack for something that is no longer asking is dead weight, and — for
+    // the items that have no clock of their own — pruning is the ONLY thing
+    // that makes a gone-and-came-back item read as new again.
+    try { pruneAcks(INBOX_ACKS_DIR, inboxIds(facts, now)); }
+    catch (error) { log.warn('inbox.prune-failed', { error }); }
+    return view;
+  }
+
+  /** Annotate an inbox item as seen. Never resolution — the ask still stands. */
+  ackInbox(id: string, by?: string): boolean {
+    try { writeAck(INBOX_ACKS_DIR, id, by); this.emit('inbox', { at: new Date().toISOString() }); return true; }
+    catch (error) { log.warn('inbox.ack-failed', { id, error }); return false; }
+  }
+
+  /** Undo an annotation. */
+  unackInbox(id: string): boolean {
+    const gone = removeAck(INBOX_ACKS_DIR, id);
+    if (gone) this.emit('inbox', { at: new Date().toISOString() });
+    return gone;
+  }
+
+  /**
+   * Every run on disk, unresolved, for the read-only money questions.
+   *
+   * Deliberately NOT `allRuns()`: that one calls `resolveAgainstBoard`, which
+   * shells `phase-graph.sh` once per plan. Spend is a header widget and the
+   * day cap is asked on every ladder climb, so both must be answerable without
+   * starting a process. The TTL is short because the only readers are a poll
+   * and a climb, and both would rather be a second stale than a scan late.
+   */
+  private runsForSpend(): SpendRunView[] {
+    const now = Date.now();
+    if (this.spendPool && now - this.spendPool.at < 5_000) return this.spendPool.runs;
+    if (!this.root) return [];
+    const slugs = this.store?.list().map((r) => r.slug) ?? [];
+    const runs = slugs.flatMap((slug) => listRuns(this.root!.path, slug, this.liveRunId())) as SpendRunView[];
+    this.spendPool = { at: now, runs };
+    return runs;
+  }
+
+  /**
+   * Every ladder rung this console climbed today, across every run.
+   *
+   * The denominator of `ladderPerDayUsd`, which no single run can see: the cap
+   * is a promise about the machine, so three runs healing at once must count
+   * against one budget rather than three.
+   */
+  dayRungs(): RungRecord[] {
+    return rungsToday(this.runsForSpend(), new Date());
+  }
+
+  /** What this console has spent, and against which ceilings. */
+  spend(): SpendView {
+    return spendSummary(
+      { runs: this.runsForSpend(), capUsd: ladderCaps(this.prefs).perDayUsd },
+      new Date(),
+    );
   }
 
   /** Every run across every plan, for the runs list. */

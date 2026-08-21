@@ -448,6 +448,15 @@ export type ConvergeDeps = {
   /** Release a lock as its recorded owner — the runner's own release, `--git` never passed. */
   releaseLock: (slug: string, phase: number, owner: string) => Promise<{ ok: boolean; detail?: string }>;
   journal: (slug: string, runId: string, event: string, data: Record<string, unknown>, phase?: number) => void;
+  /**
+   * Push the one ask a converged errand leaves behind.
+   *
+   * Optional, so a test that builds deps by hand keeps working, and because
+   * converging is useful with no notifier at all. The service passes its own
+   * `announceErrand`, which is the same dedupe the runner and the healer use —
+   * three producers of errands, one notification per ask.
+   */
+  announceErrand?: (slug: string, runId: string, phase: number | null, errand: Errand) => void;
   /** Something changed under the locks — poke whoever waits on them. */
   locksChanged?: (slug: string) => void;
 };
@@ -512,6 +521,7 @@ export async function executeConvergence(plan: ConvergePlan, deps: ConvergeDeps)
         deps.journal(slug, action.runId, action.phase == null ? 'run.errand' : 'phase.errand',
           { ...action.errand, reason: action.why, by: 'converge', trigger }, action.phase ?? undefined);
         errands.push(action.errand);
+        deps.announceErrand?.(slug, action.runId, action.phase ?? null, action.errand);
         touched.add(action.runId);
         outcomes.push({ action, ok: Boolean(edited) });
         break;

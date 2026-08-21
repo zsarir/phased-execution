@@ -40,6 +40,7 @@ import { randomUUID } from 'node:crypto';
 
 import { EFFORTS, isEffort, PERMISSION_MODES, sanitize } from './runner/spawn.ts';
 import { MODEL_FALLBACK as MODELS } from './runner/errors.ts';
+import { isKnownModel } from './runner/models.ts';
 import { recoveryLabel, recoveryPrompt, type RecoveryFacts } from './recovery.ts';
 import { qaLabel, qaPrompt, type QaFacts } from './qa-session.ts';
 import { skillDirective, type SkillInfo } from './skills.ts';
@@ -112,7 +113,8 @@ export type AgentContext = {
  * Every failure names the field and the allowed values; none of them creates
  * a session. The spec's fields:
  *
- *   model           ∈ MODEL_FALLBACK, optional (absent = the CLI's default)
+ *   model           any Claude model name — alias, full id, or either with
+ *                   the `[1m]` window suffix; optional (absent = CLI default)
  *   effort          ∈ EFFORTS, optional
  *   permissionMode  ∈ PERMISSION_MODES, optional
  *   prompt          ≤ 16 KB, may not begin with `-`, exclusive with intent
@@ -137,7 +139,14 @@ export function buildAgentLaunch(
   const bad = (error: string): AgentRefusal => ({ ok: false, status: 400, error });
 
   const model = str(body.model);
-  if (model && !MODELS.includes(model)) return bad(`model must be one of: ${MODELS.join(', ')}.`);
+  // `isKnownModel` and not membership of `MODELS`: `MODELS` is the escalation
+  // ladder, four bare aliases, and using it as the allow-list here made
+  // `claude-opus-5` — the CLI's own documented example — a 400, and left no way
+  // at all to ask for the 1M window (`opus[1m]`).
+  if (model && !isKnownModel(model)) {
+    return bad(`model must name a Claude model: an alias (${MODELS.join(', ')}), a full id `
+      + `(claude-opus-5), or either with the 1M window suffix (opus[1m]).`);
+  }
 
   const effort = str(body.effort);
   if (effort && !isEffort(effort)) return bad(`effort must be one of: ${EFFORTS.join(', ')}.`);

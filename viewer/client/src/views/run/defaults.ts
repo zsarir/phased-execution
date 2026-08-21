@@ -44,8 +44,35 @@ export const DEFAULTS: Readonly<RunDefaults> = Object.freeze({
   permissionProfile: 'trusted',
 });
 
-/** Every model the autopilot may start a phase on, strongest first. */
-export const MODELS = ['fable', 'opus', 'sonnet', 'haiku'] as const;
+/**
+ * Every model the autopilot may start a phase on, strongest first, each with
+ * its 1M-window variant where that window is actually available.
+ *
+ * The source of this list is `scripts/models.env` (`MODEL_ALIASES` and
+ * `MODEL_1M_CAPABLE`), which the server reads through
+ * `server/runner/models.ts` and mirrors as `offeredModels()`. It is spelled
+ * out again here because a browser cannot read the file; Phase 6 rebuilds this
+ * form against the server's own list and should delete this copy then.
+ *
+ * `haiku[1m]` is deliberately absent: the API answers "the long context beta
+ * is not yet available for this subscription" for it today. The SERVER still
+ * accepts the name — offering and accepting are different questions, and a
+ * subscription can gain the beta without the console shipping a new version.
+ */
+export const MODELS = ['fable', 'fable[1m]', 'opus', 'opus[1m]', 'sonnet', 'sonnet[1m]', 'haiku'] as const;
+
+/**
+ * What a model choice buys, read while choosing it.
+ *
+ * Only the variants need a note: a bare alias is self-explanatory, and `[1m]`
+ * is not — it is the difference between a 200K session and a 1M one, which is
+ * the single biggest lever on how many phases fit in one run.
+ */
+export const MODEL_NOTE: Record<string, string> = {
+  'fable[1m]': 'fable · 1M context',
+  'opus[1m]': 'opus · 1M context',
+  'sonnet[1m]': 'sonnet · 1M context',
+};
 
 /** The five the CLI accepts, plus blank for "whatever this machine defaults to". */
 export const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'] as const;

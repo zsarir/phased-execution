@@ -368,7 +368,8 @@ Scripts resolve the superproject root automatically when run from inside a submo
   (batches size to the plan's `## Session budget`) and shows QA markers when gating is on. Parses the
   `## Phase graph` table (deps, ranges, markdown-bold cells) + `### Phase N` `Size:`/`Gate-check:` bullets +
   handoff statuses + `test-status.md` + `gate-status.md`; warns on drift. Sizing/budget constants live in
-  `scripts/sizing.env`; the gate vocabulary + category split in `scripts/gates.env`.
+  `scripts/sizing.env` and the model vocabulary (aliases, full ids, the `[1m]` window suffix) in
+  `scripts/models.env`; the gate vocabulary + category split in `scripts/gates.env`.
 - `scripts/new-handoff.sh <slug> <N> <title> [status] [--qa]` — scaffold the phase handoff + create/update
   `INDEX.md`. Auto-fills `depends_on` + `blocks` from the graph and the `## ▶ Start next phase(s)` section
   (a boot prompt per unblocked phase). `status` defaults to `complete`; pass `in-progress`/`blocked`

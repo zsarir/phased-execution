@@ -11,15 +11,19 @@ import { join } from 'node:path';
 
 import type { PhaseRow, PhaseSize } from '../parse/plan.ts';
 import type { Board, PhaseState } from '../engine.ts';
+import { budgetClassOf, loadModelsEnv } from '../runner/models.ts';
 
 export type Sizing = {
   S: number; M: number; L: number;
   budgetHaiku: number; budgetBig: number; budgetDefault: number;
+  /** Any model carrying the `[1m]` window suffix. See `scripts/sizing.env`. */
+  budget1m: number;
 };
 
 const FALLBACK: Sizing = {
   S: 15_000, M: 40_000, L: 90_000,
   budgetHaiku: 40_000, budgetBig: 200_000, budgetDefault: 40_000,
+  budget1m: 200_000,
 };
 
 /** Read the canonical constants from the skill's `scripts/sizing.env` (F5 SSOT). */
@@ -28,7 +32,13 @@ export function loadSizing(scriptsDir: string): Sizing {
     const text = readFileSync(join(scriptsDir, 'sizing.env'), 'utf8');
     const values: Record<string, number> = {};
     for (const line of text.split('\n')) {
-      const m = /^([A-Z_]+)=(\d+)/.exec(line.trim());
+      // [A-Z0-9_] and not [A-Z_]: BUDGET_1M carries a digit in its NAME, and a
+      // key class that excluded digits parsed the file happily while dropping
+      // that one line, leaving the JS reader on its hardcoded fallback while
+      // bash — whose variable names have always allowed digits — honoured the
+      // file. Silent, one-sided, and exactly the drift the F5 pairing exists
+      // to prevent.
+      const m = /^([A-Z0-9_]+)=(\d+)/.exec(line.trim());
       if (m) values[m[1]] = Number(m[2]);
     }
     return {
@@ -38,6 +48,7 @@ export function loadSizing(scriptsDir: string): Sizing {
       budgetHaiku: values.BUDGET_HAIKU ?? FALLBACK.budgetHaiku,
       budgetBig: values.BUDGET_BIG ?? FALLBACK.budgetBig,
       budgetDefault: values.BUDGET_DEFAULT ?? FALLBACK.budgetDefault,
+      budget1m: values.BUDGET_1M ?? FALLBACK.budget1m,
     };
   } catch {
     return { ...FALLBACK };
@@ -48,14 +59,31 @@ export function weightOf(size: PhaseSize | undefined, sizing: Sizing): number {
   return size === 'S' ? sizing.S : size === 'L' ? sizing.L : sizing.M;
 }
 
-/** Mirrors the engine's `resolve_budget`: a number wins, else the model class. */
-export function resolveBudget(model: string | undefined, sizing: Sizing): number {
+/**
+ * Mirrors the engine's `resolve_budget`: a number wins, else the model class.
+ *
+ * The classes come from `scripts/models.env` rather than from a regex spelled
+ * here, so the bash engine and this function cannot drift apart — that pairing
+ * is the F5 invariant, and `test/engine-parity.test.ts` is what enforces it.
+ *
+ * `[1m]` is checked before the family because the suffix selects a context
+ * window and the budget is a function of the window alone. `scriptsDir` is
+ * optional so the many callers that only have a `Sizing` keep working against
+ * the built-in vocabulary; pass it when the console knows its scripts
+ * directory and should honour a newer `models.env` than the one it shipped
+ * with.
+ */
+export function resolveBudget(model: string | undefined, sizing: Sizing, scriptsDir?: string): number {
   const alias = (model ?? '').toLowerCase().trim();
   if (!alias) return sizing.budgetDefault;
   if (/^\d+$/.test(alias)) return Number(alias);
-  if (alias.includes('haiku')) return sizing.budgetHaiku;
-  if (/opus|sonnet|fable|mythos/.test(alias)) return sizing.budgetBig;
-  return sizing.budgetDefault;
+  const env = scriptsDir ? loadModelsEnv(scriptsDir) : undefined;
+  switch (budgetClassOf(alias, env)) {
+    case '1m': return sizing.budget1m;
+    case 'haiku': return sizing.budgetHaiku;
+    case 'big': return sizing.budgetBig;
+    default: return sizing.budgetDefault;
+  }
 }
 
 export type GraphIndex = {
