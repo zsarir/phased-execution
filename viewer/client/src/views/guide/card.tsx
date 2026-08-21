@@ -66,7 +66,13 @@ export function GuideCard({
         )}
 
         <h3 className={cn('min-w-0 flex-1 font-display text-lg leading-snug', worn && 'font-mono')}>
-          {worn ? <span className={worn.className} title={worn.title}>{card.title}</span> : card.title}
+          {worn ? (
+            <span className={worn.className} title={worn.title}>
+              {card.title}
+            </span>
+          ) : (
+            card.title
+          )}
         </h3>
 
         {/*

@@ -22,9 +22,21 @@ export {
 } from '../../../shared/situation-model.js';
 
 export type SituationId =
-  | 'superseded' | 'qa-failed' | 'qa-pending' | 'foreign-live' | 'foreign-stale'
-  | 'waiting-external' | 'gated-manual' | 'plan-broken' | 'mcp-unavailable' | 'resource-wall'
-  | 'blocked-declared' | 'verify-red' | 'done-unrecorded' | 'work-in-progress' | 'never-started'
+  | 'superseded'
+  | 'qa-failed'
+  | 'qa-pending'
+  | 'foreign-live'
+  | 'foreign-stale'
+  | 'waiting-external'
+  | 'gated-manual'
+  | 'plan-broken'
+  | 'mcp-unavailable'
+  | 'resource-wall'
+  | 'blocked-declared'
+  | 'verify-red'
+  | 'done-unrecorded'
+  | 'work-in-progress'
+  | 'never-started'
   | 'unknown';
 
 /** The wire shape the diagnosis endpoint carries (`server/service.ts` `PhaseDiagnosis.situation`). */

@@ -23,19 +23,32 @@ import type { RunState } from '@/lib/api';
  * a halted run mounts providers with the cache seeded (never fetched:
  * staleTime Infinity, retry off).
  */
-function mount(node: ReactNode, opts: {
-  allowRun?: boolean; allowAgent?: boolean; sessions?: unknown[];
-} = {}) {
+function mount(
+  node: ReactNode,
+  opts: {
+    allowRun?: boolean;
+    allowAgent?: boolean;
+    sessions?: unknown[];
+  } = {},
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData(keys.state(), {
-    allowRun: opts.allowRun ?? true, allowAgent: opts.allowAgent ?? true, allowWrites: false,
-    autopilot: true, root: { ok: true, path: '/repo' },
+    allowRun: opts.allowRun ?? true,
+    allowAgent: opts.allowAgent ?? true,
+    allowWrites: false,
+    autopilot: true,
+    root: { ok: true, path: '/repo' },
   });
   client.setQueryData(keys.terminal(), {
-    allowed: false, agentAllowed: true, available: 'yes', sessions: opts.sessions ?? [],
+    allowed: false,
+    agentAllowed: true,
+    available: 'yes',
+    sessions: opts.sessions ?? [],
   });
   return render(
-    <QueryClientProvider client={client}><TooltipProvider>{node}</TooltipProvider></QueryClientProvider>,
+    <QueryClientProvider client={client}>
+      <TooltipProvider>{node}</TooltipProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -82,13 +95,34 @@ describe('runNotes — one slot per legacy banner', () => {
   const cases: [string, RunState | null, { live?: boolean; allowRun?: boolean }][] = [
     ['halt', run({ halt: { at: '2026-08-03T10:00:00Z', reason: 'no handoff', phase: 2 } }), {}],
     ['ended', run({ status: 'finished', finishedReason: 'every phase is done' }), { live: false }],
-    ['pause', run({ status: 'pausing', pause: { requestedAt: '2026-08-03T10:00:00Z', afterPhase: 2, by: 'me' } }), {}],
+    [
+      'pause',
+      run({ status: 'pausing', pause: { requestedAt: '2026-08-03T10:00:00Z', afterPhase: 2, by: 'me' } }),
+      {},
+    ],
     ['pause', run({ status: 'paused' }), { live: false }],
-    ['frozen', run({ status: 'frozen', freeze: { at: '2026-08-03T10:00:00Z', phase: 2, pid: 1, by: 'me', escalateAt: '2026-08-03T12:00:00Z' } }), {}],
+    [
+      'frozen',
+      run({
+        status: 'frozen',
+        freeze: {
+          at: '2026-08-03T10:00:00Z',
+          phase: 2,
+          pid: 1,
+          by: 'me',
+          escalateAt: '2026-08-03T12:00:00Z',
+        },
+      }),
+      {},
+    ],
     ['waiting-window', run({ status: 'waiting', waitUntil: '2026-08-03T12:00:00Z' }), {}],
     // Paused ON the limit: the policy said "pause and ask", or a restart
     // preserved the clock. The reset time is what separates it from `pause`.
-    ['limit-paused', run({ status: 'paused', waitUntil: '2026-08-03T12:00:00Z', onLimit: 'pause' }), { live: false }],
+    [
+      'limit-paused',
+      run({ status: 'paused', waitUntil: '2026-08-03T12:00:00Z', onLimit: 'pause' }),
+      { live: false },
+    ],
     ['budget', run({ limits: { status: 'limited', window: 'five_hour', utilization: 0.82, at: 'x' } }), {}],
     ['scoped', run({ onlyPhases: [3] }), {}],
     ['profile', run({ permissionProfile: 'bypass' }), {}],
@@ -117,8 +151,7 @@ describe('runNotes — ordering', () => {
       onlyPhases: [1],
       permissionProfile: 'bypass',
     });
-    expect(ids(state, { live: false, allowRun: false }))
-      .toEqual(['halt', 'scoped', 'profile', 'read-only']);
+    expect(ids(state, { live: false, allowRun: false })).toEqual(['halt', 'scoped', 'profile', 'read-only']);
   });
 
   it('never raises both spellings of a pause', () => {
@@ -170,12 +203,18 @@ describe('runNotes — the actions attached to a note', () => {
   it('offers to clear a scope only when the console may act', () => {
     const scoped = run({ onlyPhases: [3] });
     const withHandler = runNotes({
-      run: scoped, live: true, allowRun: true, onClearScope: () => {},
+      run: scoped,
+      live: true,
+      allowRun: true,
+      onClearScope: () => {},
     });
     expect(withHandler[0].action).toBeTruthy();
 
     const readOnly = runNotes({
-      run: scoped, live: true, allowRun: false, onClearScope: () => {},
+      run: scoped,
+      live: true,
+      allowRun: false,
+      onClearScope: () => {},
     });
     expect(readOnly.find((n) => n.id === 'scoped')?.action).toBeUndefined();
   });
@@ -187,7 +226,12 @@ describe('runNotes — the actions attached to a note', () => {
     // console without the flag shows the button disabled with the flag named.
     const halted = run({
       status: 'halted',
-      halt: { at: '2026-08-03T10:00:00Z', reason: 'phase 2 did not verify: npm test', phase: 2, kind: 'verify-failed' },
+      halt: {
+        at: '2026-08-03T10:00:00Z',
+        reason: 'phase 2 did not verify: npm test',
+        phase: 2,
+        kind: 'verify-failed',
+      },
       phases: { 2: { phase: 2, status: 'failed', sessionId: 's-2' } as never },
     });
     const recovery = { target: { slug: 'demo', phase: 2 } };
@@ -205,13 +249,18 @@ describe('runNotes — the actions attached to a note', () => {
     // And a recovery already running is a link to it, not a second one — with
     // BOTH AI families standing down, by name.
     mount(<RunStatusStack run={halted} live={false} allowRun recovery={recovery} />, {
-      sessions: [{
-        id: 'sess-9', exited: null,
-        meta: { recovery: { kind: 'halted-verification', slug: 'demo', phase: 2 } },
-      }],
+      sessions: [
+        {
+          id: 'sess-9',
+          exited: null,
+          meta: { recovery: { kind: 'halted-verification', slug: 'demo', phase: 2 } },
+        },
+      ],
     });
-    expect(screen.getByRole('link', { name: /Fix the failing verification — running/i }))
-      .toHaveAttribute('href', '#/agent/sess-9');
+    expect(screen.getByRole('link', { name: /Fix the failing verification — running/i })).toHaveAttribute(
+      'href',
+      '#/agent/sess-9',
+    );
     expect(screen.getAllByRole('button', { name: 'Finish in its own session' }).at(-1)).toBeDisabled();
   });
 
@@ -224,8 +273,9 @@ describe('runNotes — the actions attached to a note', () => {
       status: 'parked',
       halt: {
         at: '2026-08-03T10:00:00Z',
-        reason: 'nothing left to run on its own — phase 1 is parked (phase 1 cannot start: MCP '
-          + 'servers grafana (needs authentication)).',
+        reason:
+          'nothing left to run on its own — phase 1 is parked (phase 1 cannot start: MCP ' +
+          'servers grafana (needs authentication)).',
         phase: 1,
         kind: 'mcp-preflight',
       },
@@ -236,17 +286,16 @@ describe('runNotes — the actions attached to a note', () => {
     // A console that may not spawn runs shows it DISABLED with the flag named —
     // the verb retries phases, and retrying is running. Never absent.
     mount(<RunStatusStack run={parked} live={false} allowRun={false} />, { allowRun: false });
-    expect(screen.getAllByRole('button', { name: /Continue without these servers/i }).at(-1))
-      .toBeDisabled();
+    expect(screen.getAllByRole('button', { name: /Continue without these servers/i }).at(-1)).toBeDisabled();
   });
 
   it('offers to re-guard only a run that is still live', () => {
     const loose = run({ permissionProfile: 'trusted' });
-    expect(runNotes({ run: loose, live: true, allowRun: true, onGuard: () => {} })[0].action)
-      .toBeTruthy();
+    expect(runNotes({ run: loose, live: true, allowRun: true, onGuard: () => {} })[0].action).toBeTruthy();
     // Nothing to narrow on a run that has already stopped.
-    expect(runNotes({ run: loose, live: false, allowRun: true, onGuard: () => {} })[0].action)
-      .toBeUndefined();
+    expect(
+      runNotes({ run: loose, live: false, allowRun: true, onGuard: () => {} })[0].action,
+    ).toBeUndefined();
   });
 });
 
@@ -262,10 +311,9 @@ describe('RunStatusStack — one stack, in the declared order', () => {
       onlyPhases: [1],
       permissionProfile: 'trusted',
     });
-    const { container } = mount(
-      <RunStatusStack run={state} live={false} allowRun={false} />,
-      { allowRun: false },
-    );
+    const { container } = mount(<RunStatusStack run={state} live={false} allowRun={false} />, {
+      allowRun: false,
+    });
 
     const banners = [...container.querySelectorAll('[role="status"]')];
     expect(banners).toHaveLength(4);
@@ -306,30 +354,41 @@ describe('looksLikeAuthFailure', () => {
     // The probe can be missing or stale; the halt reason is the run's own words.
     const halted = run({ halt: { at: 'x', reason: 'the session was not signed in' } });
     expect(looksLikeAuthFailure(halted, undefined)).toBe(true);
-    expect(looksLikeAuthFailure(run({ halt: { at: 'x', reason: 'authenticate first' } }), undefined))
-      .toBe(true);
+    expect(looksLikeAuthFailure(run({ halt: { at: 'x', reason: 'authenticate first' } }), undefined)).toBe(
+      true,
+    );
   });
 
   it('does not cry wolf over an ordinary halt', () => {
-    expect(looksLikeAuthFailure(run({ halt: { at: 'x', reason: 'no handoff written' } }), undefined))
-      .toBe(false);
+    expect(looksLikeAuthFailure(run({ halt: { at: 'x', reason: 'no handoff written' } }), undefined)).toBe(
+      false,
+    );
     expect(looksLikeAuthFailure(RUN, { loggedIn: true, checkedAt: 'x' })).toBe(false);
   });
 });
 
 describe('the halt card action — the shared model decides who leads', () => {
-  const halted = (kind?: string) => run({
-    status: 'halted',
-    slug: 'demo',
-    halt: { at: '2026-08-03T10:00:00Z', reason: 'no handoff was written', phase: 2, ...(kind ? { kind } : {}) },
-    phases: { 2: { phase: 2, status: 'failed', sessionId: 's-2' } as never },
-  });
-  const noteFor = (state: RunState) => runNotes({
-    run: state, live: false, allowRun: true,
-    recovery: { target: { slug: 'demo', phase: 2 } },
-  }).find((n) => n.id === 'halt');
+  const halted = (kind?: string) =>
+    run({
+      status: 'halted',
+      slug: 'demo',
+      halt: {
+        at: '2026-08-03T10:00:00Z',
+        reason: 'no handoff was written',
+        phase: 2,
+        ...(kind ? { kind } : {}),
+      },
+      phases: { 2: { phase: 2, status: 'failed', sessionId: 's-2' } as never },
+    });
+  const noteFor = (state: RunState) =>
+    runNotes({
+      run: state,
+      live: false,
+      allowRun: true,
+      recovery: { target: { slug: 'demo', phase: 2 } },
+    }).find((n) => n.id === 'halt');
 
-  it('a session-shaped halt leads with the phase\'s own session', () => {
+  it("a session-shaped halt leads with the phase's own session", () => {
     mount(<>{noteFor(halted('no-handoff'))?.action}</>);
     const buttons = screen.getAllByRole('button').map((b) => b.textContent ?? '');
     expect(buttons[0]).toContain('Finish in its own session');
@@ -356,7 +415,6 @@ describe('the halt card action — the shared model decides who leads', () => {
   });
 });
 
-
 describe('a resolved stop', () => {
   it('says "resolved on its own" instead of re-crying the dead halt', () => {
     // The observed contradiction: status 'halted' as history, halt dissolved,
@@ -365,7 +423,11 @@ describe('a resolved stop', () => {
       status: 'halted',
       halt: null,
       finishedReason: 'halted on phase 7; the board has since closed it — nothing is left of the halt',
-      resolved: { at: '2026-08-14T22:00:00Z', auto: true, reason: 'superseded — the board shows phase 7 done' } as never,
+      resolved: {
+        at: '2026-08-14T22:00:00Z',
+        auto: true,
+        reason: 'superseded — the board shows phase 7 done',
+      } as never,
     });
     const notes = runNotes({ run: settled, live: false, allowRun: true });
     const ended = notes.find((n) => n.id === 'ended')!;
@@ -381,14 +443,20 @@ describe('a resolved stop', () => {
 
 describe('the ladder on the banner', () => {
   const ERRAND = {
-    phase: 4, situation: 'gated-manual', tried: [],
+    phase: 4,
+    situation: 'gated-manual',
+    tried: [],
     need: 'A person to clear the manual gate — its numbered steps are on the Gate card.',
-    how: 'Do the steps, then press Approve on the phase\'s Gate card; the run retries the phase.', at: '',
+    how: "Do the steps, then press Approve on the phase's Gate card; the run retries the phase.",
+    at: '',
   };
 
   it('a parked run lists its errands in full under "Parked — needs you."', () => {
     const parked: RunState = {
-      ...RUN, status: 'parked', halt: null, finishedReason: 'nothing left to run on its own — phase 4 is parked',
+      ...RUN,
+      status: 'parked',
+      halt: null,
+      finishedReason: 'nothing left to run on its own — phase 4 is parked',
       recoveries: { '4': { attempts: 0, lastAt: '', errand: ERRAND } },
     };
     mount(<RunStatusStack run={parked} live={false} allowRun />);
@@ -401,7 +469,10 @@ describe('the ladder on the banner', () => {
 
   it('a resolved stop lists no errand — settled', () => {
     const resolved: RunState = {
-      ...RUN, status: 'parked', halt: null, finishedReason: 'parked',
+      ...RUN,
+      status: 'parked',
+      halt: null,
+      finishedReason: 'parked',
       resolved: { at: 'x', auto: true, reason: 'superseded — the board shows phase 4 done' },
       recoveries: { '4': { attempts: 0, lastAt: '', errand: ERRAND } },
     };
@@ -412,11 +483,14 @@ describe('the ladder on the banner', () => {
 
   it('a budget halt says the autopilot already raised the budget once', () => {
     const halted: RunState = {
-      ...RUN, status: 'halted',
+      ...RUN,
+      status: 'halted',
       halt: { at: '', reason: 'the run budget of $50.00 is spent (raised once from $40.00)', kind: 'budget' },
       budgetRaise: { from: 40, to: 50, pct: 25, at: '' },
     };
     mount(<RunStatusStack run={halted} live={false} allowRun />);
-    expect(screen.getByText(/already raised the run budget once, from \$40\.00 to \$50\.00 \(\+25%\)/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/already raised the run budget once, from \$40\.00 to \$50\.00 \(\+25%\)/),
+    ).toBeInTheDocument();
   });
 });

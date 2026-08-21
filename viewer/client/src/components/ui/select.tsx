@@ -17,7 +17,11 @@ export const Select = SelectPrimitive.Root;
 export const SelectGroup = SelectPrimitive.Group;
 export const SelectValue = SelectPrimitive.Value;
 
-export function SelectTrigger({ className, children, ...props }: ComponentProps<typeof SelectPrimitive.Trigger>) {
+export function SelectTrigger({
+  className,
+  children,
+  ...props
+}: ComponentProps<typeof SelectPrimitive.Trigger>) {
   return (
     <SelectPrimitive.Trigger
       className={cn(
@@ -71,7 +75,12 @@ export function SelectContent({
 }
 
 export function SelectLabel({ className, ...props }: ComponentProps<typeof SelectPrimitive.Label>) {
-  return <SelectPrimitive.Label className={cn('px-2 py-1.5 text-2xs font-medium uppercase tracking-wide text-ink-faint', className)} {...props} />;
+  return (
+    <SelectPrimitive.Label
+      className={cn('px-2 py-1.5 text-2xs font-medium uppercase tracking-wide text-ink-faint', className)}
+      {...props}
+    />
+  );
 }
 
 export function SelectItem({

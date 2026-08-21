@@ -43,7 +43,10 @@ describe('Badge', () => {
   it('has no axe violations in a sentence of badges', async () => {
     const { container } = render(
       <p>
-        <Badge tone="accent" dot>needs you</Badge> <Badge tone="ok">green</Badge> <Badge mono>v2.3.0</Badge>
+        <Badge tone="accent" dot>
+          needs you
+        </Badge>{' '}
+        <Badge tone="ok">green</Badge> <Badge mono>v2.3.0</Badge>
       </p>,
     );
     await expectNoAxeViolations(container);
@@ -114,7 +117,9 @@ describe('Kbd', () => {
 
   it('has no axe violations', async () => {
     const { container } = render(
-      <p>Press <KbdChord keys={['g', 'r']} conjunction=" then " /> to jump.</p>,
+      <p>
+        Press <KbdChord keys={['g', 'r']} conjunction=" then " /> to jump.
+      </p>,
     );
     await expectNoAxeViolations(container);
   });

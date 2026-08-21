@@ -7,7 +7,14 @@ import {
   type FieldValues,
   type UseFormReturn,
 } from 'react-hook-form';
-import { cloneElement, isValidElement, useId, type FormHTMLAttributes, type ReactElement, type ReactNode } from 'react';
+import {
+  cloneElement,
+  isValidElement,
+  useId,
+  type FormHTMLAttributes,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import { cn } from '@/lib/cn';
 import { Label } from './label';
 
@@ -52,29 +59,48 @@ export interface FieldProps {
   className?: string;
 }
 
-export function Field({ label, hint, error, required = false, children, id: explicitId, inline = false, className }: FieldProps) {
+export function Field({
+  label,
+  hint,
+  error,
+  required = false,
+  children,
+  id: explicitId,
+  inline = false,
+  className,
+}: FieldProps) {
   const { id, hintId, errorId } = useFieldIds(explicitId);
-  const describedBy = [hint != null ? hintId : null, error != null ? errorId : null].filter(Boolean).join(' ') || undefined;
+  const describedBy =
+    [hint != null ? hintId : null, error != null ? errorId : null].filter(Boolean).join(' ') || undefined;
   const invalid = error != null;
-  const control = typeof children === 'function'
-    ? children({ id, describedBy, invalid })
-    : isValidElement(children)
-      ? cloneElement(children as ReactElement<Record<string, unknown>>, {
-          id,
-          'aria-describedby': describedBy,
-          'aria-invalid': invalid || undefined,
-          'aria-required': required || undefined,
-        })
-      : children;
+  const control =
+    typeof children === 'function'
+      ? children({ id, describedBy, invalid })
+      : isValidElement(children)
+        ? cloneElement(children as ReactElement<Record<string, unknown>>, {
+            id,
+            'aria-describedby': describedBy,
+            'aria-invalid': invalid || undefined,
+            'aria-required': required || undefined,
+          })
+        : children;
   return (
-    <div className={cn('grid min-w-0 gap-1', inline && 'grid-cols-[1fr_auto] items-center gap-x-3', className)}>
-      <Label htmlFor={id} required={required} className={cn(inline && 'row-start-1')}>{label}</Label>
+    <div
+      className={cn('grid min-w-0 gap-1', inline && 'grid-cols-[1fr_auto] items-center gap-x-3', className)}
+    >
+      <Label htmlFor={id} required={required} className={cn(inline && 'row-start-1')}>
+        {label}
+      </Label>
       <div className={cn('min-w-0', inline && 'row-start-1 col-start-2')}>{control}</div>
       {hint != null && !invalid && (
-        <p id={hintId} className={cn('text-xs text-ink-muted', inline && 'col-span-2')}>{hint}</p>
+        <p id={hintId} className={cn('text-xs text-ink-muted', inline && 'col-span-2')}>
+          {hint}
+        </p>
       )}
       {invalid && (
-        <p id={errorId} role="alert" className={cn('text-xs text-failed', inline && 'col-span-2')}>{error}</p>
+        <p id={errorId} role="alert" className={cn('text-xs text-failed', inline && 'col-span-2')}>
+          {error}
+        </p>
       )}
     </div>
   );
@@ -120,12 +146,13 @@ export function FormField<TValues extends FieldValues, TName extends FieldPath<T
   className,
   render,
   ...controller
-}: Omit<ControllerProps<TValues, TName>, 'render'> & Omit<FieldProps, 'children' | 'error'> & {
-  render: (args: {
-    field: Parameters<ControllerProps<TValues, TName>['render']>[0]['field'];
-    ids: { id: string; describedBy?: string; invalid: boolean };
-  }) => ReactNode;
-}) {
+}: Omit<ControllerProps<TValues, TName>, 'render'> &
+  Omit<FieldProps, 'children' | 'error'> & {
+    render: (args: {
+      field: Parameters<ControllerProps<TValues, TName>['render']>[0]['field'];
+      ids: { id: string; describedBy?: string; invalid: boolean };
+    }) => ReactNode;
+  }) {
   const form = useFormContext<TValues>();
   return (
     <Controller

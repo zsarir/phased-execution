@@ -42,12 +42,26 @@ const { SessionsCard } = await import('./sessions');
 const { ShutdownButton, stopList } = await import('../settings/shutdown');
 
 const SHELL = {
-  id: 's1', label: 'Terminal 1', kind: 'shell' as const, cwd: '/hub', shell: '/bin/zsh',
-  cols: 80, rows: 24, pid: 100, clients: 1, createdAt: Date.now() - 60_000, lastOutputAt: Date.now(),
+  id: 's1',
+  label: 'Terminal 1',
+  kind: 'shell' as const,
+  cwd: '/hub',
+  shell: '/bin/zsh',
+  cols: 80,
+  rows: 24,
+  pid: 100,
+  clients: 1,
+  createdAt: Date.now() - 60_000,
+  lastOutputAt: Date.now(),
 };
 
 const CLAUDE = {
-  ...SHELL, id: 'c1', label: 'Claude 1', kind: 'claude' as const, shell: 'claude', clients: 0,
+  ...SHELL,
+  id: 'c1',
+  label: 'Claude 1',
+  kind: 'claude' as const,
+  shell: 'claude',
+  clients: 0,
   meta: { claudeSessionId: '00000000-0000-4000-8000-000000000000' },
 };
 
@@ -61,16 +75,31 @@ function mount(node: React.ReactElement) {
 beforeEach(() => {
   vi.clearAllMocks();
   __resetShutdownForTests();
-  terminal.mockResolvedValue({ allowed: true, agentAllowed: true, available: 'yes', limit: 8, live: 2, sessions: [SHELL, CLAUDE] });
+  terminal.mockResolvedValue({
+    allowed: true,
+    agentAllowed: true,
+    available: 'yes',
+    limit: 8,
+    live: 2,
+    sessions: [SHELL, CLAUDE],
+  });
 });
 
 describe('the sessions card', () => {
   it('lists both kinds, live and ended, with what each is doing', async () => {
     const ended = {
-      ...CLAUDE, id: 'c2', label: 'Claude 2', exited: { code: 1 }, exitedAt: Date.now() - 5_000,
+      ...CLAUDE,
+      id: 'c2',
+      label: 'Claude 2',
+      exited: { code: 1 },
+      exitedAt: Date.now() - 5_000,
     };
     terminal.mockResolvedValue({
-      allowed: true, agentAllowed: true, available: 'yes', limit: 8, live: 2,
+      allowed: true,
+      agentAllowed: true,
+      available: 'yes',
+      limit: 8,
+      live: 2,
       sessions: [SHELL, CLAUDE, ended],
     });
     mount(<SessionsCard state={STATE} />);
@@ -100,9 +129,17 @@ describe('the sessions card', () => {
   it('confirms before killing a live session, and dismisses a dead one outright', async () => {
     const ended = { ...SHELL, id: 's2', label: 'Terminal 2', exited: { code: 0 }, exitedAt: Date.now() };
     terminal.mockResolvedValue({
-      allowed: true, agentAllowed: true, available: 'yes', limit: 8, live: 1, sessions: [SHELL, ended],
+      allowed: true,
+      agentAllowed: true,
+      available: 'yes',
+      limit: 8,
+      live: 1,
+      sessions: [SHELL, ended],
     });
-    sessionDismiss.mockResolvedValue({ ok: true, state: { allowed: true, available: 'yes', limit: 8, live: 1, sessions: [SHELL] } });
+    sessionDismiss.mockResolvedValue({
+      ok: true,
+      state: { allowed: true, available: 'yes', limit: 8, live: 1, sessions: [SHELL] },
+    });
     mount(<SessionsCard state={STATE} />);
 
     // Dismiss is a list-tidying verb on a process that is already gone: no
@@ -121,7 +158,11 @@ describe('the sessions card', () => {
 describe('the off switch', () => {
   const READINESS = {
     supervisor: { kind: 'launchd', detail: 'launchd · com.example · KeepAlive is on' },
-    stop: { via: 'launchctl' as const, label: 'com.example', detail: 'launchd · the job is unloaded, so it stays off' },
+    stop: {
+      via: 'launchctl' as const,
+      label: 'com.example',
+      detail: 'launchd · the job is unloaded, so it stays off',
+    },
     busy: true,
     run: { slug: 'alpha', status: 'running' },
     sessions: { live: 3, agent: 2, terminal: 1, ended: 1, sessions: [] },
@@ -154,10 +195,12 @@ describe('the off switch', () => {
     await waitFor(() => expect(shutdown).toHaveBeenCalled());
     // The one moment this is knowable: a dead stream afterwards looks exactly
     // like a restart, a sleep or a dropped wifi.
-    await waitFor(() => expect(getConsoleStopped()).toEqual({
-      hint: 'launchctl kickstart -k gui/$(id -u)/com.example',
-      via: 'launchctl',
-    }));
+    await waitFor(() =>
+      expect(getConsoleStopped()).toEqual({
+        hint: 'launchctl kickstart -k gui/$(id -u)/com.example',
+        via: 'launchctl',
+      }),
+    );
   });
 
   it('says plainly when there is nothing to stop', async () => {
@@ -173,8 +216,9 @@ describe('the off switch', () => {
   });
 
   it('builds the same list for restart, which has always killed sessions silently', () => {
-    expect(stopList({ live: 1, agent: 0, terminal: 1, ended: 0, sessions: [] }, null))
-      .toEqual(['1 terminal']);
+    expect(stopList({ live: 1, agent: 0, terminal: 1, ended: 0, sessions: [] }, null)).toEqual([
+      '1 terminal',
+    ]);
     expect(stopList(undefined, undefined)).toEqual([]);
     // Ended records are history, not something a shutdown stops.
     expect(stopList({ live: 0, agent: 0, terminal: 0, ended: 4, sessions: [] }, null)).toEqual([]);

@@ -60,9 +60,7 @@ export function Chip({ className, tone, mono, dot = false, children, ...props }:
 }
 
 /** Phase states, as the engine names them. */
-export const PHASE_STATES = [
-  'done', 'ready', 'in-progress', 'waiting', 'blocked', 'stuck', 'gated',
-] as const;
+export const PHASE_STATES = ['done', 'ready', 'in-progress', 'waiting', 'blocked', 'stuck', 'gated'] as const;
 
 export type PhaseState = (typeof PHASE_STATES)[number];
 
@@ -73,9 +71,7 @@ export type PhaseState = (typeof PHASE_STATES)[number];
  * unrecognised state can never be mistaken for an actionable one.
  */
 export function asPhaseState(value: string | undefined): PhaseState {
-  return (PHASE_STATES as readonly string[]).includes(value ?? '')
-    ? (value as PhaseState)
-    : 'waiting';
+  return (PHASE_STATES as readonly string[]).includes(value ?? '') ? (value as PhaseState) : 'waiting';
 }
 
 /**

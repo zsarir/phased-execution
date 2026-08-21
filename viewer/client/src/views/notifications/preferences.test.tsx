@@ -15,7 +15,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClientConfig } from '@/lib/queries';
 
 const { state, push, savePrefs } = vi.hoisted(() => ({
-  state: vi.fn(), push: vi.fn(), savePrefs: vi.fn(),
+  state: vi.fn(),
+  push: vi.fn(),
+  savePrefs: vi.fn(),
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -25,7 +27,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 /** The three categories the card treats as load-bearing, plus the firehose. */
 const CATEGORIES = [
-  { id: 'approval', label: 'Permission needed', detail: 'blocked on a decision', byDefault: true, urgent: true },
+  {
+    id: 'approval',
+    label: 'Permission needed',
+    detail: 'blocked on a decision',
+    byDefault: true,
+    urgent: true,
+  },
   { id: 'halted', label: 'Run halted', detail: 'stopped on something', byDefault: true, urgent: true },
   { id: 'changed', label: 'Plans changed on disk', detail: 'a firehose', byDefault: false, urgent: false },
 ];
@@ -33,9 +41,13 @@ const CATEGORIES = [
 function mount(notify: Record<string, boolean> = {}) {
   state.mockResolvedValue({ prefs: { notify } });
   const client = new QueryClient(queryClientConfig);
-  return import('./preferences').then(({ PreferencesCard }) => render(
-    <QueryClientProvider client={client}><PreferencesCard /></QueryClientProvider>,
-  ));
+  return import('./preferences').then(({ PreferencesCard }) =>
+    render(
+      <QueryClientProvider client={client}>
+        <PreferencesCard />
+      </QueryClientProvider>,
+    ),
+  );
 }
 
 beforeEach(() => {
@@ -67,8 +79,9 @@ describe('global notification preferences', () => {
     const halted = await screen.findByRole('checkbox', { name: 'Run halted' });
     expect((halted as HTMLInputElement).checked).toBe(true);
     // …and the firehose stays off by its own default rather than reading as on.
-    expect((screen.getByRole('checkbox', { name: 'Plans changed on disk' }) as HTMLInputElement).checked)
-      .toBe(false);
+    expect(
+      (screen.getByRole('checkbox', { name: 'Plans changed on disk' }) as HTMLInputElement).checked,
+    ).toBe(false);
   });
 
   it('sends only the category that changed, so two tabs cannot overwrite each other', async () => {

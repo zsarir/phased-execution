@@ -154,17 +154,27 @@ export const sessionsApi = {
    * this body is enum choices, a bounded prompt, and nothing executable.
    */
   agentTicket: (body: {
-    cols?: number; rows?: number;
-    model?: string; effort?: string; permissionMode?: string;
-    prompt?: string; skills?: string[]; resume?: string;
-    intent?: 'plan' | 'recovery' | 'qa'; brief?: string;
+    cols?: number;
+    rows?: number;
+    model?: string;
+    effort?: string;
+    permissionMode?: string;
+    prompt?: string;
+    skills?: string[];
+    resume?: string;
+    intent?: 'plan' | 'recovery' | 'qa';
+    brief?: string;
     /* A recovery names its TARGET and nothing else — the server reads the
        board, the run and the diagnosis and composes the prompt itself. */
-    recoveryClass?: RecoveryClass; slug?: string; phase?: number; runId?: string;
+    recoveryClass?: RecoveryClass;
+    slug?: string;
+    phase?: number;
+    runId?: string;
     /* A review names its target the same way. `activate` turns QA on for the
        plan first; `permissionProfile` is the one place bypass is offered, and
        the server refuses it on any other kind of session. */
-    activate?: boolean; permissionProfile?: QaProfile;
+    activate?: boolean;
+    permissionProfile?: QaProfile;
     /* Which account the session runs as — a registered id, validated server-side. */
     accountId?: string;
   }) => post<TerminalTicket>('/api/terminal', { kind: 'claude', ...body }),
@@ -173,7 +183,8 @@ export const sessionsApi = {
   /** Drop the record of a session that has already ended. Refused on a live one. */
   sessionDismiss: (id: string) =>
     request<{ ok: boolean; reason?: string; state: TerminalState }>(
-      `/api/terminal?id=${q(id)}&action=dismiss`, { method: 'DELETE' },
+      `/api/terminal?id=${q(id)}&action=dismiss`,
+      { method: 'DELETE' },
     ),
   /** SIGSTOP the session's process group — the lane-freeze verb at session size. */
   sessionFreeze: (id: string) =>

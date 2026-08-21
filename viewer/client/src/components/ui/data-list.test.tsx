@@ -27,7 +27,17 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 600 });
   // A row measures 44px when the virtualizer asks.
   HTMLElement.prototype.getBoundingClientRect = () =>
-    ({ height: 44, width: 600, top: 0, left: 0, bottom: 44, right: 600, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    ({
+      height: 44,
+      width: 600,
+      top: 0,
+      left: 0,
+      bottom: 44,
+      right: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
 });
 afterAll(() => {
   HTMLElement.prototype.getBoundingClientRect = realRect;
@@ -58,7 +68,7 @@ describe('DataList', () => {
     expect(screen.queryByText('Entry 49')).toBeNull();
   });
 
-  it('an empty list shows the caller\'s empty node, not a void', () => {
+  it("an empty list shows the caller's empty node, not a void", () => {
     render(
       <DataList
         items={[]}

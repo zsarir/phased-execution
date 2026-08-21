@@ -24,8 +24,15 @@ import { Button } from '@/components/ui';
 import { onSse } from '@/lib/sse';
 import { cn } from '@/lib/cn';
 import {
-  KIND_LABEL, MAX_LINES, NO_ACTIVITY, QUIET, activity, fold, toLine,
-  type Activity, type ConsoleLine,
+  KIND_LABEL,
+  MAX_LINES,
+  NO_ACTIVITY,
+  QUIET,
+  activity,
+  fold,
+  toLine,
+  type Activity,
+  type ConsoleLine,
 } from './console-model';
 import type { TranscriptEntry } from '@/lib/api';
 
@@ -108,7 +115,9 @@ export function useRunStream(
       onSse('run:phase', as('phase')),
       onSse('run:verify', as('verify')),
     ];
-    return () => { for (const off of offs) off(); };
+    return () => {
+      for (const off of offs) off();
+    };
   }, [record, enabled]);
 }
 
@@ -172,7 +181,9 @@ export function useSessionStream(
       onSse('run:phase', as('phase')),
       onSse('run:verify', as('verify')),
     ];
-    return () => { for (const off of offs) off(); };
+    return () => {
+      for (const off of offs) off();
+    };
   }, [record, enabled, runId, phase, omitStream]);
 }
 
@@ -301,9 +312,11 @@ export function LiveConsole({
               {line.mark && (line.kind === 'injected' || line.kind === 'steer') && (
                 <span
                   className={cn('live-tick', line.delivered && 'is-delivered')}
-                  title={line.delivered
-                    ? 'The session echoed this back — it landed'
-                    : 'Written to the session; waiting for it to echo back'}
+                  title={
+                    line.delivered
+                      ? 'The session echoed this back — it landed'
+                      : 'Written to the session; waiting for it to echo back'
+                  }
                 >
                   {line.delivered ? '✓' : '·'}
                 </span>
@@ -312,9 +325,9 @@ export function LiveConsole({
           ))
         ) : (
           <p className="max-w-prose py-6 text-ink-faint">
-            Nothing to show yet. When a phase runs, everything the session does appears here as it
-            happens — tool calls, files touched, retries, and the verification that follows — and it
-            is kept, so coming back to a finished run replays it rather than showing you this.
+            Nothing to show yet. When a phase runs, everything the session does appears here as it happens —
+            tool calls, files touched, retries, and the verification that follows — and it is kept, so coming
+            back to a finished run replays it rather than showing you this.
           </p>
         )}
       </div>

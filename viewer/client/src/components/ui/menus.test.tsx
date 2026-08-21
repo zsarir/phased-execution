@@ -15,7 +15,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { expectNoAxeViolations } from '@/test/axe';
 import { Button } from './button';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './dropdown-menu';
 import { Label } from './label';
@@ -38,7 +42,9 @@ describe('Select', () => {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="fable">Fable</SelectItem>
-            <SelectItem value="opus" hint="slow">Opus</SelectItem>
+            <SelectItem value="opus" hint="slow">
+              Opus
+            </SelectItem>
           </SelectContent>
         </Select>
       </div>,

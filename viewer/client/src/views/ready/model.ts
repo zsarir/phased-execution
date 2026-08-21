@@ -74,8 +74,7 @@ export interface Departure {
 const DAY = 86_400_000;
 
 /** A lock only counts as a claim while its lease is live. */
-export const isClaimed = (lock: PhaseLock | undefined): boolean =>
-  Boolean(lock && !lock.expired);
+export const isClaimed = (lock: PhaseLock | undefined): boolean => Boolean(lock && !lock.expired);
 
 /**
  * Build the queue.
@@ -204,27 +203,18 @@ const bySlugThenPhase = (a: Departure, b: Departure): number =>
 
 const COMPARE: Record<RankId, (a: Departure, b: Departure) => number> = {
   leverage: (a, b) =>
-    b.unblocks - a.unblocks
-    || Number(b.onCriticalPath) - Number(a.onCriticalPath)
-    || weightOf(a) - weightOf(b)
-    || bySlugThenPhase(a, b),
+    b.unblocks - a.unblocks ||
+    Number(b.onCriticalPath) - Number(a.onCriticalPath) ||
+    weightOf(a) - weightOf(b) ||
+    bySlugThenPhase(a, b),
   critical: (a, b) =>
-    Number(b.onCriticalPath) - Number(a.onCriticalPath)
-    || b.unblocks - a.unblocks
-    || weightOf(a) - weightOf(b)
-    || bySlugThenPhase(a, b),
-  quick: (a, b) =>
-    weightOf(a) - weightOf(b)
-    || b.unblocks - a.unblocks
-    || bySlugThenPhase(a, b),
-  momentum: (a, b) =>
-    b.activity - a.activity
-    || a.phase - b.phase
-    || bySlugThenPhase(a, b),
-  unstick: (a, b) =>
-    b.idleDays - a.idleDays
-    || b.unblocks - a.unblocks
-    || bySlugThenPhase(a, b),
+    Number(b.onCriticalPath) - Number(a.onCriticalPath) ||
+    b.unblocks - a.unblocks ||
+    weightOf(a) - weightOf(b) ||
+    bySlugThenPhase(a, b),
+  quick: (a, b) => weightOf(a) - weightOf(b) || b.unblocks - a.unblocks || bySlugThenPhase(a, b),
+  momentum: (a, b) => b.activity - a.activity || a.phase - b.phase || bySlugThenPhase(a, b),
+  unstick: (a, b) => b.idleDays - a.idleDays || b.unblocks - a.unblocks || bySlugThenPhase(a, b),
 };
 
 /**
@@ -306,9 +296,12 @@ export function load(weight: number | undefined, budget: number): Load {
   return {
     fraction: Math.min(1, fraction),
     short: fraction > 1 ? 'over' : `${percent}%`,
-    long: fraction > 1
-      ? `${percent}% of a session — more than the plan budgets for one`
-      : fraction === 1 ? 'exactly one session' : `${percent}% of a session`,
+    long:
+      fraction > 1
+        ? `${percent}% of a session — more than the plan budgets for one`
+        : fraction === 1
+          ? 'exactly one session'
+          : `${percent}% of a session`,
     over: fraction > 1,
   };
 }

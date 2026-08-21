@@ -43,7 +43,16 @@ export interface StripSession {
 }
 
 export function SessionStrip({
-  kind, sessions, activeId, onSelect, onClose, actions, details, hints, more, note,
+  kind,
+  sessions,
+  activeId,
+  onSelect,
+  onClose,
+  actions,
+  details,
+  hints,
+  more,
+  note,
 }: {
   kind: 'shell' | 'claude';
   sessions: readonly StripSession[];
@@ -69,7 +78,13 @@ export function SessionStrip({
   if (!phone) {
     return (
       <div className="flex shrink-0 items-center gap-1 border-b border-rule bg-ground-deep px-2 py-1.5">
-        <Tabs value={active?.id ?? ''} onValueChange={(value) => { if (value) onSelect(value); }} className="min-w-0">
+        <Tabs
+          value={active?.id ?? ''}
+          onValueChange={(value) => {
+            if (value) onSelect(value);
+          }}
+          className="min-w-0"
+        >
           <TabsList aria-label={`Open ${word}s`} className="border-b-0">
             {sessions.map((session) => {
               const isActive = session.id === active?.id;
@@ -106,9 +121,7 @@ export function SessionStrip({
         </Tabs>
         {actions}
         {more}
-        {active && details && (
-          <div className="ml-auto flex shrink-0 items-center gap-2">{details}</div>
-        )}
+        {active && details && <div className="ml-auto flex shrink-0 items-center gap-2">{details}</div>}
       </div>
     );
   }
@@ -149,14 +162,19 @@ export function SessionStrip({
                     <button
                       type="button"
                       aria-current={isActive ? 'true' : undefined}
-                      onClick={() => { onSelect(session.id); setOpen(false); }}
+                      onClick={() => {
+                        onSelect(session.id);
+                        setOpen(false);
+                      }}
                       className={cn(
                         'flex min-h-(--tap-min) min-w-0 flex-1 items-center gap-2 rounded px-2 text-left text-sm',
                         isActive ? 'bg-surface-raised text-ink' : 'text-ink-muted hover:bg-surface',
                       )}
                     >
                       <span className="truncate">{session.label}</span>
-                      {session.note && <span className="shrink-0 text-2xs text-ink-faint">{session.note}</span>}
+                      {session.note && (
+                        <span className="shrink-0 text-2xs text-ink-faint">{session.note}</span>
+                      )}
                     </button>
                     <button
                       type="button"
@@ -179,7 +197,9 @@ export function SessionStrip({
               <div className="flex flex-wrap items-center gap-2">{details}</div>
               {hints && hints.length > 0 && (
                 <ul className="flex flex-col gap-1 px-1 text-2xs text-ink-faint">
-                  {hints.map((hint) => <li key={hint}>{hint}</li>)}
+                  {hints.map((hint) => (
+                    <li key={hint}>{hint}</li>
+                  ))}
                 </ul>
               )}
             </div>

@@ -27,8 +27,19 @@
 import { useState } from 'react';
 import { ChevronRight, Radio } from 'lucide-react';
 import {
-  AlertDialog, AlertDialogContent, AlertDialogTrigger,
-  Button, StatusBadge, TBody, TD, TH, THead, TR, Table, TableWrap, Tile,
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogTrigger,
+  Button,
+  StatusBadge,
+  TBody,
+  TD,
+  TH,
+  THead,
+  TR,
+  Table,
+  TableWrap,
+  Tile,
 } from '@/components/ui';
 import { LoadMeter, RunStrip } from '@/components/charts';
 import { duration, money, relativeTime } from '@/lib/format';
@@ -108,12 +119,15 @@ function PhaseLine({ phase }: { phase: PhaseRecord }) {
     <li className="flex min-w-0 flex-col gap-0.5 border-l-2 border-rule py-1 pl-2.5">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <span className="font-mono text-2xs tabular-nums text-ink-faint">P{phase.phase}</span>
-        <StatusBadge state={phaseUiState(phase.status)} label={phase.status} mono title={phaseStatusTitle(phase.status)} />
+        <StatusBadge
+          state={phaseUiState(phase.status)}
+          label={phase.status}
+          mono
+          title={phaseStatusTitle(phase.status)}
+        />
         <span className="min-w-0 truncate font-mono text-2xs text-ink-faint">{facts.join(' · ')}</span>
       </div>
-      {verify && !verify.ok && (
-        <p className="text-2xs text-blocked">verification: {verify.reason}</p>
-      )}
+      {verify && !verify.ok && <p className="text-2xs text-blocked">verification: {verify.reason}</p>}
       {/* The session's closing words. When a phase exits clean and changes
           nothing, this is the only account of why. */}
       {(phase.note || phase.said) && (
@@ -177,11 +191,13 @@ function RunDetail({
               <Button
                 size="sm"
                 disabled={!allowRun || busy}
-                title={allowRun
-                  ? row.frozen
-                    ? 'Continues the frozen session(s) mid-token'
-                    : 'Stops every running session where it stands, losing nothing'
-                  : 'Runs are disabled. Restart the console with --allow-run.'}
+                title={
+                  allowRun
+                    ? row.frozen
+                      ? 'Continues the frozen session(s) mid-token'
+                      : 'Stops every running session where it stands, losing nothing'
+                    : 'Runs are disabled. Restart the console with --allow-run.'
+                }
                 onClick={() => onLifecycle(row, row.frozen ? 'thaw' : 'freeze')}
               >
                 {row.frozen ? 'Continue' : 'Freeze'}
@@ -194,9 +210,7 @@ function RunDetail({
                     size="sm"
                     variant="danger"
                     disabled={!allowRun || busy}
-                    title={allowRun
-                      ? undefined
-                      : 'Runs are disabled. Restart the console with --allow-run.'}
+                    title={allowRun ? undefined : 'Runs are disabled. Restart the console with --allow-run.'}
                   >
                     Stop
                   </Button>
@@ -212,8 +226,8 @@ function RunDetail({
                   }}
                 >
                   <p className="mt-2 text-sm text-ink-muted">
-                    Every session of this run gets SIGTERM, so their own end-of-session hooks still
-                    run. Anything already written to the repository stays written.
+                    Every session of this run gets SIGTERM, so their own end-of-session hooks still run.
+                    Anything already written to the repository stays written.
                   </p>
                   <p className="mt-2 text-2xs text-ink-faint">
                     Phases cut off are recorded as <strong>interrupted</strong> rather than failed —
@@ -237,9 +251,11 @@ function RunDetail({
               <Button
                 size="sm"
                 disabled={!allowRun || busy}
-                title={allowRun
-                  ? undefined
-                  : 'Runs are disabled. Restart the console with --allow-run to change a run record.'}
+                title={
+                  allowRun
+                    ? undefined
+                    : 'Runs are disabled. Restart the console with --allow-run to change a run record.'
+                }
                 onClick={() => onResolve(row, !row.resolution)}
               >
                 {row.resolution ? 'Put the card back' : 'Dismiss'}
@@ -260,19 +276,23 @@ function RunDetail({
             This run stopped asking for anyone{' '}
             {row.resolution.auto
               ? 'because the board moved past it'
-              : `when ${row.resolution.by ?? 'someone'} dismissed it`}
-            {' '}— {row.resolution.reason}
+              : `when ${row.resolution.by ?? 'someone'} dismissed it`}{' '}
+            — {row.resolution.reason}
             {row.resolution.note ? ` (${row.resolution.note})` : ''}. Its record is untouched.
           </p>
         )}
 
-        {row.phases.length
-          ? <ul className="mt-2 flex flex-col gap-1">{row.phases.map((p) => <PhaseLine key={p.phase} phase={p} />)}</ul>
-          : (
-            <p className="mt-2 text-2xs text-ink-faint">
-              This run recorded no phases — it stopped before the first one started.
-            </p>
-          )}
+        {row.phases.length ? (
+          <ul className="mt-2 flex flex-col gap-1">
+            {row.phases.map((p) => (
+              <PhaseLine key={p.phase} phase={p} />
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-2 text-2xs text-ink-faint">
+            This run recorded no phases — it stopped before the first one started.
+          </p>
+        )}
       </TD>
     </TR>
   );
@@ -334,9 +354,9 @@ function FleetRows({
                 className="block truncate text-ink hover:text-action"
                 // The repos this plan touches — the fact that decides what may
                 // run beside it — without spending a column the table lacks.
-                title={reposBySlug?.[row.slug]?.length
-                  ? `repos: ${reposBySlug[row.slug].join(', ')}`
-                  : undefined}
+                title={
+                  reposBySlug?.[row.slug]?.length ? `repos: ${reposBySlug[row.slug].join(', ')}` : undefined
+                }
               >
                 {row.slug}
               </a>
@@ -346,7 +366,9 @@ function FleetRows({
                 </span>
               )}
             </TD>
-            <TD><code className="font-mono text-2xs text-ink-faint">{row.id}</code></TD>
+            <TD>
+              <code className="font-mono text-2xs text-ink-faint">{row.id}</code>
+            </TD>
             <TD>
               <StatusBadge
                 state={runUiState(row.status)}
@@ -357,34 +379,38 @@ function FleetRows({
               />
             </TD>
             <TD className="w-36">
-              {row.phases.length
-                ? (
-                  <span className="flex items-center gap-2">
-                    <RunStrip
-                      className="min-w-16 flex-1"
-                      phases={row.phases.map((p) => ({
-                        phase: p.phase,
-                        status: p.status,
-                        detail: [
-                          p.attempts > 1 ? `${p.attempts} attempts` : null,
-                          p.costUsd ? money(p.costUsd) : null,
-                        ].filter(Boolean).join(' · '),
-                      }))}
-                    />
-                    <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">
-                      {row.phasesDone}/{row.phases.length}
-                    </span>
+              {row.phases.length ? (
+                <span className="flex items-center gap-2">
+                  <RunStrip
+                    className="min-w-16 flex-1"
+                    phases={row.phases.map((p) => ({
+                      phase: p.phase,
+                      status: p.status,
+                      detail: [
+                        p.attempts > 1 ? `${p.attempts} attempts` : null,
+                        p.costUsd ? money(p.costUsd) : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · '),
+                    }))}
+                  />
+                  <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">
+                    {row.phasesDone}/{row.phases.length}
                   </span>
-                )
-                : <span className="text-2xs text-ink-faint">no phases</span>}
+                </span>
+              ) : (
+                <span className="text-2xs text-ink-faint">no phases</span>
+              )}
             </TD>
             <TD className="w-28">
               <LoadMeter
                 fraction={row.spendFraction}
                 label={money(row.spentUsd)}
-                description={row.budgetUsd
-                  ? `${money(row.spentUsd)} of a ${money(row.budgetUsd)} run budget`
-                  : `${money(row.spentUsd)}, no run budget set`}
+                description={
+                  row.budgetUsd
+                    ? `${money(row.spentUsd)} of a ${money(row.budgetUsd)} run budget`
+                    : `${money(row.spentUsd)}, no run budget set`
+                }
                 tone={row.overBudget ? 'failed' : 'running'}
               />
             </TD>
@@ -426,7 +452,6 @@ function FleetRows({
   );
 }
 
-
 /**
  * The fleet, one thumb wide. Nine columns cannot all be true on a phone; a
  * card carries the same facts in reading order — who, state, why, cost — and
@@ -456,15 +481,26 @@ function FleetCards({
         return (
           <div key={row.id} className="flex flex-col gap-2 rounded-lg border border-rule bg-surface p-3">
             <div className="flex flex-wrap items-center gap-2">
-              <a href={planHref(row.slug, 'run')} className="min-w-0 truncate font-medium text-ink hover:text-action">
+              <a
+                href={planHref(row.slug, 'run')}
+                className="min-w-0 truncate font-medium text-ink hover:text-action"
+              >
                 {row.slug}
               </a>
               <code className="font-mono text-2xs text-ink-faint">{row.id.slice(0, 8)}</code>
-              <StatusBadge state={runUiState(row.status)} label={row.status} mono title={runStatusTitle(row.status)} className="ml-auto" />
+              <StatusBadge
+                state={runUiState(row.status)}
+                label={row.status}
+                mono
+                title={runStatusTitle(row.status)}
+                className="ml-auto"
+              />
             </div>
             {row.reason && <p className="max-w-prose text-2xs text-ink-muted">{row.reason}</p>}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-2xs tabular-nums text-ink-faint">
-              <span>{row.phasesDone}/{row.phases.length} phases</span>
+              <span>
+                {row.phasesDone}/{row.phases.length} phases
+              </span>
               <span>{money(row.spentUsd)}</span>
               <span>{row.workedMs ? duration(row.workedMs) : '—'}</span>
               <span>{relativeTime(row.updatedAt)}</span>
@@ -487,7 +523,11 @@ function FleetCards({
                 </Button>
               )}
               {onResolve && ['halted', 'interrupted'].includes(row.status) && (
-                <Button size="sm" disabled={!allowRun || busy} onClick={() => onResolve(row, !row.resolution)}>
+                <Button
+                  size="sm"
+                  disabled={!allowRun || busy}
+                  onClick={() => onResolve(row, !row.resolution)}
+                >
                   {row.resolution ? 'Put the card back' : 'Dismiss'}
                 </Button>
               )}
@@ -528,11 +568,12 @@ export function Fleet({
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [all, setAll] = useState(false);
 
-  const toggle = (id: string) => setOpen((current) => {
-    const next = new Set(current);
-    if (!next.delete(id)) next.add(id);
-    return next;
-  });
+  const toggle = (id: string) =>
+    setOpen((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
 
   const shown = all ? rows : rows.slice(0, SHOW_LIMIT);
   const groups = groupRows(shown, grouped);
@@ -543,7 +584,9 @@ export function Fleet({
         {/* Not "Phases" — that is the strip column four along, and two headers
             reading the same word is two columns a screen reader cannot tell
             apart. */}
-        <TH className="w-8"><span className="sr-only">Expand</span></TH>
+        <TH className="w-8">
+          <span className="sr-only">Expand</span>
+        </TH>
         <TH>Plan</TH>
         <TH>Run</TH>
         <TH>Status</TH>
@@ -562,7 +605,9 @@ export function Fleet({
         <div key={group.key || 'all'}>
           {grouped && (
             <h3 className="mb-1 flex flex-wrap items-baseline gap-2 text-2xs font-medium uppercase tracking-[0.14em] text-ink-faint">
-              <a href={planHref(group.key, 'run')} className="hover:text-action">{group.key}</a>
+              <a href={planHref(group.key, 'run')} className="hover:text-action">
+                {group.key}
+              </a>
               <span className="font-mono tabular-nums">{group.rows.length}</span>
               {Boolean(reposBySlug?.[group.key]?.length) && (
                 <span
@@ -574,9 +619,7 @@ export function Fleet({
                       {repo}
                     </span>
                   ))}
-                  {reposBySlug![group.key].length > 3 && (
-                    <span>+{reposBySlug![group.key].length - 3}</span>
-                  )}
+                  {reposBySlug![group.key].length > 3 && <span>+{reposBySlug![group.key].length - 3}</span>}
                 </span>
               )}
             </h3>
@@ -615,9 +658,13 @@ export function Fleet({
 
       {rows.length > SHOW_LIMIT && (
         <div className="flex items-center gap-2 text-2xs text-ink-faint">
-          {all
-            ? <>Showing all {rows.length}.</>
-            : <>Showing the {SHOW_LIMIT} most relevant of {rows.length}.</>}
+          {all ? (
+            <>Showing all {rows.length}.</>
+          ) : (
+            <>
+              Showing the {SHOW_LIMIT} most relevant of {rows.length}.
+            </>
+          )}
           <Button size="sm" variant="ghost" onClick={() => setAll(!all)}>
             {all ? `Show only ${SHOW_LIMIT}` : `Show all ${rows.length}`}
           </Button>

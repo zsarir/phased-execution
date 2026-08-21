@@ -13,8 +13,7 @@ import { request, post, q } from './client';
 
 /** What kind of thing is asking. */
 export type InboxKind =
-  | 'errand' | 'approval' | 'gate' | 'sign-in' | 'mcp-auth'
-  | 'qa' | 'lock' | 'health' | 'stall' | 'ruling';
+  'errand' | 'approval' | 'gate' | 'sign-in' | 'mcp-auth' | 'qa' | 'lock' | 'health' | 'stall' | 'ruling';
 
 /** How loudly: `urgent` interrupts, `needs-you` waits for a person, `fyi` informs. */
 export type InboxSeverity = 'urgent' | 'needs-you' | 'fyi';

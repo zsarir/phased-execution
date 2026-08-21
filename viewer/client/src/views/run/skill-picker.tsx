@@ -85,9 +85,7 @@ export function SkillPicker({
       if (!out.has(skill.source)) out.set(skill.source, []);
       out.get(skill.source)!.push(skill);
     }
-    return [...out.entries()].sort(
-      (a, b) => SOURCE_ORDER.indexOf(a[0]) - SOURCE_ORDER.indexOf(b[0]),
-    );
+    return [...out.entries()].sort((a, b) => SOURCE_ORDER.indexOf(a[0]) - SOURCE_ORDER.indexOf(b[0]));
   }, [matches]);
 
   const available = useMemo(() => {
@@ -96,8 +94,7 @@ export function SkillPicker({
     return counts;
   }, [selectable]);
 
-  const toggle = (id: string) =>
-    onChange(picked.has(id) ? chosen.filter((s) => s !== id) : [...chosen, id]);
+  const toggle = (id: string) => onChange(picked.has(id) ? chosen.filter((s) => s !== id) : [...chosen, id]);
 
   // A chosen skill that is not installed here still has to be removable, so it
   // is shown from the id alone rather than dropped for want of a description.
@@ -120,9 +117,8 @@ export function SkillPicker({
         {planSkills.length > 0 && (
           <div className="mb-3">
             <p className="mb-1.5 max-w-prose text-2xs text-ink-faint">
-              The plan's <code className="font-mono">Skills (every session)</code> line already puts
-              these in every boot prompt. They are not this control's to turn off — edit the plan if
-              they are wrong.
+              The plan's <code className="font-mono">Skills (every session)</code> line already puts these in
+              every boot prompt. They are not this control's to turn off — edit the plan if they are wrong.
             </p>
             <div className="flex flex-wrap gap-1.5">
               {planSkills.map((id) => (
@@ -141,9 +137,11 @@ export function SkillPicker({
                 key={s.id}
                 type="button"
                 disabled={disabled}
-                title={byDefault.has(s.id)
-                  ? `${s.description} — on by default for every run on this console; click to remove it from this one`
-                  : `${s.description} — click to remove`}
+                title={
+                  byDefault.has(s.id)
+                    ? `${s.description} — on by default for every run on this console; click to remove it from this one`
+                    : `${s.description} — click to remove`
+                }
                 aria-label={`Remove ${s.id}`}
                 onClick={() => toggle(s.id)}
                 className="inline-flex items-center gap-1 rounded-sm border border-action/50 bg-action/10 px-1.5 py-0.5 font-mono text-2xs text-action disabled:opacity-50"
@@ -216,8 +214,8 @@ export function SkillPicker({
                 ))}
                 {list.length > SHOWN_PER_GROUP && (
                   <p className="py-1 text-2xs text-ink-faint">
-                    {list.length - SHOWN_PER_GROUP} more in {SOURCE_LABEL[group] ?? group} — narrow
-                    the search to reach them
+                    {list.length - SHOWN_PER_GROUP} more in {SOURCE_LABEL[group] ?? group} — narrow the search
+                    to reach them
                   </p>
                 )}
               </div>
@@ -240,9 +238,9 @@ export function SkillPicker({
         </div>
 
         <p className="mt-3 max-w-prose text-2xs text-ink-faint">
-          Chosen skills are named in the boot prompt of every phase in this run, on top of anything
-          the plan asks for. Whether a skill then applies is still the session's judgement — naming
-          one makes it available and says it is wanted, which is all naming a skill has ever done.
+          Chosen skills are named in the boot prompt of every phase in this run, on top of anything the plan
+          asks for. Whether a skill then applies is still the session's judgement — naming one makes it
+          available and says it is wanted, which is all naming a skill has ever done.
         </p>
       </div>
     </details>

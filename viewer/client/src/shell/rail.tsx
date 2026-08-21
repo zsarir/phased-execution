@@ -44,9 +44,7 @@ export function Rail({
         className={cn(
           'flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-sm',
           'transition-colors duration-fast ease-transit',
-          current === id
-            ? 'bg-surface-raised text-ink'
-            : 'text-ink-muted hover:bg-surface hover:text-ink',
+          current === id ? 'bg-surface-raised text-ink' : 'text-ink-muted hover:bg-surface hover:text-ink',
         )}
       >
         <span className="flex min-w-0 items-center gap-2">
@@ -71,9 +69,7 @@ export function Rail({
         </div>
       </div>
 
-      <div className="flex flex-col gap-0.5">
-        {nav.filter((n) => n.primary).map((n) => item(n.id))}
-      </div>
+      <div className="flex flex-col gap-0.5">{nav.filter((n) => n.primary).map((n) => item(n.id))}</div>
 
       <div className="mt-auto flex flex-col gap-2">
         {/* The usage meters live in the chrome, not on a page: "am I about to
@@ -100,9 +96,11 @@ export function Rail({
           </span>
         </button>
 
-        {state?.allowWrites
-          ? <Chip tone="warn">writes enabled</Chip>
-          : <Chip title="Start with --allow-writes to enable scaffolding, QA records and locks">read-only</Chip>}
+        {state?.allowWrites ? (
+          <Chip tone="warn">writes enabled</Chip>
+        ) : (
+          <Chip title="Start with --allow-writes to enable scaffolding, QA records and locks">read-only</Chip>
+        )}
 
         <ButtonGroup aria-label="Theme" className="w-full [&>button]:flex-1">
           {THEMES.map(([value, label]) => (
@@ -118,9 +116,7 @@ export function Rail({
           ))}
         </ButtonGroup>
 
-        <div className="flex flex-col gap-0.5">
-          {nav.filter((n) => !n.primary).map((n) => item(n.id))}
-        </div>
+        <div className="flex flex-col gap-0.5">{nav.filter((n) => !n.primary).map((n) => item(n.id))}</div>
       </div>
     </nav>
   );

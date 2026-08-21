@@ -27,15 +27,15 @@ export function Duration({
   const now = useNow(Boolean(live && since != null));
   const value = since != null ? Math.max(0, now - since) : ms;
   if (value == null || !Number.isFinite(value)) {
-    return <span className={cn('text-ink-faint', className)} {...props}>—</span>;
+    return (
+      <span className={cn('text-ink-faint', className)} {...props}>
+        —
+      </span>
+    );
   }
   const text = since != null ? elapsed(value) : duration(value);
   return (
-    <time
-      dateTime={isoDuration(value)}
-      className={cn('font-mono tabular-nums', className)}
-      {...props}
-    >
+    <time dateTime={isoDuration(value)} className={cn('font-mono tabular-nums', className)} {...props}>
       {text}
     </time>
   );

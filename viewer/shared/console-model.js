@@ -72,7 +72,8 @@ export function toLine(event, data) {
         text: `phase ${data.phase} started on ${data.model}${data.effort ? ` at ${data.effort} effort` : ''}`,
       };
     }
-    if (data.status === 'verifying') return { kind: 'phase', text: `phase ${data.phase} finished — verifying independently` };
+    if (data.status === 'verifying')
+      return { kind: 'phase', text: `phase ${data.phase} finished — verifying independently` };
     if (data.status === 'done') return { kind: 'phase', text: `phase ${data.phase} confirmed done` };
     if (data.status === 'awaiting-verification') {
       return {
@@ -89,7 +90,10 @@ export function toLine(event, data) {
 
   switch (data.kind) {
     case 'init':
-      return { kind: 'init', text: `${data.model ?? 'session'} started · ${data.tools ?? '?'} tools available` };
+      return {
+        kind: 'init',
+        text: `${data.model ?? 'session'} started · ${data.tools ?? '?'} tools available`,
+      };
     case 'tool': {
       // A `Task` says which agent it is handing to, because "Task" three times
       // in a row is the same line three times to a reader.
@@ -107,7 +111,12 @@ export function toLine(event, data) {
       // durations and outcomes belong. A failure is the exception: it is the
       // thing someone reading this at all o'clock is looking for.
       if (data.ok !== false) return null;
-      return { kind: 'tool-fail', text: data.detail || 'the call failed', tool: data.id, parent: data.parent };
+      return {
+        kind: 'tool-fail',
+        text: data.detail || 'the call failed',
+        tool: data.id,
+        parent: data.parent,
+      };
     // The task list is state, not a line. It renders as a panel that always
     // shows the latest one rather than as fifteen rewrites scrolling past.
     // (The tool call that carried it still prints, so nothing is hidden.)
@@ -129,7 +138,10 @@ export function toLine(event, data) {
       // one line: `fold` will only join fragments that came from the same one.
       return { kind: 'subagent', text: data.text, parent: data.parent, partial: true };
     case 'hook':
-      return { kind: 'hook', text: `${data.name}${data.event ? ` (${data.event})` : ''}${data.outcome ? ` — ${data.outcome}` : ''}` };
+      return {
+        kind: 'hook',
+        text: `${data.name}${data.event ? ` (${data.event})` : ''}${data.outcome ? ` — ${data.outcome}` : ''}`,
+      };
     // One operator message, emitted twice on purpose: undelivered by the runner
     // the instant it is written, delivered again when the CLI echoes it back.
     // `fold` joins them on the mark, so the console shows the question once and
@@ -155,12 +167,21 @@ export function toLine(event, data) {
       if (data.utilization == null) return null;
       const window = String(data.window ?? 'usage').replace(/_/g, ' ');
       const resets = data.resetsAt ? `, resets ${new Date(data.resetsAt * 1000).toLocaleString()}` : '';
-      return { kind: 'limits', text: `${Math.round(data.utilization * 100)}% of the ${window} window used${resets}` };
+      return {
+        kind: 'limits',
+        text: `${Math.round(data.utilization * 100)}% of the ${window} window used${resets}`,
+      };
     }
     case 'retry':
-      return { kind: 'retry', text: `absorbed by the CLI${data.category ? ` — ${data.category}` : ''}${data.detail ? `: ${data.detail}` : ''}` };
+      return {
+        kind: 'retry',
+        text: `absorbed by the CLI${data.category ? ` — ${data.category}` : ''}${data.detail ? `: ${data.detail}` : ''}`,
+      };
     case 'result':
-      return { kind: 'result', text: `${data.subtype} · ${data.turns ?? 0} turns · $${(data.costUsd ?? 0).toFixed(3)}` };
+      return {
+        kind: 'result',
+        text: `${data.subtype} · ${data.turns ?? 0} turns · $${(data.costUsd ?? 0).toFixed(3)}`,
+      };
     case 'stderr':
       return { kind: 'stderr', text: String(data.text ?? '').trimEnd() };
     default:
@@ -188,7 +209,9 @@ export function fold(lines, line, nextId, at = Date.now()) {
   // share a mark, so the second one updates the first — the delivery tick — and
   // the operator's own words are kept rather than the frame the session saw.
   if (line.mark && (line.kind === 'injected' || line.kind === 'steer')) {
-    const index = lines.findIndex((l) => l.mark === line.mark && (l.kind === 'injected' || l.kind === 'steer'));
+    const index = lines.findIndex(
+      (l) => l.mark === line.mark && (l.kind === 'injected' || l.kind === 'steer'),
+    );
     if (index >= 0) {
       const merged = { ...lines[index], delivered: lines[index].delivered || line.delivered };
       return [...lines.slice(0, index), merged, ...lines.slice(index + 1)];
@@ -272,13 +295,16 @@ export function activity(state, event, data, at = Date.now()) {
         // `id` stays null until the create's own result hands one back — see
         // `tool-result` below. Until then the row exists and simply cannot be
         // addressed, which is exactly true of the task.
-        const todos = [...state.todos, {
-          key: data.call,
-          id: null,
-          content: data.content,
-          activeForm: data.activeForm,
-          status: 'pending',
-        }].slice(-MAX_TODOS);
+        const todos = [
+          ...state.todos,
+          {
+            key: data.call,
+            id: null,
+            content: data.content,
+            activeForm: data.activeForm,
+            status: 'pending',
+          },
+        ].slice(-MAX_TODOS);
         return { ...state, todos, todosAt: at };
       }
       if (!data.taskId) return state;
@@ -287,38 +313,54 @@ export function activity(state, event, data, at = Date.now()) {
       if (data.status === 'deleted') {
         return { ...state, todos: state.todos.filter((_, i) => i !== index), todosAt: at };
       }
-      const todos = state.todos.map((t, i) => (i === index ? {
-        ...t,
-        ...(data.status ? { status: data.status } : {}),
-        ...(data.content ? { content: data.content } : {}),
-        ...(data.activeForm ? { activeForm: data.activeForm } : {}),
-      } : t));
+      const todos = state.todos.map((t, i) =>
+        i === index
+          ? {
+              ...t,
+              ...(data.status ? { status: data.status } : {}),
+              ...(data.content ? { content: data.content } : {}),
+              ...(data.activeForm ? { activeForm: data.activeForm } : {}),
+            }
+          : t,
+      );
       return { ...state, todos, todosAt: at };
     }
 
     case 'tool': {
-      const tools = [...state.tools, {
-        id: data.id,
-        name: data.name,
-        summary: data.summary || '',
-        agent: data.agent,
-        parent: data.parent,
-        at,
-        // `null` rather than absent: "still running" is a state the panel
-        // renders, not a field it happens to be missing.
-        ms: null,
-        ok: null,
-        detail: '',
-      }].slice(-MAX_TOOLS);
+      const tools = [
+        ...state.tools,
+        {
+          id: data.id,
+          name: data.name,
+          summary: data.summary || '',
+          agent: data.agent,
+          parent: data.parent,
+          at,
+          // `null` rather than absent: "still running" is a state the panel
+          // renders, not a field it happens to be missing.
+          ms: null,
+          ok: null,
+          detail: '',
+        },
+      ].slice(-MAX_TOOLS);
       // A delegation opens a lane. Everything that agent then says arrives
       // tagged with this call's id and nothing else, so this is the only moment
       // its name can be learned — and the name is optional on the tool, so the
       // lane opens on the delegation rather than on the name being there.
-      const agents = data.delegates && data.id
-        ? [...state.agents, {
-          id: data.id, agent: data.agent || '', title: data.summary || '', text: '', at, done: false,
-        }].slice(-MAX_AGENTS)
-        : state.agents;
+      const agents =
+        data.delegates && data.id
+          ? [
+              ...state.agents,
+              {
+                id: data.id,
+                agent: data.agent || '',
+                title: data.summary || '',
+                text: '',
+                at,
+                done: false,
+              },
+            ].slice(-MAX_AGENTS)
+          : state.agents;
       return { ...state, tools, agents };
     }
 
@@ -331,9 +373,8 @@ export function activity(state, event, data, at = Date.now()) {
       // matches nothing and the list never changes after it is written.
       const created = /(?:^|\s)#(\d+)\b/.exec(data.detail || '');
       const pending = created ? state.todos.findIndex((t) => t.key === data.id && t.id == null) : -1;
-      const todos = pending < 0
-        ? state.todos
-        : state.todos.map((t, i) => (i === pending ? { ...t, id: created[1] } : t));
+      const todos =
+        pending < 0 ? state.todos : state.todos.map((t, i) => (i === pending ? { ...t, id: created[1] } : t));
 
       const index = lastIndex(state.tools, (t) => t.id === data.id);
       const closes = state.agents.some((a) => a.id === data.id && !a.done);
@@ -342,12 +383,19 @@ export function activity(state, event, data, at = Date.now()) {
       // attach to is not worth inventing a row for.
       if (index < 0 && !closes && pending < 0) return state;
 
-      const tools = index < 0 ? state.tools : state.tools.map((tool, i) => (i === index ? {
-        ...tool,
-        ms: typeof data.ms === 'number' ? data.ms : null,
-        ok: data.ok !== false,
-        detail: data.detail || '',
-      } : tool));
+      const tools =
+        index < 0
+          ? state.tools
+          : state.tools.map((tool, i) =>
+              i === index
+                ? {
+                    ...tool,
+                    ms: typeof data.ms === 'number' ? data.ms : null,
+                    ok: data.ok !== false,
+                    detail: data.detail || '',
+                  }
+                : tool,
+            );
       const agents = closes
         ? state.agents.map((a) => (a.id === data.id ? { ...a, done: true } : a))
         : state.agents;
@@ -361,11 +409,20 @@ export function activity(state, event, data, at = Date.now()) {
       // mid-phase has the words and not the call. Better an unnamed lane than
       // a silent one.
       const agents = known
-        ? state.agents.map((a) => (a.id === data.parent
-          ? { ...a, text: (a.text + data.text).slice(-MAX_AGENT_TEXT) }
-          : a))
-        : [...state.agents, { id: data.parent, agent: '', title: '', text: data.text.slice(-MAX_AGENT_TEXT), at, done: false }]
-          .slice(-MAX_AGENTS);
+        ? state.agents.map((a) =>
+            a.id === data.parent ? { ...a, text: (a.text + data.text).slice(-MAX_AGENT_TEXT) } : a,
+          )
+        : [
+            ...state.agents,
+            {
+              id: data.parent,
+              agent: '',
+              title: '',
+              text: data.text.slice(-MAX_AGENT_TEXT),
+              at,
+              done: false,
+            },
+          ].slice(-MAX_AGENTS);
       return { ...state, agents };
     }
 

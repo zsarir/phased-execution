@@ -25,10 +25,15 @@ export function RelativeTime({
   live?: boolean;
   intervalMs?: number;
 } & HTMLAttributes<HTMLElement>) {
-  const ms = typeof at === 'string' ? Date.parse(at) : at ?? NaN;
+  const ms = typeof at === 'string' ? Date.parse(at) : (at ?? NaN);
   const valid = Number.isFinite(ms);
   useNow(live && valid, intervalMs);
-  if (!valid) return <span className={cn('text-ink-faint', className)} {...props}>—</span>;
+  if (!valid)
+    return (
+      <span className={cn('text-ink-faint', className)} {...props}>
+        —
+      </span>
+    );
   const date = new Date(ms as number);
   return (
     <time

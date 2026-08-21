@@ -40,7 +40,12 @@ export function getConsoleStopped(): Stopped | null {
 
 export function useConsoleStopped(): Stopped | null {
   return useSyncExternalStore(
-    (notify) => { listeners.add(notify); return () => { listeners.delete(notify); }; },
+    (notify) => {
+      listeners.add(notify);
+      return () => {
+        listeners.delete(notify);
+      };
+    },
     () => stopped,
     () => null,
   );

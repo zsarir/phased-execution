@@ -97,9 +97,15 @@ export function Combobox({
                     setOpen(false);
                   }}
                 >
-                  <Check size={14} aria-hidden className={cn('shrink-0', option.value === value ? 'opacity-100' : 'opacity-0')} />
+                  <Check
+                    size={14}
+                    aria-hidden
+                    className={cn('shrink-0', option.value === value ? 'opacity-100' : 'opacity-0')}
+                  />
                   <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                  {option.hint != null && <span className="ml-auto pl-3 text-2xs text-ink-faint">{option.hint}</span>}
+                  {option.hint != null && (
+                    <span className="ml-auto pl-3 text-2xs text-ink-faint">{option.hint}</span>
+                  )}
                 </CommandItem>
               ))}
             </CommandGroup>

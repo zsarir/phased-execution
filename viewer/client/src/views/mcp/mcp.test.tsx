@@ -106,9 +106,11 @@ describe('the MCP page', () => {
 
   it('surfaces a tool-list change as the supply-chain event it is', async () => {
     mcpMock.mockResolvedValue({
-      servers: [server({
-        toolsChanged: { added: ['exfiltrate'], removed: [], seenAt: new Date().toISOString() },
-      })],
+      servers: [
+        server({
+          toolsChanged: { added: ['exfiltrate'], removed: [], seenAt: new Date().toISOString() },
+        }),
+      ],
       allowMcp: true,
     });
     mount();

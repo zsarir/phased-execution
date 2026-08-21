@@ -1,6 +1,17 @@
 import {
-  Card, CardBody, CardHeader, CardTitle, Chip, Empty,
-  Table, TableWrap, TBody, TD, TH, THead, TR,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Chip,
+  Empty,
+  Table,
+  TableWrap,
+  TBody,
+  TD,
+  TH,
+  THead,
+  TR,
 } from '@/components/ui';
 import { Markdown, MarkdownInline } from '@/components/markdown';
 import { countdown, pad2 } from '@/lib/format';
@@ -13,12 +24,7 @@ export function OverviewTab({ detail }: { detail: PlanDetail }) {
   const plan = detail.plan;
 
   if (!plan) {
-    return (
-      <Empty
-        title="No plan file"
-        body="This slug has handoffs but no plan in docs/plans."
-      />
-    );
+    return <Empty title="No plan file" body="This slug has handoffs but no plan in docs/plans." />;
   }
 
   return (
@@ -34,15 +40,23 @@ export function OverviewTab({ detail }: { detail: PlanDetail }) {
 
         {plan.context && (
           <Card>
-            <CardHeader><CardTitle>Context</CardTitle></CardHeader>
-            <CardBody><Markdown text={plan.context} /></CardBody>
+            <CardHeader>
+              <CardTitle>Context</CardTitle>
+            </CardHeader>
+            <CardBody>
+              <Markdown text={plan.context} />
+            </CardBody>
           </Card>
         )}
 
         {plan.architecture && (
           <Card>
-            <CardHeader><CardTitle>Architecture</CardTitle></CardHeader>
-            <CardBody><Markdown text={plan.architecture} /></CardBody>
+            <CardHeader>
+              <CardTitle>Architecture</CardTitle>
+            </CardHeader>
+            <CardBody>
+              <Markdown text={plan.architecture} />
+            </CardBody>
           </Card>
         )}
 
@@ -71,26 +85,34 @@ export function OverviewTab({ detail }: { detail: PlanDetail }) {
                 {plan.graph.map((row) => {
                   const view = detail.phases.find((p) => p.phase === row.phase);
                   return (
-                  <TR key={row.phase} className="relative">
-                    <TD className="font-mono">
-                      <a
-                        href={phaseHref(plan.slug, row.phase)}
-                        className="rounded-sm after:absolute after:inset-0 after:content-['']"
-                      >
-                        {row.phase}
-                      </a>
-                    </TD>
-                    <TD className="text-ink"><MarkdownInline text={row.title} /></TD>
-                    <TD>
-                      {view
-                        ? <DepsCell slug={plan.slug} phase={view} />
-                        : <span className="font-mono text-xs">{row.dependsOn.join(', ') || '—'}</span>}
-                    </TD>
-                    <TD><LockCell lock={view?.lock} /></TD>
-                    <TD className="font-mono text-xs">{row.parallelSafe || '—'}</TD>
-                    <TD className="font-mono text-xs">{row.repos || '—'}</TD>
-                    <TD className="text-xs"><MarkdownInline text={row.exitCriteria} /></TD>
-                  </TR>
+                    <TR key={row.phase} className="relative">
+                      <TD className="font-mono">
+                        <a
+                          href={phaseHref(plan.slug, row.phase)}
+                          className="rounded-sm after:absolute after:inset-0 after:content-['']"
+                        >
+                          {row.phase}
+                        </a>
+                      </TD>
+                      <TD className="text-ink">
+                        <MarkdownInline text={row.title} />
+                      </TD>
+                      <TD>
+                        {view ? (
+                          <DepsCell slug={plan.slug} phase={view} />
+                        ) : (
+                          <span className="font-mono text-xs">{row.dependsOn.join(', ') || '—'}</span>
+                        )}
+                      </TD>
+                      <TD>
+                        <LockCell lock={view?.lock} />
+                      </TD>
+                      <TD className="font-mono text-xs">{row.parallelSafe || '—'}</TD>
+                      <TD className="font-mono text-xs">{row.repos || '—'}</TD>
+                      <TD className="text-xs">
+                        <MarkdownInline text={row.exitCriteria} />
+                      </TD>
+                    </TR>
                   );
                 })}
               </TBody>
@@ -98,23 +120,33 @@ export function OverviewTab({ detail }: { detail: PlanDetail }) {
           </TableWrap>
           {plan.callouts.length > 0 && (
             <CardBody className="border-t border-rule">
-              {plan.callouts.map((line, i) => <Markdown key={i} text={line} />)}
+              {plan.callouts.map((line, i) => (
+                <Markdown key={i} text={line} />
+              ))}
             </CardBody>
           )}
         </Card>
 
         {plan.endToEnd && (
           <Card>
-            <CardHeader><CardTitle>End-to-end verification</CardTitle></CardHeader>
-            <CardBody><Markdown text={plan.endToEnd} /></CardBody>
+            <CardHeader>
+              <CardTitle>End-to-end verification</CardTitle>
+            </CardHeader>
+            <CardBody>
+              <Markdown text={plan.endToEnd} />
+            </CardBody>
           </Card>
         )}
       </div>
 
       <div className="flex min-w-0 flex-col gap-3">
         <Card>
-          <CardHeader><CardTitle>Session budget</CardTitle></CardHeader>
-          <CardBody><Markdown text={plan.sessionBudget.raw} /></CardBody>
+          <CardHeader>
+            <CardTitle>Session budget</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <Markdown text={plan.sessionBudget.raw} />
+          </CardBody>
         </Card>
 
         <Card>
@@ -125,20 +157,22 @@ export function OverviewTab({ detail }: { detail: PlanDetail }) {
             )}
           </CardHeader>
           <CardBody className={detail.memory ? 'max-h-[32rem] overflow-auto overscroll-contain' : ''}>
-            {detail.memory
-              ? <Markdown text={detail.memory.text} />
-              : (
-                <p className="text-sm text-ink-faint">
-                  No <code className="font-mono">{detail.summary.slug}</code> memory entry found in the
-                  Claude memory directories.
-                </p>
-              )}
+            {detail.memory ? (
+              <Markdown text={detail.memory.text} />
+            ) : (
+              <p className="text-sm text-ink-faint">
+                No <code className="font-mono">{detail.summary.slug}</code> memory entry found in the Claude
+                memory directories.
+              </p>
+            )}
           </CardBody>
         </Card>
 
         {detail.locks.length > 0 && (
           <Card>
-            <CardHeader><CardTitle>Locks</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle>Locks</CardTitle>
+            </CardHeader>
             <CardBody className="flex flex-col gap-1.5">
               {detail.locks.map((lock) => (
                 <div key={lock.phase} className="flex items-center justify-between gap-2 text-sm">

@@ -30,7 +30,13 @@ import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // route, so a direct import from BOTH views is exactly the second facade that
 // renames the chunk.
 import {
-  EndedBanner, SESSION_HINTS, SessionControls, SessionGone, SessionStrip, SessionVitals, TerminalPane,
+  EndedBanner,
+  SESSION_HINTS,
+  SessionControls,
+  SessionGone,
+  SessionStrip,
+  SessionVitals,
+  TerminalPane,
   sessionStateNote,
 } from '../terminal/pane';
 import { Launcher, type LaunchBody } from './launcher';
@@ -49,13 +55,15 @@ export default function AgentView({ route }: { route: Route }) {
   const sessions = all.filter((session) => session.kind === 'claude');
   // Live processes only: ended records stay listed (that is where the `--resume`
   // id lives) and must not hold a slot. See the same note on the terminal page.
-  const atCap = (terminals?.live ?? all.filter((session) => !session.exited).length)
-    >= (terminals?.limit ?? 8);
+  const atCap =
+    (terminals?.live ?? all.filter((session) => !session.exited).length) >= (terminals?.limit ?? 8);
   const wanted = route.segments[1];
   const open = sessions.find((session) => session.id === wanted);
 
   // `void`, never `await` — the terminal page's rule, for the same deadlock.
-  const refresh = () => { void client.invalidateQueries({ queryKey: keys.terminal() }); };
+  const refresh = () => {
+    void client.invalidateQueries({ queryKey: keys.terminal() });
+  };
 
   /**
    * A URL naming a session this console has never heard of no longer bounces —
@@ -93,9 +101,9 @@ export default function AgentView({ route }: { route: Route }) {
     // Seeded from the response rather than waited for, so the tab and the
     // pane are right on the very next render — the ticket carries the record.
     if (!ticket.session) return;
-    client.setQueryData(keys.terminal(), (prev: typeof terminals) => (prev
-      ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session] }
-      : prev));
+    client.setQueryData(keys.terminal(), (prev: typeof terminals) =>
+      prev ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session] } : prev,
+    );
   }
 
   async function close(id: string) {
@@ -113,7 +121,10 @@ export default function AgentView({ route }: { route: Route }) {
   async function dismiss(id: string) {
     try {
       const result = await api.sessionDismiss(id);
-      if (!result.ok) { toast(String(result.reason ?? 'refused'), 'error'); return; }
+      if (!result.ok) {
+        toast(String(result.reason ?? 'refused'), 'error');
+        return;
+      }
       if (result.state) client.setQueryData(keys.terminal(), result.state);
       const rest = sessions.filter((session) => session.id !== id);
       navigate(rest.length ? `agent/${rest[0].id}` : 'agent');
@@ -132,10 +143,9 @@ export default function AgentView({ route }: { route: Route }) {
           title="Agent sessions are off"
           body={
             <>
-              An agent session is an interactive Claude Code CLI in a terminal on this machine —
-              it acts only with your approval, in the terminal itself, but starting one is still
-              its own decision. Restart the console with{' '}
-              <code className="rounded bg-surface-raised px-1 font-mono">--allow-agent</code>{' '}
+              An agent session is an interactive Claude Code CLI in a terminal on this machine — it acts only
+              with your approval, in the terminal itself, but starting one is still its own decision. Restart
+              the console with <code className="rounded bg-surface-raised px-1 font-mono">--allow-agent</code>{' '}
               to turn it on.
             </>
           }
@@ -152,10 +162,10 @@ export default function AgentView({ route }: { route: Route }) {
           title="No terminal available"
           body={
             <>
-              <code className="rounded bg-surface-raised px-1 font-mono">node-pty</code> did not
-              load, so this console cannot open a pty for the session to run in. Run{' '}
-              <code className="rounded bg-surface-raised px-1 font-mono">npm install</code> in the
-              viewer directory and restart. Everything else on the console is unaffected.
+              <code className="rounded bg-surface-raised px-1 font-mono">node-pty</code> did not load, so this
+              console cannot open a pty for the session to run in. Run{' '}
+              <code className="rounded bg-surface-raised px-1 font-mono">npm install</code> in the viewer
+              directory and restart. Everything else on the console is unaffected.
             </>
           }
         />
@@ -164,14 +174,20 @@ export default function AgentView({ route }: { route: Route }) {
   }
 
   if (isPending) {
-    return <Frame><div className="grid flex-1 place-items-center"><Spinner /></div></Frame>;
+    return (
+      <Frame>
+        <div className="grid flex-1 place-items-center">
+          <Spinner />
+        </div>
+      </Frame>
+    );
   }
 
   /* ---------------- the page ---------------- */
 
   const capNote = atCap
-    ? `The limit is ${terminals?.limit ?? 8} running sessions across shells and agents — `
-      + 'close one first (ended ones do not count).'
+    ? `The limit is ${terminals?.limit ?? 8} running sessions across shells and agents — ` +
+      'close one first (ended ones do not count).'
     : undefined;
 
   return (
@@ -182,13 +198,15 @@ export default function AgentView({ route }: { route: Route }) {
       <SessionStrip
         kind="claude"
         sessions={sessions.map((session) => ({
-          id: session.id, label: session.label, note: sessionStateNote(session),
+          id: session.id,
+          label: session.label,
+          note: sessionStateNote(session),
         }))}
         activeId={open?.id}
         onSelect={(id) => navigate(`agent/${id}`)}
         onClose={(id) => void close(id)}
         note={capNote}
-        actions={(
+        actions={
           <Button
             size="sm"
             className="ml-1 min-h-(--tap-min) shrink-0"
@@ -198,36 +216,42 @@ export default function AgentView({ route }: { route: Route }) {
           >
             <Plus size={14} aria-hidden /> New
           </Button>
-        )}
-        more={<span className="shrink-0"><NewPlanWizardButton allowAgent={allowed} /></span>}
-        details={open && (
-          <>
-            {/* Freeze / Continue / Stop — the lane verbs, for THIS session. */}
-            <SessionControls session={open} />
-            {/* Plan · phase · elapsed · ETA — the four facts that say what this
+        }
+        more={
+          <span className="shrink-0">
+            <NewPlanWizardButton allowAgent={allowed} />
+          </span>
+        }
+        details={
+          open && (
+            <>
+              {/* Freeze / Continue / Stop — the lane verbs, for THIS session. */}
+              <SessionControls session={open} />
+              {/* Plan · phase · elapsed · ETA — the four facts that say what this
                 session IS, before the mode chip says how it was launched. */}
-            <SessionVitals session={open} />
-            {/* What the process was STARTED under. ⇧Tab changes the mode inside
+              <SessionVitals session={open} />
+              {/* What the process was STARTED under. ⇧Tab changes the mode inside
                 the session and tells nothing out here, so the chip is a record
                 of the launch and the title says exactly that — a label that
                 silently went stale would be worse than no label. */}
-            <Chip mono title={MODE_TITLE}>
-              launched in {modeName(open.meta?.permissionMode)}
-            </Chip>
-            {/* The shortcut itself, where someone reading the chip is already
+              <Chip mono title={MODE_TITLE}>
+                launched in {modeName(open.meta?.permissionMode)}
+              </Chip>
+              {/* The shortcut itself, where someone reading the chip is already
                 looking. Desktop only: a phone has no ⇧Tab to press, and the
                 keybar under the terminal already offers the button. */}
-            <span className="hidden items-center gap-1.5 text-2xs text-ink-faint md:flex">
-              <kbd className="rounded border border-rule bg-surface-raised px-1 py-0.5 font-mono text-2xs">
-                ⇧Tab
-              </kbd>
-              cycles permission modes
-            </span>
-            <Chip mono className="hidden md:inline-flex" title={open.cwd}>
-              {(size ?? open).cols}×{(size ?? open).rows}
-            </Chip>
-          </>
-        )}
+              <span className="hidden items-center gap-1.5 text-2xs text-ink-faint md:flex">
+                <kbd className="rounded border border-rule bg-surface-raised px-1 py-0.5 font-mono text-2xs">
+                  ⇧Tab
+                </kbd>
+                cycles permission modes
+              </span>
+              <Chip mono className="hidden md:inline-flex" title={open.cwd}>
+                {(size ?? open).cols}×{(size ?? open).rows}
+              </Chip>
+            </>
+          )
+        }
         hints={[...SESSION_HINTS, MODE_TITLE]}
       />
 
@@ -294,7 +318,10 @@ function PlanWatcher() {
   useEffect(() => {
     if (!plans) return;
     const seen = baseline.current;
-    if (!seen) { baseline.current = new Set(plans.map((plan) => plan.slug)); return; }
+    if (!seen) {
+      baseline.current = new Set(plans.map((plan) => plan.slug));
+      return;
+    }
     const fresh = plans.find((plan) => !seen.has(plan.slug));
     if (fresh) setCreated((current) => current ?? fresh.slug);
   }, [plans]);
@@ -305,7 +332,9 @@ function PlanWatcher() {
       <Sparkles size={14} className="shrink-0 text-action" aria-hidden />
       <span>
         Plan <code className="rounded bg-surface-raised px-1 font-mono">{created}</code> was created —{' '}
-        <a className="text-action underline underline-offset-2" href={planHref(created)}>open it</a>
+        <a className="text-action underline underline-offset-2" href={planHref(created)}>
+          open it
+        </a>
       </span>
       <button
         type="button"

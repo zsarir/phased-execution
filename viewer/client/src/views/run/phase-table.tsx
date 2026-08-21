@@ -17,11 +17,34 @@
 
 import { useState } from 'react';
 import {
-  Button, Card, CardBody, CardHeader, CardTitle, Chip, Empty, StateChip, TBody, TD, TH, THead, TR, Table, TableWrap, toast, StatusBadge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Chip,
+  Empty,
+  StateChip,
+  TBody,
+  TD,
+  TH,
+  THead,
+  TR,
+  Table,
+  TableWrap,
+  toast,
+  StatusBadge,
 } from '@/components/ui';
 import {
-  api, type PhaseEta, type PhaseLock, type PhaseRecord, type PhaseScope, type PhaseView,
-  type QueueEntry, type RunState, type TerminalSession,
+  api,
+  type PhaseEta,
+  type PhaseLock,
+  type PhaseRecord,
+  type PhaseScope,
+  type PhaseView,
+  type QueueEntry,
+  type RunState,
+  type TerminalSession,
 } from '@/lib/api';
 import { countdown, duration, elapsed, money, pad2, relativeTime } from '@/lib/format';
 import { DepsCell, LockCell, PhaseDetails, SizeCell } from '@/views/plan/phase-cells';
@@ -41,7 +64,11 @@ import { RecoveryActions } from '@/components/recovery-actions';
 import { queueEntryFor, waitingLabel } from './session-panes';
 import { phaseHref } from '@shared/routes.js';
 import {
-  BOARD_ORDER, boardCounts, fellOverToAnotherModel, mergePhases, phaseActions,
+  BOARD_ORDER,
+  boardCounts,
+  fellOverToAnotherModel,
+  mergePhases,
+  phaseActions,
 } from '@shared/phase-model.js';
 import { Bot, Gauge, TerminalSquare } from 'lucide-react';
 
@@ -69,9 +96,7 @@ import { cn } from '@/lib/cn';
  * header). Exported because it is a rule about whose word counts, and a rule
  * like that should be checkable without rendering a table.
  */
-export function displayState(
-  boardState: string, { running }: { running: boolean },
-): string {
+export function displayState(boardState: string, { running }: { running: boolean }): string {
   return running && boardState !== 'done' ? 'in-progress' : boardState;
 }
 
@@ -95,10 +120,7 @@ interface Actions {
 
 const merge = mergePhases as (planPhases: PhaseView[], run: RunState | null) => MergedPhase[];
 const counts = boardCounts as (rows: MergedPhase[]) => Record<string, number>;
-const actionsFor = phaseActions as (
-  phase: MergedPhase,
-  ctx: { live: boolean; allowRun: boolean },
-) => Actions;
+const actionsFor = phaseActions as (phase: MergedPhase, ctx: { live: boolean; allowRun: boolean }) => Actions;
 const fellOver = fellOverToAnotherModel as (record: PhaseRecord | undefined) => boolean;
 const ORDER = BOARD_ORDER as string[];
 /** The Repos cell as scope tokens, never empty — a blank cell means `all`. */
@@ -183,9 +205,9 @@ export function PhaseTable({
 
       <CardBody className="p-0">
         <p className="max-w-prose px-4 py-2 text-2xs text-ink-faint">
-          Status is the plan's own board, so a phase finished by any other session reads as finished
-          here.
-          {asked && ` This run was asked for phase${asked.size === 1 ? '' : 's'} ${[...asked].join(', ')} only.`}
+          Status is the plan's own board, so a phase finished by any other session reads as finished here.
+          {asked &&
+            ` This run was asked for phase${asked.size === 1 ? '' : 's'} ${[...asked].join(', ')} only.`}
         </p>
 
         <TableWrap>
@@ -212,9 +234,15 @@ export function PhaseTable({
                 <TH scope="col">Repos</TH>
                 <TH scope="col">Size</TH>
                 <TH scope="col">This run</TH>
-                <TH scope="col" className="text-right">Cost</TH>
-                <TH scope="col" className="text-right">Turns</TH>
-                <TH scope="col" className="text-right">Took</TH>
+                <TH scope="col" className="text-right">
+                  Cost
+                </TH>
+                <TH scope="col" className="text-right">
+                  Turns
+                </TH>
+                <TH scope="col" className="text-right">
+                  Took
+                </TH>
                 <TH scope="col">
                   <span className="sr-only">Actions</span>
                 </TH>
@@ -311,13 +339,13 @@ function PhaseRows({
   // What the two start-work buttons would have offered if nothing held the
   // phase — so they can be rendered disabled rather than disappearing.
   const blockedRunAlone = Boolean(can.heldBy) && !live && p.state === 'ready' && allowRun;
-  const blockedRetry = Boolean(can.heldBy) && !live
-    && ['failed', 'interrupted', 'parked', 'gated'].includes(r?.status ?? '');
+  const blockedRetry =
+    Boolean(can.heldBy) && !live && ['failed', 'interrupted', 'parked', 'gated'].includes(r?.status ?? '');
   const heldTitle = can.heldBy
-    ? `Phase ${p.phase} is claimed by ${can.heldBy.owner}`
-      + (can.heldBy.host ? ` on ${can.heldBy.host}` : '')
-      + `${can.heldBy.leaseUntil ? ` — the lease runs ${countdown(can.heldBy.leaseUntil)} more` : ''}.`
-      + ' Release the claim to start a session here.'
+    ? `Phase ${p.phase} is claimed by ${can.heldBy.owner}` +
+      (can.heldBy.host ? ` on ${can.heldBy.host}` : '') +
+      `${can.heldBy.leaseUntil ? ` — the lease runs ${countdown(can.heldBy.leaseUntil)} more` : ''}.` +
+      ' Release the claim to start a session here.'
     : undefined;
 
   // A recovery is offered for a phase that is genuinely stuck — never for one
@@ -326,18 +354,19 @@ function PhaseRows({
   // A stuck phase (its handoff says blocked) often has NO record on this run —
   // the work happened in another session — so the board state is the fallback
   // fact when the record has nothing to say.
-  const recoveryClass = recovery && !live && p.state !== 'done'
-    ? (r ? classifyPhase(r.status, run, { authFailure: recovery.authFailure ?? false }) : undefined)
-      ?? classifyBoardPhase(p.state)
-    : undefined;
+  const recoveryClass =
+    recovery && !live && p.state !== 'done'
+      ? ((r ? classifyPhase(r.status, run, { authFailure: recovery.authFailure ?? false }) : undefined) ??
+        classifyBoardPhase(p.state))
+      : undefined;
   const recovering = liveRecovery(recovery?.sessions, { slug, phase: p.phase });
   const reviewing = liveQa(recovery?.sessions, { slug, phase: p.phase });
 
   // A session of THIS run is open on this phase. `startedAt` with no `endedAt`
   // is the record's own account; `live` is the console's, and both have to hold
   // — a checkpoint left by a killed console has the first and not the second.
-  const running = live && Boolean(r?.startedAt) && !r?.endedAt
-    && (r?.status === 'running' || r?.status === 'verifying');
+  const running =
+    live && Boolean(r?.startedAt) && !r?.endedAt && (r?.status === 'running' || r?.status === 'verifying');
   const showing = displayState(p.state, { running });
   // The record is what THIS run is doing; the entry is the scheduler's own view.
   // Either alone is enough to say the phase is in a line.
@@ -354,7 +383,11 @@ function PhaseRows({
             {p.title}
           </a>
           <div className="mt-0.5 flex flex-wrap items-center gap-1">
-            {p.gated && <Chip tone="gate" title={boardStateTitle('gated')}>gated</Chip>}
+            {p.gated && (
+              <Chip tone="gate" title={boardStateTitle('gated')}>
+                gated
+              </Chip>
+            )}
             {/* The row's own record, not the mirror pointer: with two lanes
                 live, `activePhase` names only the lowest one. */}
             {running && <Chip tone="busy">running now</Chip>}
@@ -373,10 +406,12 @@ function PhaseRows({
             <StateChip
               state={showing}
               board
-              title={showing !== p.state
-                ? `This run is working on phase ${p.phase} now. The board still reads `
-                  + `"${p.state}" and catches up when the phase's handoff lands.`
-                : undefined}
+              title={
+                showing !== p.state
+                  ? `This run is working on phase ${p.phase} now. The board still reads ` +
+                    `"${p.state}" and catches up when the phase's handoff lands.`
+                  : undefined
+              }
             />
             <QaVerdict qa={p.qa} />
           </div>
@@ -387,28 +422,45 @@ function PhaseRows({
             <div className="mt-0.5">
               <Chip
                 tone="busy"
-                title={entry?.waitingOn.length
-                  ? entry.waitingOn
-                    .map((h) => `${h.slug}${h.phase != null ? ` P${h.phase}` : ''}`
-                      + (h.overlaps.length ? ` — overlaps ${h.overlaps.join(', ')}` : ''))
-                    .join('\n')
-                  : 'Waiting on the scheduler for a scope something else is holding'}
+                title={
+                  entry?.waitingOn.length
+                    ? entry.waitingOn
+                        .map(
+                          (h) =>
+                            `${h.slug}${h.phase != null ? ` P${h.phase}` : ''}` +
+                            (h.overlaps.length ? ` — overlaps ${h.overlaps.join(', ')}` : ''),
+                        )
+                        .join('\n')
+                    : 'Waiting on the scheduler for a scope something else is holding'
+                }
               >
                 {waitingLabel(entry)}
               </Chip>
             </div>
           )}
         </TD>
-        <TD><DepsCell slug={slug} phase={p} /></TD>
-        <TD><LockCell lock={p.lock} compact /></TD>
+        <TD>
+          <DepsCell slug={slug} phase={p} />
+        </TD>
+        <TD>
+          <LockCell lock={p.lock} compact />
+        </TD>
         <TD>
           <ScopeChips tokens={scopeOf(p.row?.repos)} conflicts={conflicts} />
         </TD>
-        <TD><SizeCell phase={p} eta={eta} /></TD>
+        <TD>
+          <SizeCell phase={p} eta={eta} />
+        </TD>
         <TD className="text-2xs">
           {r ? (
             <>
-              <StatusBadge state={phaseUiState(r.status)} label={r.status} mono title={phaseStatusTitle(r.status)} pulse={r.status === 'running'} />
+              <StatusBadge
+                state={phaseUiState(r.status)}
+                label={r.status}
+                mono
+                title={phaseStatusTitle(r.status)}
+                pulse={r.status === 'running'}
+              />
               {/* Same icon vocabulary as the header's Model tile — what a row
                   ran as should not be the smallest, least-scannable text on it. */}
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ink-faint">
@@ -438,7 +490,8 @@ function PhaseRows({
                   never used. */}
               {r.mcpCalls && Object.keys(r.mcpCalls).length > 0 && (
                 <div className="text-2xs text-ink-faint">
-                  mcp {Object.entries(r.mcpCalls)
+                  mcp{' '}
+                  {Object.entries(r.mcpCalls)
                     .map(([id, calls]) => `${id} ×${calls}`)
                     .join(' · ')}
                 </div>
@@ -456,18 +509,24 @@ function PhaseRows({
             been 40 minutes" into "and that is about right" or "and that is
             twice as long". One not yet attempted wants the estimate alone. */}
         <TD className="text-right font-mono tabular-nums">
-          {r?.durationMs
-            ? duration(r.durationMs)
-            : running
-              ? (
-                <span title={eta ? `Phase ${p.phase} was expected to take about ${eta.label.replace('~', '')}.` : undefined}>
-                  {elapsed(runningMs)}
-                  {eta && <span className="text-ink-faint"> / {phaseProgress(runningMs, eta.estMs)}</span>}
-                </span>
-              )
-              : eta
-                ? <span className="text-ink-faint" title={`An estimate for phase ${p.phase}, not a measurement.`}>{eta.label}</span>
-                : '—'}
+          {r?.durationMs ? (
+            duration(r.durationMs)
+          ) : running ? (
+            <span
+              title={
+                eta ? `Phase ${p.phase} was expected to take about ${eta.label.replace('~', '')}.` : undefined
+              }
+            >
+              {elapsed(runningMs)}
+              {eta && <span className="text-ink-faint"> / {phaseProgress(runningMs, eta.estMs)}</span>}
+            </span>
+          ) : eta ? (
+            <span className="text-ink-faint" title={`An estimate for phase ${p.phase}, not a measurement.`}>
+              {eta.label}
+            </span>
+          ) : (
+            '—'
+          )}
         </TD>
         <TD>
           <div className="flex flex-wrap items-center gap-1">
@@ -477,10 +536,12 @@ function PhaseRows({
             {p.elsewhere && r && ['failed', 'interrupted', 'parked', 'gated'].includes(r.status) && (
               <span
                 className="text-2xs text-ink-faint"
-                title={'This run\'s own attempt stopped'
-                  + (r.note ? ` (${r.note.slice(0, 160)})` : '')
-                  + ' — but the phase was finished and verified outside it, and the board reads done.'
-                  + ' There is nothing to fix; Why? opens what failed here.'}
+                title={
+                  "This run's own attempt stopped" +
+                  (r.note ? ` (${r.note.slice(0, 160)})` : '') +
+                  ' — but the phase was finished and verified outside it, and the board reads done.' +
+                  ' There is nothing to fix; Why? opens what failed here.'
+                }
               >
                 nothing to fix — done elsewhere
               </span>
@@ -490,12 +551,16 @@ function PhaseRows({
                 whole complaint that put a Lock column on this table. It stays
                 in place, greyed, and says who holds it. */}
             {(can.retry || (blockedRetry && allowRun)) && (
-              <Button size="sm"
+              <Button
+                size="sm"
                 disabled={!can.retry}
-                title={can.retry
-                  ? "Clears this phase's failure and CONTINUES the run from here — a session starts, under normal admission."
-                  : heldTitle}
-                onClick={() => void onAct('retry', () => api.runRetry(slug, p.phase))}>
+                title={
+                  can.retry
+                    ? "Clears this phase's failure and CONTINUES the run from here — a session starts, under normal admission."
+                    : heldTitle
+                }
+                onClick={() => void onAct('retry', () => api.runRetry(slug, p.phase))}
+              >
                 Retry
               </Button>
             )}
@@ -508,9 +573,11 @@ function PhaseRows({
               <Button
                 size="sm"
                 disabled={!can.runAlone}
-                title={can.runAlone
-                  ? 'Run this phase on its own, then stop — the loop does not carry on into the rest of the plan'
-                  : heldTitle}
+                title={
+                  can.runAlone
+                    ? 'Run this phase on its own, then stop — the loop does not carry on into the rest of the plan'
+                    : heldTitle
+                }
                 onClick={() => onRunAlone(p.phase)}
               >
                 Run only this
@@ -518,9 +585,7 @@ function PhaseRows({
             )}
             {/* The way out, right where the refusal is. Releasing a live claim
                 is the operator's decision and asks for it explicitly. */}
-            {can.heldBy && allowRun && (
-              <ForceReleaseButton slug={slug} phase={p.phase} lock={can.heldBy} />
-            )}
+            {can.heldBy && allowRun && <ForceReleaseButton slug={slug} phase={p.phase} lock={can.heldBy} />}
             {/* Last, and only when a rule cannot settle it. Retry re-runs the
                 phase unchanged and Skip abandons it; this is the middle that
                 was missing — read the evidence, fix the cause, finish. */}
@@ -577,7 +642,8 @@ function PhaseRows({
                 {r.waits ? ` (wait ${r.waits})` : ''}
                 {r.watch?.length ? (
                   <>
-                    {' '}· watching <code className="font-mono">{r.watch.join(', ')}</code>
+                    {' '}
+                    · watching <code className="font-mono">{r.watch.join(', ')}</code>
                   </>
                 ) : null}
               </div>
@@ -607,7 +673,9 @@ function PhaseRows({
                   {r.preflight.length} verification warning{r.preflight.length === 1 ? '' : 's'} from boarding
                 </summary>
                 <ul className="mt-1 flex flex-col gap-0.5 text-2xs">
-                  {r.preflight.map((warning, i) => <li key={i}>{warning}</li>)}
+                  {r.preflight.map((warning, i) => (
+                    <li key={i}>{warning}</li>
+                  ))}
                 </ul>
               </details>
             ) : null}
@@ -617,14 +685,13 @@ function PhaseRows({
               // handoff afterwards, so this one stays open. The errand is the
               // operator's, and it is the same errand every time.
               <p className="mt-1 text-2xs text-gated">
-                Ran without {r.mcpDegraded.map((d) => `${d.id} (${d.detail ?? MCP_REASON[d.reason]})`).join(', ')}
+                Ran without{' '}
+                {r.mcpDegraded.map((d) => `${d.id} (${d.detail ?? MCP_REASON[d.reason]})`).join(', ')}
                 {' — '}the session was told to record what it could not do.
               </p>
             ) : null}
             {r?.mcpPark && r.status === 'parked' ? <McpParkNote park={r.mcpPark} /> : null}
-            {can.diagnose && (
-              <PhaseDiagnosis slug={slug} phase={p.phase} run={run} />
-            )}
+            {can.diagnose && <PhaseDiagnosis slug={slug} phase={p.phase} run={run} />}
             <details className={cn('group', hasNote && 'mt-1')}>
               <summary className="cursor-pointer text-2xs text-ink-faint hover:text-ink-muted">
                 Everything about phase {p.phase}
@@ -647,7 +714,8 @@ function PhaseRows({
  */
 function McpParkNote({ park }: { park: NonNullable<PhaseRecord['mcpPark']> }) {
   const { data: state } = useConsoleState();
-  const timeoutMs = typeof state?.prefs?.mcpRequireTimeoutMs === 'number' ? state.prefs.mcpRequireTimeoutMs : 1_800_000;
+  const timeoutMs =
+    typeof state?.prefs?.mcpRequireTimeoutMs === 'number' ? state.prefs.mcpRequireTimeoutMs : 1_800_000;
   const since = Date.parse(park.at);
   const servers = park.degraded.map((d) => d.id).join(', ') || 'an MCP server';
   const due = timeoutMs > 0 && Number.isFinite(since) ? new Date(since + timeoutMs) : null;
@@ -687,9 +755,7 @@ const BLOCKED_ON: Record<string, string> = {
  * the phase record the moment the session ends — green settles the phase via
  * the normal re-check, red lands as evidence with its output.
  */
-function VerifyInTerminalButton({ slug, phase, command }: {
-  slug: string; phase: number; command: string;
-}) {
+function VerifyInTerminalButton({ slug, phase, command }: { slug: string; phase: number; command: string }) {
   const { data: state } = useConsoleState();
   const [busy, setBusy] = useState(false);
   const allowed = Boolean(state?.allowTerminal);
@@ -698,14 +764,17 @@ function VerifyInTerminalButton({ slug, phase, command }: {
       size="sm"
       variant="ghost"
       disabled={!allowed || busy}
-      title={allowed
-        ? 'Runs exactly this recorded command in the integrated terminal — your shell, the '
-          + "phase's own directory. The exit code is written back onto this phase when it ends; "
-          + 'if everything reads green, the phase re-checks itself.'
-        : 'The terminal is disabled. Restart the console with --allow-terminal.'}
+      title={
+        allowed
+          ? 'Runs exactly this recorded command in the integrated terminal — your shell, the ' +
+            "phase's own directory. The exit code is written back onto this phase when it ends; " +
+            'if everything reads green, the phase re-checks itself.'
+          : 'The terminal is disabled. Restart the console with --allow-terminal.'
+      }
       onClick={() => {
         setBusy(true);
-        void api.runVerifyCommand(slug, phase, command)
+        void api
+          .runVerifyCommand(slug, phase, command)
           .then((minted) => navigate(`terminal/${minted.sessionId}`))
           .catch((error: unknown) => toast((error as Error).message, 'error'))
           .finally(() => setBusy(false));
@@ -730,7 +799,8 @@ function PhaseDiagnosis({
   const { data, error, isFetching } = useDiagnosis(slug, phase, open);
 
   const failed = (data?.verification?.ran ?? []).filter((x) => !x.ok);
-  const pre = 'mt-1 max-h-56 overflow-auto rounded border border-rule bg-ground px-2 py-1.5 font-mono text-2xs whitespace-pre-wrap';
+  const pre =
+    'mt-1 max-h-56 overflow-auto rounded border border-rule bg-ground px-2 py-1.5 font-mono text-2xs whitespace-pre-wrap';
 
   return (
     <details className="mt-1.5" onToggle={(e) => setOpen(e.currentTarget.open)}>
@@ -861,7 +931,14 @@ function PhaseDiagnosis({
             ctx={{
               ...(run ? { run } : {}),
               record: { status: data.status, resumable: data.resumable },
-              ...(data.situation ? { situation: { id: data.situation.id, ...(data.situation.sub ? { sub: data.situation.sub } : {}) } } : {}),
+              ...(data.situation
+                ? {
+                    situation: {
+                      id: data.situation.id,
+                      ...(data.situation.sub ? { sub: data.situation.sub } : {}),
+                    },
+                  }
+                : {}),
             }}
             max={3}
             showBlurbs

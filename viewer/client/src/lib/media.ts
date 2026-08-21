@@ -45,9 +45,8 @@ function entry(query: string) {
 
 export function useMediaQuery(query: string): boolean {
   return useSyncExternalStore(
-    (notify) => (typeof window === 'undefined' || !window.matchMedia
-      ? () => {}
-      : entry(query).subscribe(notify)),
+    (notify) =>
+      typeof window === 'undefined' || !window.matchMedia ? () => {} : entry(query).subscribe(notify),
     () => (typeof window === 'undefined' || !window.matchMedia ? false : entry(query).list.matches),
     () => false,
   );
@@ -57,9 +56,10 @@ export function useMediaQuery(query: string): boolean {
 export const usePhone = (): boolean => useMediaQuery(`(max-width: ${BP_SHELL - 1}px)`);
 
 /** The same answer for code that runs outside React — a mint from a plain function. */
-export const isPhone = (): boolean => (typeof window !== 'undefined' && Boolean(window.matchMedia)
-  ? window.matchMedia(`(max-width: ${BP_SHELL - 1}px)`).matches
-  : false);
+export const isPhone = (): boolean =>
+  typeof window !== 'undefined' && Boolean(window.matchMedia)
+    ? window.matchMedia(`(max-width: ${BP_SHELL - 1}px)`).matches
+    : false;
 
 /** True when there is room for one column only. */
 export const useNarrow = (): boolean => useMediaQuery(`(max-width: ${BP_PHONE - 1}px)`);

@@ -26,12 +26,17 @@
 import { useMemo } from 'react';
 import { ArrowRight, GitBranch, HardDrive, Radio, ShieldCheck, TerminalSquare } from 'lucide-react';
 import {
-  useApprovals, useAuth, useConsoleState, usePlanDetails, usePlans, useRuns, useSessions, useStats,
+  useApprovals,
+  useAuth,
+  useConsoleState,
+  usePlanDetails,
+  usePlans,
+  useRuns,
+  useSessions,
+  useStats,
 } from '@/lib/queries';
 import { plural, weight } from '@/lib/format';
-import {
-  Banner, Card, CardBody, CardHeader, CardTitle, Chip, Skeleton, Tile,
-} from '@/components/ui';
+import { Banner, Card, CardBody, CardHeader, CardTitle, Chip, Skeleton, Tile } from '@/components/ui';
 import { Bars, StackBar } from '@/components/charts';
 import { LaunchDialog } from '@/components/launch-dialog';
 import { plainText } from '@/components/markdown';
@@ -69,9 +74,10 @@ export default function DashboardView() {
   // both the "In flight" hint and the six route strips — so without the closure
   // gate the dashboard opens on a wall of plans nobody is coming back to.
   const active = useMemo(
-    () => summaries
-      .filter((p) => p.kind === 'plan' && !isClosed(p) && (p.done ?? 0) < (p.phases ?? 0))
-      .sort((a, b) => (b.activity ?? 0) - (a.activity ?? 0)),
+    () =>
+      summaries
+        .filter((p) => p.kind === 'plan' && !isClosed(p) && (p.done ?? 0) < (p.phases ?? 0))
+        .sort((a, b) => (b.activity ?? 0) - (a.activity ?? 0)),
     [summaries],
   );
   const stripPlans = active.slice(0, STRIP_LIMIT);
@@ -85,9 +91,12 @@ export default function DashboardView() {
   const open = useMemo(() => summaries.filter((p) => !isClosed(p)), [summaries]);
 
   const expiredLocks = useMemo(
-    () => open.flatMap((p) => (p.locks ?? [])
-      .filter((l) => l.expired && l.phase != null)
-      .map((l) => ({ slug: p.slug, phase: l.phase! }))),
+    () =>
+      open.flatMap((p) =>
+        (p.locks ?? [])
+          .filter((l) => l.expired && l.phase != null)
+          .map((l) => ({ slug: p.slug, phase: l.phase! })),
+      ),
     [open],
   );
 
@@ -95,9 +104,7 @@ export default function DashboardView() {
   // a session is holding that phase *right now*. A stale `status:` line must not
   // make a running session invisible — the same argument P2 used to keep
   // `approval`/`needs-you`/`halted` notifications firing on a closed plan.
-  const claimed = summaries.reduce(
-    (n, p) => n + (p.locks ?? []).filter((l) => !l.expired).length, 0,
-  );
+  const claimed = summaries.reduce((n, p) => n + (p.locks ?? []).filter((l) => !l.expired).length, 0);
   const readyCount = open.reduce((n, p) => n + (p.ready?.length ?? 0), 0);
   const inFlight = open.reduce((n, p) => n + (p.inProgress?.length ?? 0), 0);
   // The issues themselves, not a count of them: the plan-error card names the
@@ -151,10 +158,12 @@ export default function DashboardView() {
       // `root.planCount` counts every document in `docs/plans`, which is not the
       // number the rail shows; a header that disagrees with the nav beside it
       // reads as a bug in both.
-      subtitle={root?.label
-        ? `${root.label} · ${plural(summaries.filter((p) => p.kind === 'plan').length, 'plan')}`
-          + `${state?.repo?.branch ? ` · ${state.repo.branch}` : ''}`
-        : undefined}
+      subtitle={
+        root?.label
+          ? `${root.label} · ${plural(summaries.filter((p) => p.kind === 'plan').length, 'plan')}` +
+            `${state?.repo?.branch ? ` · ${state.repo.branch}` : ''}`
+          : undefined
+      }
     >
       <div className="flex flex-col gap-4">
         {attention.length > 0 && (
@@ -169,17 +178,19 @@ export default function DashboardView() {
         {launch && <LaunchDialog request={launch} onClose={clearLaunch} />}
 
         <section aria-label="Running now" className="flex flex-col gap-4">
-          {isPending
-            ? <Skeleton className="h-16" />
-            : (runs ?? []).some((r) => ['running', 'waiting', 'pausing', 'stopping', 'frozen', 'halting'].includes(r.status))
-              ? <LiveStrip runs={runs ?? []} />
-              : (
-                <AllQuiet
-                  next={nextWithTitle(next, bySlug)}
-                  allowRun={Boolean(state?.allowRun)}
-                  allowAgent={state?.allowAgent === true}
-                />
-              )}
+          {isPending ? (
+            <Skeleton className="h-16" />
+          ) : (runs ?? []).some((r) =>
+              ['running', 'waiting', 'pausing', 'stopping', 'frozen', 'halting'].includes(r.status),
+            ) ? (
+            <LiveStrip runs={runs ?? []} />
+          ) : (
+            <AllQuiet
+              next={nextWithTitle(next, bySlug)}
+              allowRun={Boolean(state?.allowRun)}
+              allowAgent={state?.allowAgent === true}
+            />
+          )}
           {/* Directly under the run, because it answers the same question: an
               agent session left working overnight is as much "what is running
               now" as an autopilot phase, and nothing else on the console lists
@@ -191,7 +202,9 @@ export default function DashboardView() {
         <section aria-label="Totals">
           {isPending ? (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-20" />)}
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-20" />
+              ))}
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -199,7 +212,11 @@ export default function DashboardView() {
                 label="Ready now"
                 value={readyCount}
                 state={readyCount > 0 ? 'state-ready' : undefined}
-                hint={<a href="#/ready" className="hover:text-action">open the board</a>}
+                hint={
+                  <a href="#/ready" className="hover:text-action">
+                    open the board
+                  </a>
+                }
               />
               <Tile
                 label="In flight"
@@ -212,9 +229,11 @@ export default function DashboardView() {
               <Tile
                 label="Claimed"
                 value={claimed}
-                hint={expiredLocks.length
-                  ? `${plural(expiredLocks.length, 'lease')} expired`
-                  : 'phases a session is holding'}
+                hint={
+                  expiredLocks.length
+                    ? `${plural(expiredLocks.length, 'lease')} expired`
+                    : 'phases a session is holding'
+                }
                 state={claimed > 0 ? 'state-in-progress' : undefined}
               />
               <Tile
@@ -255,7 +274,10 @@ export default function DashboardView() {
             <Card>
               <CardHeader className="flex-wrap items-baseline gap-x-3 gap-y-1">
                 <CardTitle>Recent weeks</CardTitle>
-                <a href="#/stats" className="flex shrink-0 items-center gap-1 text-2xs text-ink-faint hover:text-action">
+                <a
+                  href="#/stats"
+                  className="flex shrink-0 items-center gap-1 text-2xs text-ink-faint hover:text-action"
+                >
                   all statistics <ArrowRight size={11} aria-hidden />
                 </a>
               </CardHeader>
@@ -264,7 +286,10 @@ export default function DashboardView() {
                 <p className="text-2xs text-ink-faint">
                   phases completed per week
                   {stats.medianCycleDays != null && (
-                    <> · median gap {stats.medianCycleDays === 0 ? 'same day' : `${stats.medianCycleDays}d`}</>
+                    <>
+                      {' '}
+                      · median gap {stats.medianCycleDays === 0 ? 'same day' : `${stats.medianCycleDays}d`}
+                    </>
                   )}
                 </p>
                 <dl className="mt-auto grid grid-cols-3 gap-2 border-t border-rule pt-2">
@@ -343,24 +368,37 @@ function ConsoleCard({
 }) {
   const repo = state?.repo;
   const caps = [
-    { id: 'writes', label: 'Writes', on: Boolean(state?.allowWrites), icon: <ShieldCheck size={12} aria-hidden /> },
+    {
+      id: 'writes',
+      label: 'Writes',
+      on: Boolean(state?.allowWrites),
+      icon: <ShieldCheck size={12} aria-hidden />,
+    },
     { id: 'run', label: 'Autopilot', on: Boolean(state?.allowRun), icon: <Radio size={12} aria-hidden /> },
-    { id: 'terminal', label: 'Terminal', on: Boolean(state?.allowTerminal), icon: <TerminalSquare size={12} aria-hidden /> },
+    {
+      id: 'terminal',
+      label: 'Terminal',
+      on: Boolean(state?.allowTerminal),
+      icon: <TerminalSquare size={12} aria-hidden />,
+    },
   ];
 
   return (
     <Card>
       <CardHeader className="flex-wrap items-baseline gap-x-3 gap-y-1">
         <CardTitle>This console</CardTitle>
-        <a href="#/settings" className="flex shrink-0 items-center gap-1 text-2xs text-ink-faint hover:text-action">
+        <a
+          href="#/settings"
+          className="flex shrink-0 items-center gap-1 text-2xs text-ink-faint hover:text-action"
+        >
           settings <ArrowRight size={11} aria-hidden />
         </a>
       </CardHeader>
       <CardBody className="flex flex-col gap-2.5">
         {state?.serverStale && (
           <Banner severity="warn">
-            The server on disk is newer than the one answering this page. Restart it from Settings to
-            pick the change up.
+            The server on disk is newer than the one answering this page. Restart it from Settings to pick the
+            change up.
           </Banner>
         )}
         {stale && (
@@ -374,8 +412,7 @@ function ConsoleCard({
         {(state?.environment?.issues ?? []).map((issue, index) => (
           <Banner key={`${issue.kind}-${index}`} severity="warn">
             <div className="min-w-0">
-              <strong>{issue.detail}</strong>{' '}
-              <span className="text-ink-muted">{issue.fix}</span>
+              <strong>{issue.detail}</strong> <span className="text-ink-muted">{issue.fix}</span>
             </div>
           </Banner>
         ))}
@@ -405,9 +442,21 @@ function ConsoleCard({
               </dt>
               <dd className="flex flex-wrap items-center gap-1.5 font-mono text-ink-muted">
                 {repo.branch}
-                {repo.ahead ? <Chip mono tone="warn">{repo.ahead} ahead</Chip> : null}
-                {repo.behind ? <Chip mono tone="warn">{repo.behind} behind</Chip> : null}
-                {repo.dirty?.length ? <Chip mono tone="warn">{plural(repo.dirty.length, 'file')} changed</Chip> : null}
+                {repo.ahead ? (
+                  <Chip mono tone="warn">
+                    {repo.ahead} ahead
+                  </Chip>
+                ) : null}
+                {repo.behind ? (
+                  <Chip mono tone="warn">
+                    {repo.behind} behind
+                  </Chip>
+                ) : null}
+                {repo.dirty?.length ? (
+                  <Chip mono tone="warn">
+                    {plural(repo.dirty.length, 'file')} changed
+                  </Chip>
+                ) : null}
               </dd>
             </>
           )}

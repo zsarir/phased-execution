@@ -23,7 +23,14 @@ import { SETUP_PROMPTS } from '@shared/setup-prompts.js';
 import { useTailscale } from '@/lib/queries';
 import type { TailscaleDevice, TailscaleStatus } from '@/lib/api';
 import {
-  Banner, Card, CardBody, CardHeader, CardTitle, CopyButton, KeyValue, Skeleton,
+  Banner,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  CopyButton,
+  KeyValue,
+  Skeleton,
 } from '@/components/ui';
 
 /** The port the console is served on, for the commands this card prints. */
@@ -50,18 +57,20 @@ function Devices({ self, peers }: { self: TailscaleDevice; peers: TailscaleDevic
                 {device.hostName}
                 {/* The leading space is read; the margin is only seen. Without
                     it a screen reader says "…MacBook Prothis machine". */}
-                {device.isSelf && <span className="ml-1 font-sans text-2xs text-ink-faint">{' '}this machine</span>}
+                {device.isSelf && (
+                  <span className="ml-1 font-sans text-2xs text-ink-faint"> this machine</span>
+                )}
               </td>
               <td className="py-1 pr-3 text-ink-muted">{device.os ?? '—'}</td>
               <td className="py-1">
-                {device.online
-                  ? <span className="text-done">online</span>
-                  : (
-                    <span className="text-ink-faint">
-                      offline
-                      {device.lastSeen && ` · last seen ${new Date(device.lastSeen).toLocaleDateString()}`}
-                    </span>
-                  )}
+                {device.online ? (
+                  <span className="text-done">online</span>
+                ) : (
+                  <span className="text-ink-faint">
+                    offline
+                    {device.lastSeen && ` · last seen ${new Date(device.lastSeen).toLocaleDateString()}`}
+                  </span>
+                )}
               </td>
             </tr>
           ))}
@@ -92,10 +101,13 @@ function Commands({ port, serving }: { port: number; serving: boolean }) {
       )}
       <div>
         <p className="mb-1 text-2xs text-ink-faint">
-          Then re-install the agent so the console answers to that hostname, keeping the flags it
-          already has.
+          Then re-install the agent so the console answers to that hostname, keeping the flags it already has.
         </p>
-        <Block text={'bash viewer/deploy/agent.sh install --root <repo> [existing flags] \\\n  --remote <name>.<tailnet>.ts.net --remote-user <your login>'} />
+        <Block
+          text={
+            'bash viewer/deploy/agent.sh install --root <repo> [existing flags] \\\n  --remote <name>.<tailnet>.ts.net --remote-user <your login>'
+          }
+        />
       </div>
     </div>
   );
@@ -130,8 +142,8 @@ function Mismatch({ status, remoteHosts }: { status: TailscaleStatus; remoteHost
   if (serving && !flagged) {
     return (
       <Banner severity="warn">
-        Tailscale is publishing this console, but it was started without <code>--remote</code>, so
-        every request through that URL is refused with a 421. Re-install with the hostname below.
+        Tailscale is publishing this console, but it was started without <code>--remote</code>, so every
+        request through that URL is refused with a 421. Re-install with the hostname below.
       </Banner>
     );
   }
@@ -139,8 +151,8 @@ function Mismatch({ status, remoteHosts }: { status: TailscaleStatus; remoteHost
   if (!serving && flagged) {
     return (
       <Banner severity="warn">
-        This console answers to <code>{remoteHosts.join(', ')}</code>, but nothing is being served
-        on 443 for it — the URL will not resolve. Run the serve command below.
+        This console answers to <code>{remoteHosts.join(', ')}</code>, but nothing is being served on 443 for
+        it — the URL will not resolve. Run the serve command below.
       </Banner>
     );
   }
@@ -152,8 +164,8 @@ function Mismatch({ status, remoteHosts }: { status: TailscaleStatus; remoteHost
       return (
         <Banner severity="warn">
           Tailscale serves <code>{host}</code>, but this console only answers to{' '}
-          <code>{remoteHosts.join(', ')}</code>. Requests arriving as <code>{host}</code> are
-          refused. Re-install with that hostname.
+          <code>{remoteHosts.join(', ')}</code>. Requests arriving as <code>{host}</code> are refused.
+          Re-install with that hostname.
         </Banner>
       );
     }
@@ -162,7 +174,11 @@ function Mismatch({ status, remoteHosts }: { status: TailscaleStatus; remoteHost
   return null;
 }
 
-export function TailscaleCard({ port, remoteHosts, remoteUsers }: {
+export function TailscaleCard({
+  port,
+  remoteHosts,
+  remoteUsers,
+}: {
   port: number;
   remoteHosts?: string[];
   remoteUsers?: string[];
@@ -177,15 +193,15 @@ export function TailscaleCard({ port, remoteHosts, remoteUsers }: {
         {setup && <CopyButton text={setup.prompt} label="Copy prompt" />}
       </CardHeader>
       <CardBody className="flex flex-col gap-3">
-        {isPending && !status
-          ? <Skeleton className="h-24" />
-          : <Body status={status} port={port} remoteHosts={remoteHosts} remoteUsers={remoteUsers} />}
+        {isPending && !status ? (
+          <Skeleton className="h-24" />
+        ) : (
+          <Body status={status} port={port} remoteHosts={remoteHosts} remoteUsers={remoteUsers} />
+        )}
 
         {setup && (
           <details className="text-sm">
-            <summary className="cursor-pointer text-ink-muted">
-              Have Claude set this up instead
-            </summary>
+            <summary className="cursor-pointer text-ink-muted">Have Claude set this up instead</summary>
             <pre className="m-0 mt-2 max-h-96 overflow-auto overscroll-contain rounded bg-ground-deep p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap">
               {setup.prompt}
             </pre>
@@ -196,7 +212,12 @@ export function TailscaleCard({ port, remoteHosts, remoteUsers }: {
   );
 }
 
-function Body({ status, port, remoteHosts, remoteUsers }: {
+function Body({
+  status,
+  port,
+  remoteHosts,
+  remoteUsers,
+}: {
   status?: TailscaleStatus;
   port: number;
   remoteHosts?: string[];
@@ -205,8 +226,8 @@ function Body({ status, port, remoteHosts, remoteUsers }: {
   if (!status) {
     return (
       <p className="text-sm text-ink-muted">
-        This server cannot report on Tailscale — it started before this feature existed. Restart it
-        above to ask.
+        This server cannot report on Tailscale — it started before this feature existed. Restart it above to
+        ask.
       </p>
     );
   }
@@ -215,9 +236,9 @@ function Body({ status, port, remoteHosts, remoteUsers }: {
     return (
       <>
         <p className="text-sm text-ink-muted">
-          Tailscale is not installed on this machine. It is the only supported way to reach this
-          console from another device: it puts an authenticating proxy in front of a server that
-          never leaves loopback, so nothing is ever exposed to a network.
+          Tailscale is not installed on this machine. It is the only supported way to reach this console from
+          another device: it puts an authenticating proxy in front of a server that never leaves loopback, so
+          nothing is ever exposed to a network.
         </p>
         <p className="text-sm text-ink-muted">
           Install it from <code>tailscale.com/download</code>, sign in, then come back here.
@@ -231,7 +252,13 @@ function Body({ status, port, remoteHosts, remoteUsers }: {
       <>
         <Banner severity="warn">
           Tailscale is installed but not running
-          {status.detail ? <> — <code>{status.detail}</code></> : null}.
+          {status.detail ? (
+            <>
+              {' '}
+              — <code>{status.detail}</code>
+            </>
+          ) : null}
+          .
         </Banner>
         <p className="text-sm text-ink-muted">
           Open the Tailscale app and sign in, then this card will fill in.
@@ -247,17 +274,40 @@ function Body({ status, port, remoteHosts, remoteUsers }: {
       <KeyValue
         items={[
           ['Tailnet', status.tailnet ?? 'unknown'],
-          ['MagicDNS', status.magicDns
-            ? <span>on{status.magicDnsSuffix ? <> · <code>{status.magicDnsSuffix}</code></> : null}</span>
-            : <span className="text-action">off — device names will not resolve</span>],
-          ['Serving', status.serve.forOurPort
-            ? <span className="text-done">this console, on 443</span>
-            : status.serve.active
-              ? <span className="text-action">something else — not this console&apos;s port</span>
-              : 'nothing'],
-          ['Allowed logins', remoteUsers?.length
-            ? <span className="font-mono text-2xs">{remoteUsers.join(', ')}</span>
-            : 'none — the console is local-only'],
+          [
+            'MagicDNS',
+            status.magicDns ? (
+              <span>
+                on
+                {status.magicDnsSuffix ? (
+                  <>
+                    {' '}
+                    · <code>{status.magicDnsSuffix}</code>
+                  </>
+                ) : null}
+              </span>
+            ) : (
+              <span className="text-action">off — device names will not resolve</span>
+            ),
+          ],
+          [
+            'Serving',
+            status.serve.forOurPort ? (
+              <span className="text-done">this console, on 443</span>
+            ) : status.serve.active ? (
+              <span className="text-action">something else — not this console&apos;s port</span>
+            ) : (
+              'nothing'
+            ),
+          ],
+          [
+            'Allowed logins',
+            remoteUsers?.length ? (
+              <span className="font-mono text-2xs">{remoteUsers.join(', ')}</span>
+            ) : (
+              'none — the console is local-only'
+            ),
+          ],
         ]}
       />
 
@@ -266,8 +316,11 @@ function Body({ status, port, remoteHosts, remoteUsers }: {
       {reachable && remoteHosts?.length ? (
         <Banner severity="ok">
           <span>
-            Open <a className="font-mono underline" href={reachable}>{reachable}</a> on any device
-            signed into this tailnet.
+            Open{' '}
+            <a className="font-mono underline" href={reachable}>
+              {reachable}
+            </a>{' '}
+            on any device signed into this tailnet.
           </span>
         </Banner>
       ) : null}
@@ -278,12 +331,16 @@ function Body({ status, port, remoteHosts, remoteUsers }: {
         <summary className="cursor-pointer text-ink-muted">First time on a tailnet</summary>
         <div className="mt-2 flex flex-col gap-2 text-sm text-ink-muted">
           <p>
-            Two tailnet-wide settings have to be on before HTTPS serving works, and neither can be
-            set from this machine — do them once in the Tailscale admin console:
+            Two tailnet-wide settings have to be on before HTTPS serving works, and neither can be set from
+            this machine — do them once in the Tailscale admin console:
           </p>
           <ul className="ml-4 list-disc">
-            <li><strong>DNS → MagicDNS</strong>, so devices resolve each other by name.</li>
-            <li><strong>DNS → HTTPS Certificates</strong>, so <code>serve</code> can get a certificate.</li>
+            <li>
+              <strong>DNS → MagicDNS</strong>, so devices resolve each other by name.
+            </li>
+            <li>
+              <strong>DNS → HTTPS Certificates</strong>, so <code>serve</code> can get a certificate.
+            </li>
           </ul>
         </div>
       </details>
@@ -292,17 +349,19 @@ function Body({ status, port, remoteHosts, remoteUsers }: {
         <summary className="cursor-pointer text-ink-muted">Setting up a device</summary>
         <div className="mt-2 flex flex-col gap-2 text-sm text-ink-muted">
           <ol className="ml-4 list-decimal">
-            <li>Install Tailscale and sign into the <em>same</em> tailnet.</li>
+            <li>
+              Install Tailscale and sign into the <em>same</em> tailnet.
+            </li>
             <li>Turn on MagicDNS — on iOS and Android it is called “Use Tailscale DNS”.</li>
             <li>Open {reachable ? <code>{reachable}</code> : 'the URL above'}.</li>
             <li>
-              On iOS, add it to the Home Screen. Notifications only work from a Home Screen app —
-              in a browser tab they never arrive.
+              On iOS, add it to the Home Screen. Notifications only work from a Home Screen app — in a browser
+              tab they never arrive.
             </li>
           </ol>
           <p className="text-2xs text-ink-faint">
-            Only devices on this tailnet, signed in as an allowed login, can reach it. Everyone
-            else gets a refusal from Tailscale before the console is involved at all.
+            Only devices on this tailnet, signed in as an allowed login, can reach it. Everyone else gets a
+            refusal from Tailscale before the console is involved at all.
           </p>
         </div>
       </details>

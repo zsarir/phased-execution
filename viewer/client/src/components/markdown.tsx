@@ -41,7 +41,10 @@ const FORBIDDEN = /^(script|style|iframe|object|embed|form|input|button|link|met
  */
 export function sweep(root: ParentNode): void {
   for (const node of root.querySelectorAll('*')) {
-    if (FORBIDDEN.test(node.tagName)) { node.remove(); continue; }
+    if (FORBIDDEN.test(node.tagName)) {
+      node.remove();
+      continue;
+    }
     for (const attribute of [...node.attributes]) {
       const name = attribute.name.toLowerCase();
       if (name.startsWith('on') || name === 'style' || name === 'srcset') {
@@ -79,7 +82,10 @@ function useRendered(text: string | undefined, inline: boolean) {
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
-    if (!fragment) { node.replaceChildren(); return; }
+    if (!fragment) {
+      node.replaceChildren();
+      return;
+    }
     // A fragment is emptied by the first `replaceChildren` that consumes it, so
     // the memoised one is cloned rather than spent — otherwise a re-render with
     // the same text (a theme flip, a parent state change) blanks the block.

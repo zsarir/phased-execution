@@ -44,21 +44,10 @@ export function Page({
  * deep-links and reloads — with nothing in it yet, which is exactly what the
  * shell needs to be verifiable before the content exists.
  */
-export function Placeholder({
-  title,
-  phase,
-  what,
-}: {
-  title: string;
-  phase: number;
-  what: string;
-}) {
+export function Placeholder({ title, phase, what }: { title: string; phase: number; what: string }) {
   return (
     <Page title={title}>
-      <Empty
-        title={`${title} is built in Phase ${phase}`}
-        body={what}
-      />
+      <Empty title={`${title} is built in Phase ${phase}`} body={what} />
     </Page>
   );
 }

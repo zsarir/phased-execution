@@ -33,11 +33,23 @@ vi.mock('@/lib/api', async (importOriginal) => {
       plan: vi.fn(),
       planRaw: vi.fn(async () => '# raw plan body'),
       handoff: vi.fn(async () => ({
-        slug: 'demo', phase: 1, file: 'phase-01-x.md', path: '/x', title: 'foundations',
-        status: 'complete', completed: '2026-08-03', dependsOn: [], blocks: [2], parallelSafe: [],
-        skillsUsed: ['phased-execution'], keyFiles: ['viewer/shared/routes.js'],
-        outstanding: 'None.', prompts: 1, body: '## What this phase did\n\nScaffolded it.',
-        bytes: 2048, mtime: 0,
+        slug: 'demo',
+        phase: 1,
+        file: 'phase-01-x.md',
+        path: '/x',
+        title: 'foundations',
+        status: 'complete',
+        completed: '2026-08-03',
+        dependsOn: [],
+        blocks: [2],
+        parallelSafe: [],
+        skillsUsed: ['phased-execution'],
+        keyFiles: ['viewer/shared/routes.js'],
+        outstanding: 'None.',
+        prompts: 1,
+        body: '## What this phase did\n\nScaffolded it.',
+        bytes: 2048,
+        mtime: 0,
       })),
       prompt: vi.fn(async () => '/phased-execution\n\nStart phase 2.'),
       nextPrompt: vi.fn(async () => 'board + prompts'),
@@ -60,46 +72,183 @@ const { api } = await import('@/lib/api');
 
 const DETAIL: PlanDetail = {
   summary: {
-    slug: 'demo', title: 'demo plan', kind: 'plan', status: 'active', created: '2026-08-01',
-    activity: 0, phases: 3, done: 1, ready: [2], waiting: 1, inProgress: [], stuck: [],
-    percent: 33, remainingWeight: 130_000, remainingSessions: 1, criticalPath: [2, 3],
-    criticalWeight: 130_000, minimumSessions: 1, bottleneck: { phase: 2, blocks: 1 },
-    nextBest: { phase: 2, unblocks: 1 }, budget: 200_000, targetModel: 'claude-opus-5',
-    branch: 'main', skills: [], mcpServers: [], qaMode: 'off', qaFailures: [], locks: [], repos: ['skill'],
-    handoffCount: 1, lastCompleted: '2026-08-02', spanDays: 1, medianGapDays: 1, issues: [],
-    issueCounts: { error: 0, warning: 0, info: 0 }, hasHandoffs: true,
+    slug: 'demo',
+    title: 'demo plan',
+    kind: 'plan',
+    status: 'active',
+    created: '2026-08-01',
+    activity: 0,
+    phases: 3,
+    done: 1,
+    ready: [2],
+    waiting: 1,
+    inProgress: [],
+    stuck: [],
+    percent: 33,
+    remainingWeight: 130_000,
+    remainingSessions: 1,
+    criticalPath: [2, 3],
+    criticalWeight: 130_000,
+    minimumSessions: 1,
+    bottleneck: { phase: 2, blocks: 1 },
+    nextBest: { phase: 2, unblocks: 1 },
+    budget: 200_000,
+    targetModel: 'claude-opus-5',
+    branch: 'main',
+    skills: [],
+    mcpServers: [],
+    qaMode: 'off',
+    qaFailures: [],
+    locks: [],
+    repos: ['skill'],
+    handoffCount: 1,
+    lastCompleted: '2026-08-02',
+    spanDays: 1,
+    medianGapDays: 1,
+    issues: [],
+    issueCounts: { error: 0, warning: 0, info: 0 },
+    hasHandoffs: true,
   },
   plan: {
-    slug: 'demo', title: 'demo plan',
-    context: 'Why this exists.', architecture: 'How it hangs together.',
+    slug: 'demo',
+    title: 'demo plan',
+    context: 'Why this exists.',
+    architecture: 'How it hangs together.',
     endToEnd: '1. Everything green.',
-    sessionBudget: { raw: '**Target model:** `claude-opus-5`', targetModel: 'claude-opus-5', branch: 'main', skills: [], mcpServers: [] },
+    sessionBudget: {
+      raw: '**Target model:** `claude-opus-5`',
+      targetModel: 'claude-opus-5',
+      branch: 'main',
+      skills: [],
+      mcpServers: [],
+    },
     graph: [
-      { phase: 1, title: 'Foundations', dependsOn: [], parallelSafe: '—', repos: 'skill', exitCriteria: 'it builds' },
-      { phase: 2, title: 'Surface', dependsOn: [1], parallelSafe: '3', repos: 'skill', exitCriteria: 'it renders' },
-      { phase: 3, title: 'Cutover', dependsOn: [2], parallelSafe: '—', repos: 'skill', exitCriteria: 'web/ gone' },
+      {
+        phase: 1,
+        title: 'Foundations',
+        dependsOn: [],
+        parallelSafe: '—',
+        repos: 'skill',
+        exitCriteria: 'it builds',
+      },
+      {
+        phase: 2,
+        title: 'Surface',
+        dependsOn: [1],
+        parallelSafe: '3',
+        repos: 'skill',
+        exitCriteria: 'it renders',
+      },
+      {
+        phase: 3,
+        title: 'Cutover',
+        dependsOn: [2],
+        parallelSafe: '—',
+        repos: 'skill',
+        exitCriteria: 'web/ gone',
+      },
     ],
     callouts: ['**Blocking:** `1 → 2 → 3`'],
     sections: [],
   },
   phases: [
     {
-      phase: 1, title: 'Foundations', state: 'done', size: 'M', weight: 40_000, gated: false,
-      goal: 'Scaffold the thing.', exitCriteria: '1. It builds.', bullets: [],
-      row: { phase: 1, title: 'Foundations', dependsOn: [], parallelSafe: '—', repos: 'skill', exitCriteria: 'it builds' },
-      analysis: { phase: 1, state: 'done', size: 'M', weight: 40_000, dependsOn: [], dependents: [2], transitiveDependents: [2, 3], unblocks: 2, onCriticalPath: false },
-      handoff: { file: 'phase-01-x.md', status: 'complete', completed: '2026-08-02', title: 'foundations', outstanding: 'None.', skillsUsed: ['phased-execution'], prompts: 1 },
+      phase: 1,
+      title: 'Foundations',
+      state: 'done',
+      size: 'M',
+      weight: 40_000,
+      gated: false,
+      goal: 'Scaffold the thing.',
+      exitCriteria: '1. It builds.',
+      bullets: [],
+      row: {
+        phase: 1,
+        title: 'Foundations',
+        dependsOn: [],
+        parallelSafe: '—',
+        repos: 'skill',
+        exitCriteria: 'it builds',
+      },
+      analysis: {
+        phase: 1,
+        state: 'done',
+        size: 'M',
+        weight: 40_000,
+        dependsOn: [],
+        dependents: [2],
+        transitiveDependents: [2, 3],
+        unblocks: 2,
+        onCriticalPath: false,
+      },
+      handoff: {
+        file: 'phase-01-x.md',
+        status: 'complete',
+        completed: '2026-08-02',
+        title: 'foundations',
+        outstanding: 'None.',
+        skillsUsed: ['phased-execution'],
+        prompts: 1,
+      },
     },
     {
-      phase: 2, title: 'Surface', state: 'ready', size: 'L', weight: 90_000, gated: false,
-      goal: 'Build the **surface**.', steps: '1. Do it.', exitCriteria: '1. It renders.', bullets: [],
-      row: { phase: 2, title: 'Surface', dependsOn: [1], parallelSafe: '3', repos: 'skill', exitCriteria: 'it renders' },
-      analysis: { phase: 2, state: 'ready', size: 'L', weight: 90_000, dependsOn: [1], dependents: [3], transitiveDependents: [3], unblocks: 1, onCriticalPath: true },
+      phase: 2,
+      title: 'Surface',
+      state: 'ready',
+      size: 'L',
+      weight: 90_000,
+      gated: false,
+      goal: 'Build the **surface**.',
+      steps: '1. Do it.',
+      exitCriteria: '1. It renders.',
+      bullets: [],
+      row: {
+        phase: 2,
+        title: 'Surface',
+        dependsOn: [1],
+        parallelSafe: '3',
+        repos: 'skill',
+        exitCriteria: 'it renders',
+      },
+      analysis: {
+        phase: 2,
+        state: 'ready',
+        size: 'L',
+        weight: 90_000,
+        dependsOn: [1],
+        dependents: [3],
+        transitiveDependents: [3],
+        unblocks: 1,
+        onCriticalPath: true,
+      },
     },
     {
-      phase: 3, title: 'Cutover', state: 'waiting', size: 'S', weight: 15_000, gated: false, bullets: [],
-      row: { phase: 3, title: 'Cutover', dependsOn: [2], parallelSafe: '—', repos: 'skill', exitCriteria: 'web/ gone' },
-      analysis: { phase: 3, state: 'waiting', size: 'S', weight: 15_000, dependsOn: [2], dependents: [], transitiveDependents: [], unblocks: 0, onCriticalPath: true },
+      phase: 3,
+      title: 'Cutover',
+      state: 'waiting',
+      size: 'S',
+      weight: 15_000,
+      gated: false,
+      bullets: [],
+      row: {
+        phase: 3,
+        title: 'Cutover',
+        dependsOn: [2],
+        parallelSafe: '—',
+        repos: 'skill',
+        exitCriteria: 'web/ gone',
+      },
+      analysis: {
+        phase: 3,
+        state: 'waiting',
+        size: 'S',
+        weight: 15_000,
+        dependsOn: [2],
+        dependents: [],
+        transitiveDependents: [],
+        unblocks: 0,
+        onCriticalPath: true,
+      },
     },
   ],
   route: {
@@ -108,13 +257,33 @@ const DETAIL: PlanDetail = {
       { phase: 2, layer: 1, row: 0, state: 'ready', size: 'L', gated: false, title: 'Surface' },
       { phase: 3, layer: 2, row: 0, state: 'waiting', size: 'S', gated: false, title: 'Cutover' },
     ],
-    edges: [{ from: 1, to: 2 }, { from: 2, to: 3 }],
-    layers: 3, rows: 1,
+    edges: [
+      { from: 1, to: 2 },
+      { from: 2, to: 3 },
+    ],
+    layers: 3,
+    rows: 1,
   },
-  batches: { groups: [{ index: 1, kind: 'batch', weight: '105K', phases: [2, 3], gated: false }], raw: '', budget: '200K/session' },
+  batches: {
+    groups: [{ index: 1, kind: 'batch', weight: '105K', phases: [2, 3], gated: false }],
+    raw: '',
+    budget: '200K/session',
+  },
   boardText: 'Phase graph — demo   (1/3 done)',
   lint: { ok: true, issues: [], summary: 'LINT OK: demo — 3 phases', timedOut: false },
-  handoffs: [{ phase: 1, file: 'phase-01-x.md', title: 'foundations', status: 'complete', completed: '2026-08-02', bytes: 2048, mtime: 0, prompts: 1, skillsUsed: ['phased-execution'] }],
+  handoffs: [
+    {
+      phase: 1,
+      file: 'phase-01-x.md',
+      title: 'foundations',
+      status: 'complete',
+      completed: '2026-08-02',
+      bytes: 2048,
+      mtime: 0,
+      prompts: 1,
+      skillsUsed: ['phased-execution'],
+    },
+  ],
   index: [{ phase: 1, title: 'foundations', status: 'complete', link: 'phase-01-x.md' }],
   qa: [],
   locks: [],
@@ -186,7 +355,11 @@ describe('the tab strip', () => {
     renderPlan(['demo', 'analysis']);
     const list = await screen.findByRole('tablist', { name: 'Plan sections' });
     expect(list).toHaveAttribute('tabindex', '0');
-    expect(within(list).getAllByRole('tab').every((t) => t.getAttribute('tabindex') === '-1')).toBe(true);
+    expect(
+      within(list)
+        .getAllByRole('tab')
+        .every((t) => t.getAttribute('tabindex') === '-1'),
+    ).toBe(true);
 
     fireEvent.focus(list);
     await waitFor(() => expect(screen.getByRole('tab', { selected: true })).toHaveFocus());
@@ -226,17 +399,25 @@ describe('a repo change does not blank the page', () => {
     // What the SSE bridge does for a `changed` event naming this slug — with a
     // refetch that has not answered yet.
     let release: (value: PlanDetail) => void = () => {};
-    vi.mocked(api.plan).mockReturnValueOnce(new Promise<PlanDetail>((resolve) => { release = resolve; }));
+    vi.mocked(api.plan).mockReturnValueOnce(
+      new Promise<PlanDetail>((resolve) => {
+        release = resolve;
+      }),
+    );
     // NOT awaited: `invalidateQueries` resolves only once the refetch settles,
     // and the refetch is the thing being held open — awaiting it here deadlocks
     // the test rather than testing the in-flight state.
-    await act(async () => { void client.invalidateQueries({ queryKey: ['plan', 'demo'] }); });
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ['plan', 'demo'] });
+    });
 
     // The old view set its state to null here and rendered a spinner.
     expect(screen.getByText('demo plan')).toBeInTheDocument();
     expect(screen.getByText('Departures')).toBeInTheDocument();
 
-    await act(async () => { release(DETAIL); });
+    await act(async () => {
+      release(DETAIL);
+    });
     await waitFor(() => expect(screen.getByText('demo plan')).toBeInTheDocument());
   });
 
@@ -270,18 +451,19 @@ describe('the plan surface renders its parts', () => {
    * array into an invitation. The page has to keep the record and drop the
    * invitations. */
 
-  const closedDetail = (over: Record<string, unknown> = {}) => ({
-    ...DETAIL,
-    summary: {
-      ...DETAIL.summary,
-      status: 'abandoned',
-      closed: true,
-      closedOn: '2026-08-05',
-      closedReason: 'the approach did not survive contact',
-      ...over,
-    },
-    batches: { groups: [], raw: '🔒 CLOSED [abandoned]\n\nNo sessions to plan.\n', budget: '200K/session' },
-  } as PlanDetail);
+  const closedDetail = (over: Record<string, unknown> = {}) =>
+    ({
+      ...DETAIL,
+      summary: {
+        ...DETAIL.summary,
+        status: 'abandoned',
+        closed: true,
+        closedOn: '2026-08-05',
+        closedReason: 'the approach did not survive contact',
+        ...over,
+      },
+      batches: { groups: [], raw: '🔒 CLOSED [abandoned]\n\nNo sessions to plan.\n', budget: '200K/session' },
+    }) as PlanDetail;
 
   // Reported: a closed plan did not read as closed. It carried the padlock on
   // its status chip, which is correct and, at chip size beside a heading and
@@ -341,8 +523,10 @@ describe('the plan surface renders its parts', () => {
     await screen.findByText('Departures');
     // One link per phase, each carrying the phase deep link — not a `tr onClick`.
     for (const phase of [1, 2, 3]) {
-      expect(screen.getByRole('link', { name: String(phase).padStart(2, '0') }))
-        .toHaveAttribute('href', `#/plan/demo/phase/${phase}`);
+      expect(screen.getByRole('link', { name: String(phase).padStart(2, '0') })).toHaveAttribute(
+        'href',
+        `#/plan/demo/phase/${phase}`,
+      );
     }
   });
 
@@ -408,9 +592,7 @@ describe('the plan surface renders its parts', () => {
     });
 
     it('names the lock for a phase somebody else is already on', async () => {
-      const inProgress = DETAIL.phases.map((p) => (p.phase === 2
-        ? { ...p, state: 'in-progress' }
-        : p));
+      const inProgress = DETAIL.phases.map((p) => (p.phase === 2 ? { ...p, state: 'in-progress' } : p));
       vi.mocked(api.plan).mockResolvedValue({ ...DETAIL, phases: inProgress });
       renderPlan(['demo', 'phase', '2']);
 
@@ -427,9 +609,11 @@ describe('the plan surface renders its parts', () => {
     });
 
     it('the Gate card names the category and, with writes off, says how to approve', async () => {
-      const gated = DETAIL.phases.map((p) => (p.phase === 2
-        ? { ...p, gated: true, gateKind: 'human' as const, gates: '1. mint the keys\n2. export them' }
-        : p));
+      const gated = DETAIL.phases.map((p) =>
+        p.phase === 2
+          ? { ...p, gated: true, gateKind: 'human' as const, gates: '1. mint the keys\n2. export them' }
+          : p,
+      );
       vi.mocked(api.plan).mockResolvedValue({ ...DETAIL, phases: gated });
       renderPlan(['demo', 'phase', '2']);
 
@@ -440,9 +624,9 @@ describe('the plan surface renders its parts', () => {
     });
 
     it('an ai gate says booting IS the way through', async () => {
-      const gated = DETAIL.phases.map((p) => (p.phase === 2
-        ? { ...p, gated: true, gateKind: 'ai' as const, gates: 'staging deployed' }
-        : p));
+      const gated = DETAIL.phases.map((p) =>
+        p.phase === 2 ? { ...p, gated: true, gateKind: 'ai' as const, gates: 'staging deployed' } : p,
+      );
       vi.mocked(api.plan).mockResolvedValue({ ...DETAIL, phases: gated });
       renderPlan(['demo', 'phase', '2']);
 

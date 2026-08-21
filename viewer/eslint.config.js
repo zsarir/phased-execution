@@ -54,7 +54,12 @@ export default tseslint.config(
       // the `_` convention covers the destructure-to-drop pattern it accepts.
       '@typescript-eslint/no-unused-vars': [
         'error',
-        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_', ignoreRestSiblings: true },
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+          ignoreRestSiblings: true,
+        },
       ],
       // Type-only imports are erased by `verbatimModuleSyntax`; asking for
       // them keeps the runtime graph one-directional (vocab → nothing).
@@ -83,7 +88,8 @@ export default tseslint.config(
         // made the run page crawl under SSE renders. Move `scrollLeft`/`Top`.
         {
           selector: "CallExpression[callee.property.name='scrollIntoView']",
-          message: 'scrollIntoView scrolls every ancestor; move scrollLeft/scrollTop on the one scroller instead.',
+          message:
+            'scrollIntoView scrolls every ancestor; move scrollLeft/scrollTop on the one scroller instead.',
         },
       ],
     },
@@ -116,7 +122,11 @@ export default tseslint.config(
   {
     // The shared modules and the build scripts: plain ESM for node AND the browser.
     files: ['shared/**/*.{js,mjs}', 'scripts/**/*.mjs', 'vite.config.ts', 'eslint.config.js'],
-    languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: { ...globals.node, ...globals.browser } },
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...globals.node, ...globals.browser },
+    },
     rules: { 'no-console': 'off' },
   },
 );

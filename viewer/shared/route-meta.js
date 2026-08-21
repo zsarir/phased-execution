@@ -57,15 +57,7 @@ export const ROUTE_HEADS = Object.freeze([
  * not listed here.
  * @type {readonly string[]}
  */
-export const PLAN_TABS = Object.freeze([
-  'route',
-  'phases',
-  'run',
-  'handoffs',
-  'analysis',
-  'overview',
-  'raw',
-]);
+export const PLAN_TABS = Object.freeze(['route', 'phases', 'run', 'handoffs', 'analysis', 'overview', 'raw']);
 
 /**
  * Guide section ids — the segment of `#/guide/:section`. The guide is rebuilt as

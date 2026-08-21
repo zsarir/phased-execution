@@ -46,7 +46,9 @@ vi.mock('@/lib/media', async (importOriginal) => {
   return { ...actual, usePhone: () => phone };
 });
 
-afterEach(() => { phone = false; });
+afterEach(() => {
+  phone = false;
+});
 
 function renderGuide(segments: string[], query: Record<string, string> = {}) {
   const client = new QueryClient(queryClientConfig);
@@ -95,14 +97,16 @@ describe('the guide section registry', () => {
     // is literally `runner`, and forbidding it would forbid the word this
     // guide's autopilot chapter is made of.
     const GENERIC = new Set(['runner', 'ci', 'build', 'agent', 'admin', 'user', 'root', 'ubuntu']);
-    const local = [userInfo().username, hostname(), homedir()]
-      .filter((s) => s.length >= 3 && !GENERIC.has(s.toLowerCase()));
+    const local = [userInfo().username, hostname(), homedir()].filter(
+      (s) => s.length >= 3 && !GENERIC.has(s.toLowerCase()),
+    );
     const forbidden = [/\.ts\.net\/[a-z]/i, /\/Users\//, /\/home\/[a-z]/i];
     // As a token, never a bare substring: this machine's hostname is `Mac`, and
     // the guide is full of the word "machine". A leak names the identity alone.
     const names = (body: string, secret: string) =>
-      new RegExp(`(?<![A-Za-z0-9])${secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, 'i')
-        .test(body);
+      new RegExp(`(?<![A-Za-z0-9])${secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, 'i').test(
+        body,
+      );
 
     for (const section of SECTIONS) {
       for (const pattern of forbidden) {
@@ -174,7 +178,7 @@ describe('the guide view', () => {
       expect(halted, 'the glossary names halted as inline code').toBeTruthy();
       // A halted run needs a person: the badge wears the needs-you state class
       // and paints by `--state`, never a colour of its own.
-      expect(halted!.className, 'painted as the run badge\'s own UI state').toContain('state-needs-you');
+      expect(halted!.className, "painted as the run badge's own UI state").toContain('state-needs-you');
       expect(halted!.className).toContain('text-state');
       expect(halted!.getAttribute('title')).toMatch(/must not be automated past/);
     });

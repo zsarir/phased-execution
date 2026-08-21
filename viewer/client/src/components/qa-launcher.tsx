@@ -19,7 +19,11 @@ import { LaunchDialog, type QaTarget } from '@/components/launch-dialog';
 
 export type { QaTarget } from '@/components/launch-dialog';
 
-export function QaDialog({ target, allowWrites, onClose }: {
+export function QaDialog({
+  target,
+  allowWrites,
+  onClose,
+}: {
   target: QaTarget;
   /** Activation writes `test-status.md`, so it is gated separately from minting. */
   allowWrites?: boolean;
@@ -74,9 +78,11 @@ export function QaButton({
       <Button
         size={size}
         disabled={!allowAgent}
-        title={allowAgent
-          ? 'Opens a fresh Claude session that reviews this phase and records the verdict itself.'
-          : 'Agent sessions are disabled. Restart the console with --allow-agent.'}
+        title={
+          allowAgent
+            ? 'Opens a fresh Claude session that reviews this phase and records the verdict itself.'
+            : 'Agent sessions are disabled. Restart the console with --allow-agent.'
+        }
         onClick={() => setOpen(true)}
       >
         <ShieldCheck size={13} aria-hidden /> {label}
@@ -95,8 +101,14 @@ export function QaButton({
  */
 export function QaVerdict({ qa, href }: { qa?: { result: string; report?: string }; href?: string }) {
   if (!qa || !isVerdict(qa.result)) return null;
-  const chip = <StatusBadge state={qaUiState(qa.result)} label={`QA ${qa.result}`} title={qaResultTitle(qa.result)} />;
-  return qa.report && href
-    ? <a href={href} className="hover:underline" title={qa.report}>{chip}</a>
-    : chip;
+  const chip = (
+    <StatusBadge state={qaUiState(qa.result)} label={`QA ${qa.result}`} title={qaResultTitle(qa.result)} />
+  );
+  return qa.report && href ? (
+    <a href={href} className="hover:underline" title={qa.report}>
+      {chip}
+    </a>
+  ) : (
+    chip
+  );
 }

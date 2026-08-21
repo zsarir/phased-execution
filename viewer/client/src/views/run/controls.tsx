@@ -28,16 +28,29 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  AlertDialog, AlertDialogContent, AlertDialogTrigger,
-  Button, Card, CardBody, CardHeader, CardTitle, toast,
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogTrigger,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  toast,
 } from '@/components/ui';
-import { api, type AccountView, type McpPolicy, type PhaseOptions, type PhaseView, type RunSettings, type RunState, type SkillInfo }
-  from '@/lib/api';
+import {
+  api,
+  type AccountView,
+  type McpPolicy,
+  type PhaseOptions,
+  type PhaseView,
+  type RunSettings,
+  type RunState,
+  type SkillInfo,
+} from '@/lib/api';
 import { keys, useAccounts, useMcp } from '@/lib/queries';
 import { cn } from '@/lib/cn';
-import {
-  AUTONOMY_LABEL, DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS, PROFILE_LABEL,
-} from './defaults';
+import { AUTONOMY_LABEL, DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS, PROFILE_LABEL } from './defaults';
 import { PhaseMatrix } from './phase-matrix';
 import { McpPicker } from './mcp-picker';
 import { SkillPicker } from './skill-picker';
@@ -49,33 +62,32 @@ function ProfileNote({ profile }: { profile: PermissionProfile }) {
   if (profile === 'guarded') {
     return (
       <>
-        Commits, installs, merges and fetches raise a card. The deny list — pushes, destructive git,
-        deploys, publishes — is refused outright and no card can approve it.
+        Commits, installs, merges and fetches raise a card. The deny list — pushes, destructive git, deploys,
+        publishes — is refused outright and no card can approve it.
       </>
     );
   }
   if (profile === 'trusted') {
     return (
       <>
-        <strong>Nothing raises a card.</strong> The deny list still holds, and still holds with this
-        console dead — it is enforced by the CLI, not by the hook. Everything else runs unattended,
-        including every commit.
+        <strong>Nothing raises a card.</strong> The deny list still holds, and still holds with this console
+        dead — it is enforced by the CLI, not by the hook. Everything else runs unattended, including every
+        commit.
       </>
     );
   }
   return (
     <>
       <strong>Nothing raises a card, and the CLI stops asking too</strong> (
-      <code className="font-mono">--permission-mode bypassPermissions</code>). The deny list is the
-      only thing left between this run and your repository — it does still hold, because bypass
-      auto-approves everything <em>except</em> explicit deny rules. Journaled for as long as it is in
-      force.
+      <code className="font-mono">--permission-mode bypassPermissions</code>). The deny list is the only thing
+      left between this run and your repository — it does still hold, because bypass auto-approves everything{' '}
+      <em>except</em> explicit deny rules. Journaled for as long as it is in force.
       <br />
       Requires the bypass disclaimer to have been accepted once, interactively, in a normal{' '}
       <code className="font-mono">claude</code> session on this machine. Without it the CLI silently
-      downgrades to <code className="font-mono">default</code>, which refuses every edit in headless
-      mode — the run would do <em>less</em> than Guarded. The console reports that if it happens; if
-      you have not accepted it, use Trusted.
+      downgrades to <code className="font-mono">default</code>, which refuses every edit in headless mode —
+      the run would do <em>less</em> than Guarded. The console reports that if it happens; if you have not
+      accepted it, use Trusted.
     </>
   );
 }
@@ -124,8 +136,10 @@ export function Controls({
   defaultSkills?: string[];
   /** The Automation preferences — the opening values for the new knobs. */
   automation?: {
-    attachDefaultSkills: boolean; qaByDefault: boolean;
-    gitMode: 'default-branch' | 'new-branch'; openPrOnComplete: boolean;
+    attachDefaultSkills: boolean;
+    qaByDefault: boolean;
+    gitMode: 'default-branch' | 'new-branch';
+    openPrOnComplete: boolean;
     mcpPolicy: McpPolicy;
   };
   /** The plan's qa-mode; `off` offers the launch-time QA toggle. */
@@ -159,24 +173,24 @@ export function Controls({
   // one-shot useState seed would show the fallback instead. An existing run's
   // own record still wins over the preference, exactly as for skills above.
   const [attachChoice, setAttachChoice] = useState<boolean | null>(null);
-  const attach = attachChoice
-    ?? (run ? false : (automation?.attachDefaultSkills ?? false) && defaultSkills.length > 0);
+  const attach =
+    attachChoice ?? (run ? false : (automation?.attachDefaultSkills ?? false) && defaultSkills.length > 0);
   const [qaChoice, setQaChoice] = useState<boolean | null>(null);
   const canQaToggle = qaMode === 'off' && allowWrites !== false;
   const qaOn = qaChoice ?? (canQaToggle && (automation?.qaByDefault ?? false));
   const [gitChoice, setGitChoice] = useState<'default-branch' | 'new-branch' | null>(null);
   // An existing run answers for itself (absent = default-branch, its meaning on
   // disk); only a run that does not exist yet opens on the preference.
-  const gitMode = gitChoice ?? run?.gitMode
-    ?? (run ? 'default-branch' : automation?.gitMode ?? 'default-branch');
+  const gitMode =
+    gitChoice ?? run?.gitMode ?? (run ? 'default-branch' : (automation?.gitMode ?? 'default-branch'));
   const [prChoice, setPrChoice] = useState<boolean | null>(null);
-  const openPr = prChoice ?? run?.openPr ?? (run ? true : automation?.openPrOnComplete ?? true);
+  const openPr = prChoice ?? run?.openPr ?? (run ? true : (automation?.openPrOnComplete ?? true));
   // Same shape again, and the fallback matters: an EXISTING run with no
   // `mcpPolicy` on it is `continue` (absent means that on disk, including on
   // runs written before the key existed), so a resume must not silently pick up
   // a `require` preference the run never had.
-  const mcpPolicy: McpPolicy = mcpChoice ?? run?.mcpPolicy
-    ?? (run ? 'continue' : automation?.mcpPolicy ?? 'continue');
+  const mcpPolicy: McpPolicy =
+    mcpChoice ?? run?.mcpPolicy ?? (run ? 'continue' : (automation?.mcpPolicy ?? 'continue'));
 
   // Follow the run when it changes underneath us. Note the fallbacks differ from
   // the ones above on purpose: an EXISTING run with no `permissionProfile` on it
@@ -192,8 +206,17 @@ export function Controls({
     setRunSkills(seedSkills(run, defaults));
     setProfile(run?.permissionProfile ?? (run ? 'guarded' : DEFAULTS.permissionProfile));
     setMcpChoice(null);
-  }, [run?.id, run?.model, run?.effort, run?.autonomy, run?.phaseBudgetUsd, run?.runBudgetUsd,
-    run?.permissionProfile, run, defaults]);
+  }, [
+    run?.id,
+    run?.model,
+    run?.effort,
+    run?.autonomy,
+    run?.phaseBudgetUsd,
+    run?.runBudgetUsd,
+    run?.permissionProfile,
+    run,
+    defaults,
+  ]);
 
   const resumable = Boolean(run) && !live && run?.status !== 'finished';
   const disabled = !allowRun || Boolean(busy);
@@ -229,20 +252,20 @@ export function Controls({
     ...(attach ? { attachDefaultSkills: true } : {}),
   };
 
-  const changed = live && (
-    model !== run?.model
-    || effort !== (run?.effort ?? '')
-    || autonomy !== run?.autonomy
-    || profile !== (run?.permissionProfile ?? 'guarded')
-    || (Number(phaseBudget) || null) !== (run?.phaseBudgetUsd ?? null)
-    || (Number(runBudget) || null) !== (run?.runBudgetUsd ?? null)
-    || gitMode !== (run?.gitMode ?? 'default-branch')
-    || (gitMode === 'new-branch' && openPr !== (run?.openPr ?? true))
-    || JSON.stringify(overrides) !== JSON.stringify(run?.phaseOptions ?? {})
-    || JSON.stringify(runSkills) !== JSON.stringify(run?.skills ?? [])
-    || JSON.stringify(runMcp) !== JSON.stringify(run?.mcpServers ?? [])
-    || mcpPolicy !== (run?.mcpPolicy ?? 'continue')
-  );
+  const changed =
+    live &&
+    (model !== run?.model ||
+      effort !== (run?.effort ?? '') ||
+      autonomy !== run?.autonomy ||
+      profile !== (run?.permissionProfile ?? 'guarded') ||
+      (Number(phaseBudget) || null) !== (run?.phaseBudgetUsd ?? null) ||
+      (Number(runBudget) || null) !== (run?.runBudgetUsd ?? null) ||
+      gitMode !== (run?.gitMode ?? 'default-branch') ||
+      (gitMode === 'new-branch' && openPr !== (run?.openPr ?? true)) ||
+      JSON.stringify(overrides) !== JSON.stringify(run?.phaseOptions ?? {}) ||
+      JSON.stringify(runSkills) !== JSON.stringify(run?.skills ?? []) ||
+      JSON.stringify(runMcp) !== JSON.stringify(run?.mcpServers ?? []) ||
+      mcpPolicy !== (run?.mcpPolicy ?? 'continue'));
 
   return (
     <Card>
@@ -265,60 +288,105 @@ export function Controls({
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <label className="flex flex-col gap-1">
             <span className="text-2xs tracking-wide text-ink-muted uppercase">Model</span>
-            <select value={model} disabled={disabled} className={field}
-              onChange={(e) => setModel(e.target.value)}>
-              {MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+            <select
+              value={model}
+              disabled={disabled}
+              className={field}
+              onChange={(e) => setModel(e.target.value)}
+            >
+              {MODELS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
             </select>
           </label>
 
           <label className="flex flex-col gap-1">
             <span className="text-2xs tracking-wide text-ink-muted uppercase">Effort</span>
-            <select value={effort} disabled={disabled} title={EFFORT_NOTE[effort]} className={field}
-              onChange={(e) => setEffort(e.target.value)}>
-              {EFFORTS.map((e) => <option key={e} value={e}>{EFFORT_NOTE[e]}</option>)}
+            <select
+              value={effort}
+              disabled={disabled}
+              title={EFFORT_NOTE[effort]}
+              className={field}
+              onChange={(e) => setEffort(e.target.value)}
+            >
+              {EFFORTS.map((e) => (
+                <option key={e} value={e}>
+                  {EFFORT_NOTE[e]}
+                </option>
+              ))}
             </select>
           </label>
 
           <label className="flex flex-col gap-1">
-            <span className="text-2xs tracking-wide text-ink-muted uppercase">
-              If something is unclear
-            </span>
-            <select value={autonomy} disabled={disabled} className={field}
-              onChange={(e) => setAutonomy(e.target.value as Autonomy)}>
+            <span className="text-2xs tracking-wide text-ink-muted uppercase">If something is unclear</span>
+            <select
+              value={autonomy}
+              disabled={disabled}
+              className={field}
+              onChange={(e) => setAutonomy(e.target.value as Autonomy)}
+            >
               {(Object.keys(AUTONOMY_LABEL) as Autonomy[]).map((a) => (
-                <option key={a} value={a}>{AUTONOMY_LABEL[a]}</option>
+                <option key={a} value={a}>
+                  {AUTONOMY_LABEL[a]}
+                </option>
               ))}
             </select>
           </label>
 
           <label className="flex flex-col gap-1">
             <span className="text-2xs tracking-wide text-ink-muted uppercase">Budget per phase ($)</span>
-            <input type="number" min="0" step="0.5" value={phaseBudget} disabled={disabled}
-              placeholder="none" className={field}
-              onChange={(e) => setPhaseBudget(e.target.value)} />
+            <input
+              type="number"
+              min="0"
+              step="0.5"
+              value={phaseBudget}
+              disabled={disabled}
+              placeholder="none"
+              className={field}
+              onChange={(e) => setPhaseBudget(e.target.value)}
+            />
           </label>
 
           <label className="flex flex-col gap-1">
             <span className="text-2xs tracking-wide text-ink-muted uppercase">Budget for the run ($)</span>
-            <input type="number" min="0" step="1" value={runBudget} disabled={disabled}
-              placeholder="none" className={field}
-              onChange={(e) => setRunBudget(e.target.value)} />
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={runBudget}
+              disabled={disabled}
+              placeholder="none"
+              className={field}
+              onChange={(e) => setRunBudget(e.target.value)}
+            />
           </label>
 
           <label className="flex flex-col gap-1">
             <span className="text-2xs tracking-wide text-ink-muted uppercase">Permissions</span>
-            <select value={profile} disabled={disabled} className={field}
-              onChange={(e) => setProfile(e.target.value as PermissionProfile)}>
+            <select
+              value={profile}
+              disabled={disabled}
+              className={field}
+              onChange={(e) => setProfile(e.target.value as PermissionProfile)}
+            >
               {(Object.keys(PROFILE_LABEL) as PermissionProfile[]).map((p) => (
-                <option key={p} value={p}>{PROFILE_LABEL[p]}</option>
+                <option key={p} value={p}>
+                  {PROFILE_LABEL[p]}
+                </option>
               ))}
             </select>
           </label>
 
           <label className="flex flex-col gap-1">
             <span className="text-2xs tracking-wide text-ink-muted uppercase">Branch</span>
-            <select value={gitMode} disabled={disabled} className={field}
-              onChange={(e) => setGitChoice(e.target.value as 'default-branch' | 'new-branch')}>
+            <select
+              value={gitMode}
+              disabled={disabled}
+              className={field}
+              onChange={(e) => setGitChoice(e.target.value as 'default-branch' | 'new-branch')}
+            >
               <option value="default-branch">Work on the current branch</option>
               <option value="new-branch">Work branch per run (pe/{slug})</option>
             </select>
@@ -327,13 +395,18 @@ export function Controls({
 
         {gitMode === 'new-branch' && (
           <label className="flex flex-wrap items-start gap-2 text-sm">
-            <input type="checkbox" className="mt-1 accent-[var(--action)]" checked={openPr}
-              disabled={disabled} onChange={(e) => setPrChoice(e.target.checked)} />
+            <input
+              type="checkbox"
+              className="mt-1 accent-[var(--action)]"
+              checked={openPr}
+              disabled={disabled}
+              onChange={(e) => setPrChoice(e.target.checked)}
+            />
             <span className="min-w-0 flex-1">
               Open a PR when the plan completes
               <span className="block text-2xs text-ink-faint">
-                The final phase pushes <code className="font-mono">pe/{slug}</code> and opens the PR
-                — after one approval tap on the push. Force-pushes stay denied outright.
+                The final phase pushes <code className="font-mono">pe/{slug}</code> and opens the PR — after
+                one approval tap on the push. Force-pushes stay denied outright.
               </span>
             </span>
           </label>
@@ -341,16 +414,21 @@ export function Controls({
 
         {qaMode === 'off' && !live && (
           <label className="flex flex-wrap items-start gap-2 text-sm">
-            <input type="checkbox" className="mt-1 accent-[var(--action)]"
-              checked={qaOn && canQaToggle} disabled={disabled || !canQaToggle}
-              title={canQaToggle ? undefined : 'Writes are disabled. Restart the console with --allow-writes.'}
-              onChange={(e) => setQaChoice(e.target.checked)} />
+            <input
+              type="checkbox"
+              className="mt-1 accent-[var(--action)]"
+              checked={qaOn && canQaToggle}
+              disabled={disabled || !canQaToggle}
+              title={
+                canQaToggle ? undefined : 'Writes are disabled. Restart the console with --allow-writes.'
+              }
+              onChange={(e) => setQaChoice(e.target.checked)}
+            />
             <span className="min-w-0 flex-1">
               Turn the QA gate on for this plan
               <span className="block text-2xs text-ink-faint">
-                Each finished phase then waits for an independent review. Phases that finished
-                before now are recorded as <em>waived</em>, so turning it on does not retroactively
-                hold the board.
+                Each finished phase then waits for an independent review. Phases that finished before now are
+                recorded as <em>waived</em>, so turning it on does not retroactively hold the board.
               </span>
             </span>
           </label>
@@ -361,39 +439,61 @@ export function Controls({
             <span className="min-w-0">
               <span className="text-ink">Attach default skills</span>
               <span className="mt-0.5 block text-2xs text-ink-faint">
-                This machine's list: {defaultSkills.map((s) => <code key={s} className="mr-1">{s}</code>)}
+                This machine's list:{' '}
+                {defaultSkills.map((s) => (
+                  <code key={s} className="mr-1">
+                    {s}
+                  </code>
+                ))}
               </span>
             </span>
-            <Button size="sm" aria-pressed={attach} disabled={disabled}
-              onClick={() => setAttachChoice(!attach)}>
+            <Button
+              size="sm"
+              aria-pressed={attach}
+              disabled={disabled}
+              onClick={() => setAttachChoice(!attach)}
+            >
               {attach ? 'Attached' : 'Off'}
             </Button>
           </div>
         )}
 
-        <p className={cn(
-          'max-w-prose text-2xs',
-          profile === 'guarded' ? 'text-ink-faint' : 'rounded border border-action/40 bg-action/8 p-2 text-ink-muted',
-        )}>
+        <p
+          className={cn(
+            'max-w-prose text-2xs',
+            profile === 'guarded'
+              ? 'text-ink-faint'
+              : 'rounded border border-action/40 bg-action/8 p-2 text-ink-muted',
+          )}
+        >
           <ProfileNote profile={profile} />
         </p>
 
         {skills.length > 0 && (
-          <SkillPicker skills={skills} chosen={runSkills} planSkills={planSkills}
-            defaultSkills={defaultSkills} disabled={disabled} onChange={setRunSkills} />
+          <SkillPicker
+            skills={skills}
+            chosen={runSkills}
+            planSkills={planSkills}
+            defaultSkills={defaultSkills}
+            disabled={disabled}
+            onChange={setRunSkills}
+          />
         )}
 
-        <McpPicker servers={mcp?.servers ?? []} chosen={runMcp} planServers={planMcp}
+        <McpPicker
+          servers={mcp?.servers ?? []}
+          chosen={runMcp}
+          planServers={planMcp}
           onChange={setRunMcp}
-          note="Checked before each phase boards, so a wall costs a probe rather than an hour." />
+          note="Checked before each phase boards, so a wall costs a probe rather than an hour."
+        />
 
         {(runMcp.length > 0 || planMcp.length > 0) && (
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label htmlFor="run-mcp-policy" className="min-w-0 text-sm text-ink">
               If one will not connect
               <span className="mt-0.5 block text-2xs text-ink-muted">
-                A phase whose plan says it requires its servers still parks — this cannot overrule
-                that.
+                A phase whose plan says it requires its servers still parks — this cannot overrule that.
               </span>
             </label>
             <select
@@ -409,102 +509,142 @@ export function Controls({
           </div>
         )}
 
-        <PhaseMatrix planPhases={planPhases} overrides={overrides} runModel={model}
-          runEffort={effort} skills={skills} runSkills={runSkills} disabled={disabled}
-          servers={mcp?.servers ?? []} runMcp={runMcp}
-          onChange={setOverrides} />
+        <PhaseMatrix
+          planPhases={planPhases}
+          overrides={overrides}
+          runModel={model}
+          runEffort={effort}
+          skills={skills}
+          runSkills={runSkills}
+          disabled={disabled}
+          servers={mcp?.servers ?? []}
+          runMcp={runMcp}
+          onChange={setOverrides}
+        />
 
         {changed && (
           <p className="max-w-prose text-2xs text-ink-faint">
-            These apply from the <strong>next</strong> phase. The session already running was started
-            with its model and budget fixed in its own command line, and there is no honest way to
-            change those underneath it.
+            These apply from the <strong>next</strong> phase. The session already running was started with its
+            model and budget fixed in its own command line, and there is no honest way to change those
+            underneath it.
           </p>
         )}
 
         <div className="flex flex-wrap items-center gap-2">
           {!live ? (
-            <Button variant="action" disabled={disabled}
-              onClick={() => void onAct('start', () => api.runStart(slug, {
-                ...settings,
-                // START only — activating QA is a start-time act, never part of
-                // a mid-run settings patch.
-                ...(qaOn && canQaToggle ? { qa: true } : {}),
-                resumeRunId: resumable && run ? run.id : undefined,
-              }))}>
+            <Button
+              variant="action"
+              disabled={disabled}
+              onClick={() =>
+                void onAct('start', () =>
+                  api.runStart(slug, {
+                    ...settings,
+                    // START only — activating QA is a start-time act, never part of
+                    // a mid-run settings patch.
+                    ...(qaOn && canQaToggle ? { qa: true } : {}),
+                    resumeRunId: resumable && run ? run.id : undefined,
+                  }),
+                )
+              }
+            >
               {busy === 'start' ? 'Starting…' : resumable ? 'Continue' : 'Start'}
             </Button>
           ) : (
             <>
               {pausing ? (
-                <Button variant="action" disabled={disabled}
-                  onClick={() => void onAct('resume', async () => {
-                    const { run: after } = await api.runResume(slug);
-                    toast(
-                      after?.status === 'pausing'
-                        ? 'The pause could not be cancelled — reload and look at the status'
-                        : 'Pause cancelled — the run carries on',
-                      after?.status === 'pausing' ? 'warn' : 'ok',
-                    );
-                  })}>
+                <Button
+                  variant="action"
+                  disabled={disabled}
+                  onClick={() =>
+                    void onAct('resume', async () => {
+                      const { run: after } = await api.runResume(slug);
+                      toast(
+                        after?.status === 'pausing'
+                          ? 'The pause could not be cancelled — reload and look at the status'
+                          : 'Pause cancelled — the run carries on',
+                        after?.status === 'pausing' ? 'warn' : 'ok',
+                      );
+                    })
+                  }
+                >
                   {busy === 'resume' ? 'Cancelling…' : 'Cancel pause — keep going'}
                 </Button>
               ) : (
-                <Button disabled={disabled || stopping || halting}
-                  onClick={() => void onAct('pause', async () => {
-                    // Report what the SERVER did, not what the click intended. A
-                    // pause that lands on nothing used to answer 200 and say
-                    // nothing at all, which read as "it worked".
-                    const { run: after } = await api.runPause(slug);
-                    if (after?.status === 'pausing') {
-                      toast(after.pause?.afterPhase != null
-                        ? `Pause armed — phase ${after.pause.afterPhase} finishes first`
-                        : 'Pause armed — stopping at the next phase boundary', 'ok');
-                    } else {
-                      toast('Nothing to pause: no phase is running on this run.', 'warn');
-                    }
-                  })}>
+                <Button
+                  disabled={disabled || stopping || halting}
+                  onClick={() =>
+                    void onAct('pause', async () => {
+                      // Report what the SERVER did, not what the click intended. A
+                      // pause that lands on nothing used to answer 200 and say
+                      // nothing at all, which read as "it worked".
+                      const { run: after } = await api.runPause(slug);
+                      if (after?.status === 'pausing') {
+                        toast(
+                          after.pause?.afterPhase != null
+                            ? `Pause armed — phase ${after.pause.afterPhase} finishes first`
+                            : 'Pause armed — stopping at the next phase boundary',
+                          'ok',
+                        );
+                      } else {
+                        toast('Nothing to pause: no phase is running on this run.', 'warn');
+                      }
+                    })
+                  }
+                >
                   {busy === 'pause' ? 'Arming…' : 'Pause after this phase'}
                 </Button>
               )}
 
               {frozen ? (
-                <Button variant="action" disabled={disabled}
-                  onClick={() => void onAct('thaw', async () => {
-                    const { run: after } = await api.runThaw(slug);
-                    const still = after?.status === 'frozen' || Boolean(after?.freeze);
-                    toast(
-                      still
-                        ? 'The session could not be continued — reload and look at the status'
-                        : 'Continued — the session picks up mid-token',
-                      still ? 'warn' : 'ok',
-                    );
-                  })}>
+                <Button
+                  variant="action"
+                  disabled={disabled}
+                  onClick={() =>
+                    void onAct('thaw', async () => {
+                      const { run: after } = await api.runThaw(slug);
+                      const still = after?.status === 'frozen' || Boolean(after?.freeze);
+                      toast(
+                        still
+                          ? 'The session could not be continued — reload and look at the status'
+                          : 'Continued — the session picks up mid-token',
+                        still ? 'warn' : 'ok',
+                      );
+                    })
+                  }
+                >
                   {busy === 'thaw' ? 'Continuing…' : 'Continue the frozen session'}
                 </Button>
               ) : (
-                <Button disabled={disabled || stopping || halting || run?.activePhase == null}
+                <Button
+                  disabled={disabled || stopping || halting || run?.activePhase == null}
                   title="Stops EVERY running session where it stands, losing nothing. One session's tab has the freeze scoped to it alone."
-                  onClick={() => void onAct('freeze', async () => {
-                    const { run: after } = await api.runFreeze(slug);
-                    const held = after?.status === 'frozen' || Boolean(after?.freeze);
-                    const count = Object.values(after?.children ?? {}).filter((child) => child.frozen).length;
-                    toast(
-                      held
-                        ? count > 1
-                          ? `Frozen — ${count} sessions are stopped where they stood`
-                          : `Frozen — phase ${after?.freeze?.phase ?? ''} is stopped where it stood`.trim()
-                        : 'Nothing to freeze: no session is running on this run.',
-                      held ? 'ok' : 'warn',
-                    );
-                  })}>
+                  onClick={() =>
+                    void onAct('freeze', async () => {
+                      const { run: after } = await api.runFreeze(slug);
+                      const held = after?.status === 'frozen' || Boolean(after?.freeze);
+                      const count = Object.values(after?.children ?? {}).filter(
+                        (child) => child.frozen,
+                      ).length;
+                      toast(
+                        held
+                          ? count > 1
+                            ? `Frozen — ${count} sessions are stopped where they stood`
+                            : `Frozen — phase ${after?.freeze?.phase ?? ''} is stopped where it stood`.trim()
+                          : 'Nothing to freeze: no session is running on this run.',
+                        held ? 'ok' : 'warn',
+                      );
+                    })
+                  }
+                >
                   {busy === 'freeze' ? 'Freezing…' : 'Freeze now'}
                 </Button>
               )}
 
               {changed && (
-                <Button disabled={disabled}
-                  onClick={() => void onAct('settings', () => api.runSettings(slug, settings))}>
+                <Button
+                  disabled={disabled}
+                  onClick={() => void onAct('settings', () => api.runSettings(slug, settings))}
+                >
                   {busy === 'settings' ? 'Applying…' : 'Apply from next phase'}
                 </Button>
               )}
@@ -533,8 +673,8 @@ export function Controls({
 /** How an account reads in a picker: name, email, plan, and its 5-hour meter. */
 function accountOptionLabel(account: AccountView, current: string): string {
   const name = account.builtIn
-    ? account.name ?? 'machine login'
-    : account.name ?? account.email ?? account.id;
+    ? (account.name ?? 'machine login')
+    : (account.name ?? account.email ?? account.id);
   const email = !account.builtIn || account.name ? account.email : undefined;
   const five = account.usage?.buckets.five_hour?.utilization;
   return [
@@ -543,7 +683,9 @@ function accountOptionLabel(account: AccountView, current: string): string {
     account.plan ? `· ${account.plan}` : null,
     typeof five === 'number' ? `· 5h ${Math.round(five)}%` : null,
     account.id === current ? '· current' : null,
-  ].filter(Boolean).join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 /**
@@ -556,7 +698,11 @@ function accountOptionLabel(account: AccountView, current: string): string {
  * current select read as "the console only knows one account" on a machine
  * with two, which is precisely the question this row exists to answer.
  */
-export function SwitchAccountRow({ slug, run, disabled }: {
+export function SwitchAccountRow({
+  slug,
+  run,
+  disabled,
+}: {
   slug: string;
   run: RunState | null | undefined;
   disabled: boolean;
@@ -572,7 +718,9 @@ export function SwitchAccountRow({ slug, run, disabled }: {
   const currentView = accounts.find((account) => account.id === current);
   const currentLabel = currentView
     ? accountOptionLabel(currentView, '').replace(/ · current$/, '')
-    : current === 'default' ? 'machine login' : current;
+    : current === 'default'
+      ? 'machine login'
+      : current;
 
   if (accounts.length < 2) {
     return (
@@ -612,16 +760,22 @@ export function SwitchAccountRow({ slug, run, disabled }: {
       <Button
         size="sm"
         disabled={disabled || busy || value === current}
-        title={value === current
-          ? 'The run is already on this account — pick another, or auto.'
-          : 'A live session is checkpointed (its session id kept) and re-attempted under the chosen account right away.'}
+        title={
+          value === current
+            ? 'The run is already on this account — pick another, or auto.'
+            : 'A live session is checkpointed (its session id kept) and re-attempted under the chosen account right away.'
+        }
         onClick={() => {
           setBusy(true);
-          api.runSwitchAccount(slug, value)
+          api
+            .runSwitchAccount(slug, value)
             .then((outcome) => {
-              toast(outcome.ok
-                ? 'Switched — the next session runs under the other account.'
-                : outcome.reason ?? 'Could not switch.', outcome.ok ? 'ok' : 'warn');
+              toast(
+                outcome.ok
+                  ? 'Switched — the next session runs under the other account.'
+                  : (outcome.reason ?? 'Could not switch.'),
+                outcome.ok ? 'ok' : 'warn',
+              );
               if (outcome.ok) setChoice(null);
               void client.invalidateQueries({ queryKey: keys.runs() });
               void client.invalidateQueries({ queryKey: keys.run(slug) });
@@ -636,15 +790,7 @@ export function SwitchAccountRow({ slug, run, disabled }: {
   );
 }
 
-function StopButton({
-  disabled,
-  busy,
-  onStop,
-}: {
-  disabled: boolean;
-  busy: boolean;
-  onStop: () => void;
-}) {
+function StopButton({ disabled, busy, onStop }: { disabled: boolean; busy: boolean; onStop: () => void }) {
   const [open, setOpen] = useState(false);
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
@@ -664,13 +810,13 @@ function StopButton({
         }}
       >
         <p className="mt-2 text-sm text-ink-muted">
-          The session gets SIGTERM, so its own end-of-session hooks still run. Anything it has
-          already written to the repository stays written — stopping does not undo work.
+          The session gets SIGTERM, so its own end-of-session hooks still run. Anything it has already written
+          to the repository stays written — stopping does not undo work.
         </p>
         <p className="mt-2 text-2xs text-ink-faint">
-          The phase is recorded as <strong>interrupted</strong> rather than failed, because a phase
-          cut off partway may have half-finished something. Continuing later will ask you about it
-          instead of silently running it again.
+          The phase is recorded as <strong>interrupted</strong> rather than failed, because a phase cut off
+          partway may have half-finished something. Continuing later will ask you about it instead of silently
+          running it again.
         </p>
       </AlertDialogContent>
     </AlertDialog>

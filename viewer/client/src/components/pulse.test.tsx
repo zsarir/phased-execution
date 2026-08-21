@@ -8,42 +8,76 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { PlanPulse, convergenceLines, fmtElapsed, foreignLanesFor, foreignVehicle, isLiveRun, pulseLanes, pulseWaits } from './pulse';
+import {
+  PlanPulse,
+  convergenceLines,
+  fmtElapsed,
+  foreignLanesFor,
+  foreignVehicle,
+  isLiveRun,
+  pulseLanes,
+  pulseWaits,
+} from './pulse';
 import type { ConvergeView, ForeignSession } from '@/lib/api';
 import { otherSessions, pulseRuns } from '@/views/pulse';
 import type { RunState } from '@/lib/api';
 
 function run(over: Partial<RunState> = {}): RunState {
   return {
-    id: 'r1', slug: 'demo', root: '/tmp/demo', status: 'running', autonomy: 'auto',
-    model: 'sonnet', phaseBudgetUsd: null, runBudgetUsd: null, spentUsd: 1.25,
-    maxConsecutiveFailures: 2, consecutiveFailures: 0,
-    createdAt: '2026-08-15T10:00:00Z', updatedAt: new Date().toISOString(),
-    activePhase: 4, phases: {}, ...over,
+    id: 'r1',
+    slug: 'demo',
+    root: '/tmp/demo',
+    status: 'running',
+    autonomy: 'auto',
+    model: 'sonnet',
+    phaseBudgetUsd: null,
+    runBudgetUsd: null,
+    spentUsd: 1.25,
+    maxConsecutiveFailures: 2,
+    consecutiveFailures: 0,
+    createdAt: '2026-08-15T10:00:00Z',
+    updatedAt: new Date().toISOString(),
+    activePhase: 4,
+    phases: {},
+    ...over,
   } as RunState;
 }
 
 describe('pulseLanes', () => {
-  it('one lane per live child, carrying the record\'s model, clock and cost', () => {
+  it("one lane per live child, carrying the record's model, clock and cost", () => {
     const state = run({
       children: { '4': { pid: 1, phase: 4, sessionId: 's4', startedAt: '2026-08-15T10:05:00Z' } },
       phases: {
         '4': {
-          phase: 4, status: 'running', attempts: 1, costUsd: 0.42,
-          startedAt: '2026-08-15T10:05:00Z', actualModel: 'claude-sonnet-5',
+          phase: 4,
+          status: 'running',
+          attempts: 1,
+          costUsd: 0.42,
+          startedAt: '2026-08-15T10:05:00Z',
+          actualModel: 'claude-sonnet-5',
         },
       },
     } as never);
     const lanes = pulseLanes(state, new Map([[4, 'cart api']]));
     expect(lanes).toHaveLength(1);
     expect(lanes[0]).toMatchObject({
-      phase: 4, title: 'cart api', vehicle: 'Autopilot session',
-      model: 'claude-sonnet-5', costUsd: 0.42, frozen: false, sessionId: 's4',
+      phase: 4,
+      title: 'cart api',
+      vehicle: 'Autopilot session',
+      model: 'claude-sonnet-5',
+      costUsd: 0.42,
+      frozen: false,
+      sessionId: 's4',
     });
   });
 
   it('falls back to the active phase when the run predates the pool', () => {
-    const lanes = pulseLanes(run({ activePhase: 2, phases: { '2': { phase: 2, status: 'running', attempts: 1, costUsd: 0 } } } as never));
+    const lanes = pulseLanes(
+      run({
+        activePhase: 2,
+        phases: { '2': { phase: 2, status: 'running', attempts: 1, costUsd: 0 } },
+      } as never),
+    );
     expect(lanes.map((l) => l.phase)).toEqual([2]);
   });
 
@@ -58,8 +92,12 @@ describe('pulseWaits', () => {
       phases: {
         '5': { phase: 5, status: 'queued', attempts: 0, costUsd: 0, lockWaitSince: '2026-08-15T10:00:00Z' },
         '6': {
-          phase: 6, status: 'waiting', attempts: 1, costUsd: 0,
-          parkedUntil: '2026-08-15T12:00:00Z', parkReason: 'CI run 812 is still building',
+          phase: 6,
+          status: 'waiting',
+          attempts: 1,
+          costUsd: 0,
+          parkedUntil: '2026-08-15T12:00:00Z',
+          parkReason: 'CI run 812 is still building',
           watch: ['gh:owner/repo#run/812'],
         },
       },
@@ -83,21 +121,38 @@ describe('fmtElapsed', () => {
 describe('PlanPulse', () => {
   it('shows the lane — phase, vehicle, model — and the parked row with its reason', () => {
     const state = run({
-      children: { '4': { pid: 1, phase: 4, sessionId: 's4', startedAt: new Date(Date.now() - 90_000).toISOString() } },
+      children: {
+        '4': { pid: 1, phase: 4, sessionId: 's4', startedAt: new Date(Date.now() - 90_000).toISOString() },
+      },
       phases: {
-        '4': { phase: 4, status: 'running', attempts: 1, costUsd: 0.42, startedAt: new Date(Date.now() - 90_000).toISOString(), model: 'opus' },
-        '6': { phase: 6, status: 'waiting', attempts: 1, costUsd: 0, parkReason: 'waiting on the image build' },
+        '4': {
+          phase: 4,
+          status: 'running',
+          attempts: 1,
+          costUsd: 0.42,
+          startedAt: new Date(Date.now() - 90_000).toISOString(),
+          model: 'opus',
+        },
+        '6': {
+          phase: 6,
+          status: 'waiting',
+          attempts: 1,
+          costUsd: 0,
+          parkReason: 'waiting on the image build',
+        },
       },
     } as never);
-    render(<PlanPulse
-      slug="demo"
-      run={state}
-      board={[
-        { phase: 4, title: 'cart api', state: 'ready' },
-        { phase: 6, title: 'deploy', state: 'ready' },
-        { phase: 7, title: 'docs', state: 'waiting', dependsOn: [6] },
-      ]}
-    />);
+    render(
+      <PlanPulse
+        slug="demo"
+        run={state}
+        board={[
+          { phase: 4, title: 'cart api', state: 'ready' },
+          { phase: 6, title: 'deploy', state: 'ready' },
+          { phase: 7, title: 'docs', state: 'waiting', dependsOn: [6] },
+        ]}
+      />,
+    );
     expect(screen.getByText('P4')).toBeInTheDocument();
     expect(screen.getByText('cart api')).toBeInTheDocument();
     expect(screen.getByText(/Autopilot session/)).toBeInTheDocument();
@@ -108,7 +163,9 @@ describe('PlanPulse', () => {
   });
 
   it('renders nothing for an idle plan', () => {
-    const { container } = render(<PlanPulse slug="demo" run={run({ status: 'finished', activePhase: null })} />);
+    const { container } = render(
+      <PlanPulse slug="demo" run={run({ status: 'finished', activePhase: null })} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 });
@@ -139,22 +196,36 @@ describe('isLiveRun', () => {
 
 function foreign(over: Partial<ForeignSession> = {}): ForeignSession {
   return {
-    sessionId: 'sess-hand', kind: 'foreign', cwd: '/work/demo', startedAt: new Date(Date.now() - 90_000).toISOString(),
-    lastSeen: new Date().toISOString(), turns: 2, presence: 'live', user: 'sam', host: 'laptop',
-    plan: { slug: 'demo', phase: 3, strong: true }, ...over,
+    sessionId: 'sess-hand',
+    kind: 'foreign',
+    cwd: '/work/demo',
+    startedAt: new Date(Date.now() - 90_000).toISOString(),
+    lastSeen: new Date().toISOString(),
+    turns: 2,
+    presence: 'live',
+    user: 'sam',
+    host: 'laptop',
+    plan: { slug: 'demo', phase: 3, strong: true },
+    ...over,
   };
 }
 
 describe('foreignLanesFor', () => {
-  it('keeps live sessions correlated to THIS plan, drops ended ones, other plans, and the run\'s own lanes', () => {
-    const state = run({ children: { '4': { pid: 1, phase: 4, sessionId: 'own-4', startedAt: '2026-08-15T10:05:00Z' } } } as never);
-    const lanes = foreignLanesFor([
-      foreign(),
-      foreign({ sessionId: 'ended', presence: 'ended' }),
-      foreign({ sessionId: 'elsewhere', plan: { slug: 'other', phase: 1, strong: true } }),
-      foreign({ sessionId: 'own-4', plan: { slug: 'demo', phase: 4, strong: true } }),
-      foreign({ sessionId: 'no-plan', plan: undefined }),
-    ], 'demo', state);
+  it("keeps live sessions correlated to THIS plan, drops ended ones, other plans, and the run's own lanes", () => {
+    const state = run({
+      children: { '4': { pid: 1, phase: 4, sessionId: 'own-4', startedAt: '2026-08-15T10:05:00Z' } },
+    } as never);
+    const lanes = foreignLanesFor(
+      [
+        foreign(),
+        foreign({ sessionId: 'ended', presence: 'ended' }),
+        foreign({ sessionId: 'elsewhere', plan: { slug: 'other', phase: 1, strong: true } }),
+        foreign({ sessionId: 'own-4', plan: { slug: 'demo', phase: 4, strong: true } }),
+        foreign({ sessionId: 'no-plan', plan: undefined }),
+      ],
+      'demo',
+      state,
+    );
     expect(lanes.map((l) => l.sessionId)).toEqual(['sess-hand']);
     expect(foreignLanesFor(undefined, 'demo')).toEqual([]);
   });
@@ -169,7 +240,14 @@ describe('foreignLanesFor', () => {
 describe('PlanPulse — a hand-run session beside the lanes', () => {
   it('draws a live hook-reported session as a lane of its own kind, with its phase, its owner and its clock', () => {
     const state = run({ status: 'halted', phases: {} } as never);
-    render(<PlanPulse slug="demo" run={state} board={[{ phase: 3, title: 'checkout', state: 'in-progress' }]} foreign={[foreign()]} />);
+    render(
+      <PlanPulse
+        slug="demo"
+        run={state}
+        board={[{ phase: 3, title: 'checkout', state: 'in-progress' }]}
+        foreign={[foreign()]}
+      />,
+    );
     const lane = screen.getByTestId('foreign-lane');
     expect(lane.textContent).toContain('P3');
     expect(lane.textContent).toContain('checkout');
@@ -181,7 +259,13 @@ describe('PlanPulse — a hand-run session beside the lanes', () => {
 
   it('a weakly correlated session says so; with nothing foreign and nothing live the panel still renders nothing', () => {
     const state = run({ status: 'halted', phases: {} } as never);
-    const { container, rerender } = render(<PlanPulse slug="demo" run={state} foreign={[foreign({ plan: { slug: 'demo', phase: 3, strong: false } })]} />);
+    const { container, rerender } = render(
+      <PlanPulse
+        slug="demo"
+        run={state}
+        foreign={[foreign({ plan: { slug: 'demo', phase: 3, strong: false } })]}
+      />,
+    );
     expect(screen.getByTestId('foreign-lane').textContent).toContain('probably');
     rerender(<PlanPulse slug="demo" run={state} foreign={[]} />);
     expect(container.querySelector('section')).toBeNull();
@@ -191,14 +275,28 @@ describe('PlanPulse — a hand-run session beside the lanes', () => {
 describe('otherSessions', () => {
   it('lists live sessions no plan row draws (no plan, or a plan without a run) and what ended within the hour; live first', () => {
     const now = Date.now();
-    const rows = [run({ slug: 'demo', children: { '4': { pid: 1, phase: 4, sessionId: 'own-4', startedAt: '' } } } as never)];
+    const rows = [
+      run({
+        slug: 'demo',
+        children: { '4': { pid: 1, phase: 4, sessionId: 'own-4', startedAt: '' } },
+      } as never),
+    ];
     const sessions: ForeignSession[] = [
       foreign({ sessionId: 'drawn', plan: { slug: 'demo', phase: 3, strong: true } }),
       foreign({ sessionId: 'own-4', plan: { slug: 'demo', phase: 4, strong: true } }),
       foreign({ sessionId: 'no-plan', plan: undefined }),
       foreign({ sessionId: 'other-plan', plan: { slug: 'beta', phase: 1, strong: true } }),
-      foreign({ sessionId: 'just-left', presence: 'ended', endedAt: new Date(now - 5 * 60_000).toISOString(), lastSeen: new Date(now - 5 * 60_000).toISOString() }),
-      foreign({ sessionId: 'long-gone', presence: 'ended', endedAt: new Date(now - 3 * 60 * 60_000).toISOString() }),
+      foreign({
+        sessionId: 'just-left',
+        presence: 'ended',
+        endedAt: new Date(now - 5 * 60_000).toISOString(),
+        lastSeen: new Date(now - 5 * 60_000).toISOString(),
+      }),
+      foreign({
+        sessionId: 'long-gone',
+        presence: 'ended',
+        endedAt: new Date(now - 3 * 60 * 60_000).toISOString(),
+      }),
       foreign({ sessionId: 'unknown', presence: 'unknown' }),
     ];
     const ids = otherSessions(sessions, rows, now).map((s) => s.sessionId);
@@ -217,39 +315,95 @@ describe('otherSessions', () => {
  * ------------------------------------------------------------------ */
 
 const report = (over: Partial<ConvergeView> = {}): ConvergeView => ({
-  slug: 'demo', trigger: 'boot', at: new Date(Date.now() - 90_000).toISOString(), launched: true, noop: false,
+  slug: 'demo',
+  trigger: 'boot',
+  at: new Date(Date.now() - 90_000).toISOString(),
+  launched: true,
+  noop: false,
   errands: 0,
   actions: [
-    { kind: 'release-debris', phase: 3, owner: 'autopilot/r0', ok: true, why: 'the run that held it is dead' },
-    { kind: 'relaunch', ok: true, why: 'phase 12 never started', reboard: [{ phase: 12, situation: 'never-started', rung: 'reboard-fresh', brief: 'fresh' }], rearm: [5] },
+    {
+      kind: 'release-debris',
+      phase: 3,
+      owner: 'autopilot/r0',
+      ok: true,
+      why: 'the run that held it is dead',
+    },
+    {
+      kind: 'relaunch',
+      ok: true,
+      why: 'phase 12 never started',
+      reboard: [{ phase: 12, situation: 'never-started', rung: 'reboard-fresh', brief: 'fresh' }],
+      rearm: [5],
+    },
   ],
   ...over,
 });
 
 describe('convergenceLines', () => {
-  it('says what the pass did, phase by phase, in the shared table\'s words', () => {
+  it("says what the pass did, phase by phase, in the shared table's words", () => {
     expect(convergenceLines(report())).toEqual([
       'released a stale claim on P3 (autopilot/r0)',
       're-boarded P12 (Never started → Re-board fresh)',
-      're-armed P5\'s lock wait',
+      "re-armed P5's lock wait",
     ]);
   });
 
-  it('names a heal\'s rung when it launched, and its reason when it did not', () => {
-    expect(convergenceLines(report({ actions: [
-      { kind: 'heal', phase: 2, situation: 'verify-red', rung: 'fix-agent', vehicle: 'agent', launched: true, ok: true, why: '' },
-    ] }))).toEqual(['P2: Verification red → Fix with a stronger new agent']);
-    expect(convergenceLines(report({ actions: [
-      { kind: 'heal', phase: 2, launched: false, ok: true, why: 'phase 2 reads Declared blocked · credential — a person\'s to settle' },
-    ] }))).toEqual(['looked at P2 — phase 2 reads Declared blocked · credential — a person\'s to settle']);
+  it("names a heal's rung when it launched, and its reason when it did not", () => {
+    expect(
+      convergenceLines(
+        report({
+          actions: [
+            {
+              kind: 'heal',
+              phase: 2,
+              situation: 'verify-red',
+              rung: 'fix-agent',
+              vehicle: 'agent',
+              launched: true,
+              ok: true,
+              why: '',
+            },
+          ],
+        }),
+      ),
+    ).toEqual(['P2: Verification red → Fix with a stronger new agent']);
+    expect(
+      convergenceLines(
+        report({
+          actions: [
+            {
+              kind: 'heal',
+              phase: 2,
+              launched: false,
+              ok: true,
+              why: "phase 2 reads Declared blocked · credential — a person's to settle",
+            },
+          ],
+        }),
+      ),
+    ).toEqual(["looked at P2 — phase 2 reads Declared blocked · credential — a person's to settle"]);
   });
 
   it('names an errand, a skip, and a failure by what they are', () => {
-    expect(convergenceLines(report({ actions: [
-      { kind: 'errand', phase: 5, situation: 'gated-manual', need: 'A person to clear the manual gate.', ok: true, why: 'exhausted' },
-      { kind: 'skip', ok: true, why: 'the operator stopped it' },
-      { kind: 'release-debris', phase: 1, owner: 'x', ok: false, why: 'dead run' },
-    ] }))).toEqual([
+    expect(
+      convergenceLines(
+        report({
+          actions: [
+            {
+              kind: 'errand',
+              phase: 5,
+              situation: 'gated-manual',
+              need: 'A person to clear the manual gate.',
+              ok: true,
+              why: 'exhausted',
+            },
+            { kind: 'skip', ok: true, why: 'the operator stopped it' },
+            { kind: 'release-debris', phase: 1, owner: 'x', ok: false, why: 'dead run' },
+          ],
+        }),
+      ),
+    ).toEqual([
       'left an errand on P5 — A person to clear the manual gate.',
       'left it alone — the operator stopped it',
       'failed: released a stale claim on P1 (x)',
@@ -269,9 +423,13 @@ describe('<PlanPulse> — the convergence line', () => {
   });
 
   it('ignores a pass about another plan, and one older than a day', () => {
-    const { container } = render(<PlanPulse slug="demo" run={run({ status: 'parked' })} converge={report({ slug: 'other' })} />);
+    const { container } = render(
+      <PlanPulse slug="demo" run={run({ status: 'parked' })} converge={report({ slug: 'other' })} />,
+    );
     expect(container.firstChild).toBeNull();
     const stale = report({ at: new Date(Date.now() - 36 * 3600 * 1000).toISOString() });
-    expect(render(<PlanPulse slug="demo" run={run({ status: 'parked' })} converge={stale} />).container.firstChild).toBeNull();
+    expect(
+      render(<PlanPulse slug="demo" run={run({ status: 'parked' })} converge={stale} />).container.firstChild,
+    ).toBeNull();
   });
 });

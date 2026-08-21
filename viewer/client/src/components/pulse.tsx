@@ -13,7 +13,17 @@
  * that keeps the elapsed timers honest while anything is live.
  */
 
-import { Bot, CircleDashed, Clock3, Eye, Hourglass, Lock, RefreshCw, Snowflake, Terminal } from 'lucide-react';
+import {
+  Bot,
+  CircleDashed,
+  Clock3,
+  Eye,
+  Hourglass,
+  Lock,
+  RefreshCw,
+  Snowflake,
+  Terminal,
+} from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useNow } from '@/lib/clock';
 import { money } from '@/lib/format';
@@ -57,7 +67,11 @@ const LIVE_RUN = new Set(['running', 'waiting', 'pausing', 'stopping', 'frozen',
 
 /** The vehicle a hook-reported session is, in words — the Pulse's other lane kind. */
 export function foreignVehicle(session: Pick<ForeignSession, 'kind'>): string {
-  return session.kind === 'agent' ? 'Console agent' : session.kind === 'autopilot' ? 'Autopilot session' : 'Terminal session';
+  return session.kind === 'agent'
+    ? 'Console agent'
+    : session.kind === 'autopilot'
+      ? 'Autopilot session'
+      : 'Terminal session';
 }
 
 /**
@@ -67,13 +81,19 @@ export function foreignVehicle(session: Pick<ForeignSession, 'kind'>): string {
  * of it (same session id) is not drawn twice.
  */
 export function foreignLanesFor(
-  sessions: readonly ForeignSession[] | undefined, slug: string, run?: RunState | null,
+  sessions: readonly ForeignSession[] | undefined,
+  slug: string,
+  run?: RunState | null,
 ): ForeignSession[] {
   if (!sessions?.length) return [];
-  const own = new Set(Object.values(run?.children ?? {}).map((child) => child.sessionId).filter(Boolean));
+  const own = new Set(
+    Object.values(run?.children ?? {})
+      .map((child) => child.sessionId)
+      .filter(Boolean),
+  );
   return sessions
     .filter((s) => s.presence === 'live' && s.plan?.slug === slug && !own.has(s.sessionId))
-    .sort((a, b) => (a.plan!.phase - b.plan!.phase) || a.startedAt.localeCompare(b.startedAt));
+    .sort((a, b) => a.plan!.phase - b.plan!.phase || a.startedAt.localeCompare(b.startedAt));
 }
 
 /**
@@ -91,21 +111,28 @@ export function convergenceLines(view: ConvergeView): string[] {
     switch (action.kind) {
       case 'relaunch': {
         for (const r of action.reboard ?? []) {
-          lines.push(`${prefix}re-boarded P${r.phase} (${situationLabelFor(r.situation)} → ${rungLabel(r.rung, undefined, r.situation)})`);
+          lines.push(
+            `${prefix}re-boarded P${r.phase} (${situationLabelFor(r.situation)} → ${rungLabel(r.rung, undefined, r.situation)})`,
+          );
         }
         for (const n of action.rearm ?? []) lines.push(`${prefix}re-armed P${n}'s lock wait`);
-        if (!action.reboard?.length && !action.rearm?.length) lines.push(`${prefix}continued the run — ${action.why}`);
+        if (!action.reboard?.length && !action.rearm?.length)
+          lines.push(`${prefix}continued the run — ${action.why}`);
         break;
       }
       case 'heal':
         if (action.launched) {
-          lines.push(`${prefix}${at(action.phase)}: ${action.situation ? situationLabelFor(action.situation) : 'healing'}${action.rung ? ` → ${rungLabel(action.rung, undefined, action.situation)}` : ''}`);
+          lines.push(
+            `${prefix}${at(action.phase)}: ${action.situation ? situationLabelFor(action.situation) : 'healing'}${action.rung ? ` → ${rungLabel(action.rung, undefined, action.situation)}` : ''}`,
+          );
         } else {
           lines.push(`${prefix}looked at ${at(action.phase)} — ${action.why}`);
         }
         break;
       case 'release-debris':
-        lines.push(`${prefix}released a stale claim on P${action.phase}${action.owner ? ` (${action.owner})` : ''}`);
+        lines.push(
+          `${prefix}released a stale claim on P${action.phase}${action.owner ? ` (${action.owner})` : ''}`,
+        );
         break;
       case 'errand':
         lines.push(`${prefix}left an errand on ${at(action.phase)}${action.need ? ` — ${action.need}` : ''}`);
@@ -175,9 +202,7 @@ export function pulseWaits(run: RunState, titles?: Map<number, string>): PulseWa
         phase: rec.phase,
         title: titles?.get(rec.phase),
         kind: 'queued',
-        why: rec.lockWaitSince
-          ? 'queued behind a lock another session holds'
-          : 'queued for a free lane',
+        why: rec.lockWaitSince ? 'queued behind a lock another session holds' : 'queued for a free lane',
         since: rec.lockWaitSince,
       });
     } else if (rec.status === 'waiting' || (rec.parkedUntil && rec.status !== 'done')) {
@@ -235,7 +260,8 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign, co
   const now = useNow((live && lanes.length > 0) || others.length > 0);
   // A pass older than a day is history, not a heartbeat; a plan nothing
   // touched in that long reads idle here, whatever the loop once did to it.
-  const recentConverge = converge && converge.slug === slug && now - Date.parse(converge.at) < DAY_MS ? converge : null;
+  const recentConverge =
+    converge && converge.slug === slug && now - Date.parse(converge.at) < DAY_MS ? converge : null;
   const convergeLines = recentConverge ? convergenceLines(recentConverge) : [];
 
   // Up next, from the board: open phases whose dependencies are not done yet —
@@ -249,16 +275,16 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign, co
 
   const strip = board
     ? board.map((p) => {
-      const rec = run.phases?.[String(p.phase)];
-      return {
-        phase: p.phase,
-        status: rec?.status ?? (p.state === 'done' ? 'done' : p.state === 'ready' ? 'pending' : 'waiting'),
-        detail: p.title,
-      };
-    })
+        const rec = run.phases?.[String(p.phase)];
+        return {
+          phase: p.phase,
+          status: rec?.status ?? (p.state === 'done' ? 'done' : p.state === 'ready' ? 'pending' : 'waiting'),
+          detail: p.title,
+        };
+      })
     : Object.values(run.phases ?? {})
-      .sort((a, b) => a.phase - b.phase)
-      .map((r) => ({ phase: r.phase, status: r.status }));
+        .sort((a, b) => a.phase - b.phase)
+        .map((r) => ({ phase: r.phase, status: r.status }));
 
   return (
     <section
@@ -267,25 +293,40 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign, co
     >
       <header className="flex flex-wrap items-center gap-2 border-b border-rule px-4 py-2.5">
         <span className="relative flex size-2.5 shrink-0" aria-hidden>
-          <span className={cn(
-            'absolute inline-flex h-full w-full rounded-full',
-            live ? 'animate-ping bg-progress/60' : 'bg-ink-faint/40',
-          )}
+          <span
+            className={cn(
+              'absolute inline-flex h-full w-full rounded-full',
+              live ? 'animate-ping bg-progress/60' : 'bg-ink-faint/40',
+            )}
           />
-          <span className={cn('relative inline-flex size-2.5 rounded-full', live ? 'bg-progress' : 'bg-ink-faint')} />
+          <span
+            className={cn(
+              'relative inline-flex size-2.5 rounded-full',
+              live ? 'bg-progress' : 'bg-ink-faint',
+            )}
+          />
         </span>
-        {linkHeader
-          ? (
-            <a
-              href={planHref(slug, 'run')}
-              className="min-w-0 truncate font-medium text-ink hover:underline"
-              onClick={(event) => { event.preventDefault(); navigate(planHref(slug, 'run')); }}
-            >
-              {slug}
-            </a>
-          )
-          : <span className="font-medium text-ink">Right now</span>}
-        <StatusBadge state={runUiState(run.status)} label={run.status} mono title={runStatusTitle(run.status)} pulse={run.status === 'running'} />
+        {linkHeader ? (
+          <a
+            href={planHref(slug, 'run')}
+            className="min-w-0 truncate font-medium text-ink hover:underline"
+            onClick={(event) => {
+              event.preventDefault();
+              navigate(planHref(slug, 'run'));
+            }}
+          >
+            {slug}
+          </a>
+        ) : (
+          <span className="font-medium text-ink">Right now</span>
+        )}
+        <StatusBadge
+          state={runUiState(run.status)}
+          label={run.status}
+          mono
+          title={runStatusTitle(run.status)}
+          pulse={run.status === 'running'}
+        />
         <span className="ml-auto shrink-0 font-mono text-2xs tabular-nums text-ink-faint">
           {money(run.spentUsd)} spent
         </span>
@@ -308,18 +349,30 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign, co
               'flex w-full items-center gap-3 rounded-md border-l-4 bg-ground-deep/60 px-3 py-2 text-left',
               lane.frozen ? 'border-gated' : 'border-progress',
             )}
-            title={lane.frozen
-              ? 'This lane is frozen (SIGSTOP) — Continue lives on the run page'
-              : `Phase ${lane.phase} is being worked on right now — open the run page`}
+            title={
+              lane.frozen
+                ? 'This lane is frozen (SIGSTOP) — Continue lives on the run page'
+                : `Phase ${lane.phase} is being worked on right now — open the run page`
+            }
           >
             <span className="font-mono text-lg font-semibold tabular-nums text-ink">P{lane.phase}</span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm text-ink">{lane.title ?? `Phase ${lane.phase}`}</span>
               <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-2xs text-ink-muted">
-                <Chip tone={lane.frozen ? 'gate' : 'busy'} dot className={cn(!lane.frozen && 'animate-pulse-soft')}>
-                  {lane.frozen
-                    ? <><Snowflake size={11} aria-hidden /> frozen</>
-                    : <><Bot size={11} aria-hidden /> {lane.vehicle}</>}
+                <Chip
+                  tone={lane.frozen ? 'gate' : 'busy'}
+                  dot
+                  className={cn(!lane.frozen && 'animate-pulse-soft')}
+                >
+                  {lane.frozen ? (
+                    <>
+                      <Snowflake size={11} aria-hidden /> frozen
+                    </>
+                  ) : (
+                    <>
+                      <Bot size={11} aria-hidden /> {lane.vehicle}
+                    </>
+                  )}
                 </Chip>
                 {lane.status === 'verifying' && <Chip tone="busy">verifying</Chip>}
                 {lane.model && <span className="font-mono">{lane.model}</span>}
@@ -332,7 +385,9 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign, co
                 {lane.startedAt ? fmtElapsed(now - Date.parse(lane.startedAt)) : '—'}
               </span>
               {Boolean(lane.costUsd) && (
-                <span className="block font-mono text-2xs tabular-nums text-ink-faint">{money(lane.costUsd!)}</span>
+                <span className="block font-mono text-2xs tabular-nums text-ink-faint">
+                  {money(lane.costUsd!)}
+                </span>
               )}
             </span>
           </button>
@@ -345,19 +400,35 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign, co
             className="flex w-full items-center gap-3 rounded-md border-l-4 border-ink-faint/70 bg-ground-deep/40 px-3 py-2"
             title={`${foreignVehicle(session)} ${session.sessionId} — reported by the session-presence hook${session.plan?.strong ? '' : ' (matched by owner and time, not by the lock)'}`}
           >
-            <span className="font-mono text-lg font-semibold tabular-nums text-ink">P{session.plan!.phase}</span>
+            <span className="font-mono text-lg font-semibold tabular-nums text-ink">
+              P{session.plan!.phase}
+            </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm text-ink">{titles?.get(session.plan!.phase) ?? `Phase ${session.plan!.phase}`}</span>
+              <span className="block truncate text-sm text-ink">
+                {titles?.get(session.plan!.phase) ?? `Phase ${session.plan!.phase}`}
+              </span>
               <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-2xs text-ink-muted">
                 <Chip tone="neutral" dot>
                   <Terminal size={11} aria-hidden /> {foreignVehicle(session)}
                 </Chip>
-                {session.user && <span className="font-mono">{session.user}{session.host ? `@${session.host}` : ''}</span>}
+                {session.user && (
+                  <span className="font-mono">
+                    {session.user}
+                    {session.host ? `@${session.host}` : ''}
+                  </span>
+                )}
                 {session.plan && !session.plan.strong && <span>probably</span>}
-                {session.turns > 0 && <span>{session.turns} {session.turns === 1 ? 'turn' : 'turns'}</span>}
+                {session.turns > 0 && (
+                  <span>
+                    {session.turns} {session.turns === 1 ? 'turn' : 'turns'}
+                  </span>
+                )}
               </span>
             </span>
-            <span className="shrink-0 font-mono text-sm tabular-nums text-ink" aria-label="in the session for">
+            <span
+              className="shrink-0 font-mono text-sm tabular-nums text-ink"
+              aria-label="in the session for"
+            >
               <Clock3 size={12} className="mr-1 inline-block align-[-1px] text-ink-faint" aria-hidden />
               {fmtElapsed(now - Date.parse(session.startedAt))}
             </span>
@@ -374,9 +445,15 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign, co
               <span className="block truncate text-sm text-ink">{wait.title ?? `Phase ${wait.phase}`}</span>
               <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-2xs text-ink-muted">
                 <Chip tone="warn">
-                  {wait.kind === 'queued'
-                    ? <><Lock size={11} aria-hidden /> queued</>
-                    : <><Hourglass size={11} aria-hidden /> waiting</>}
+                  {wait.kind === 'queued' ? (
+                    <>
+                      <Lock size={11} aria-hidden /> queued
+                    </>
+                  ) : (
+                    <>
+                      <Hourglass size={11} aria-hidden /> waiting
+                    </>
+                  )}
                 </Chip>
                 <span className="min-w-0 truncate">{wait.why}</span>
                 {wait.watch?.map((ref) => (
@@ -387,11 +464,11 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign, co
               </span>
             </span>
             <span className="shrink-0 font-mono text-sm tabular-nums text-ink-muted">
-              {wait.until
-                ? <>wakes in {fmtElapsed(Date.parse(wait.until) - now)}</>
-                : wait.since
-                  ? <>{fmtElapsed(now - Date.parse(wait.since))} so far</>
-                  : null}
+              {wait.until ? (
+                <>wakes in {fmtElapsed(Date.parse(wait.until) - now)}</>
+              ) : wait.since ? (
+                <>{fmtElapsed(now - Date.parse(wait.since))} so far</>
+              ) : null}
             </span>
           </div>
         ))}
@@ -404,9 +481,13 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign, co
           >
             <RefreshCw size={12} className="mt-0.5 shrink-0 text-ink-faint" aria-hidden />
             <span className="text-ink-faint">Converge</span>
-            <span className="font-mono text-ink-faint">{recentConverge.trigger} · {fmtElapsed(Math.max(0, now - Date.parse(recentConverge.at)))} ago</span>
+            <span className="font-mono text-ink-faint">
+              {recentConverge.trigger} · {fmtElapsed(Math.max(0, now - Date.parse(recentConverge.at)))} ago
+            </span>
             <span className="flex min-w-0 flex-1 flex-wrap gap-x-2">
-              {convergeLines.map((line, index) => <span key={index}>{line}</span>)}
+              {convergeLines.map((line, index) => (
+                <span key={index}>{line}</span>
+              ))}
             </span>
           </div>
         )}

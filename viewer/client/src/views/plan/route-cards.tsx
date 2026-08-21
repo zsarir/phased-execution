@@ -17,9 +17,7 @@
  */
 
 import { Bot } from 'lucide-react';
-import {
-  Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip, StatusBadge,
-} from '@/components/ui';
+import { Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip, StatusBadge } from '@/components/ui';
 import { useAuth, useConsoleState, useConverge, useRun } from '@/lib/queries';
 import { money } from '@/lib/format';
 import { isClosed } from '@/lib/closure';
@@ -45,8 +43,9 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
   const { data: auth } = useAuth(Boolean(state?.autopilot));
   const run = (detailRun?.run ?? null) as RunState | null;
 
-  const live = ['running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting']
-    .includes(run?.status ?? '');
+  const live = ['running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting'].includes(
+    run?.status ?? '',
+  );
   // A stuck phase is plan progress, and progress is what closure silences — the
   // server already drops `stale-handoff` for a closed plan, so leaving the
   // banner here would reintroduce the same warning from `phases[].state`.
@@ -80,21 +79,35 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
   if (run && (runClass || parkedRun)) {
     const phase = run.halt?.phase;
     const record = phase != null ? run.phases?.[String(phase)] : undefined;
-    offer(`run:${recoveryKey({ slug, ...(phase != null ? { phase } : {}) })}`, {
-      slug,
-      ...(phase != null ? { phase } : {}),
-      runId: run.id,
-    }, {
-      run,
-      ...(record ? { record: { status: record.status, resumable: Boolean(record.sessionId ?? record.resumeSessionId) } } : {}),
-      ...(authFailure ? { authFailure: true } : {}),
-    });
+    offer(
+      `run:${recoveryKey({ slug, ...(phase != null ? { phase } : {}) })}`,
+      {
+        slug,
+        ...(phase != null ? { phase } : {}),
+        runId: run.id,
+      },
+      {
+        run,
+        ...(record
+          ? {
+              record: {
+                status: record.status,
+                resumable: Boolean(record.sessionId ?? record.resumeSessionId),
+              },
+            }
+          : {}),
+        ...(authFailure ? { authFailure: true } : {}),
+      },
+    );
   }
   for (const phase of stuck) {
-    offer(`stuck:${recoveryKey({ slug, phase: phase.phase })}`, { slug, phase: phase.phase }, { boardState: 'stuck' });
+    offer(
+      `stuck:${recoveryKey({ slug, phase: phase.phase })}`,
+      { slug, phase: phase.phase },
+      { boardState: 'stuck' },
+    );
   }
   if (lintFailed) offer('lint', { slug }, { planIssues: true } as RecoveryCtx);
-
 
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -118,32 +131,45 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
       <Card className={!troubled ? 'sm:col-span-2 lg:col-span-3' : undefined}>
         <CardHeader>
           <CardTitle>Autopilot</CardTitle>
-          {run
-            ? <StatusBadge state={runUiState(run.status)} label={run.status} mono title={runStatusTitle(run.status)} pulse={run.status === 'running'} />
-            : <Chip>not running</Chip>}
+          {run ? (
+            <StatusBadge
+              state={runUiState(run.status)}
+              label={run.status}
+              mono
+              title={runStatusTitle(run.status)}
+              pulse={run.status === 'running'}
+            />
+          ) : (
+            <Chip>not running</Chip>
+          )}
         </CardHeader>
         <CardBody className="flex flex-col gap-2">
           <p className="text-sm text-ink-muted">
-            {run
-              ? live
-                ? <>
-                    {run.activePhase != null ? `Driving phase ${run.activePhase}` : 'Between phases'}
-                    {' · '}{run.model}{run.spentUsd ? <> · {money(run.spentUsd)} spent</> : null}
-                  </>
-                : excerpt(run.finishedReason ?? run.halt?.reason)
-                  ?? 'Stopped, without a note.'
-              : 'Nothing has been run for this plan yet — the run tab starts one.'}
+            {run ? (
+              live ? (
+                <>
+                  {run.activePhase != null ? `Driving phase ${run.activePhase}` : 'Between phases'}
+                  {' · '}
+                  {run.model}
+                  {run.spentUsd ? <> · {money(run.spentUsd)} spent</> : null}
+                </>
+              ) : (
+                (excerpt(run.finishedReason ?? run.halt?.reason) ?? 'Stopped, without a note.')
+              )
+            ) : (
+              'Nothing has been run for this plan yet — the run tab starts one.'
+            )}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" asChild>
-              <a href={planHref(slug, 'run')}><Bot size={13} aria-hidden /> Open autopilot</a>
+              <a href={planHref(slug, 'run')}>
+                <Bot size={13} aria-hidden /> Open autopilot
+              </a>
             </Button>
             {/* The one-press plan recovery, on the plan itself: confirm against
                 the board, stand down what it settled, recover or continue what
                 is real. Renders only for a stopped, unresolved run. */}
-            {run && !live && (
-              <RecoveryActions target={{ slug, runId: run.id }} ctx={{ run }} max={1} />
-            )}
+            {run && !live && <RecoveryActions target={{ slug, runId: run.id }} ctx={{ run }} max={1} />}
             {run?.gitMode === 'new-branch' && (
               <Chip title="This run works on its own branch and, unless turned off, opens a PR when the plan completes.">
                 work branch{run.openPr === false ? '' : ' · PR'}
@@ -155,7 +181,9 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
 
       {troubled && (
         <Card>
-          <CardHeader><CardTitle>Something's wrong</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Something's wrong</CardTitle>
+          </CardHeader>
           <CardBody className="flex flex-col gap-2">
             {(runClass || parkedRun) && run && (
               <Banner severity={parkedRun ? 'warn' : 'error'}>
@@ -179,7 +207,9 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
 
       {troubled && offers.length > 0 && (
         <Card>
-          <CardHeader><CardTitle>{WAYS_FORWARD}</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>{WAYS_FORWARD}</CardTitle>
+          </CardHeader>
           <CardBody className="flex flex-col gap-3">
             {offers.map(({ key, target, ctx }) => (
               <div key={key} className="flex flex-col gap-1">

@@ -39,8 +39,7 @@ export function pulseRuns(runs: readonly RunState[]): RunState[] {
   };
   return [...newestPerPlan.values()]
     .filter((run) => rank(run) < 2 || Date.now() - Date.parse(run.updatedAt) < DAY_MS)
-    .sort((a, b) => rank(a) - rank(b)
-      || Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    .sort((a, b) => rank(a) - rank(b) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
 /**
@@ -49,15 +48,28 @@ export function pulseRuns(runs: readonly RunState[]): RunState[] {
  * plan has no run to mount a pulse on, plus what ended in the last hour —
  * the "just left" the operator actually asks about.
  */
-export function otherSessions(sessions: readonly ForeignSession[] | undefined, rows: readonly RunState[], now = Date.now()): ForeignSession[] {
+export function otherSessions(
+  sessions: readonly ForeignSession[] | undefined,
+  rows: readonly RunState[],
+  now = Date.now(),
+): ForeignSession[] {
   if (!sessions?.length) return [];
   const shown = new Set(rows.map((run) => run.slug));
-  const own = new Set(rows.flatMap((run) => Object.values(run.children ?? {}).map((child) => child.sessionId)));
+  const own = new Set(
+    rows.flatMap((run) => Object.values(run.children ?? {}).map((child) => child.sessionId)),
+  );
   return sessions
     .filter((s) => !own.has(s.sessionId))
-    .filter((s) => (s.presence === 'live' && !(s.plan && shown.has(s.plan.slug)))
-      || (s.presence === 'ended' && s.endedAt != null && now - Date.parse(s.endedAt) < HOUR_MS))
-    .sort((a, b) => (a.presence === 'live' ? 0 : 1) - (b.presence === 'live' ? 0 : 1) || b.lastSeen.localeCompare(a.lastSeen));
+    .filter(
+      (s) =>
+        (s.presence === 'live' && !(s.plan && shown.has(s.plan.slug))) ||
+        (s.presence === 'ended' && s.endedAt != null && now - Date.parse(s.endedAt) < HOUR_MS),
+    )
+    .sort(
+      (a, b) =>
+        (a.presence === 'live' ? 0 : 1) - (b.presence === 'live' ? 0 : 1) ||
+        b.lastSeen.localeCompare(a.lastSeen),
+    );
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -80,39 +92,58 @@ export default function PulseView(_props: ViewProps) {
   return (
     <Page
       title="Pulse"
-      subtitle={lanes || waits || foreignLive
-        ? [
-          lanes ? `${lanes} ${lanes === 1 ? 'phase' : 'phases'} being worked on right now` : null,
-          waits ? `${waits} waiting` : null,
-          foreignLive ? `${foreignLive} ${foreignLive === 1 ? 'session' : 'sessions'} reported by the hook` : null,
-        ].filter(Boolean).join(' · ')
-        : 'What every plan is doing right now'}
+      subtitle={
+        lanes || waits || foreignLive
+          ? [
+              lanes ? `${lanes} ${lanes === 1 ? 'phase' : 'phases'} being worked on right now` : null,
+              waits ? `${waits} waiting` : null,
+              foreignLive
+                ? `${foreignLive} ${foreignLive === 1 ? 'session' : 'sessions'} reported by the hook`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : 'What every plan is doing right now'
+      }
     >
       <div className="flex w-full max-w-3xl flex-col gap-4">
-        {rows.length === 0 && others.length === 0
-          ? (
-            <Empty
-              icon={<Activity size={28} aria-hidden />}
-              title="Nothing is moving"
-              body="No plan has a live, queued or recently finished run, and no session has reported itself. Start one from a plan's Autopilot tab and its lanes appear here."
+        {rows.length === 0 && others.length === 0 ? (
+          <Empty
+            icon={<Activity size={28} aria-hidden />}
+            title="Nothing is moving"
+            body="No plan has a live, queued or recently finished run, and no session has reported itself. Start one from a plan's Autopilot tab and its lanes appear here."
+          />
+        ) : (
+          rows.map((run) => (
+            <PlanPulse
+              key={run.slug}
+              slug={run.slug}
+              run={run}
+              linkHeader
+              foreign={foreign}
+              converge={convergeFor(run.slug)}
             />
-          )
-          : rows.map((run) => (
-            <PlanPulse key={run.slug} slug={run.slug} run={run} linkHeader foreign={foreign} converge={convergeFor(run.slug)} />
-          ))}
+          ))
+        )}
 
         {converge && (
           <p className="text-2xs text-ink-faint" data-testid="converge-status">
-            Convergence {converge.automatic
+            Convergence{' '}
+            {converge.automatic
               ? `runs by itself here — at boot, on a docs change, a minute after a stop${converge.everyMs > 0 ? ` and every ${Math.round(converge.everyMs / 60_000)} min` : ''}`
               : 'is manual on this console (runs disabled or --no-converge) — Recover & continue still runs a pass'}
-            {converge.pending.length ? ` · ${converge.pending.length} ${converge.pending.length === 1 ? 'pass' : 'passes'} queued` : ''}
+            {converge.pending.length
+              ? ` · ${converge.pending.length} ${converge.pending.length === 1 ? 'pass' : 'passes'} queued`
+              : ''}
             {converge.running.length ? ` · converging ${converge.running.join(', ')}` : ''}.
           </p>
         )}
 
         {others.length > 0 && (
-          <section aria-label="Other sessions" className="rounded-lg border border-rule bg-surface shadow-card">
+          <section
+            aria-label="Other sessions"
+            className="rounded-lg border border-rule bg-surface shadow-card"
+          >
             <header className="flex flex-wrap items-center gap-2 border-b border-rule px-4 py-2.5">
               <Terminal size={14} className="text-ink-faint" aria-hidden />
               <span className="font-medium text-ink">Other sessions</span>
@@ -128,20 +159,33 @@ export default function PulseView(_props: ViewProps) {
                 >
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm text-ink">
-                      {session.plan ? `${session.plan.slug} · P${session.plan.phase}` : session.root ?? session.cwd}
+                      {session.plan
+                        ? `${session.plan.slug} · P${session.plan.phase}`
+                        : (session.root ?? session.cwd)}
                     </span>
                     <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-2xs text-ink-muted">
-                      <Chip tone={session.presence === 'live' ? 'busy' : 'neutral'} dot={session.presence === 'live'}>
-                        {foreignVehicle(session)}{session.presence === 'ended' ? ' · ended' : ''}
+                      <Chip
+                        tone={session.presence === 'live' ? 'busy' : 'neutral'}
+                        dot={session.presence === 'live'}
+                      >
+                        {foreignVehicle(session)}
+                        {session.presence === 'ended' ? ' · ended' : ''}
                       </Chip>
-                      {session.user && <span className="font-mono">{session.user}{session.host ? `@${session.host}` : ''}</span>}
+                      {session.user && (
+                        <span className="font-mono">
+                          {session.user}
+                          {session.host ? `@${session.host}` : ''}
+                        </span>
+                      )}
                       <span className="font-mono text-ink-faint">{session.sessionId.slice(0, 8)}</span>
                     </span>
                   </span>
                   <span className="shrink-0 font-mono text-sm tabular-nums text-ink-muted">
                     {session.presence === 'live'
                       ? fmtElapsed(now - Date.parse(session.startedAt))
-                      : session.endedAt ? `ended ${fmtElapsed(now - Date.parse(session.endedAt))} ago` : null}
+                      : session.endedAt
+                        ? `ended ${fmtElapsed(now - Date.parse(session.endedAt))} ago`
+                        : null}
                   </span>
                 </div>
               ))}

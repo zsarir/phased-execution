@@ -33,26 +33,34 @@ if (!existsSync(join(VIEWER, '..', '.git'))) {
 const warn = (message) => process.stderr.write(`\n  phase-console: ${message}\n\n`);
 
 if (!existsSync(join(DIST, 'index.html'))) {
-  warn('the client is not built — the console will serve a page saying so.\n'
-    + '  Build it with: npm ci && npm run build   (or deploy/agent.sh update)');
+  warn(
+    'the client is not built — the console will serve a page saying so.\n' +
+      '  Build it with: npm ci && npm run build   (or deploy/agent.sh update)',
+  );
   process.exit(0);
 }
 
 let head = null;
 try {
   head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: VIEWER, encoding: 'utf8' }).trim();
-} catch { /* no repository — nothing to compare against */ }
+} catch {
+  /* no repository — nothing to compare against */
+}
 
 const stampFile = join(DIST, '.build-rev');
 if (!existsSync(stampFile)) {
-  warn('client/dist carries no .build-rev stamp (built by a bare `vite build`?).\n'
-    + '  `npm run build` stamps what it builds, so staleness can be told.');
+  warn(
+    'client/dist carries no .build-rev stamp (built by a bare `vite build`?).\n' +
+      '  `npm run build` stamps what it builds, so staleness can be told.',
+  );
   process.exit(0);
 }
 
 const stamp = readFileSync(stampFile, 'utf8').trim();
 if (head && stamp !== 'unknown' && stamp !== head) {
-  warn(`the built client is STALE — built at ${stamp.slice(0, 12)}, the repo is at ${head.slice(0, 12)}.\n`
-    + '  It will serve until you rebuild: npm run build   (or deploy/agent.sh update)');
+  warn(
+    `the built client is STALE — built at ${stamp.slice(0, 12)}, the repo is at ${head.slice(0, 12)}.\n` +
+      '  It will serve until you rebuild: npm run build   (or deploy/agent.sh update)',
+  );
 }
 process.exit(0);

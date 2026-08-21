@@ -79,8 +79,13 @@ describe('rename, remove, and a broken login', () => {
     accounts: [
       { id: 'default', kind: 'default', builtIn: true, email: 'me@example.com' },
       {
-        id: 'info', kind: 'profile', builtIn: false, name: 'info', email: 'info@example.com',
-        signedIn: true, authState: 'expired',
+        id: 'info',
+        kind: 'profile',
+        builtIn: false,
+        name: 'info',
+        email: 'info@example.com',
+        signedIn: true,
+        authState: 'expired',
       },
     ],
   };

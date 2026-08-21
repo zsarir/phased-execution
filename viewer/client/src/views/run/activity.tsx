@@ -58,7 +58,9 @@ export function ActivityPanels({ activity, live }: { activity: Activity; live: b
                       TODO_TONE[todo.status] ?? 'text-ink-faint',
                     )}
                   />
-                  <span className={cn('min-w-0', todo.status === 'completed' && 'text-ink-faint line-through')}>
+                  <span
+                    className={cn('min-w-0', todo.status === 'completed' && 'text-ink-faint line-through')}
+                  >
                     {todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content}
                   </span>
                 </li>
@@ -106,9 +108,13 @@ export function ActivityPanels({ activity, live }: { activity: Activity; live: b
                         six minutes in reads identically to one that finished,
                         without this. */}
                     {tool.ok === null
-                      ? (live ? '…' : '—')
+                      ? live
+                        ? '…'
+                        : '—'
                       : tool.ms == null
-                        ? (tool.ok ? 'ok' : 'failed')
+                        ? tool.ok
+                          ? 'ok'
+                          : 'failed'
                         : `${tool.ok ? '' : '✗ '}${toolTime(tool.ms)}`}
                   </span>
                 </li>
@@ -136,9 +142,7 @@ export function ActivityPanels({ activity, live }: { activity: Activity; live: b
                 >
                   <div className="flex items-baseline justify-between gap-2">
                     <strong className="text-2xs">{agent.agent || 'agent'}</strong>
-                    <span className="text-2xs text-ink-faint">
-                      {agent.done ? 'finished' : 'working'}
-                    </span>
+                    <span className="text-2xs text-ink-faint">{agent.done ? 'finished' : 'working'}</span>
                   </div>
                   {agent.title && <div className="text-2xs text-ink-faint">{agent.title}</div>}
                   {agent.text && (
@@ -150,9 +154,9 @@ export function ActivityPanels({ activity, live }: { activity: Activity; live: b
               ))}
             </div>
             <p className="mt-1.5 max-w-prose text-2xs text-ink-faint">
-              One lane per delegated agent, matched to the <code className="font-mono">Agent</code>{' '}
-              call that started it. Unnamed when that call did not say which agent — the field is
-              optional. Their words used to arrive as one voice and read as neither.
+              One lane per delegated agent, matched to the <code className="font-mono">Agent</code> call that
+              started it. Unnamed when that call did not say which agent — the field is optional. Their words
+              used to arrive as one voice and read as neither.
             </p>
           </section>
         )}

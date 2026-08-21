@@ -60,7 +60,11 @@ function mount() {
     ...queryClientConfig,
     defaultOptions: { queries: { ...queryClientConfig.defaultOptions?.queries, retry: false } },
   });
-  return render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={client}>
+      <App />
+    </QueryClientProvider>,
+  );
 }
 
 const setOnline = (value: boolean) => {

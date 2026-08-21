@@ -18,7 +18,12 @@ import { SECTIONS } from './sections';
 import { cardsOf, slug, splitGuide } from './split';
 
 /** Trailing whitespace and blank-line runs are not content. */
-const norm = (text: string) => text.split('\n').map((l) => l.trimEnd()).filter(Boolean).join('\n');
+const norm = (text: string) =>
+  text
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter(Boolean)
+    .join('\n');
 
 function reassemble(markdown: string): string {
   const outline = splitGuide(markdown);
@@ -128,7 +133,14 @@ describe('the cutting rule', () => {
 
 describe('bulky', () => {
   it('marks a card that is mostly one long fenced block', () => {
-    const prompt = ['## Paste this', 'One sentence of setup.', '', '```', ...Array(24).fill('a line of prompt'), '```'].join('\n');
+    const prompt = [
+      '## Paste this',
+      'One sentence of setup.',
+      '',
+      '```',
+      ...Array(24).fill('a line of prompt'),
+      '```',
+    ].join('\n');
     expect(splitGuide(prompt).groups[0].cards[0].bulky).toBe(true);
   });
 
@@ -172,8 +184,9 @@ describe('what a heading says about itself', () => {
   });
 
   it('flattens emphasis in the title', () => {
-    expect(splitGuide('## The `--allow-run` switch\na').groups[0].cards[0].title)
-      .toBe('The --allow-run switch');
+    expect(splitGuide('## The `--allow-run` switch\na').groups[0].cards[0].title).toBe(
+      'The --allow-run switch',
+    );
   });
 
   it('never yields an empty id or title, however odd the heading', () => {

@@ -27,13 +27,15 @@ export function LauncherCard({ supervised }: { supervised?: boolean }) {
 
   // "$HOME/…" in the shown path, same rule as the start-command card: portable
   // to read, no username in a screenshot.
-  const shownPath = plan?.path && state?.home && plan.path.startsWith(`${state.home}/`)
-    ? `~${plan.path.slice(state.home.length)}`
-    : plan?.path;
+  const shownPath =
+    plan?.path && state?.home && plan.path.startsWith(`${state.home}/`)
+      ? `~${plan.path.slice(state.home.length)}`
+      : plan?.path;
 
   const create = () => {
     setCreating(true);
-    api.createLauncher()
+    api
+      .createLauncher()
       .then((outcome) => {
         setCreated({ path: outcome.path, note: outcome.note });
         toast('Desktop launcher written — every capability on.', 'ok');
@@ -56,11 +58,13 @@ export function LauncherCard({ supervised }: { supervised?: boolean }) {
               <Button
                 variant="action"
                 disabled={creating || !plan.rootOpen || state?.allowWrites !== true}
-                title={state?.allowWrites !== true
-                  ? 'Restart with --allow-writes — writing an executable to the Desktop is a write.'
-                  : plan.rootOpen
-                    ? `Writes ${shownPath ?? 'the launcher'} with this console's source directory, port, every capability switch, and its remote/session/skills settings.`
-                    : 'Open a source directory first — the launcher bakes it in as its ROOT.'}
+                title={
+                  state?.allowWrites !== true
+                    ? 'Restart with --allow-writes — writing an executable to the Desktop is a write.'
+                    : plan.rootOpen
+                      ? `Writes ${shownPath ?? 'the launcher'} with this console's source directory, port, every capability switch, and its remote/session/skills settings.`
+                      : 'Open a source directory first — the launcher bakes it in as its ROOT.'
+                }
                 onClick={create}
               >
                 {creating ? 'Writing…' : 'Create the Desktop launcher — full options'}
@@ -68,15 +72,25 @@ export function LauncherCard({ supervised }: { supervised?: boolean }) {
               {shownPath ? <code className="text-2xs text-ink-faint">{shownPath}</code> : null}
             </div>
             <p className="m-0 text-2xs text-ink-faint">
-              {plan.platform === 'darwin'
-                ? <>macOS: a double-clickable .command with ROOT, PORT,{' '}
-                  {(plan.fullFlags ?? []).map((flag) => <code key={flag} className="mr-1">{flag}</code>)}
-                  and this console&rsquo;s remote/session/skills settings baked in.</>
-                : 'Linux: an XDG .desktop entry that runs the start command — full flag set — in a terminal.'}{' '}
+              {plan.platform === 'darwin' ? (
+                <>
+                  macOS: a double-clickable .command with ROOT, PORT,{' '}
+                  {(plan.fullFlags ?? []).map((flag) => (
+                    <code key={flag} className="mr-1">
+                      {flag}
+                    </code>
+                  ))}
+                  and this console&rsquo;s remote/session/skills settings baked in.
+                </>
+              ) : (
+                'Linux: an XDG .desktop entry that runs the start command — full flag set — in a terminal.'
+              )}{' '}
               {created ? created.note : plan.note}
             </p>
             {created ? (
-              <p className="m-0 text-2xs text-ink-muted">Written to <code>{created.path}</code>.</p>
+              <p className="m-0 text-2xs text-ink-muted">
+                Written to <code>{created.path}</code>.
+              </p>
             ) : null}
           </div>
         ) : plan ? (
@@ -87,9 +101,9 @@ export function LauncherCard({ supervised }: { supervised?: boolean }) {
 
         {supervised === false && (
           <Banner severity="warn">
-            Nothing is supervising this console, which is why Restart refuses above. A launcher
-            started with <code>SUPERVISED="yes"</code> installs a launchd agent — and a clean exit
-            comes straight back, so the button has something to restart.
+            Nothing is supervising this console, which is why Restart refuses above. A launcher started with{' '}
+            <code>SUPERVISED="yes"</code> installs a launchd agent — and a clean exit comes straight back, so
+            the button has something to restart.
           </Banner>
         )}
       </CardBody>

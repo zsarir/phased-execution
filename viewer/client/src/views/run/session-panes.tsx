@@ -56,7 +56,10 @@ import { LiveConsole, forPhase, useLiveLines, useSessionStream } from './console
  * somebody is about to be asked to judge.
  */
 export const PANE_STATUSES: readonly PhaseStatus[] = [
-  'running', 'verifying', 'awaiting-verification', 'queued',
+  'running',
+  'verifying',
+  'awaiting-verification',
+  'queued',
 ];
 
 export interface Lane {
@@ -167,9 +170,9 @@ export function SessionPanes({
   // reads, to save a single pass over an array it holds anyway.
   const { data: transcript } = useTranscript(slug, runId, enabled);
   useEffect(() => {
-    hydrate(runLevel
-      ? (transcript ?? []).filter((entry) => entry.event !== 'stream')
-      : forPhase(transcript, phase));
+    hydrate(
+      runLevel ? (transcript ?? []).filter((entry) => entry.event !== 'stream') : forPhase(transcript, phase),
+    );
   }, [transcript, phase, hydrate, runLevel]);
 
   useSessionStream(record, enabled, { runId, phase, omitStream: runLevel });
@@ -184,22 +187,22 @@ export function SessionPanes({
         title={title ?? (phase != null ? `Phase ${phase} console` : 'Session console')}
         {...(control ? { actions: control } : {})}
         {...(subtitle ? { subtitle } : {})}
-        footer={(
+        footer={
           <AskBox
             slug={slug}
             enabled={Boolean(allowRun && live && target != null)}
             allowRun={allowRun}
             phase={target}
           />
-        )}
+        }
       />
-      {runLevel
-        ? (
-          <p className="text-2xs text-ink-faint">
-            Each phase&rsquo;s session text, task list and tool calls live in its own tab.
-          </p>
-        )
-        : <ActivityPanels activity={activity} live={live} />}
+      {runLevel ? (
+        <p className="text-2xs text-ink-faint">
+          Each phase&rsquo;s session text, task list and tool calls live in its own tab.
+        </p>
+      ) : (
+        <ActivityPanels activity={activity} live={live} />
+      )}
     </div>
   );
 }
@@ -249,8 +252,8 @@ export function QueuedPane({
       </CardHeader>
       <CardBody className="flex flex-col gap-3">
         <p className="max-w-prose text-2xs text-ink-faint">
-          Nothing has been spawned and no lock is held — this phase is in a line for a scope
-          something else is working in, and it starts itself the moment that clears.
+          Nothing has been spawned and no lock is held — this phase is in a line for a scope something else is
+          working in, and it starts itself the moment that clears.
         </p>
 
         {wanted.length > 0 && (
@@ -272,14 +275,16 @@ export function QueuedPane({
                   {holder.owner && <span className="text-ink-faint"> · {holder.owner}</span>}
                   {holder.overlaps.length > 0 && (
                     <span className="text-ink-faint">
-                      {' '}· overlaps <code className="font-mono">{holder.overlaps.join(', ')}</code>
+                      {' '}
+                      · overlaps <code className="font-mono">{holder.overlaps.join(', ')}</code>
                     </span>
                   )}
                   {holder.kind === 'lock' && holder.leaseUntil != null && (
                     // The lease is the holder's promise to lapse — the honest
                     // answer to "how long can this possibly block me".
                     <span className="text-ink-faint">
-                      {' '}· lease ends {new Date(holder.leaseUntil).toLocaleTimeString()}
+                      {' '}
+                      · lease ends {new Date(holder.leaseUntil).toLocaleTimeString()}
                     </span>
                   )}
                 </li>
@@ -296,8 +301,8 @@ export function QueuedPane({
 
         {entry?.bypassed ? (
           <p className="text-2xs text-ink-faint">
-            Passed over {entry.bypassed} time(s) by a phase that could run. After enough of those it
-            reserves its tokens and nothing else may take them.
+            Passed over {entry.bypassed} time(s) by a phase that could run. After enough of those it reserves
+            its tokens and nothing else may take them.
           </p>
         ) : null}
         {entry?.reserving ? (
@@ -333,8 +338,9 @@ export function waitingLabel(entry: QueueEntry | undefined): string {
   const first = entry?.waitingOn?.[0];
   if (!first) return 'queued';
   const rest = (entry?.waitingOn.length ?? 0) - 1;
-  return `queued — waiting on ${holderLabel(first.kind, first.slug, first.phase)}`
-    + (rest > 0 ? ` +${rest}` : '');
+  return (
+    `queued — waiting on ${holderLabel(first.kind, first.slug, first.phase)}` + (rest > 0 ? ` +${rest}` : '')
+  );
 }
 
 /** This plan's entry in the admission queue for one phase, if it has one. */

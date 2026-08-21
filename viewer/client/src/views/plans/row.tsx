@@ -27,7 +27,19 @@
  */
 
 import { AlertTriangle, Lock } from 'lucide-react';
-import { Card, Chip, StateChip, StatusBadge, TBody, TD, TH, THead, TR, Table, TableWrap } from '@/components/ui';
+import {
+  Card,
+  Chip,
+  StateChip,
+  StatusBadge,
+  TBody,
+  TD,
+  TH,
+  THead,
+  TR,
+  Table,
+  TableWrap,
+} from '@/components/ui';
 import { Progress } from '@/components/ui';
 import { etaLabel, etaTitle, relativeTime } from '@/lib/format';
 import { closedTitle } from '@/lib/closure';
@@ -127,9 +139,11 @@ function ConcernChip({ row }: { row: PlanRow }) {
   if (!worst) return null;
   return (
     <Chip tone={worst.tone === 'bad' ? 'bad' : 'warn'} className="min-w-0 max-w-full">
-      {worst.tone === 'bad'
-        ? <AlertTriangle size={11} className="shrink-0" aria-hidden />
-        : <Lock size={11} className="shrink-0" aria-hidden />}
+      {worst.tone === 'bad' ? (
+        <AlertTriangle size={11} className="shrink-0" aria-hidden />
+      ) : (
+        <Lock size={11} className="shrink-0" aria-hidden />
+      )}
       <span className="truncate">{worst.text}</span>
     </Chip>
   );
@@ -165,9 +179,7 @@ export function PlanCard({ row, index }: { row: PlanRow; index: number }) {
         </a>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           {!row.isPlan && <Chip>{row.kind === 'orphan-handoffs' ? 'handoffs only' : row.kind}</Chip>}
-          {row.isPlan && row.status !== 'active' && row.status !== 'unknown' && (
-            <ClosedChip row={row} />
-          )}
+          {row.isPlan && row.status !== 'active' && row.status !== 'unknown' && <ClosedChip row={row} />}
           <RunChip row={row} />
         </div>
       </div>
@@ -182,8 +194,8 @@ export function PlanCard({ row, index }: { row: PlanRow; index: number }) {
       </div>
 
       <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-        {ready.length > 0
-          ? ready.slice(0, 4).map((phase) => (
+        {ready.length > 0 ? (
+          ready.slice(0, 4).map((phase) => (
             <a key={phase} href={phaseHref(row.slug, phase)} className="rounded-sm">
               <StateChip
                 state="ready"
@@ -193,10 +205,10 @@ export function PlanCard({ row, index }: { row: PlanRow; index: number }) {
               />
             </a>
           ))
-          : <span className="text-2xs text-ink-faint">{restingReason(row)}</span>}
-        {ready.length > 4 && (
-          <span className="text-2xs text-ink-faint">+{ready.length - 4} more</span>
+        ) : (
+          <span className="text-2xs text-ink-faint">{restingReason(row)}</span>
         )}
+        {ready.length > 4 && <span className="text-2xs text-ink-faint">+{ready.length - 4} more</span>}
 
         {/* `max-w-full` and no `shrink-0`: the wrapper has to be allowed to
             give way, or the `truncate` inside it has nothing to truncate
@@ -218,7 +230,9 @@ export function PlanCard({ row, index }: { row: PlanRow; index: number }) {
       </div>
 
       {concerns(row).length > 0 && (
-        <div className="mt-2 flex min-w-0"><ConcernChip row={row} /></div>
+        <div className="mt-2 flex min-w-0">
+          <ConcernChip row={row} />
+        </div>
       )}
     </Card>
   );
@@ -281,10 +295,7 @@ function SortableTH({
       <button
         type="button"
         onClick={() => onSort(target)}
-        className={cn(
-          'inline-flex items-center gap-1 hover:text-ink',
-          active && 'text-action',
-        )}
+        className={cn('inline-flex items-center gap-1 hover:text-ink', active && 'text-action')}
         title={SORTS.find((s) => s.id === target)?.blurb}
       >
         {label}
@@ -354,24 +365,26 @@ export function PlanTable({
                   )}
                 </a>
               </TD>
-              <TD><Track row={row} /></TD>
+              <TD>
+                <Track row={row} />
+              </TD>
               <TD className="whitespace-nowrap text-right font-mono tabular-nums">
                 {row.phases ? `${row.done}/${row.phases}` : '—'}
               </TD>
               {/* Same rule as the card: a closed plan reads `—`, not a live
                   count in ready-amber linking into a phase nobody will run. */}
               <TD className="text-right font-mono tabular-nums">
-                {!row.isClosed && row.readyPhases.length
-                  ? (
-                    <a
-                      href={phaseHref(row.slug, row.readyPhases[0])}
-                      className="text-ready hover:text-action"
-                      title={`Open phase ${row.readyPhases[0]}`}
-                    >
-                      {row.readyPhases.length}
-                    </a>
-                  )
-                  : <span className="text-ink-faint">—</span>}
+                {!row.isClosed && row.readyPhases.length ? (
+                  <a
+                    href={phaseHref(row.slug, row.readyPhases[0])}
+                    className="text-ready hover:text-action"
+                    title={`Open phase ${row.readyPhases[0]}`}
+                  >
+                    {row.readyPhases.length}
+                  </a>
+                ) : (
+                  <span className="text-ink-faint">—</span>
+                )}
               </TD>
               {/* Sessions is the unit of work left; the estimate under it is
                   what that has been costing in wall-clock. Sorting still keys
@@ -393,9 +406,12 @@ export function PlanTable({
                 </span>
               </TD>
               <TD className="max-w-56">
-                <ConcernChip row={row} /> {concerns(row).length === 0 && <span className="text-ink-faint">—</span>}
+                <ConcernChip row={row} />{' '}
+                {concerns(row).length === 0 && <span className="text-ink-faint">—</span>}
               </TD>
-              <TD><RunChip row={row} /> {!row.run && <span className="text-ink-faint">—</span>}</TD>
+              <TD>
+                <RunChip row={row} /> {!row.run && <span className="text-ink-faint">—</span>}
+              </TD>
               <TD className="whitespace-nowrap text-2xs text-ink-faint">{relativeTime(row.activity)}</TD>
             </TR>
           ))}

@@ -14,7 +14,10 @@
 
 import { Composer as UiComposer } from '@/components/ui/composer';
 
-export function Composer({ onSend, placeholder = 'Message the session…' }: {
+export function Composer({
+  onSend,
+  placeholder = 'Message the session…',
+}: {
   /** The line with its Enter: `text + '\r'`. */
   onSend(data: string): void;
   placeholder?: string;

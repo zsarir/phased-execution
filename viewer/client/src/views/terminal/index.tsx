@@ -33,7 +33,13 @@ import { Button, Chip, Empty, Spinner, toast } from '@/components/ui';
 // SessionControls and the strip through the pane facade too, for the same
 // reason (see the note in pane.tsx).
 import {
-  EndedBanner, SESSION_HINTS, SessionControls, SessionGone, SessionStrip, SessionVitals, TerminalPane,
+  EndedBanner,
+  SESSION_HINTS,
+  SessionControls,
+  SessionGone,
+  SessionStrip,
+  SessionVitals,
+  TerminalPane,
 } from './pane';
 
 export default function TerminalView({ route }: { route: Route }) {
@@ -52,15 +58,17 @@ export default function TerminalView({ route }: { route: Route }) {
   // toward the cap would refuse a new shell because of eight that exited
   // yesterday. `live` is the server's own number; the filter is the fallback for
   // a server that predates it.
-  const atCap = (terminals?.live ?? all.filter((session) => !session.exited).length)
-    >= (terminals?.limit ?? 8);
+  const atCap =
+    (terminals?.live ?? all.filter((session) => !session.exited).length) >= (terminals?.limit ?? 8);
   const wanted = route.segments[1];
   const open = sessions.find((session) => session.id === wanted);
 
   // `void`, never `await`: awaiting an invalidation resolves only when the
   // refetch settles, and awaiting one inside a render path is how P3 deadlocked
   // a whole test file.
-  const refresh = () => { void client.invalidateQueries({ queryKey: keys.terminal() }); };
+  const refresh = () => {
+    void client.invalidateQueries({ queryKey: keys.terminal() });
+  };
 
   /**
    * A URL naming a session this console does not have used to bounce silently —
@@ -87,9 +95,9 @@ export default function TerminalView({ route }: { route: Route }) {
       // session record, so the tab and the pane are correct on the very next
       // render instead of one network round trip later.
       if (ticket.session) {
-        client.setQueryData(keys.terminal(), (prev: typeof terminals) => (prev
-          ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session] }
-          : prev));
+        client.setQueryData(keys.terminal(), (prev: typeof terminals) =>
+          prev ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session] } : prev,
+        );
       }
       refresh();
       navigate(`terminal/${ticket.sessionId}`);
@@ -115,7 +123,10 @@ export default function TerminalView({ route }: { route: Route }) {
   async function dismiss(id: string) {
     try {
       const result = await api.sessionDismiss(id);
-      if (!result.ok) { toast(String(result.reason ?? 'refused'), 'error'); return; }
+      if (!result.ok) {
+        toast(String(result.reason ?? 'refused'), 'error');
+        return;
+      }
       if (result.state) client.setQueryData(keys.terminal(), result.state);
       const rest = sessions.filter((session) => session.id !== id);
       navigate(rest.length ? `terminal/${rest[0].id}` : 'terminal');
@@ -134,10 +145,10 @@ export default function TerminalView({ route }: { route: Route }) {
           title="The terminal is off"
           body={
             <>
-              A shell is a separate decision from the autopilot: it runs as you, with nothing
-              between it and the machine. Restart the console with{' '}
-              <code className="rounded bg-surface-raised px-1 font-mono">--allow-terminal</code>{' '}
-              to turn it on.
+              A shell is a separate decision from the autopilot: it runs as you, with nothing between it and
+              the machine. Restart the console with{' '}
+              <code className="rounded bg-surface-raised px-1 font-mono">--allow-terminal</code> to turn it
+              on.
             </>
           }
         />
@@ -153,10 +164,10 @@ export default function TerminalView({ route }: { route: Route }) {
           title="No shell available"
           body={
             <>
-              <code className="rounded bg-surface-raised px-1 font-mono">node-pty</code> did not
-              load, so this console cannot open a pty. Run{' '}
-              <code className="rounded bg-surface-raised px-1 font-mono">npm install</code> in the
-              viewer directory and restart. Everything else on the console is unaffected.
+              <code className="rounded bg-surface-raised px-1 font-mono">node-pty</code> did not load, so this
+              console cannot open a pty. Run{' '}
+              <code className="rounded bg-surface-raised px-1 font-mono">npm install</code> in the viewer
+              directory and restart. Everything else on the console is unaffected.
             </>
           }
         />
@@ -165,14 +176,20 @@ export default function TerminalView({ route }: { route: Route }) {
   }
 
   if (isPending) {
-    return <Frame><div className="grid flex-1 place-items-center"><Spinner /></div></Frame>;
+    return (
+      <Frame>
+        <div className="grid flex-1 place-items-center">
+          <Spinner />
+        </div>
+      </Frame>
+    );
   }
 
   /* ---------------- the page ---------------- */
 
   const capNote = atCap
-    ? `The limit is ${terminals?.limit ?? 8} running sessions across shells and agents — `
-      + 'close one first (ended ones do not count).'
+    ? `The limit is ${terminals?.limit ?? 8} running sessions across shells and agents — ` +
+      'close one first (ended ones do not count).'
     : undefined;
 
   return (
@@ -182,13 +199,15 @@ export default function TerminalView({ route }: { route: Route }) {
       <SessionStrip
         kind="shell"
         sessions={sessions.map((session) => ({
-          id: session.id, label: session.label, note: session.exited ? 'ended' : null,
+          id: session.id,
+          label: session.label,
+          note: session.exited ? 'ended' : null,
         }))}
         activeId={open?.id}
         onSelect={(id) => navigate(`terminal/${id}`)}
         onClose={(id) => void closeShell(id)}
         note={capNote}
-        actions={(
+        actions={
           <Button
             size="sm"
             className="ml-1 min-h-(--tap-min) shrink-0"
@@ -198,19 +217,21 @@ export default function TerminalView({ route }: { route: Route }) {
           >
             <Plus size={14} aria-hidden /> New
           </Button>
-        )}
-        details={open && (
-          <>
-            {/* Freeze / Continue / Stop — the lane verbs, for THIS shell. */}
-            <SessionControls session={open} />
-            {/* Plan · phase · elapsed (· ETA when the session names a phase) —
+        }
+        details={
+          open && (
+            <>
+              {/* Freeze / Continue / Stop — the lane verbs, for THIS shell. */}
+              <SessionControls session={open} />
+              {/* Plan · phase · elapsed (· ETA when the session names a phase) —
                 a shell attached to nothing still gets its clock. */}
-            <SessionVitals session={open} />
-            <Chip mono className="hidden shrink-0 md:inline-flex" title={open.cwd}>
-              {(size ?? open).cols}×{(size ?? open).rows}
-            </Chip>
-          </>
-        )}
+              <SessionVitals session={open} />
+              <Chip mono className="hidden shrink-0 md:inline-flex" title={open.cwd}>
+                {(size ?? open).cols}×{(size ?? open).rows}
+              </Chip>
+            </>
+          )
+        }
         hints={SESSION_HINTS}
       />
 
@@ -239,7 +260,11 @@ export default function TerminalView({ route }: { route: Route }) {
               ? `A new shell starts in ${state.root.path}.`
               : 'A new shell starts in your home directory.'
           }
-          action={<Button variant="action" onClick={() => void openShell()}><Plus size={15} aria-hidden /> Open a shell</Button>}
+          action={
+            <Button variant="action" onClick={() => void openShell()}>
+              <Plus size={15} aria-hidden /> Open a shell
+            </Button>
+          }
         />
       )}
     </Frame>

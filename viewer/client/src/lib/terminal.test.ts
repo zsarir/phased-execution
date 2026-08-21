@@ -21,7 +21,13 @@ vi.mock('./api', async (importOriginal) => {
 });
 
 import { ApiError } from './api';
-import { RECONNECT_BACKOFF_MS, TerminalLink, estimateTerminalSize, type LinkHandlers, type LinkStatus } from './terminal';
+import {
+  RECONNECT_BACKOFF_MS,
+  TerminalLink,
+  estimateTerminalSize,
+  type LinkHandlers,
+  type LinkStatus,
+} from './terminal';
 
 class FakeSocket {
   static instances: FakeSocket[] = [];
@@ -37,20 +43,56 @@ class FakeSocket {
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onerror: (() => void) | null = null;
   onclose: (() => void) | null = null;
-  constructor(readonly url: string) { FakeSocket.instances.push(this); }
-  send(data: string) { this.sent.push(data); }
+  constructor(readonly url: string) {
+    FakeSocket.instances.push(this);
+  }
+  send(data: string) {
+    this.sent.push(data);
+  }
   /** Our side closing — the browser fires `close` later, by itself. */
-  close(code?: number, reason?: string) { this.readyState = 3; this.closedWith = [code, reason]; }
+  close(code?: number, reason?: string) {
+    this.readyState = 3;
+    this.closedWith = [code, reason];
+  }
   /* ---- the test's hands ---- */
-  open() { this.readyState = 1; this.onopen?.(); }
-  drop() { this.readyState = 3; this.onclose?.(); }
-  receive(data: unknown) { this.onmessage?.({ data }); }
-  frames(): Record<string, unknown>[] { return this.sent.map((f) => JSON.parse(f) as Record<string, unknown>); }
-  resizes() { return this.frames().filter((f) => f.t === 'r'); }
+  open() {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+  drop() {
+    this.readyState = 3;
+    this.onclose?.();
+  }
+  receive(data: unknown) {
+    this.onmessage?.({ data });
+  }
+  frames(): Record<string, unknown>[] {
+    return this.sent.map((f) => JSON.parse(f) as Record<string, unknown>);
+  }
+  resizes() {
+    return this.frames().filter((f) => f.t === 'r');
+  }
 }
 
-const SESSION = { id: 's1', label: 'Terminal 1', cwd: '/repo', shell: '/bin/zsh', cols: 80, rows: 24, pid: 1, clients: 1, createdAt: 0 };
-const TICKET = { ok: true, sessionId: 's1', token: 't', expiresAt: 0, path: '/ws/terminal', session: SESSION };
+const SESSION = {
+  id: 's1',
+  label: 'Terminal 1',
+  cwd: '/repo',
+  shell: '/bin/zsh',
+  cols: 80,
+  rows: 24,
+  pid: 1,
+  clients: 1,
+  createdAt: 0,
+};
+const TICKET = {
+  ok: true,
+  sessionId: 's1',
+  token: 't',
+  expiresAt: 0,
+  path: '/ws/terminal',
+  session: SESSION,
+};
 
 function harness(overrides: Partial<LinkHandlers> = {}) {
   const statuses: [LinkStatus, string | undefined][] = [];
@@ -58,10 +100,16 @@ function harness(overrides: Partial<LinkHandlers> = {}) {
   const sessions: { reattach: boolean }[] = [];
   const handlers: LinkHandlers = {
     onData: vi.fn(),
-    onStatus: (status, detail) => { statuses.push([status, detail]); },
-    onSession: (_session, info) => { sessions.push(info); },
+    onStatus: (status, detail) => {
+      statuses.push([status, detail]);
+    },
+    onSession: (_session, info) => {
+      sessions.push(info);
+    },
     onExit: vi.fn(),
-    onSize: (size) => { sizes.push(size); },
+    onSize: (size) => {
+      sizes.push(size);
+    },
     ...overrides,
   };
   return { handlers, statuses, sizes, sessions };
@@ -155,7 +203,10 @@ describe('staying connected', () => {
     expect(statuses.at(-1)).toEqual(['live', undefined]);
 
     socket(0).drop();
-    expect(statuses.slice(-2)).toEqual([['closed', undefined], ['reconnecting', '1']]);
+    expect(statuses.slice(-2)).toEqual([
+      ['closed', undefined],
+      ['reconnecting', '1'],
+    ]);
     await vi.advanceTimersByTimeAsync(999);
     expect(terminalTicket).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -278,18 +329,29 @@ describe('the heartbeat', () => {
     socket(0).open();
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(socket(0).frames().filter((f) => f.t === 'ping')).toHaveLength(1);
+    expect(
+      socket(0)
+        .frames()
+        .filter((f) => f.t === 'ping'),
+    ).toHaveLength(1);
     socket(0).receive(JSON.stringify({ t: 'pong' }));
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(socket(0).frames().filter((f) => f.t === 'ping')).toHaveLength(2);
+    expect(
+      socket(0)
+        .frames()
+        .filter((f) => f.t === 'ping'),
+    ).toHaveLength(2);
     // No answer this time. Ten seconds later the socket is declared dead —
     // closed with a reason, the pane told why, a reconnect scheduled.
     await vi.advanceTimersByTimeAsync(9_999);
     expect(statuses.at(-1)).toEqual(['live', undefined]);
     await vi.advanceTimersByTimeAsync(1);
     expect(socket(0).closedWith).toEqual([4000, 'no heartbeat']);
-    expect(statuses.slice(-2)).toEqual([['closed', 'no heartbeat'], ['reconnecting', '1']]);
+    expect(statuses.slice(-2)).toEqual([
+      ['closed', 'no heartbeat'],
+      ['reconnecting', '1'],
+    ]);
     await vi.advanceTimersByTimeAsync(1_000);
     await flush();
     expect(FakeSocket.instances).toHaveLength(2);
@@ -302,7 +364,11 @@ describe('the heartbeat', () => {
     await link.connect('s1', { cols: 80, rows: 24 });
     socket(0).open();
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(socket(0).frames().filter((f) => f.t === 'ping').length).toBeGreaterThanOrEqual(3);
+    expect(
+      socket(0)
+        .frames()
+        .filter((f) => f.t === 'ping').length,
+    ).toBeGreaterThanOrEqual(3);
     expect(statuses.at(-1)).toEqual(['live', undefined]);
     expect(FakeSocket.instances).toHaveLength(1);
     link.dispose();
@@ -331,7 +397,9 @@ describe('the heartbeat', () => {
     setVisibility('hidden');
     await vi.advanceTimersByTimeAsync(120_000);
     setVisibility('visible');
-    const pings = socket(0).frames().filter((f) => f.t === 'ping').length;
+    const pings = socket(0)
+      .frames()
+      .filter((f) => f.t === 'ping').length;
     expect(pings).toBeGreaterThanOrEqual(2);
     expect(terminalTicket).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(10_000);
@@ -345,7 +413,12 @@ describe('the heartbeat', () => {
 describe('teardown', () => {
   it('a link disposed mid-mint opens no socket (StrictMode: mount, unmount, mount)', async () => {
     let resolveTicket: (value: typeof TICKET) => void = () => {};
-    terminalTicket.mockImplementationOnce(() => new Promise((resolve) => { resolveTicket = resolve; }));
+    terminalTicket.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveTicket = resolve;
+        }),
+    );
     const { handlers } = harness();
     const link = new TerminalLink(handlers);
     const connecting = link.connect('s1', { cols: 80, rows: 24 });

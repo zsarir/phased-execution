@@ -30,8 +30,7 @@ describe('route registry', () => {
       expect(view, head).toBeTypeOf('object');
       // React marks lazy components with this tag; a plain object would render
       // as nothing and only fail once someone navigated there.
-      expect((view as unknown as { $$typeof: symbol }).$$typeof, head)
-        .toBe(Symbol.for('react.lazy'));
+      expect((view as unknown as { $$typeof: symbol }).$$typeof, head).toBe(Symbol.for('react.lazy'));
     }
   });
 

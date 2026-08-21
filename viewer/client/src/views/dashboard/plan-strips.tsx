@@ -44,7 +44,10 @@ export function PlanStrips({
     <Card>
       <CardHeader className="flex-wrap items-baseline gap-x-3 gap-y-1">
         <CardTitle>Plans in flight</CardTitle>
-        <a href="#/plans" className="flex shrink-0 items-center gap-1 text-2xs text-ink-faint hover:text-action">
+        <a
+          href="#/plans"
+          className="flex shrink-0 items-center gap-1 text-2xs text-ink-faint hover:text-action"
+        >
           every plan <ArrowRight size={11} aria-hidden />
         </a>
       </CardHeader>
@@ -74,43 +77,39 @@ export function PlanStrips({
                   {plan.done}/{plan.phases} · {plan.percent}%
                   {plan.eta && (
                     <span title={etaTitle(plan.eta)}>
-                      {' · '}{etaLabel(plan.eta.lowMs, plan.eta.highMs, plan.eta.basis)}
+                      {' · '}
+                      {etaLabel(plan.eta.lowMs, plan.eta.highMs, plan.eta.basis)}
                     </span>
                   )}
                 </span>
               </div>
 
               <div className="mt-1.5 flex items-center gap-2">
-                {nodes.length > 0
-                  ? (
-                    <a href={planHref(plan.slug)} className="min-w-0 flex-1" title="Open the route map">
-                      <RouteStrip phases={[...nodes].sort((a, b) => a.phase - b.phase)} />
-                    </a>
-                  )
-                  : <Skeleton className="h-3 flex-1" />}
+                {nodes.length > 0 ? (
+                  <a href={planHref(plan.slug)} className="min-w-0 flex-1" title="Open the route map">
+                    <RouteStrip phases={[...nodes].sort((a, b) => a.phase - b.phase)} />
+                  </a>
+                ) : (
+                  <Skeleton className="h-3 flex-1" />
+                )}
               </div>
 
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                {ready.length > 0
-                  ? ready.map((phase) => (
+                {ready.length > 0 ? (
+                  ready.map((phase) => (
                     <a key={phase} href={phaseHref(plan.slug, phase)} className="rounded-sm">
-                      <Chip
-                        tone="state"
-                        dot
-                        mono
-                        className="state-ready hover:bg-action/12"
-                      >
+                      <Chip tone="state" dot mono className="state-ready hover:bg-action/12">
                         P{phase} ready
                       </Chip>
                     </a>
                   ))
-                  : (
-                    <span className="text-2xs text-ink-faint">
-                      {plan.inProgress?.length
-                        ? `phase ${plan.inProgress.join(', ')} in progress`
-                        : 'nothing ready — every remaining phase is waiting on another'}
-                    </span>
-                  )}
+                ) : (
+                  <span className="text-2xs text-ink-faint">
+                    {plan.inProgress?.length
+                      ? `phase ${plan.inProgress.join(', ')} in progress`
+                      : 'nothing ready — every remaining phase is waiting on another'}
+                  </span>
+                )}
                 <span className="ml-auto shrink-0 text-2xs text-ink-faint">
                   {relativeTime(plan.activity)}
                 </span>

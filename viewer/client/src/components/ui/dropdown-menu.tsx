@@ -54,7 +54,12 @@ export function DropdownMenuItem({
 }: ComponentProps<typeof DropdownMenuPrimitive.Item> & { inset?: boolean; destructive?: boolean }) {
   return (
     <DropdownMenuPrimitive.Item
-      className={cn(itemClass, inset && 'pl-8', destructive && 'text-failed data-[highlighted]:bg-failed/10', className)}
+      className={cn(
+        itemClass,
+        inset && 'pl-8',
+        destructive && 'text-failed data-[highlighted]:bg-failed/10',
+        className,
+      )}
       {...props}
     />
   );
@@ -94,21 +99,34 @@ export function DropdownMenuRadioItem({
   );
 }
 
-export function DropdownMenuLabel({ className, inset, ...props }: ComponentProps<typeof DropdownMenuPrimitive.Label> & { inset?: boolean }) {
+export function DropdownMenuLabel({
+  className,
+  inset,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.Label> & { inset?: boolean }) {
   return (
     <DropdownMenuPrimitive.Label
-      className={cn('px-2 py-1.5 text-2xs font-medium uppercase tracking-wide text-ink-faint', inset && 'pl-8', className)}
+      className={cn(
+        'px-2 py-1.5 text-2xs font-medium uppercase tracking-wide text-ink-faint',
+        inset && 'pl-8',
+        className,
+      )}
       {...props}
     />
   );
 }
 
-export function DropdownMenuSeparator({ className, ...props }: ComponentProps<typeof DropdownMenuPrimitive.Separator>) {
+export function DropdownMenuSeparator({
+  className,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.Separator>) {
   return <DropdownMenuPrimitive.Separator className={cn('-mx-1 my-1 h-px bg-rule', className)} {...props} />;
 }
 
 export function DropdownMenuShortcut({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
-  return <span className={cn('ml-auto font-mono text-2xs tracking-wide text-ink-faint', className)} {...props} />;
+  return (
+    <span className={cn('ml-auto font-mono text-2xs tracking-wide text-ink-faint', className)} {...props} />
+  );
 }
 
 export function DropdownMenuSubTrigger({
@@ -118,14 +136,20 @@ export function DropdownMenuSubTrigger({
   ...props
 }: ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & { inset?: boolean }) {
   return (
-    <DropdownMenuPrimitive.SubTrigger className={cn(itemClass, inset && 'pl-8', 'data-[state=open]:bg-surface-raised', className)} {...props}>
+    <DropdownMenuPrimitive.SubTrigger
+      className={cn(itemClass, inset && 'pl-8', 'data-[state=open]:bg-surface-raised', className)}
+      {...props}
+    >
       {children}
       <ChevronRight size={14} aria-hidden className="ml-auto" />
     </DropdownMenuPrimitive.SubTrigger>
   );
 }
 
-export function DropdownMenuSubContent({ className, ...props }: ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+export function DropdownMenuSubContent({
+  className,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.SubContent

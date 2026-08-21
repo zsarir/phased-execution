@@ -28,9 +28,20 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type PlanDetail, type PhaseView, type WriteRequest, type WriteResult } from '@/lib/api';
 import { keys } from '@/lib/queries';
 import {
-  AlertDialog, AlertDialogContent, AlertDialogTrigger,
-  Banner, Button, Card, CardBody, CardHeader, CardTitle,
-  Dialog, DialogClose, DialogContent, DialogFooter, toast,
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogTrigger,
+  Banner,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  toast,
 } from '@/components/ui';
 import { isClosed } from '@/lib/closure';
 import { ReleaseStaleButton } from '@/components/release-lock';
@@ -63,7 +74,12 @@ export const FORMS: Record<string, Form> = {
     hint: 'Runs new-handoff.sh, which also creates or updates INDEX.md and generates the boot prompts for whatever this phase unblocks.',
     fields: [
       { name: 'title', label: 'Title (kebab-case)', placeholder: 'cart-api-endpoint', required: true },
-      { name: 'status', label: 'Status', type: 'select', options: ['complete', 'in-progress', 'blocked', 'pending'] },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        options: ['complete', 'in-progress', 'blocked', 'pending'],
+      },
       { name: 'qa', label: 'Turn QA on for this plan (--qa)', type: 'checkbox' },
       { name: 'force', label: 'Overwrite an existing handoff (--force)', type: 'checkbox' },
     ],
@@ -73,14 +89,25 @@ export const FORMS: Record<string, Form> = {
     hint: 'Writes one row into test-status.md. A recorded fail holds every dependent until it is re-run.',
     fields: [
       { name: 'result', label: 'Result', type: 'select', options: ['pass', 'fail', 'waived', 'pending'] },
-      { name: 'report', label: 'Report path (relative)', placeholder: 'reports/phase-08-qa.md', required: true },
+      {
+        name: 'report',
+        label: 'Report path (relative)',
+        placeholder: 'reports/phase-08-qa.md',
+        required: true,
+      },
     ],
   },
   'lock-claim': {
     title: 'Claim the phase',
     hint: 'Cooperative lock so two sessions never build the same phase. Written locally only — it is not committed or pushed from here.',
     fields: [
-      { name: 'owner', label: 'Owner (account/session)', placeholder: 'you@example.com/session-name', required: true, remember: OWNER_KEY },
+      {
+        name: 'owner',
+        label: 'Owner (account/session)',
+        placeholder: 'you@example.com/session-name',
+        required: true,
+        remember: OWNER_KEY,
+      },
       { name: 'force', label: 'Take over a live lock (--force)', type: 'checkbox' },
     ],
   },
@@ -88,7 +115,13 @@ export const FORMS: Record<string, Form> = {
     title: 'Release the phase',
     hint: 'Clears the lock file. Use this when a session ended without releasing.',
     fields: [
-      { name: 'owner', label: 'Owner (account/session)', placeholder: 'you@example.com/session-name', required: true, remember: OWNER_KEY },
+      {
+        name: 'owner',
+        label: 'Owner (account/session)',
+        placeholder: 'you@example.com/session-name',
+        required: true,
+        remember: OWNER_KEY,
+      },
     ],
   },
   'new-plan': {
@@ -157,13 +190,25 @@ function WriteDialog({
   useEffect(() => {
     let live = true;
     const id = setTimeout(() => {
-      api.write(JSON.parse(key) as WriteRequest, true)
-        .then((result) => { if (live) { setPreview(result.command ?? null); setError(null); } })
+      api
+        .write(JSON.parse(key) as WriteRequest, true)
+        .then((result) => {
+          if (live) {
+            setPreview(result.command ?? null);
+            setError(null);
+          }
+        })
         .catch((failure: Error) => {
-          if (live) { setPreview(null); setError(String(failure.message ?? failure)); }
+          if (live) {
+            setPreview(null);
+            setError(String(failure.message ?? failure));
+          }
         });
     }, PREVIEW_DEBOUNCE_MS);
-    return () => { live = false; clearTimeout(id); };
+    return () => {
+      live = false;
+      clearTimeout(id);
+    };
   }, [key]);
 
   const run = useMutation({
@@ -173,7 +218,11 @@ function WriteDialog({
       for (const field of form.fields) {
         const value = values[field.name];
         if (field.remember && typeof value === 'string' && value) {
-          try { localStorage.setItem(field.remember, value); } catch { /* private mode */ }
+          try {
+            localStorage.setItem(field.remember, value);
+          } catch {
+            /* private mode */
+          }
         }
       }
       // Only what this could have changed, rather than the whole cache: a
@@ -189,12 +238,15 @@ function WriteDialog({
     onError: (failure: Error) => setError(String(failure.message ?? failure)),
   });
 
-  const missing = form.fields.some(
-    (f) => f.required && !String(values[f.name] ?? '').trim(),
-  );
+  const missing = form.fields.some((f) => f.required && !String(values[f.name] ?? '').trim());
 
   return (
-    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
       <DialogContent title={form.title} description={form.hint}>
         <div className="flex flex-col gap-3">
           {form.fields.map((field) => (
@@ -215,7 +267,11 @@ function WriteDialog({
                   onChange={(event) => setValues({ ...values, [field.name]: event.target.value })}
                   className="min-h-(--tap-min) min-w-0 flex-1 rounded border border-rule bg-ground px-2 text-sm text-ink"
                 >
-                  {field.options?.map((option) => <option key={option} value={option}>{option}</option>)}
+                  {field.options?.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
                 </select>
               ) : (
                 <input
@@ -326,10 +382,12 @@ export function WriteMenu({
     if (!inline) return null;
     return (
       <Card>
-        <CardHeader><CardTitle>Actions</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>Actions</CardTitle>
+        </CardHeader>
         <CardBody className="text-sm text-ink-faint">
-          Writes are off. Restart with <code>--allow-writes</code> to scaffold handoffs, record QA
-          results and manage phase locks from here.
+          Writes are off. Restart with <code>--allow-writes</code> to scaffold handoffs, record QA results and
+          manage phase locks from here.
         </CardBody>
       </Card>
     );
@@ -344,16 +402,18 @@ export function WriteMenu({
     ? [
         ['new-handoff', 'Scaffold handoff'],
         ['qa-record', 'Record QA'],
-        phase.lock && !phase.lock.expired
-          ? ['lock-release', 'Release lock']
-          : ['lock-claim', 'Claim phase'],
+        phase.lock && !phase.lock.expired ? ['lock-release', 'Release lock'] : ['lock-claim', 'Claim phase'],
       ]
-    : closed ? [] : [['close-plan', 'Close plan']];
+    : closed
+      ? []
+      : [['close-plan', 'Close plan']];
 
   const buttons = (
     <div className="flex flex-wrap gap-2">
       {actions.map(([id, label]) => (
-        <Button key={id} size="sm" onClick={() => setAction(id)}>{label}</Button>
+        <Button key={id} size="sm" onClick={() => setAction(id)}>
+          {label}
+        </Button>
       ))}
       {/* Reopen takes no input, so it gets a confirm rather than a form — but a
           confirm and not a bare button, because it silently puts the plan's
@@ -364,11 +424,11 @@ export function WriteMenu({
           phase rather than freeing it — so the one action that fixed a stale
           claim was the one the menu did not have. Both are offered now, and
           this one needs no owner typed: the server reads it from the file. */}
-      {phase?.lock?.expired && (
-        <ReleaseStaleButton slug={slug} phase={phase.phase} onDone={onChanged} />
-      )}
+      {phase?.lock?.expired && <ReleaseStaleButton slug={slug} phase={phase.phase} onDone={onChanged} />}
       {!phase && detail.plan?.path && (
-        <Button size="sm" onClick={() => void openEditor(detail.plan!.path!)}>Open in editor</Button>
+        <Button size="sm" onClick={() => void openEditor(detail.plan!.path!)}>
+          Open in editor
+        </Button>
       )}
     </div>
   );
@@ -377,17 +437,16 @@ export function WriteMenu({
     <>
       {inline ? (
         <Card>
-          <CardHeader><CardTitle>Actions</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Actions</CardTitle>
+          </CardHeader>
           <CardBody>{buttons}</CardBody>
         </Card>
-      ) : buttons}
+      ) : (
+        buttons
+      )}
       {action && (
-        <WriteDialog
-          action={action}
-          base={base}
-          onClose={() => setAction(null)}
-          onDone={onChanged}
-        />
+        <WriteDialog action={action} base={base} onClose={() => setAction(null)} onDone={onChanged} />
       )}
     </>
   );
@@ -415,8 +474,10 @@ function ReopenPlanButton({ slug, onDone }: { slug: string; onDone?: () => void 
       void client.invalidateQueries({ queryKey: keys.plans() });
       void client.invalidateQueries({ queryKey: keys.stats() });
       void client.invalidateQueries({ queryKey: keys.plan(slug) });
-      toast(result.ok ? 'Reopened — the plan is active again' : 'The script reported a problem',
-        result.ok ? 'ok' : 'error');
+      toast(
+        result.ok ? 'Reopened — the plan is active again' : 'The script reported a problem',
+        result.ok ? 'ok' : 'error',
+      );
       onDone?.();
     },
     onError: (failure: Error) => toast(String(failure.message ?? failure), 'error'),
@@ -446,7 +507,9 @@ export function NewPlanButton({ allowWrites }: { allowWrites: boolean }) {
   if (!allowWrites) return null;
   return (
     <>
-      <Button size="sm" onClick={() => setOpen(true)}>New plan</Button>
+      <Button size="sm" onClick={() => setOpen(true)}>
+        New plan
+      </Button>
       {open && (
         <WriteDialog
           action="new-plan"

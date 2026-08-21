@@ -160,15 +160,9 @@ describe('sweep — links leave the app safely', () => {
 
 describe('markdown rendering', () => {
   it('renders GFM: tables and fenced code', () => {
-    const html = renderMd([
-      '| a | b |',
-      '| - | - |',
-      '| 1 | 2 |',
-      '',
-      '```bash',
-      'npm test',
-      '```',
-    ].join('\n'));
+    const html = renderMd(
+      ['| a | b |', '| - | - |', '| 1 | 2 |', '', '```bash', 'npm test', '```'].join('\n'),
+    );
     expect(html).toContain('<table>');
     expect(html).toContain('<code');
     expect(html).toContain('npm test');

@@ -18,11 +18,11 @@ export type RunRecoverVerb =
 
 const CONFIRMATIONS: Record<RunRecoverVerb, string> = {
   'auto-recover': '', // recoverPlan answers with its own steps — toasted below.
-  'recheck': 'Re-checking — board, verification and validate.sh.',
-  'closeout': "Resuming the phase's session to finish the closeout.",
-  'resume': "Resuming the phase's session with your instruction.",
-  'retry': 'Cleared the failure — the run continues from here.',
-  'skip': 'Skipped. The board still reads it as not done.',
+  recheck: 'Re-checking — board, verification and validate.sh.',
+  closeout: "Resuming the phase's session to finish the closeout.",
+  resume: "Resuming the phase's session with your instruction.",
+  retry: 'Cleared the failure — the run continues from here.',
+  skip: 'Skipped. The board still reads it as not done.',
   'mcp-continue': 'Carrying on without the servers that would not connect.',
 };
 

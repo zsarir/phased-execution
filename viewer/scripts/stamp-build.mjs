@@ -24,7 +24,9 @@ import { VIEWER_DIR as VIEWER, buildRev } from './build-rev.mjs';
 const DIST = resolve(join(VIEWER, 'client'), process.env.PC_DIST_DIR || 'dist');
 
 if (!existsSync(join(DIST, 'index.html'))) {
-  process.stderr.write(`stamp-build: no ${DIST.replace(VIEWER + '/', '')} to stamp — run \`vite build\` first.\n`);
+  process.stderr.write(
+    `stamp-build: no ${DIST.replace(VIEWER + '/', '')} to stamp — run \`vite build\` first.\n`,
+  );
   process.exit(1);
 }
 

@@ -76,7 +76,12 @@ export function McpPicker({
 
         {planServers.length > 0 && (
           <p className="text-2xs text-ink-faint">
-            The plan already attaches {planServers.map((id) => <code key={id} className="mr-1">{id}</code>)}
+            The plan already attaches{' '}
+            {planServers.map((id) => (
+              <code key={id} className="mr-1">
+                {id}
+              </code>
+            ))}
             — every phase gets those whatever is ticked here.
           </p>
         )}
@@ -122,9 +127,9 @@ export function McpPicker({
 
         {ordered.some(unchecked) && (
           <p className="text-2xs text-ink-faint">
-            A server nobody has probed can still be ticked — its status simply is not known yet.
-            Check them from the MCP page if it matters; a phase that boards with one it cannot reach
-            runs without it and says so, unless the plan requires it.
+            A server nobody has probed can still be ticked — its status simply is not known yet. Check them
+            from the MCP page if it matters; a phase that boards with one it cannot reach runs without it and
+            says so, unless the plan requires it.
           </p>
         )}
       </div>
@@ -141,10 +146,12 @@ export function McpPicker({
  * as a choice is offering something that cannot work.
  */
 function usable(server: McpServerView): boolean {
-  return server.enabled
-    && !server.needsConfig?.length
-    && server.status !== 'needs-auth'
-    && server.status !== 'failed';
+  return (
+    server.enabled &&
+    !server.needsConfig?.length &&
+    server.status !== 'needs-auth' &&
+    server.status !== 'failed'
+  );
 }
 
 /**

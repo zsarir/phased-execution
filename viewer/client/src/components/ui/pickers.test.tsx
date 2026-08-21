@@ -15,7 +15,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { expectNoAxeViolations } from '@/test/axe';
 import { Button } from './button';
 import {
-  Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+  Command,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
 } from './command';
 import { Combobox } from './combobox';
 import { Popover, PopoverContent, PopoverTrigger } from './popover';

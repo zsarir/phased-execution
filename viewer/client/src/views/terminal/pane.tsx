@@ -124,21 +124,29 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
     const terminal = term.current;
     const element = host.current;
     if (!terminal || !element) return;
-    const textarea = terminal.textarea ?? element.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea');
+    const textarea =
+      terminal.textarea ?? element.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea');
     if (!textarea || document.activeElement === textarea) return;
     // Composing: a key-bar tap must not pull the keyboard away from the
     // composer's input — the bytes went to the pty either way.
     if (bottom.current?.contains(document.activeElement)) return;
     const { scrollLeft, scrollTop } = element;
-    try { textarea.focus({ preventScroll: true }); } catch { terminal.focus(); }
+    try {
+      textarea.focus({ preventScroll: true });
+    } catch {
+      terminal.focus();
+    }
     element.scrollLeft = scrollLeft;
     element.scrollTop = scrollTop;
   }, []);
 
-  const send = useCallback((data: string) => {
-    link.current?.send(data);
-    focusTerminal();
-  }, [focusTerminal]);
+  const send = useCallback(
+    (data: string) => {
+      link.current?.send(data);
+      focusTerminal();
+    },
+    [focusTerminal],
+  );
 
   /* ---------------- the terminal itself ---------------- */
 
@@ -148,8 +156,8 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
 
     const terminal = new Terminal({
       fontSize: fontLive.current,
-      fontFamily: getComputedStyle(document.body).getPropertyValue('--font-mono')
-        || 'ui-monospace, monospace',
+      fontFamily:
+        getComputedStyle(document.body).getPropertyValue('--font-mono') || 'ui-monospace, monospace',
       lineHeight: 1.15,
       cursorBlink: true,
       // The server keeps its own ring for reattach; this is what you can
@@ -184,16 +192,23 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
     if (prefs.terminalWebgl === true) {
       try {
         const webgl = new WebglAddon();
-        webgl.onContextLoss(() => { webgl.dispose(); });
+        webgl.onContextLoss(() => {
+          webgl.dispose();
+        });
         terminal.loadAddon(webgl);
-      } catch { /* DOM renderer */ }
+      } catch {
+        /* DOM renderer */
+      }
     }
     term.current = terminal;
     fit.current = fitAddon;
 
     const connection = new TerminalLink({
       onData: (bytes) => terminal.write(bytes),
-      onStatus: (next, why) => { setStatus(next); setDetail(why); },
+      onStatus: (next, why) => {
+        setStatus(next);
+        setDetail(why);
+      },
       onSession: (session, { reattach }) => {
         // The server replays its scrollback on every attach: a reattach
         // starts from an empty screen or the replay would stack on the copy
@@ -201,7 +216,10 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
         if (reattach) terminal.reset();
         onSession?.(session);
       },
-      onExit: (ended) => { setExited(ended); onEnded?.(); },
+      onExit: (ended) => {
+        setExited(ended);
+        onEnded?.();
+      },
       onSize: (size) => onSize?.(size),
     });
     link.current = connection;
@@ -215,7 +233,10 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
     const scrolled = terminal.onScroll(() => {
       const buffer = terminal.buffer.active;
       const up = buffer.viewportY < buffer.baseY;
-      if (up !== wasUp) { wasUp = up; setScrolledUp(up); }
+      if (up !== wasUp) {
+        wasUp = up;
+        setScrolledUp(up);
+      }
     });
 
     const typed = terminal.onData((data) => {
@@ -223,7 +244,10 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
         const control = applyCtrl(data);
         ctrlArmed.current = false;
         setCtrl(false);
-        if (control) { connection.send(control); return; }
+        if (control) {
+          connection.send(control);
+          return;
+        }
       }
       connection.send(data);
     });
@@ -236,14 +260,20 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
      */
     const fitNow = (): boolean => {
       if (!element.clientWidth || !element.clientHeight) return false;
-      try { fitWithFloor(terminal, fitAddon, phoneLive.current); } catch { return false; /* a detached node mid-teardown */ }
+      try {
+        fitWithFloor(terminal, fitAddon, phoneLive.current);
+      } catch {
+        return false; /* a detached node mid-teardown */
+      }
       connection.resize(terminal.cols, terminal.rows);
       return true;
     };
     let frame = 0;
     const resize = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => { fitNow(); });
+      frame = requestAnimationFrame(() => {
+        fitNow();
+      });
     };
     const observer = new ResizeObserver(resize);
     observer.observe(element);
@@ -262,11 +292,20 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
      * `touchstart` listener is PASSIVE (it only reads the finger); only the
      * vertical `touchmove` is cancelled, and only once the axis is known.
      */
-    let touchX = 0; let touchY = 0; let axis: 'x' | 'y' | null = null; let carry = 0;
+    let touchX = 0;
+    let touchY = 0;
+    let axis: 'x' | 'y' | null = null;
+    let carry = 0;
     const touchBegin = (event: TouchEvent) => {
       const touch = event.touches[0];
-      if (!touch || event.touches.length > 1) { axis = 'x'; return; }
-      touchX = touch.clientX; touchY = touch.clientY; axis = null; carry = 0;
+      if (!touch || event.touches.length > 1) {
+        axis = 'x';
+        return;
+      }
+      touchX = touch.clientX;
+      touchY = touch.clientY;
+      axis = null;
+      carry = 0;
     };
     const touchScroll = (event: TouchEvent) => {
       const touch = event.touches[0];
@@ -280,11 +319,15 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
       if (axis === 'x') return;
       if (terminal.buffer.active.type === 'alternate') return;
       if (event.cancelable) event.preventDefault();
-      touchX = touch.clientX; touchY = touch.clientY;
+      touchX = touch.clientX;
+      touchY = touch.clientY;
       carry += dy;
       const cell = (terminal.options.fontSize ?? 14) * (terminal.options.lineHeight ?? 1.15);
       const lines = Math.trunc(carry / cell);
-      if (lines) { terminal.scrollLines(lines); carry -= lines * cell; }
+      if (lines) {
+        terminal.scrollLines(lines);
+        carry -= lines * cell;
+      }
     };
     element.addEventListener('touchstart', touchBegin, { passive: true });
     element.addEventListener('touchmove', touchScroll, { passive: false });
@@ -295,7 +338,9 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
      * it was constructed with and would keep the old ones. `system` mode sets
      * no attribute at all, which is why the media query is watched too.
      */
-    const repaint = () => { terminal.options.theme = xtermTheme(element); };
+    const repaint = () => {
+      terminal.options.theme = xtermTheme(element);
+    };
     const themeAttribute = new MutationObserver(repaint);
     themeAttribute.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     const scheme = window.matchMedia('(prefers-color-scheme: dark)');
@@ -339,7 +384,11 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
     if (!terminal) return;
     if (terminal.options.fontSize === fontSize) return;
     terminal.options.fontSize = fontSize;
-    try { if (fit.current) fitWithFloor(terminal, fit.current, phone); } catch { /* mid-teardown */ }
+    try {
+      if (fit.current) fitWithFloor(terminal, fit.current, phone);
+    } catch {
+      /* mid-teardown */
+    }
     if (link.current && terminal.cols && terminal.rows) {
       link.current.resize(terminal.cols, terminal.rows);
     }
@@ -361,19 +410,25 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
     }
   }, [send]);
 
-  const armCtrl = useCallback((next: boolean) => {
-    ctrlArmed.current = next;
-    setCtrl(next);
-    focusTerminal();
-  }, [focusTerminal]);
+  const armCtrl = useCallback(
+    (next: boolean) => {
+      ctrlArmed.current = next;
+      setCtrl(next);
+      focusTerminal();
+    },
+    [focusTerminal],
+  );
 
-  const stepFont = useCallback((delta: -1 | 1) => {
-    const current = terminalFontSize(phoneLive.current, prefs.terminalFontStep);
-    const next = Math.min(FONT_MAX, Math.max(FONT_MIN, current + delta));
-    if (next === current) return;
-    setPrefs({ terminalFontStep: prefs.terminalFontStep + (next - current) });
-    focusTerminal();
-  }, [prefs.terminalFontStep, setPrefs, focusTerminal]);
+  const stepFont = useCallback(
+    (delta: -1 | 1) => {
+      const current = terminalFontSize(phoneLive.current, prefs.terminalFontStep);
+      const next = Math.min(FONT_MAX, Math.max(FONT_MIN, current + delta));
+      if (next === current) return;
+      setPrefs({ terminalFontStep: prefs.terminalFontStep + (next - current) });
+      focusTerminal();
+    },
+    [prefs.terminalFontStep, setPrefs, focusTerminal],
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -389,10 +444,14 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
               ? exited.closedByOperator
                 ? 'This shell was closed.'
                 : `The shell exited (${exited.signal ? `signal ${exited.signal}` : `status ${exited.code}`}).`
-              : status === 'connecting' ? 'Connecting…'
-                : status === 'reconnecting' ? `Reconnecting… (${detail ?? '1'})`
-                  : status === 'error' ? (detail ?? 'The connection failed.')
-                    : detail === 'no heartbeat' ? 'The connection went quiet — reconnecting.'
+              : status === 'connecting'
+                ? 'Connecting…'
+                : status === 'reconnecting'
+                  ? `Reconnecting… (${detail ?? '1'})`
+                  : status === 'error'
+                    ? (detail ?? 'The connection failed.')
+                    : detail === 'no heartbeat'
+                      ? 'The connection went quiet — reconnecting.'
                       : 'Disconnected.'}
           </span>
           {status !== 'connecting' && !exited && (
@@ -432,7 +491,10 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
           <Button
             size="sm"
             className="absolute bottom-2 right-3 z-(--z-base) shadow-card"
-            onClick={() => { term.current?.scrollToBottom(); focusTerminal(); }}
+            onClick={() => {
+              term.current?.scrollToBottom();
+              focusTerminal();
+            }}
           >
             <ArrowDown size={13} aria-hidden /> Latest
           </Button>

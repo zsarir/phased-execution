@@ -13,10 +13,16 @@ import { cn } from '@/lib/cn';
 export const Accordion = AccordionPrimitive.Root;
 
 export function AccordionItem({ className, ...props }: ComponentProps<typeof AccordionPrimitive.Item>) {
-  return <AccordionPrimitive.Item className={cn('border-b border-rule last:border-b-0', className)} {...props} />;
+  return (
+    <AccordionPrimitive.Item className={cn('border-b border-rule last:border-b-0', className)} {...props} />
+  );
 }
 
-export function AccordionTrigger({ className, children, ...props }: ComponentProps<typeof AccordionPrimitive.Trigger>) {
+export function AccordionTrigger({
+  className,
+  children,
+  ...props
+}: ComponentProps<typeof AccordionPrimitive.Trigger>) {
   return (
     <AccordionPrimitive.Header className="flex">
       <AccordionPrimitive.Trigger
@@ -39,7 +45,11 @@ export function AccordionTrigger({ className, children, ...props }: ComponentPro
   );
 }
 
-export function AccordionContent({ className, children, ...props }: ComponentProps<typeof AccordionPrimitive.Content>) {
+export function AccordionContent({
+  className,
+  children,
+  ...props
+}: ComponentProps<typeof AccordionPrimitive.Content>) {
   return (
     <AccordionPrimitive.Content
       className={cn('overflow-hidden text-sm text-ink-muted data-[state=open]:animate-fade', className)}

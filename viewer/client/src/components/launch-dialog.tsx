@@ -24,9 +24,7 @@
 import { useState } from 'react';
 import { Bot, ShieldCheck } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
-import {
-  Banner, Button, Dialog, DialogClose, DialogContent, DialogFooter, toast,
-} from '@/components/ui';
+import { Banner, Button, Dialog, DialogClose, DialogContent, DialogFooter, toast } from '@/components/ui';
 import { keys, useAccounts, useConsoleState, useMcp, useSkills } from '@/lib/queries';
 import { api, automationPrefs, type OnLimitPolicy, type PhaseLock, type RunState } from '@/lib/api';
 import { countdown, relativeTime } from '@/lib/format';
@@ -35,9 +33,7 @@ import { startQa } from '@/lib/start-qa';
 import { startRecovery } from '@/lib/start-recovery';
 import { QA_PROFILES, QA_PROFILE_LABEL, isVerdict, type QaProfile } from '@/lib/qa';
 import { RECOVERY_BLURBS, RECOVERY_LABELS, type RecoveryClass } from '@/lib/recovery';
-import {
-  DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS, PROFILE_LABEL,
-} from '@/views/run/defaults';
+import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS, PROFILE_LABEL } from '@/views/run/defaults';
 import { SkillPicker } from '@/views/run/skill-picker';
 import { McpPicker } from '@/views/run/mcp-picker';
 import type { McpPolicy, PermissionProfile } from '@/lib/api';
@@ -62,19 +58,34 @@ export interface QaTarget {
 
 export type LaunchRequest =
   | {
-    kind: 'recovery'; recoveryClass: RecoveryClass; slug: string; phase?: number; runId?: string;
-    lock?: PhaseLock;
-  }
+      kind: 'recovery';
+      recoveryClass: RecoveryClass;
+      slug: string;
+      phase?: number;
+      runId?: string;
+      lock?: PhaseLock;
+    }
   | {
-    kind: 'phase'; slug: string; phase: number; run: RunState | null;
-    qaMode?: string; allowWrites?: boolean; planSkills?: string[]; planMcp?: string[];
-    /** Who holds this phase, if anyone. Decides whether this dialog may submit. */
-    lock?: PhaseLock;
-  }
+      kind: 'phase';
+      slug: string;
+      phase: number;
+      run: RunState | null;
+      qaMode?: string;
+      allowWrites?: boolean;
+      planSkills?: string[];
+      planMcp?: string[];
+      /** Who holds this phase, if anyone. Decides whether this dialog may submit. */
+      lock?: PhaseLock;
+    }
   | {
-    kind: 'continue'; slug: string; run: RunState;
-    qaMode?: string; allowWrites?: boolean; planSkills?: string[]; planMcp?: string[];
-  }
+      kind: 'continue';
+      slug: string;
+      run: RunState;
+      qaMode?: string;
+      allowWrites?: boolean;
+      planSkills?: string[];
+      planMcp?: string[];
+    }
   | { kind: 'qa'; target: QaTarget; allowWrites?: boolean; lock?: PhaseLock };
 
 /**
@@ -93,8 +104,10 @@ function claimOn(request: LaunchRequest): PhaseLock | undefined {
 
 /** Which phase this launch is about, when it is about one. */
 function phaseOfRequest(request: LaunchRequest): number | undefined {
-  return request.kind === 'qa' ? request.target.phase
-    : request.kind === 'continue' ? undefined
+  return request.kind === 'qa'
+    ? request.target.phase
+    : request.kind === 'continue'
+      ? undefined
       : request.phase;
 }
 
@@ -107,18 +120,18 @@ function QaProfileNote({ profile }: { profile: QaProfile }) {
   if (profile === 'guarded') {
     return (
       <>
-        The CLI asks you in the terminal before it edits, runs a command or commits. Slower, and
-        the right default for a review — most of the work is reading.
+        The CLI asks you in the terminal before it edits, runs a command or commits. Slower, and the right
+        default for a review — most of the work is reading.
       </>
     );
   }
   return (
     <>
-      <strong>The CLI stops asking</strong> (<code className="font-mono">--permission-mode
-      bypassPermissions</code>). Your deny list still holds — it is enforced by the CLI, not by
-      this console. Requires the bypass disclaimer to have been accepted once, interactively, in a
-      normal <code className="font-mono">claude</code> session on this machine; without it the CLI
-      silently downgrades and asks for everything instead.
+      <strong>The CLI stops asking</strong> (
+      <code className="font-mono">--permission-mode bypassPermissions</code>). Your deny list still holds — it
+      is enforced by the CLI, not by this console. Requires the bypass disclaimer to have been accepted once,
+      interactively, in a normal <code className="font-mono">claude</code> session on this machine; without it
+      the CLI silently downgrades and asks for everything instead.
     </>
   );
 }
@@ -133,25 +146,31 @@ function heading(request: LaunchRequest): { title: string; description: string }
     case 'phase':
       return {
         title: `Run only phase ${request.phase}`,
-        description: 'Run this phase on its own, then stop — the loop does not carry on into the '
-          + 'rest of the plan.',
+        description:
+          'Run this phase on its own, then stop — the loop does not carry on into the ' + 'rest of the plan.',
       };
     case 'continue':
       return {
         title: 'Continue the run',
-        description: 'Picks the run up where it stopped, with the settings below. The scope is '
-          + 'cleared — a continue never silently inherits a single-phase run.',
+        description:
+          'Picks the run up where it stopped, with the settings below. The scope is ' +
+          'cleared — a continue never silently inherits a single-phase run.',
       };
     case 'qa':
       return {
         title: `QA phase ${request.target.phase}`,
-        description: 'A fresh Claude session reviews this phase against its own exit criteria and '
-          + 'records the verdict with qa-record.sh. It is never the session that built it.',
+        description:
+          'A fresh Claude session reviews this phase against its own exit criteria and ' +
+          'records the verdict with qa-record.sh. It is never the session that built it.',
       };
   }
 }
 
-export function LaunchDialog({ request, onClose, onDone }: {
+export function LaunchDialog({
+  request,
+  onClose,
+  onDone,
+}: {
   request: LaunchRequest;
   onClose: () => void;
   /** Called after a successful submit, once the dialog's own bookkeeping ran. */
@@ -165,19 +184,33 @@ export function LaunchDialog({ request, onClose, onDone }: {
 
   const run = request.kind === 'phase' || request.kind === 'continue' ? request.run : null;
   const qaTarget = request.kind === 'qa' ? request.target : null;
-  const planSkills = request.kind === 'qa'
-    ? request.target.planSkills ?? []
-    : (request.kind === 'phase' || request.kind === 'continue') ? request.planSkills ?? [] : [];
-  const planMcp = request.kind === 'qa'
-    ? request.target.planMcp ?? []
-    : (request.kind === 'phase' || request.kind === 'continue') ? request.planMcp ?? [] : [];
+  const planSkills =
+    request.kind === 'qa'
+      ? (request.target.planSkills ?? [])
+      : request.kind === 'phase' || request.kind === 'continue'
+        ? (request.planSkills ?? [])
+        : [];
+  const planMcp =
+    request.kind === 'qa'
+      ? (request.target.planMcp ?? [])
+      : request.kind === 'phase' || request.kind === 'continue'
+        ? (request.planMcp ?? [])
+        : [];
 
   // Seeded from the record that already exists — the run's own settings, the
   // phase's own plan bullets — so the dialog opens on what would happen and
   // the operator overrides rather than retypes.
-  const [model, setModel] = useState(qaTarget ? qaTarget.model ?? '' : run?.model ?? (request.kind === 'recovery' ? '' : DEFAULTS.model));
-  const [effort, setEffort] = useState(qaTarget ? qaTarget.effort ?? '' : run?.effort ?? (request.kind === 'recovery' ? '' : DEFAULTS.effort));
-  const [profile, setProfile] = useState<PermissionProfile>(run?.permissionProfile ?? DEFAULTS.permissionProfile);
+  const [model, setModel] = useState(
+    qaTarget ? (qaTarget.model ?? '') : (run?.model ?? (request.kind === 'recovery' ? '' : DEFAULTS.model)),
+  );
+  const [effort, setEffort] = useState(
+    qaTarget
+      ? (qaTarget.effort ?? '')
+      : (run?.effort ?? (request.kind === 'recovery' ? '' : DEFAULTS.effort)),
+  );
+  const [profile, setProfile] = useState<PermissionProfile>(
+    run?.permissionProfile ?? DEFAULTS.permissionProfile,
+  );
   const [qaProfile, setQaProfile] = useState<QaProfile>('guarded');
   // Which account pays, and what to do when its window closes. `switch` is the
   // deliberate default: with one account it degrades to `wait` on its own, and
@@ -187,7 +220,7 @@ export function LaunchDialog({ request, onClose, onDone }: {
   const [accountId, setAccountId] = useState(run?.accountId ?? 'default');
   const [onLimit, setOnLimit] = useState<OnLimitPolicy>(run?.onLimit ?? 'switch');
   const [chosen, setChosen] = useState<string[]>(
-    qaTarget ? qaTarget.planSkills ?? [] : run?.skills ?? [],
+    qaTarget ? (qaTarget.planSkills ?? []) : (run?.skills ?? []),
   );
   const { data: mcp } = useMcp();
   // Seeded from the run's own record on a resume, exactly as `chosen` is: the
@@ -210,8 +243,7 @@ export function LaunchDialog({ request, onClose, onDone }: {
 
   // Run-flavoured extras. The QA toggle is offered only where turning the gate
   // on can actually be done; the git section only where a run is being minted.
-  const qaOffered = (request.kind === 'phase' || request.kind === 'continue')
-    && request.qaMode === 'off';
+  const qaOffered = (request.kind === 'phase' || request.kind === 'continue') && request.qaMode === 'off';
   const canQaToggle = qaOffered && request.allowWrites !== false;
   const [qaChoice, setQaChoice] = useState<boolean | null>(null);
   const qaOn = qaChoice ?? (canQaToggle && prefs.qaByDefault);
@@ -224,8 +256,8 @@ export function LaunchDialog({ request, onClose, onDone }: {
   // because the healer is an agent session.
   const canAutoRecover = state?.allowAgent === true;
   const [recoverChoice, setRecoverChoice] = useState<boolean | null>(null);
-  const autoRecover = (recoverChoice
-    ?? (run ? Boolean(run.autoRecover) : prefs.autoRecoverByDefault)) && canAutoRecover;
+  const autoRecover =
+    (recoverChoice ?? (run ? Boolean(run.autoRecover) : prefs.autoRecoverByDefault)) && canAutoRecover;
 
   // The QA variant's activation checkbox — the old QaDialog's, verbatim.
   const canActivate = qaTarget?.qaMode === 'off' && (request.kind !== 'qa' || request.allowWrites !== false);
@@ -248,7 +280,10 @@ export function LaunchDialog({ request, onClose, onDone }: {
           ...(merged().length ? { skills: merged() } : {}),
           ...(activate && canActivate ? { activate: true } : {}),
         });
-        if (id) { onDone?.(id); onClose(); }
+        if (id) {
+          onDone?.(id);
+          onClose();
+        }
         return;
       }
 
@@ -263,7 +298,10 @@ export function LaunchDialog({ request, onClose, onDone }: {
           ...(accountId !== 'default' && accountId !== 'auto' ? { accountId } : {}),
           ...(merged().length ? { skills: merged() } : {}),
         });
-        if (id) { onDone?.(id); onClose(); }
+        if (id) {
+          onDone?.(id);
+          onClose();
+        }
         return;
       }
 
@@ -271,9 +309,12 @@ export function LaunchDialog({ request, onClose, onDone }: {
       // what the dialog shows. The attach choice goes as the flag (the server
       // unions the machine list in), never pre-merged here, so the run's
       // record says which skills were picked and which rode along.
-      const resumable = request.kind === 'continue'
-        ? request.run
-        : request.run && request.run.status !== 'finished' ? request.run : null;
+      const resumable =
+        request.kind === 'continue'
+          ? request.run
+          : request.run && request.run.status !== 'finished'
+            ? request.run
+            : null;
       await api.runStart(request.slug, {
         model,
         effort,
@@ -300,9 +341,12 @@ export function LaunchDialog({ request, onClose, onDone }: {
         ...(resumable ? { resumeRunId: resumable.id } : {}),
         ...(request.kind === 'phase' ? { onlyPhases: [request.phase] } : {}),
       });
-      toast(request.kind === 'phase'
-        ? `Running phase ${request.phase} of ${request.slug}`
-        : `Continuing ${request.slug}`, 'ok');
+      toast(
+        request.kind === 'phase'
+          ? `Running phase ${request.phase} of ${request.slug}`
+          : `Continuing ${request.slug}`,
+        'ok',
+      );
       void client.invalidateQueries({ queryKey: keys.runs() });
       void client.invalidateQueries({ queryKey: keys.plans() });
       void client.invalidateQueries({ queryKey: keys.stats() });
@@ -321,12 +365,22 @@ export function LaunchDialog({ request, onClose, onDone }: {
   // A live claim refuses; a lapsed one does not. The server agrees with both,
   // so this is the same rule shown early rather than a second, softer one.
   const blocked = Boolean(claim && !claim.expired);
-  const submitLabel = request.kind === 'qa' ? 'Start review'
-    : request.kind === 'recovery' ? RECOVERY_LABELS[request.recoveryClass]
-      : request.kind === 'phase' ? `Run phase ${request.phase}` : 'Continue';
+  const submitLabel =
+    request.kind === 'qa'
+      ? 'Start review'
+      : request.kind === 'recovery'
+        ? RECOVERY_LABELS[request.recoveryClass]
+        : request.kind === 'phase'
+          ? `Run phase ${request.phase}`
+          : 'Continue';
 
   return (
-    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
       <DialogContent title={title} description={description}>
         <div className="flex flex-col gap-3">
           {qaTarget?.title && (
@@ -342,20 +396,26 @@ export function LaunchDialog({ request, onClose, onDone }: {
             <Banner severity="error">
               <strong>
                 Phase {phaseOfRequest(request)} is claimed by <span className="font-mono">{claim.owner}</span>
-                {claim.host ? <> on <span className="font-mono">{claim.host}</span></> : null}.
+                {claim.host ? (
+                  <>
+                    {' '}
+                    on <span className="font-mono">{claim.host}</span>
+                  </>
+                ) : null}
+                .
               </strong>{' '}
               {claim.claimedAt ? `Claimed ${relativeTime(claim.claimedAt)}` : 'Claimed'}
-              {claim.leaseUntil ? `, and the lease runs ${countdown(claim.leaseUntil)} more` : ''}.
-              Booting a second session into this phase is how two agents overwrite each other.
-              Wait for that session, or release the claim from the phase's row.
+              {claim.leaseUntil ? `, and the lease runs ${countdown(claim.leaseUntil)} more` : ''}. Booting a
+              second session into this phase is how two agents overwrite each other. Wait for that session, or
+              release the claim from the phase's row.
             </Banner>
           )}
 
           {claim?.expired && (
             <Banner severity="warn">
-              A claim by <span className="font-mono">{claim.owner}</span> lapsed on this phase — the
-              session holding it stopped renewing, so nothing is working here. It does not block
-              this launch; releasing it just tidies the board.
+              A claim by <span className="font-mono">{claim.owner}</span> lapsed on this phase — the session
+              holding it stopped renewing, so nothing is working here. It does not block this launch;
+              releasing it just tidies the board.
               <span className="mt-2 block">
                 <ReleaseStaleButton
                   slug={slugOfRequest(request)}
@@ -379,14 +439,20 @@ export function LaunchDialog({ request, onClose, onDone }: {
               <span className="text-2xs uppercase tracking-wide text-ink-faint">Model</span>
               <select className={field} value={model} onChange={(event) => setModel(event.target.value)}>
                 <option value="">default — this machine’s</option>
-                {MODELS.map((name) => <option key={name} value={name}>{name}</option>)}
+                {MODELS.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm">
               <span className="text-2xs uppercase tracking-wide text-ink-faint">Effort</span>
               <select className={field} value={effort} onChange={(event) => setEffort(event.target.value)}>
                 {EFFORTS.map((level) => (
-                  <option key={level} value={level}>{EFFORT_NOTE[level] ?? level}</option>
+                  <option key={level} value={level}>
+                    {EFFORT_NOTE[level] ?? level}
+                  </option>
                 ))}
               </select>
             </label>
@@ -398,16 +464,21 @@ export function LaunchDialog({ request, onClose, onDone }: {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1 text-sm">
               <span className="text-2xs uppercase tracking-wide text-ink-faint">Account</span>
-              <select className={field} value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+              <select
+                className={field}
+                value={accountId}
+                onChange={(event) => setAccountId(event.target.value)}
+              >
                 <option value="auto">auto — most 5-hour headroom</option>
                 {accounts.map((account) => {
                   const five = account.usage?.buckets.five_hour;
                   const label = account.builtIn
                     ? `machine login${account.email ? ` (${account.email})` : ''}`
-                    : account.name ?? account.email ?? account.id;
+                    : (account.name ?? account.email ?? account.id);
                   return (
                     <option key={account.id} value={account.id}>
-                      {label}{five ? ` — 5h ${Math.round(five.utilization)}%` : ''}
+                      {label}
+                      {five ? ` — 5h ${Math.round(five.utilization)}%` : ''}
                     </option>
                   );
                 })}
@@ -439,10 +510,14 @@ export function LaunchDialog({ request, onClose, onDone }: {
                 onChange={(event) => setQaProfile(event.target.value as QaProfile)}
               >
                 {QA_PROFILES.map((id) => (
-                  <option key={id} value={id}>{QA_PROFILE_LABEL[id]}</option>
+                  <option key={id} value={id}>
+                    {QA_PROFILE_LABEL[id]}
+                  </option>
                 ))}
               </select>
-              <span className="text-2xs text-ink-faint"><QaProfileNote profile={qaProfile} /></span>
+              <span className="text-2xs text-ink-faint">
+                <QaProfileNote profile={qaProfile} />
+              </span>
             </label>
           )}
 
@@ -455,7 +530,9 @@ export function LaunchDialog({ request, onClose, onDone }: {
                 onChange={(event) => setProfile(event.target.value as PermissionProfile)}
               >
                 {(Object.keys(PROFILE_LABEL) as PermissionProfile[]).map((id) => (
-                  <option key={id} value={id}>{PROFILE_LABEL[id]}</option>
+                  <option key={id} value={id}>
+                    {PROFILE_LABEL[id]}
+                  </option>
                 ))}
               </select>
             </label>
@@ -466,7 +543,12 @@ export function LaunchDialog({ request, onClose, onDone }: {
               <span className="min-w-0">
                 <span className="text-ink">Attach default skills</span>
                 <span className="mt-0.5 block text-2xs text-ink-faint">
-                  This machine's list: {defaultSkills.map((s) => <code key={s} className="mr-1">{s}</code>)}
+                  This machine's list:{' '}
+                  {defaultSkills.map((s) => (
+                    <code key={s} className="mr-1">
+                      {s}
+                    </code>
+                  ))}
                 </span>
               </span>
               <Button size="sm" aria-pressed={attach} onClick={() => setAttachChoice(!attach)}>
@@ -533,8 +615,8 @@ export function LaunchDialog({ request, onClose, onDone }: {
                   <span className="min-w-0 flex-1">
                     Open a PR when the plan completes
                     <span className="block text-2xs text-ink-faint">
-                      The final phase pushes the branch and opens the PR — after one approval tap on
-                      the push. Force-pushes stay denied outright.
+                      The final phase pushes the branch and opens the PR — after one approval tap on the push.
+                      Force-pushes stay denied outright.
                     </span>
                   </span>
                 </label>
@@ -546,15 +628,19 @@ export function LaunchDialog({ request, onClose, onDone }: {
                     className="mt-1 accent-[var(--action)]"
                     checked={qaOn && canQaToggle}
                     disabled={!canQaToggle}
-                    title={canQaToggle ? undefined : 'Writes are disabled. Restart the console with --allow-writes.'}
+                    title={
+                      canQaToggle
+                        ? undefined
+                        : 'Writes are disabled. Restart the console with --allow-writes.'
+                    }
                     onChange={(event) => setQaChoice(event.target.checked)}
                   />
                   <span className="min-w-0 flex-1">
                     Turn the QA gate on for this plan
                     <span className="block text-2xs text-ink-faint">
-                      Each finished phase then waits for an independent review. Phases that finished
-                      before now are recorded as <em>waived</em>, so turning it on does not
-                      retroactively hold the board.
+                      Each finished phase then waits for an independent review. Phases that finished before
+                      now are recorded as <em>waived</em>, so turning it on does not retroactively hold the
+                      board.
                     </span>
                   </span>
                 </label>
@@ -565,23 +651,28 @@ export function LaunchDialog({ request, onClose, onDone }: {
                   className="mt-1 accent-[var(--action)]"
                   checked={autoRecover}
                   disabled={!canAutoRecover}
-                  title={canAutoRecover ? undefined : 'Auto-recovery needs --allow-agent — the healer is an agent session.'}
+                  title={
+                    canAutoRecover
+                      ? undefined
+                      : 'Auto-recovery needs --allow-agent — the healer is an agent session.'
+                  }
                   onChange={(event) => setRecoverChoice(event.target.checked)}
                 />
                 <span className="min-w-0 flex-1">
                   Auto-recover halts
                   <span className="block text-2xs text-ink-faint">
-                    {canAutoRecover
-                      ? <>
-                          A halt an agent can clear (failed verification, missing handoff, a crash)
-                          launches the fix agent by itself — at most 2 tries per phase, never the
-                          same failure twice — and the run resumes when the board reads fixed.
-                        </>
-                      : <>
-                          Restart the console with{' '}
-                          <code className="font-mono">--allow-agent</code> to let halted phases heal
-                          themselves; without it every halt waits for you.
-                        </>}
+                    {canAutoRecover ? (
+                      <>
+                        A halt an agent can clear (failed verification, missing handoff, a crash) launches the
+                        fix agent by itself — at most 2 tries per phase, never the same failure twice — and
+                        the run resumes when the board reads fixed.
+                      </>
+                    ) : (
+                      <>
+                        Restart the console with <code className="font-mono">--allow-agent</code> to let
+                        halted phases heal themselves; without it every halt waits for you.
+                      </>
+                    )}
                   </span>
                 </span>
               </label>
@@ -595,24 +686,28 @@ export function LaunchDialog({ request, onClose, onDone }: {
                 className="mt-1 accent-[var(--action)]"
                 checked={activate && canActivate}
                 disabled={!canActivate}
-                title={canActivate ? undefined : 'Writes are disabled. Restart the console with --allow-writes.'}
+                title={
+                  canActivate ? undefined : 'Writes are disabled. Restart the console with --allow-writes.'
+                }
                 onChange={(event) => setActivate(event.target.checked)}
               />
               <span className="min-w-0 flex-1">
                 Turn QA on for this plan (<code className="font-mono">--qa</code>)
                 <span className="block text-2xs text-ink-faint">
-                  {canActivate
-                    ? <>
-                        Creates <code className="font-mono">test-status.md</code> so verdicts gate
-                        dependents. Phases that finished before now are recorded as <em>waived</em>,
-                        so turning it on does not retroactively hold the board. Without this the
-                        review still runs — its verdict just gates nothing.
-                      </>
-                    : <>
-                        Writes are off — restart the console with{' '}
-                        <code className="font-mono">--allow-writes</code> to turn QA on from here.
-                        The review still runs; its verdict just gates nothing until then.
-                      </>}
+                  {canActivate ? (
+                    <>
+                      Creates <code className="font-mono">test-status.md</code> so verdicts gate dependents.
+                      Phases that finished before now are recorded as <em>waived</em>, so turning it on does
+                      not retroactively hold the board. Without this the review still runs — its verdict just
+                      gates nothing.
+                    </>
+                  ) : (
+                    <>
+                      Writes are off — restart the console with{' '}
+                      <code className="font-mono">--allow-writes</code> to turn QA on from here. The review
+                      still runs; its verdict just gates nothing until then.
+                    </>
+                  )}
                 </span>
               </span>
             </label>
@@ -628,16 +723,17 @@ export function LaunchDialog({ request, onClose, onDone }: {
                 : 'Opens with the Automation defaults from Settings; this launch overrides them.'}
           </span>
           <div className="flex gap-2">
-            <DialogClose asChild><Button variant="ghost">Cancel</Button></DialogClose>
+            <DialogClose asChild>
+              <Button variant="ghost">Cancel</Button>
+            </DialogClose>
             <Button
               variant="action"
               disabled={busy || blocked}
               title={blocked ? `Claimed by ${claim?.owner}` : undefined}
               onClick={() => void submit()}
             >
-              {request.kind === 'qa'
-                ? <ShieldCheck size={15} aria-hidden />
-                : <Bot size={15} aria-hidden />} {busy ? 'Starting…' : submitLabel}
+              {request.kind === 'qa' ? <ShieldCheck size={15} aria-hidden /> : <Bot size={15} aria-hidden />}{' '}
+              {busy ? 'Starting…' : submitLabel}
             </Button>
           </div>
         </DialogFooter>

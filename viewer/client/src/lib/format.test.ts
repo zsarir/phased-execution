@@ -18,9 +18,14 @@ const HOUR = 3_600_000;
 
 function estimate(over: Partial<EtaEstimate> = {}): EtaEstimate {
   return {
-    ratePerWeight: 60, samples: 4, basis: 'plan',
-    remainingWeight: 120_000, remainingPhases: 3,
-    lowMs: HOUR, highMs: 3 * HOUR, label: '~1 h–3 h left',
+    ratePerWeight: 60,
+    samples: 4,
+    basis: 'plan',
+    remainingWeight: 120_000,
+    remainingPhases: 3,
+    lowMs: HOUR,
+    highMs: 3 * HOUR,
+    label: '~1 h–3 h left',
     ...over,
   };
 }

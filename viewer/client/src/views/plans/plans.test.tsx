@@ -25,8 +25,19 @@ import { queryClientConfig } from '@/lib/queries';
 import { setPrefs } from '@/lib/prefs';
 import type { PlanSummaryFull, RunState } from '@/lib/api';
 import {
-  CLOSED_ONLY, NO_FILTERS, OPEN_ONLY, applyFilters, concerns, groupRows, hiddenBreakdown,
-  matches, repoOptions, rowTotals, sortRows, statusOptions, toRows,
+  CLOSED_ONLY,
+  NO_FILTERS,
+  OPEN_ONLY,
+  applyFilters,
+  concerns,
+  groupRows,
+  hiddenBreakdown,
+  matches,
+  repoOptions,
+  rowTotals,
+  sortRows,
+  statusOptions,
+  toRows,
 } from './model';
 
 /* ------------------------------------------------------------------ *
@@ -52,7 +63,8 @@ const plan = (over: Partial<PlanSummaryFull> = {}): PlanSummaryFull => ({
   criticalWeight: 40_000,
   minimumSessions: 1,
   budget: 200_000,
-  skills: [], mcpServers: [],
+  skills: [],
+  mcpServers: [],
   qaMode: 'off',
   qaFailures: [],
   locks: [],
@@ -64,16 +76,17 @@ const plan = (over: Partial<PlanSummaryFull> = {}): PlanSummaryFull => ({
   ...over,
 });
 
-const run = (over: Partial<RunState> = {}): RunState => ({
-  id: 'r1',
-  slug: 'alpha',
-  status: 'running',
-  activePhase: 2,
-  updatedAt: '2026-08-03T01:00:00Z',
-  createdAt: '2026-08-03T00:00:00Z',
-  phases: {},
-  ...over,
-} as unknown as RunState);
+const run = (over: Partial<RunState> = {}): RunState =>
+  ({
+    id: 'r1',
+    slug: 'alpha',
+    status: 'running',
+    activePhase: 2,
+    updatedAt: '2026-08-03T01:00:00Z',
+    createdAt: '2026-08-03T00:00:00Z',
+    phases: {},
+    ...over,
+  }) as unknown as RunState;
 
 const NOW = Date.UTC(2026, 7, 3, 12);
 
@@ -100,10 +113,11 @@ describe('building a row', () => {
   });
 
   it('joins only the newest run of a plan', () => {
-    const [row] = toRows([plan()], [
-      run({ id: 'new', status: 'running' }),
-      run({ id: 'old', status: 'finished' }),
-    ], NOW);
+    const [row] = toRows(
+      [plan()],
+      [run({ id: 'new', status: 'running' }), run({ id: 'old', status: 'finished' })],
+      NOW,
+    );
     expect(row.run?.id).toBe('new');
     expect(row.run?.ui).toBe('running');
   });
@@ -133,11 +147,17 @@ describe('what is wrong with a plan', () => {
   });
 
   it('puts an error above a halted run above a stuck phase', () => {
-    const [row] = toRows([plan({
-      issueCounts: { error: 1, warning: 0, info: 0 },
-      issues: [{ slug: 'alpha', severity: 'error', kind: 'engine', message: 'boom' }],
-      stuck: [3],
-    })], [run({ status: 'halted' })], NOW);
+    const [row] = toRows(
+      [
+        plan({
+          issueCounts: { error: 1, warning: 0, info: 0 },
+          issues: [{ slug: 'alpha', severity: 'error', kind: 'engine', message: 'boom' }],
+          stuck: [3],
+        }),
+      ],
+      [run({ status: 'halted' })],
+      NOW,
+    );
     expect(concerns(row).map((c) => c.key)).toEqual(['error', 'halted', 'stuck']);
     expect(concerns(row)[0].text).toBe('boom');
   });
@@ -178,10 +198,16 @@ describe('what is wrong with a plan', () => {
   // and marks them `info`. A plan nobody can parse must never become invisible;
   // it just stops outranking a live plan's real error.
   it('keeps a closed plan’s structural error, demoted to a warning', () => {
-    const [row] = toRows([plan({
-      status: 'superseded',
-      engineError: 'the phase table did not parse',
-    })], [], NOW);
+    const [row] = toRows(
+      [
+        plan({
+          status: 'superseded',
+          engineError: 'the phase table did not parse',
+        }),
+      ],
+      [],
+      NOW,
+    );
     expect(concerns(row).map((c) => c.key)).toEqual(['error']);
     expect(concerns(row)[0].tone).toBe('warn');
     expect(concerns(row)[0].text).toBe('the phase table did not parse');
@@ -213,18 +239,34 @@ describe('what is wrong with a plan', () => {
  * ------------------------------------------------------------------ */
 
 describe('the five orders', () => {
-  const rows = toRows([
-    plan({ slug: 'recent', title: 'Recent', activity: NOW, percent: 10, done: 1, phases: 10, ready: [2] }),
-    plan({ slug: 'nearly', title: 'Nearly', activity: 1, percent: 90, done: 9, phases: 10, ready: [10] }),
-    plan({
-      slug: 'wide', title: 'Wide', activity: 2, percent: 20, done: 2, phases: 10, ready: [3, 4, 5],
-    }),
-    plan({
-      slug: 'broken', title: 'Broken', activity: 3, percent: 50, done: 5, phases: 10, ready: [6],
-      issueCounts: { error: 2, warning: 0, info: 0 },
-      issues: [{ slug: 'broken', severity: 'error', kind: 'engine', message: 'unreadable' }],
-    }),
-  ], [], NOW);
+  const rows = toRows(
+    [
+      plan({ slug: 'recent', title: 'Recent', activity: NOW, percent: 10, done: 1, phases: 10, ready: [2] }),
+      plan({ slug: 'nearly', title: 'Nearly', activity: 1, percent: 90, done: 9, phases: 10, ready: [10] }),
+      plan({
+        slug: 'wide',
+        title: 'Wide',
+        activity: 2,
+        percent: 20,
+        done: 2,
+        phases: 10,
+        ready: [3, 4, 5],
+      }),
+      plan({
+        slug: 'broken',
+        title: 'Broken',
+        activity: 3,
+        percent: 50,
+        done: 5,
+        phases: 10,
+        ready: [6],
+        issueCounts: { error: 2, warning: 0, info: 0 },
+        issues: [{ slug: 'broken', severity: 'error', kind: 'engine', message: 'unreadable' }],
+      }),
+    ],
+    [],
+    NOW,
+  );
 
   it('leads each order with a different plan', () => {
     const first = (by: Parameters<typeof sortRows>[1]) => sortRows(rows, by)[0].slug;
@@ -241,10 +283,14 @@ describe('the five orders', () => {
   it('sinks finished plans in the closest-to-done order', () => {
     // "Closest to done" asked for the ones you can still finish. A wall of
     // hundred-percent bars answers a question nobody had.
-    const withDone = toRows([
-      plan({ slug: 'done', title: 'Done', phases: 4, done: 4, percent: 100, ready: [] }),
-      plan({ slug: 'nearly', title: 'Nearly', phases: 4, done: 3, percent: 75, ready: [4] }),
-    ], [], NOW);
+    const withDone = toRows(
+      [
+        plan({ slug: 'done', title: 'Done', phases: 4, done: 4, percent: 100, ready: [] }),
+        plan({ slug: 'nearly', title: 'Nearly', phases: 4, done: 3, percent: 75, ready: [4] }),
+      ],
+      [],
+      NOW,
+    );
     expect(sortRows(withDone, 'progress').map((r) => r.slug)).toEqual(['nearly', 'done']);
   });
 
@@ -253,12 +299,21 @@ describe('the five orders', () => {
   // go next*, and a closed plan is never the answer — so with `showClosed` on,
   // an abandoned plan holding five ready phases must not head either board.
   it('sinks closed plans in the work-shaped orders', () => {
-    const mixed = toRows([
-      plan({ slug: 'walked-away', title: 'Walked away', status: 'abandoned', ready: [1, 2, 3, 4, 5],
-        issueCounts: { error: 1, warning: 0, info: 0 },
-        issues: [{ slug: 'walked-away', severity: 'error', kind: 'engine', message: 'unreadable' }] }),
-      plan({ slug: 'live', title: 'Live', ready: [2] }),
-    ], [], NOW);
+    const mixed = toRows(
+      [
+        plan({
+          slug: 'walked-away',
+          title: 'Walked away',
+          status: 'abandoned',
+          ready: [1, 2, 3, 4, 5],
+          issueCounts: { error: 1, warning: 0, info: 0 },
+          issues: [{ slug: 'walked-away', severity: 'error', kind: 'engine', message: 'unreadable' }],
+        }),
+        plan({ slug: 'live', title: 'Live', ready: [2] }),
+      ],
+      [],
+      NOW,
+    );
     expect(sortRows(mixed, 'ready').map((r) => r.slug)).toEqual(['live', 'walked-away']);
     expect(sortRows(mixed, 'attention').map((r) => r.slug)).toEqual(['live', 'walked-away']);
     // Untouched orders stay honest — closure is not a global demotion.
@@ -277,20 +332,25 @@ describe('the five orders', () => {
  * ------------------------------------------------------------------ */
 
 describe('filtering', () => {
-  const rows = toRows([
-    plan({ slug: 'cart-api-endpoint', title: 'Cart API endpoint', repos: ['shop'] }),
-    plan({ slug: 'notes', title: 'Notes', kind: 'document', phases: 0, ready: [] }),
-    plan({ slug: 'shipped', title: 'Shipped', status: 'complete', phases: 3, done: 3, ready: [] }),
-  ], [], NOW);
+  const rows = toRows(
+    [
+      plan({ slug: 'cart-api-endpoint', title: 'Cart API endpoint', repos: ['shop'] }),
+      plan({ slug: 'notes', title: 'Notes', kind: 'document', phases: 0, ready: [] }),
+      plan({ slug: 'shipped', title: 'Shipped', status: 'complete', phases: 3, done: 3, ready: [] }),
+    ],
+    [],
+    NOW,
+  );
 
   it('hides documents by default and brings them back on request', () => {
     // `shipped` is absent for a second, independent reason — it is `complete`,
     // therefore closed, and closed is hidden by default. See below.
     expect(applyFilters(rows, NO_FILTERS).map((r) => r.slug)).toEqual(['cart-api-endpoint']);
-    expect(applyFilters(rows, { ...NO_FILTERS, showDocuments: true }).map((r) => r.slug))
-      .toEqual(['cart-api-endpoint', 'notes']);
-    expect(applyFilters(rows, { ...NO_FILTERS, showDocuments: true, showClosed: true }))
-      .toHaveLength(3);
+    expect(applyFilters(rows, { ...NO_FILTERS, showDocuments: true }).map((r) => r.slug)).toEqual([
+      'cart-api-endpoint',
+      'notes',
+    ]);
+    expect(applyFilters(rows, { ...NO_FILTERS, showDocuments: true, showClosed: true })).toHaveLength(3);
   });
 
   // The DIVERGENCE from the toggle this replaces: `showComplete` defaulted to
@@ -298,16 +358,22 @@ describe('filtering', () => {
   // the operator saying nobody is coming back — the list opens on the work.
   it('hides closed plans by default and brings them back on request', () => {
     expect(applyFilters(rows, NO_FILTERS).map((r) => r.slug)).toEqual(['cart-api-endpoint']);
-    expect(applyFilters(rows, { ...NO_FILTERS, showClosed: true }).map((r) => r.slug))
-      .toEqual(['cart-api-endpoint', 'shipped']);
+    expect(applyFilters(rows, { ...NO_FILTERS, showClosed: true }).map((r) => r.slug)).toEqual([
+      'cart-api-endpoint',
+      'shipped',
+    ]);
   });
 
   it('hides abandoned and superseded plans too, not only complete ones', () => {
-    const terminal = toRows([
-      plan({ slug: 'live' }),
-      plan({ slug: 'walked-away', status: 'abandoned', ready: [2, 3] }),
-      plan({ slug: 'replaced', status: 'superseded' }),
-    ], [], NOW);
+    const terminal = toRows(
+      [
+        plan({ slug: 'live' }),
+        plan({ slug: 'walked-away', status: 'abandoned', ready: [2, 3] }),
+        plan({ slug: 'replaced', status: 'superseded' }),
+      ],
+      [],
+      NOW,
+    );
     expect(applyFilters(terminal, NO_FILTERS).map((r) => r.slug)).toEqual(['live']);
     expect(applyFilters(terminal, { ...NO_FILTERS, showClosed: true })).toHaveLength(3);
   });
@@ -315,41 +381,49 @@ describe('filtering', () => {
   // Otherwise picking `abandoned` from the status dropdown returns nothing,
   // which reads as a broken control rather than two filters disagreeing.
   it('lets an explicit status filter override the closed filter', () => {
-    expect(applyFilters(rows, { ...NO_FILTERS, status: 'complete' }).map((r) => r.slug))
-      .toEqual(['shipped']);
+    expect(applyFilters(rows, { ...NO_FILTERS, status: 'complete' }).map((r) => r.slug)).toEqual(['shipped']);
   });
 
   // "Closed" is three statuses, so picking one of them from the dropdown
   // answers a third of the question. These two sentinels ask it properly.
   it('offers open-only and closed-only, which no single status can express', () => {
-    const terminal = toRows([
-      plan({ slug: 'live' }),
-      plan({ slug: 'walked-away', status: 'abandoned' }),
-      plan({ slug: 'replaced', status: 'superseded' }),
-      plan({ slug: 'shipped', status: 'complete' }),
-    ], [], NOW);
+    const terminal = toRows(
+      [
+        plan({ slug: 'live' }),
+        plan({ slug: 'walked-away', status: 'abandoned' }),
+        plan({ slug: 'replaced', status: 'superseded' }),
+        plan({ slug: 'shipped', status: 'complete' }),
+      ],
+      [],
+      NOW,
+    );
 
-    expect(applyFilters(terminal, { ...NO_FILTERS, status: CLOSED_ONLY }).map((r) => r.slug))
-      .toEqual(['walked-away', 'replaced', 'shipped']);
+    expect(applyFilters(terminal, { ...NO_FILTERS, status: CLOSED_ONLY }).map((r) => r.slug)).toEqual([
+      'walked-away',
+      'replaced',
+      'shipped',
+    ]);
     // …and it works without `showClosed`, which is the whole point: asking for
     // closed plans must not also require finding the toggle that permits them.
-    expect(applyFilters(terminal, { ...NO_FILTERS, status: OPEN_ONLY }).map((r) => r.slug))
-      .toEqual(['live']);
+    expect(applyFilters(terminal, { ...NO_FILTERS, status: OPEN_ONLY }).map((r) => r.slug)).toEqual(['live']);
     // A sentinel is not a status. Compared to one, every list would be empty.
-    expect(applyFilters(terminal, { ...NO_FILTERS, status: CLOSED_ONLY, showClosed: true }))
-      .toHaveLength(3);
+    expect(applyFilters(terminal, { ...NO_FILTERS, status: CLOSED_ONLY, showClosed: true })).toHaveLength(3);
   });
 
   // A single "86 hidden" is true and useless: the operator's reasonable
   // conclusion is that the page is broken, not that two toggles are doing what
   // they were asked. Which filter is doing it is the actionable half.
   it('says how many rows each filter is hiding, and whether the search is involved', () => {
-    const mixed = toRows([
-      plan({ slug: 'live' }),
-      plan({ slug: 'shipped', status: 'complete' }),
-      plan({ slug: 'gone', status: 'abandoned' }),
-      plan({ slug: 'notes', kind: 'document', status: 'active' }),
-    ], [], NOW);
+    const mixed = toRows(
+      [
+        plan({ slug: 'live' }),
+        plan({ slug: 'shipped', status: 'complete' }),
+        plan({ slug: 'gone', status: 'abandoned' }),
+        plan({ slug: 'notes', kind: 'document', status: 'active' }),
+      ],
+      [],
+      NOW,
+    );
 
     const shape = hiddenBreakdown(mixed, NO_FILTERS);
     expect(shape.total).toBe(3);
@@ -370,10 +444,11 @@ describe('filtering', () => {
   // to neither `closed` nor `documents`. A `+1` on a button that then returns
   // nothing is worse than no number at all.
   it('does not credit a toggle with rows the other toggle is also hiding', () => {
-    const both = toRows([
-      plan({ slug: 'live' }),
-      plan({ slug: 'old-notes', kind: 'document', status: 'complete' }),
-    ], [], NOW);
+    const both = toRows(
+      [plan({ slug: 'live' }), plan({ slug: 'old-notes', kind: 'document', status: 'complete' })],
+      [],
+      NOW,
+    );
     const counts = hiddenBreakdown(both, NO_FILTERS);
     expect(counts.total).toBe(1);
     expect(counts.closed).toBe(0);
@@ -383,27 +458,31 @@ describe('filtering', () => {
   // The counts are what the toggles PROMISE. A number that does not match what
   // pressing the button actually returns is worse than no number.
   it('each hidden count equals what turning that toggle on brings back', () => {
-    const mixed = toRows([
-      plan({ slug: 'live' }),
-      plan({ slug: 'shipped', status: 'complete' }),
-      plan({ slug: 'notes', kind: 'document' }),
-    ], [], NOW);
+    const mixed = toRows(
+      [
+        plan({ slug: 'live' }),
+        plan({ slug: 'shipped', status: 'complete' }),
+        plan({ slug: 'notes', kind: 'document' }),
+      ],
+      [],
+      NOW,
+    );
     const before = applyFilters(mixed, NO_FILTERS).length;
     const counts = hiddenBreakdown(mixed, NO_FILTERS);
 
-    expect(applyFilters(mixed, { ...NO_FILTERS, showClosed: true }).length - before)
-      .toBe(counts.closed);
-    expect(applyFilters(mixed, { ...NO_FILTERS, showDocuments: true }).length - before)
-      .toBe(counts.documents);
+    expect(applyFilters(mixed, { ...NO_FILTERS, showClosed: true }).length - before).toBe(counts.closed);
+    expect(applyFilters(mixed, { ...NO_FILTERS, showDocuments: true }).length - before).toBe(
+      counts.documents,
+    );
   });
 
   it('matches words in any order, across the slug and the title', () => {
     const [row] = rows;
-    expect(matches(row, 'cart api')).toBe(true);       // hyphenated slug, split query
+    expect(matches(row, 'cart api')).toBe(true); // hyphenated slug, split query
     expect(matches(row, 'endpoint cart')).toBe(true);
-    expect(matches(row, 'Endpoint')).toBe(true);       // case-insensitive
+    expect(matches(row, 'Endpoint')).toBe(true); // case-insensitive
     expect(matches(row, 'cart checkout')).toBe(false); // every word must match
-    expect(matches(row, '   ')).toBe(true);            // blank is not a filter
+    expect(matches(row, '   ')).toBe(true); // blank is not a filter
   });
 
   it('offers only the repos and statuses the data actually has', () => {
@@ -413,10 +492,11 @@ describe('filtering', () => {
 });
 
 describe('grouping', () => {
-  const rows = toRows([
-    plan({ slug: 'a', title: 'A', repos: ['hub', 'shop'] }),
-    plan({ slug: 'b', title: 'B', repos: [] }),
-  ], [], NOW);
+  const rows = toRows(
+    [plan({ slug: 'a', title: 'A', repos: ['hub', 'shop'] }), plan({ slug: 'b', title: 'B', repos: [] })],
+    [],
+    NOW,
+  );
 
   it('keeps a plan that names no repo rather than dropping it', () => {
     // Grouping must not make rows disappear; "never said" is its own group.
@@ -457,10 +537,14 @@ describe('a row that has to fit', () => {
 
 describe('the totals', () => {
   it('counts plans and documents apart', () => {
-    const rows = toRows([
-      plan({ slug: 'a', ready: [2], remainingSessions: 2 }),
-      plan({ slug: 'n', kind: 'document', phases: 0, ready: [], remainingSessions: 0 }),
-    ], [], NOW);
+    const rows = toRows(
+      [
+        plan({ slug: 'a', ready: [2], remainingSessions: 2 }),
+        plan({ slug: 'n', kind: 'document', phases: 0, ready: [], remainingSessions: 0 }),
+      ],
+      [],
+      NOW,
+    );
     const totals = rowTotals(rows);
     expect(totals).toMatchObject({ plans: 1, documents: 1, ready: 1, sessions: 2 });
   });
@@ -470,18 +554,31 @@ describe('the totals', () => {
   // reading "6 ready · 4 sessions of work left" that included an abandoned
   // plan's phases is an invitation to start work nobody wants.
   it('counts a closed plan in the census but not in the work left', () => {
-    const rows = toRows([
-      plan({ slug: 'live', phases: 4, done: 1, ready: [2], remainingSessions: 2 }),
-      plan({
-        slug: 'gone', status: 'abandoned', phases: 6, done: 2, ready: [3, 4], remainingSessions: 3,
-        issueCounts: { error: 1, warning: 0, info: 0 },
-      }),
-    ], [], NOW);
+    const rows = toRows(
+      [
+        plan({ slug: 'live', phases: 4, done: 1, ready: [2], remainingSessions: 2 }),
+        plan({
+          slug: 'gone',
+          status: 'abandoned',
+          phases: 6,
+          done: 2,
+          ready: [3, 4],
+          remainingSessions: 3,
+          issueCounts: { error: 1, warning: 0, info: 0 },
+        }),
+      ],
+      [],
+      NOW,
+    );
     const totals = rowTotals(rows);
     expect(totals).toMatchObject({
-      plans: 2, closed: 1,      // census: both counted
-      phases: 10, done: 3,      // census: history is not deleted
-      ready: 1, sessions: 2, errors: 0, // work: only the open plan
+      plans: 2,
+      closed: 1, // census: both counted
+      phases: 10,
+      done: 3, // census: history is not deleted
+      ready: 1,
+      sessions: 2,
+      errors: 0, // work: only the open plan
     });
   });
 });
@@ -510,9 +607,18 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   // The SHIPPED defaults, so the page tests exercise what an operator opens on.
-  setPrefs({ sort: 'activity', showDocuments: false, showClosed: false, plansLayout: 'board', plansGroup: 'none' });
+  setPrefs({
+    sort: 'activity',
+    showDocuments: false,
+    showClosed: false,
+    plansLayout: 'board',
+    plansGroup: 'none',
+  });
   state.mockResolvedValue({
-    autopilot: true, allowRun: true, allowWrites: false, unread: 0,
+    autopilot: true,
+    allowRun: true,
+    allowWrites: false,
+    unread: 0,
     root: { label: 'hub', path: '/hub', ok: true, planCount: 3 },
     repo: { available: true, branch: 'main', dirty: [] },
   });
@@ -579,9 +685,13 @@ describe('the plans page', () => {
   it('says so, loudly, when the filters are hiding most of the source', async () => {
     plans.mockResolvedValue([
       plan({ slug: 'live', title: 'Still going' }),
-      ...Array.from({ length: 8 }, (_, i) => plan({
-        slug: `done-${i}`, title: `Finished ${i}`, status: 'complete',
-      })),
+      ...Array.from({ length: 8 }, (_, i) =>
+        plan({
+          slug: `done-${i}`,
+          title: `Finished ${i}`,
+          status: 'complete',
+        }),
+      ),
     ]);
     const { default: PlansView } = await import('./index');
     mount(<PlansView />);
@@ -599,9 +709,13 @@ describe('the plans page', () => {
   it('can be dismissed, and the counts survive the dismissal', async () => {
     plans.mockResolvedValue([
       plan({ slug: 'live', title: 'Still going' }),
-      ...Array.from({ length: 8 }, (_, i) => plan({
-        slug: `done-${i}`, title: `Finished ${i}`, status: 'complete',
-      })),
+      ...Array.from({ length: 8 }, (_, i) =>
+        plan({
+          slug: `done-${i}`,
+          title: `Finished ${i}`,
+          status: 'complete',
+        }),
+      ),
     ]);
     const { default: PlansView } = await import('./index');
     mount(<PlansView />);
@@ -680,7 +794,12 @@ describe('the plans page', () => {
     // paired open plan is the control: it proves the band renders at all here,
     // so "the closed one is absent" cannot pass by the band never appearing.
     plans.mockResolvedValue([
-      plan({ slug: 'gone', title: 'Walked away', status: 'abandoned', engineError: 'closed plan will not parse' }),
+      plan({
+        slug: 'gone',
+        title: 'Walked away',
+        status: 'abandoned',
+        engineError: 'closed plan will not parse',
+      }),
       plan({ slug: 'broken', title: 'Broken', engineError: 'open plan will not parse' }),
     ]);
     const { default: PlansView } = await import('./index');
@@ -725,7 +844,9 @@ describe('the plans page', () => {
   });
 
   it('names a plan the engine could not read, at the top', async () => {
-    plans.mockResolvedValue([plan({ slug: 'broken', title: 'Broken', engineError: 'phase table did not parse' })]);
+    plans.mockResolvedValue([
+      plan({ slug: 'broken', title: 'Broken', engineError: 'phase table did not parse' }),
+    ]);
     const { default: PlansView } = await import('./index');
     mount(<PlansView />);
     const band = await screen.findByRole('status');
@@ -768,9 +889,10 @@ describe('the plans page', () => {
     const { container } = mount(<PlansView />);
     await screen.findByText('Alpha plan');
 
-    const amber = () => [...container.querySelectorAll('button')]
-      .filter((b) => b.className.includes('bg-action/12'))
-      .map((b) => b.textContent?.trim());
+    const amber = () =>
+      [...container.querySelectorAll('button')]
+        .filter((b) => b.className.includes('bg-action/12'))
+        .map((b) => b.textContent?.trim());
     // The segmented sort control is the exception: `ButtonGroup` lights its
     // own pressed member, and one order is always in force.
     expect(amber().filter((label) => label !== 'Recent')).toEqual([]);

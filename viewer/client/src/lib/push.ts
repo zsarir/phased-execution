@@ -27,10 +27,11 @@
 import { api, type PushDevice, type PushState } from './api';
 import { registerServiceWorker } from './pwa';
 
-const SUPPORTED = typeof navigator !== 'undefined'
-  && 'serviceWorker' in navigator
-  && typeof PushManager !== 'undefined'
-  && typeof Notification !== 'undefined';
+const SUPPORTED =
+  typeof navigator !== 'undefined' &&
+  'serviceWorker' in navigator &&
+  typeof PushManager !== 'undefined' &&
+  typeof Notification !== 'undefined';
 
 export interface PushOutcome {
   ok: boolean;
@@ -48,11 +49,12 @@ export interface PushOutcome {
 export function iosNeedsInstall(): boolean {
   if (typeof navigator === 'undefined') return false;
   const platform = navigator.platform ?? '';
-  const ios = /iP(hone|ad|od)/.test(platform)
-    || (/Mac/.test(platform) && (navigator.maxTouchPoints ?? 0) > 1);
+  const ios =
+    /iP(hone|ad|od)/.test(platform) || (/Mac/.test(platform) && (navigator.maxTouchPoints ?? 0) > 1);
   if (!ios) return false;
-  const standalone = (navigator as { standalone?: boolean }).standalone === true
-    || window.matchMedia?.('(display-mode: standalone)').matches === true;
+  const standalone =
+    (navigator as { standalone?: boolean }).standalone === true ||
+    window.matchMedia?.('(display-mode: standalone)').matches === true;
   return !standalone;
 }
 
@@ -60,15 +62,19 @@ export function iosNeedsInstall(): boolean {
 export function blocker(): string | null {
   if (!SUPPORTED) return 'This browser does not support push notifications.';
   if (iosNeedsInstall()) {
-    return 'On iOS, notifications only work once this is added to the Home Screen: Share → Add to '
-      + 'Home Screen, then open it from there.';
+    return (
+      'On iOS, notifications only work once this is added to the Home Screen: Share → Add to ' +
+      'Home Screen, then open it from there.'
+    );
   }
   if (!window.isSecureContext) {
     return 'Push needs a secure context — https, or localhost. Reach the console over HTTPS and try again.';
   }
   if (Notification.permission === 'denied') {
-    return 'Notification permission was refused for this site. It has to be changed in browser '
-      + 'settings; the page cannot ask twice.';
+    return (
+      'Notification permission was refused for this site. It has to be changed in browser ' +
+      'settings; the page cannot ask twice.'
+    );
   }
   return null;
 }
@@ -76,17 +82,30 @@ export function blocker(): string | null {
 /** What this browser is, in as few words as will still tell two of them apart. */
 export function describeBrowser(): string {
   const ua = navigator.userAgent ?? '';
-  const browser = /Firefox\//.test(ua) ? 'Firefox'
-    : /Edg\//.test(ua) ? 'Edge'
-      : /OPR\//.test(ua) ? 'Opera'
-        : /Chrome\//.test(ua) ? 'Chrome'
-          : /Safari\//.test(ua) ? 'Safari' : 'a browser';
-  const platform = /iPhone/.test(ua) ? 'iPhone'
-    : /iPad/.test(ua) ? 'iPad'
-      : /Android/.test(ua) ? 'Android'
-        : /Mac OS X/.test(ua) ? 'Mac'
-          : /Windows/.test(ua) ? 'Windows'
-            : /Linux/.test(ua) ? 'Linux' : '';
+  const browser = /Firefox\//.test(ua)
+    ? 'Firefox'
+    : /Edg\//.test(ua)
+      ? 'Edge'
+      : /OPR\//.test(ua)
+        ? 'Opera'
+        : /Chrome\//.test(ua)
+          ? 'Chrome'
+          : /Safari\//.test(ua)
+            ? 'Safari'
+            : 'a browser';
+  const platform = /iPhone/.test(ua)
+    ? 'iPhone'
+    : /iPad/.test(ua)
+      ? 'iPad'
+      : /Android/.test(ua)
+        ? 'Android'
+        : /Mac OS X/.test(ua)
+          ? 'Mac'
+          : /Windows/.test(ua)
+            ? 'Windows'
+            : /Linux/.test(ua)
+              ? 'Linux'
+              : '';
   return platform ? `${platform} · ${browser}` : browser;
 }
 
@@ -134,12 +153,14 @@ export async function enable(categories?: Record<string, boolean>): Promise<Push
   await navigator.serviceWorker.ready;
 
   const existing = await reg.pushManager.getSubscription();
-  const subscription = existing ?? await reg.pushManager.subscribe({
-    // Not optional, and not only a policy: a push that shows nothing is what
-    // gets an app's push privileges withdrawn.
-    userVisibleOnly: true,
-    applicationServerKey: publicKey,
-  });
+  const subscription =
+    existing ??
+    (await reg.pushManager.subscribe({
+      // Not optional, and not only a policy: a push that shows nothing is what
+      // gets an app's push privileges withdrawn.
+      userVisibleOnly: true,
+      applicationServerKey: publicKey,
+    }));
 
   const result = await api.pushSubscribe({
     subscription: subscription.toJSON(),
@@ -156,6 +177,8 @@ export async function disable(): Promise<void> {
     const reg = await navigator.serviceWorker.getRegistration('/');
     const sub = await reg?.pushManager.getSubscription();
     await sub?.unsubscribe();
-  } catch { /* the server row is what matters; a stale local one is harmless */ }
+  } catch {
+    /* the server row is what matters; a stale local one is harmless */
+  }
   if (endpoint) await api.pushUnsubscribe(endpoint);
 }

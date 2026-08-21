@@ -33,20 +33,20 @@ import type { ConsoleState, PlanDetail, RunState } from '@/lib/api';
 // declaration in the file, so a top-level `const` it closes over is in its
 // temporal dead zone when the factory runs. The failure reads as "Cannot access
 // 'state' before initialization" from inside an unrelated module.
-const {
-  state, search, runs, notifications, browse, checkRoot, write, run, queue, runScopes,
-} = vi.hoisted(() => ({
-  state: vi.fn(),
-  search: vi.fn(),
-  runs: vi.fn(),
-  notifications: vi.fn(),
-  browse: vi.fn(),
-  checkRoot: vi.fn(),
-  write: vi.fn(),
-  run: vi.fn(),
-  queue: vi.fn(),
-  runScopes: vi.fn(),
-}));
+const { state, search, runs, notifications, browse, checkRoot, write, run, queue, runScopes } = vi.hoisted(
+  () => ({
+    state: vi.fn(),
+    search: vi.fn(),
+    runs: vi.fn(),
+    notifications: vi.fn(),
+    browse: vi.fn(),
+    checkRoot: vi.fn(),
+    write: vi.fn(),
+    run: vi.fn(),
+    queue: vi.fn(),
+    runScopes: vi.fn(),
+  }),
+);
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -54,14 +54,27 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
-      state, search, runs, notifications, browse, checkRoot, write, run, queue, runScopes,
+      state,
+      search,
+      runs,
+      notifications,
+      browse,
+      checkRoot,
+      write,
+      run,
+      queue,
+      runScopes,
       plans: vi.fn(async () => []),
       stats: vi.fn(async () => null),
       approvals: vi.fn(async () => []),
       auth: vi.fn(async () => ({ loggedIn: true, checkedAt: '2026-08-03T00:00:00Z' })),
       runTranscript: vi.fn(async () => []),
-      policy: vi.fn(async () => { throw new Error('no policy endpoint'); }),
-      restartReadiness: vi.fn(async () => { throw new Error('no restart endpoint'); }),
+      policy: vi.fn(async () => {
+        throw new Error('no policy endpoint');
+      }),
+      restartReadiness: vi.fn(async () => {
+        throw new Error('no restart endpoint');
+      }),
       push: vi.fn(async () => ({ publicKey: 'k', devices: [], categories: [] })),
     },
   };
@@ -87,8 +100,11 @@ function mount(node: React.ReactElement) {
   return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
 }
 
-const route = (segments: string[], query: Record<string, string> = {}) =>
-  ({ segments, query, path: segments.join('/') });
+const route = (segments: string[], query: Record<string, string> = {}) => ({
+  segments,
+  query,
+  path: segments.join('/'),
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -96,11 +112,23 @@ beforeEach(() => {
   search.mockResolvedValue({ query: '', total: 0, groups: [] });
   runs.mockResolvedValue([]);
   notifications.mockResolvedValue({
-    items: [], total: 0, unread: 0, more: false,
-    categories: [], devices: 0, outOfBand: { configured: false },
+    items: [],
+    total: 0,
+    unread: 0,
+    more: false,
+    categories: [],
+    devices: 0,
+    outOfBand: { configured: false },
   });
   browse.mockResolvedValue({ path: '/repo', parent: '/', entries: [] });
-  checkRoot.mockResolvedValue({ path: '/repo', ok: false, label: 'repo', planCount: 0, handoffCount: 0, reason: 'No docs/plans directory here' });
+  checkRoot.mockResolvedValue({
+    path: '/repo',
+    ok: false,
+    label: 'repo',
+    planCount: 0,
+    handoffCount: 0,
+    reason: 'No docs/plans directory here',
+  });
   write.mockResolvedValue({ dryRun: true, command: 'new-handoff.sh demo 2 x complete' });
   run.mockResolvedValue({ run: null, history: [], eta: null });
   queue.mockResolvedValue({ max: 3, live: 0, queued: 0, throttledUntil: null, grants: [], entries: [] });
@@ -127,15 +155,40 @@ describe('search', () => {
     search.mockResolvedValue({
       query: 'cart',
       total: 3,
-      groups: [{
-        slug: 'demo',
-        title: 'demo plan',
-        hits: [
-          { slug: 'demo', kind: 'phase', phase: 3, section: 'Phase 3', title: 't', score: 1, snippet: 'the cart api' },
-          { slug: 'demo', kind: 'handoff', phase: 2, section: 'State now', title: 't', score: 1, snippet: 'cart done' },
-          { slug: 'demo', kind: 'plan', section: 'Context', title: 't', score: 1, snippet: 'cart everywhere' },
-        ],
-      }],
+      groups: [
+        {
+          slug: 'demo',
+          title: 'demo plan',
+          hits: [
+            {
+              slug: 'demo',
+              kind: 'phase',
+              phase: 3,
+              section: 'Phase 3',
+              title: 't',
+              score: 1,
+              snippet: 'the cart api',
+            },
+            {
+              slug: 'demo',
+              kind: 'handoff',
+              phase: 2,
+              section: 'State now',
+              title: 't',
+              score: 1,
+              snippet: 'cart done',
+            },
+            {
+              slug: 'demo',
+              kind: 'plan',
+              section: 'Context',
+              title: 't',
+              score: 1,
+              snippet: 'cart everywhere',
+            },
+          ],
+        },
+      ],
     });
     const { default: SearchView } = await import('./search');
     mount(<SearchView route={route(['search'], { q: 'cart' })} />);
@@ -151,14 +204,22 @@ describe('search', () => {
     search.mockResolvedValue({
       query: 'cart',
       total: 1,
-      groups: [{
-        slug: 'demo',
-        title: 'demo plan',
-        hits: [{
-          slug: 'demo', kind: 'plan', section: 'Context', title: 't', score: 1,
-          snippet: 'the cart <script>alert(1)</script> api',
-        }],
-      }],
+      groups: [
+        {
+          slug: 'demo',
+          title: 'demo plan',
+          hits: [
+            {
+              slug: 'demo',
+              kind: 'plan',
+              section: 'Context',
+              title: 't',
+              score: 1,
+              snippet: 'the cart <script>alert(1)</script> api',
+            },
+          ],
+        },
+      ],
     });
     const { default: SearchView } = await import('./search');
     const { container } = mount(<SearchView route={route(['search'], { q: 'cart' })} />);
@@ -190,8 +251,20 @@ describe('search', () => {
       query: 'cart',
       total: 2,
       groups: [
-        { slug: 'gone', title: 'walked away', hits: [{ slug: 'gone', kind: 'plan', section: 'Context', title: 't', score: 2, snippet: 'the cart api' }] },
-        { slug: 'demo', title: 'demo plan', hits: [{ slug: 'demo', kind: 'plan', section: 'Context', title: 't', score: 1, snippet: 'the cart api' }] },
+        {
+          slug: 'gone',
+          title: 'walked away',
+          hits: [
+            { slug: 'gone', kind: 'plan', section: 'Context', title: 't', score: 2, snippet: 'the cart api' },
+          ],
+        },
+        {
+          slug: 'demo',
+          title: 'demo plan',
+          hits: [
+            { slug: 'demo', kind: 'plan', section: 'Context', title: 't', score: 1, snippet: 'the cart api' },
+          ],
+        },
       ],
     });
     const { default: SearchView } = await import('./search');
@@ -248,7 +321,15 @@ const DETAIL = {
   phases: [],
 } as unknown as PlanDetail;
 
-const PHASE = { phase: 2, title: 'the thing', state: 'ready', size: 'M', weight: 40_000, gated: false, bullets: [] };
+const PHASE = {
+  phase: 2,
+  title: 'the thing',
+  state: 'ready',
+  size: 'M',
+  weight: 40_000,
+  gated: false,
+  bullets: [],
+};
 
 describe('the write menu', () => {
   it('renders nothing in a header when writes are off', async () => {
@@ -351,8 +432,9 @@ describe('the write menu', () => {
 
     expect(await screen.findByRole('button', { name: 'Run' })).toHaveAttribute('disabled');
     // `active` is not on the menu — reopening is its own verb, not a status.
-    const options = [...screen.getByRole('combobox').querySelectorAll('option')]
-      .map((o) => o.getAttribute('value'));
+    const options = [...screen.getByRole('combobox').querySelectorAll('option')].map((o) =>
+      o.getAttribute('value'),
+    );
     expect(options).toEqual(['abandoned', 'superseded', 'complete']);
   });
 
@@ -367,7 +449,9 @@ describe('the write menu', () => {
     await waitFor(() => expect(write).toHaveBeenCalled());
     expect(write.mock.calls.at(-1)![1]).toBe(true); // dry run, always
     expect(write.mock.calls.at(-1)![0]).toMatchObject({
-      action: 'close-plan', slug: 'demo', status: 'abandoned',
+      action: 'close-plan',
+      slug: 'demo',
+      status: 'abandoned',
       reason: 'the approach did not survive contact',
     });
   });
@@ -392,11 +476,25 @@ describe('the write menu', () => {
  * ------------------------------------------------------------------ */
 
 const RUN = {
-  id: 'abc123', slug: 'demo', root: '/repo', status: 'finished', autonomy: 'keep-going',
-  model: 'opus', phaseBudgetUsd: null, runBudgetUsd: null, spentUsd: 1.65,
-  maxConsecutiveFailures: 2, consecutiveFailures: 0,
-  createdAt: '2026-08-03T00:00:00Z', updatedAt: '2026-08-03T01:00:00Z',
-  activePhase: null, child: null, waitUntil: null, halt: null, pause: null, freeze: null,
+  id: 'abc123',
+  slug: 'demo',
+  root: '/repo',
+  status: 'finished',
+  autonomy: 'keep-going',
+  model: 'opus',
+  phaseBudgetUsd: null,
+  runBudgetUsd: null,
+  spentUsd: 1.65,
+  maxConsecutiveFailures: 2,
+  consecutiveFailures: 0,
+  createdAt: '2026-08-03T00:00:00Z',
+  updatedAt: '2026-08-03T01:00:00Z',
+  activePhase: null,
+  child: null,
+  waitUntil: null,
+  halt: null,
+  pause: null,
+  freeze: null,
   phases: {},
 } as unknown as RunState;
 
@@ -470,17 +568,36 @@ describe('runs', () => {
 
 /** Phase records, keyed by the phase number **as a string**. */
 const RECORDS = (...live: number[]) =>
-  Object.fromEntries(live.map((phase) => [
-    String(phase), { phase, status: 'running', attempts: 1, costUsd: 0 },
-  ]));
+  Object.fromEntries(
+    live.map((phase) => [String(phase), { phase, status: 'running', attempts: 1, costUsd: 0 }]),
+  );
 
 const PLAN_PHASES = [
   {
-    phase: 1, title: 'the api', state: 'ready', size: 'M', weight: 40_000, gated: false, bullets: [],
-    row: { phase: 1, title: 'the api', dependsOn: [], parallelSafe: '', repos: 'packages/cart-api', exitCriteria: '' },
+    phase: 1,
+    title: 'the api',
+    state: 'ready',
+    size: 'M',
+    weight: 40_000,
+    gated: false,
+    bullets: [],
+    row: {
+      phase: 1,
+      title: 'the api',
+      dependsOn: [],
+      parallelSafe: '',
+      repos: 'packages/cart-api',
+      exitCriteria: '',
+    },
   },
   {
-    phase: 2, title: 'the docs', state: 'waiting', size: 'S', weight: 15_000, gated: false, bullets: [],
+    phase: 2,
+    title: 'the docs',
+    state: 'waiting',
+    size: 'S',
+    weight: 15_000,
+    gated: false,
+    bullets: [],
     row: { phase: 2, title: 'the docs', dependsOn: [1], parallelSafe: '', repos: '', exitCriteria: '' },
   },
 ];
@@ -503,15 +620,33 @@ describe('the autopilot page', () => {
       eta: null,
     });
     queue.mockResolvedValue({
-      max: 3, live: 1, queued: 1, throttledUntil: null, grants: [],
-      entries: [{
-        id: 'q1', slug: 'demo', phase: 2, runId: 'abc123', scope: ['hub-docs'],
-        since: Date.now(), bypassed: 0, reserving: false,
-        waitingOn: [{
-          kind: 'grant', slug: 'other-plan', phase: 4, owner: 'claude-a/x',
-          scope: ['hub-docs'], overlaps: ['hub-docs'],
-        }],
-      }],
+      max: 3,
+      live: 1,
+      queued: 1,
+      throttledUntil: null,
+      grants: [],
+      entries: [
+        {
+          id: 'q1',
+          slug: 'demo',
+          phase: 2,
+          runId: 'abc123',
+          scope: ['hub-docs'],
+          since: Date.now(),
+          bypassed: 0,
+          reserving: false,
+          waitingOn: [
+            {
+              kind: 'grant',
+              slug: 'other-plan',
+              phase: 4,
+              owner: 'claude-a/x',
+              scope: ['hub-docs'],
+              overlaps: ['hub-docs'],
+            },
+          ],
+        },
+      ],
     });
 
     const { default: RunView } = await import('./run');
@@ -528,15 +663,15 @@ describe('the autopilot page', () => {
     // box that silently addressed `activePhase` would send it to another one.
     run.mockResolvedValue({
       run: { ...RUN, status: 'running', activePhase: 1, phases: RECORDS(1, 2) },
-      history: [], eta: null,
+      history: [],
+      eta: null,
     });
     const { default: RunView } = await import('./run');
     mount(<RunView detail={planDetail()} />);
 
     await screen.findAllByRole('tab');
     fireEvent.click(screen.getByRole('tab', { name: 'Phase 2' }));
-    await waitFor(() =>
-      expect(screen.getByPlaceholderText(/ask the session running phase 2/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByPlaceholderText(/ask the session running phase 2/i)).toBeTruthy());
   });
 
   it('says what a queued phase is behind rather than just that it is queued', async () => {
@@ -546,18 +681,37 @@ describe('the autopilot page', () => {
         status: 'running',
         phases: { 2: { phase: 2, status: 'queued', attempts: 0, costUsd: 0 } },
       },
-      history: [], eta: null,
+      history: [],
+      eta: null,
     });
     queue.mockResolvedValue({
-      max: 3, live: 0, queued: 1, throttledUntil: null, grants: [],
-      entries: [{
-        id: 'q1', slug: 'demo', phase: 2, runId: 'abc123', scope: ['hub-docs'],
-        since: Date.now(), bypassed: 0, reserving: false,
-        waitingOn: [{
-          kind: 'grant', slug: 'other-plan', phase: 4, owner: 'claude-a/x',
-          scope: ['hub-docs'], overlaps: ['hub-docs'],
-        }],
-      }],
+      max: 3,
+      live: 0,
+      queued: 1,
+      throttledUntil: null,
+      grants: [],
+      entries: [
+        {
+          id: 'q1',
+          slug: 'demo',
+          phase: 2,
+          runId: 'abc123',
+          scope: ['hub-docs'],
+          since: Date.now(),
+          bypassed: 0,
+          reserving: false,
+          waitingOn: [
+            {
+              kind: 'grant',
+              slug: 'other-plan',
+              phase: 4,
+              owner: 'claude-a/x',
+              scope: ['hub-docs'],
+              overlaps: ['hub-docs'],
+            },
+          ],
+        },
+      ],
     });
 
     const { default: RunView } = await import('./run');
@@ -597,14 +751,27 @@ describe('the inbox', () => {
 
   it('renders a row as a link built from the server-supplied url', async () => {
     notifications.mockResolvedValue({
-      items: [{
-        id: 'n1', at: new Date().toISOString(), category: 'approval', title: 'Permission needed',
-        body: 'A session is blocked.', url: '/#/plan/demo/run', urgent: true, read: false,
-        delivery: [{ device: 'd1', label: 'Mac · Chrome', outcome: 'sent', at: '' }],
-      }],
-      total: 1, unread: 1, more: false,
-      categories: [{ id: 'approval', label: 'Permission needed', detail: 'x', byDefault: true, urgent: true }],
-      devices: 1, outOfBand: { configured: false },
+      items: [
+        {
+          id: 'n1',
+          at: new Date().toISOString(),
+          category: 'approval',
+          title: 'Permission needed',
+          body: 'A session is blocked.',
+          url: '/#/plan/demo/run',
+          urgent: true,
+          read: false,
+          delivery: [{ device: 'd1', label: 'Mac · Chrome', outcome: 'sent', at: '' }],
+        },
+      ],
+      total: 1,
+      unread: 1,
+      more: false,
+      categories: [
+        { id: 'approval', label: 'Permission needed', detail: 'x', byDefault: true, urgent: true },
+      ],
+      devices: 1,
+      outOfBand: { configured: false },
     });
     const { default: NotificationsView } = await import('./notifications');
     mount(<NotificationsView route={route(['notifications'])} />);
@@ -616,11 +783,24 @@ describe('the inbox', () => {
 
   it('says a notification reached no device rather than implying it was delivered', async () => {
     notifications.mockResolvedValue({
-      items: [{
-        id: 'n1', at: new Date().toISOString(), category: 'halted', title: 'Run halted',
-        body: 'It stopped.', url: '/#/runs', urgent: true, read: true, delivery: [],
-      }],
-      total: 1, unread: 0, more: false, categories: [], devices: 0,
+      items: [
+        {
+          id: 'n1',
+          at: new Date().toISOString(),
+          category: 'halted',
+          title: 'Run halted',
+          body: 'It stopped.',
+          url: '/#/runs',
+          urgent: true,
+          read: true,
+          delivery: [],
+        },
+      ],
+      total: 1,
+      unread: 0,
+      more: false,
+      categories: [],
+      devices: 0,
       outOfBand: { configured: true },
     });
     const { default: NotificationsView } = await import('./notifications');
@@ -654,19 +834,27 @@ describe('the source picker', () => {
 
   it('enables Open and says what is in there once the path checks out', async () => {
     checkRoot.mockResolvedValue({
-      path: '/repo', ok: true, label: 'repo', planCount: 7, handoffCount: 4, docsDir: '/repo/docs',
+      path: '/repo',
+      ok: true,
+      label: 'repo',
+      planCount: 7,
+      handoffCount: 4,
+      docsDir: '/repo/docs',
     });
     const { default: SourceView } = await import('./source');
     mount(<SourceView />);
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Open' }).hasAttribute('disabled')).toBe(false));
+      expect(screen.getByRole('button', { name: 'Open' }).hasAttribute('disabled')).toBe(false),
+    );
     expect(screen.getByText('7')).toBeTruthy();
     expect(screen.getByText('/repo/docs')).toBeTruthy();
   });
 
   it('marks a browsable directory that already holds plans', async () => {
     browse.mockResolvedValue({
-      path: '/code', parent: '/', entries: [
+      path: '/code',
+      parent: '/',
+      entries: [
         { name: 'hub', path: '/code/hub', hasDocs: true },
         { name: 'notes', path: '/code/notes', hasDocs: false },
       ],

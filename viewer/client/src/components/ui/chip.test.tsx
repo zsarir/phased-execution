@@ -40,7 +40,14 @@ describe('Chip', () => {
 
   it('has no axe violations', async () => {
     const { container } = render(
-      <p><Chip tone="warn" dot>gated</Chip> <Chip tone="ok" mono>ok</Chip></p>,
+      <p>
+        <Chip tone="warn" dot>
+          gated
+        </Chip>{' '}
+        <Chip tone="ok" mono>
+          ok
+        </Chip>
+      </p>,
     );
     await expectNoAxeViolations(container);
   });

@@ -32,9 +32,7 @@ import { FileText, Filter, X } from 'lucide-react';
 import { useConsoleState, usePlans, useRuns } from '@/lib/queries';
 import { usePrefs } from '@/lib/prefs';
 import { plural } from '@/lib/format';
-import {
-  Banner, Button, Card, Empty, Skeleton, StatusStack, type StatusNote,
-} from '@/components/ui';
+import { Banner, Button, Card, Empty, Skeleton, StatusStack, type StatusNote } from '@/components/ui';
 import { NewPlanButton } from '@/components/write-menu';
 // The AI wizard, NOT gated on allowWrites: the claude session writes the plan,
 // not the console — `allowAgent` is its capability. It never imports the pane,
@@ -46,8 +44,20 @@ import { Page } from '../_page';
 import { Controls } from './controls';
 import { PlanCard, PlanTable } from './row';
 import {
-  NO_FILTERS, applyFilters, groupRows, hiddenBreakdown, isSortId, repoOptions, rowTotals,
-  sortRows, statusOptions, toRows, type Filters, type GroupBy, type PlanRow, type SortId,
+  NO_FILTERS,
+  applyFilters,
+  groupRows,
+  hiddenBreakdown,
+  isSortId,
+  repoOptions,
+  rowTotals,
+  sortRows,
+  statusOptions,
+  toRows,
+  type Filters,
+  type GroupBy,
+  type PlanRow,
+  type SortId,
 } from './model';
 
 export default function PlansView() {
@@ -81,10 +91,7 @@ export default function PlansView() {
   const layout = prefs.plansLayout === 'table' ? 'table' : 'board';
   const group = (prefs.plansGroup ?? 'none') as GroupBy;
 
-  const visible = useMemo(
-    () => sortRows(applyFilters(all, filters), sortId),
-    [all, filters, sortId],
-  );
+  const visible = useMemo(() => sortRows(applyFilters(all, filters), sortId), [all, filters, sortId]);
   const groups = useMemo(() => groupRows(visible, group), [visible, group]);
   const totals = rowTotals(visible);
   const repos = useMemo(() => repoOptions(all), [all]);
@@ -130,7 +137,9 @@ export default function PlansView() {
       <Page title="Plans" subtitle="Reading the source">
         <Skeleton className="h-20" />
         <div className="mt-3 flex flex-col gap-2">
-          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-24" />)}
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-24" />
+          ))}
         </div>
       </Page>
     );
@@ -178,12 +187,18 @@ export default function PlansView() {
         <Empty
           icon={<Filter size={22} />}
           title={allClosed ? 'Every plan here is closed' : 'Every plan is filtered out'}
-          body={allClosed
-            ? `All ${plural(all.length, 'plan')} in this source are complete, abandoned or superseded, so the list leaves them out. Nothing is wrong — there is just no open work.`
-            : `${plural(all.length, 'plan')} are in this source. Widen the filters to see them.`}
-          action={allClosed
-            ? <Button onClick={() => onFilters({ showClosed: true })}>Show the closed plans</Button>
-            : <Button onClick={clearFilters}>Clear the filters</Button>}
+          body={
+            allClosed
+              ? `All ${plural(all.length, 'plan')} in this source are complete, abandoned or superseded, so the list leaves them out. Nothing is wrong — there is just no open work.`
+              : `${plural(all.length, 'plan')} are in this source. Widen the filters to see them.`
+          }
+          action={
+            allClosed ? (
+              <Button onClick={() => onFilters({ showClosed: true })}>Show the closed plans</Button>
+            ) : (
+              <Button onClick={clearFilters}>Clear the filters</Button>
+            )
+          }
         />
       </Page>
     );
@@ -210,13 +225,15 @@ export default function PlansView() {
               <span className="font-mono tabular-nums">{section.rows.length}</span>
             </h2>
           )}
-          {layout === 'table'
-            ? <PlanTable rows={section.rows} sortId={sortId} onSort={(id) => setPrefs({ sort: id })} />
-            : (
-              <div className="grid gap-2 lg:grid-cols-2">
-                {section.rows.map((row, i) => <PlanCard key={row.slug} row={row} index={i} />)}
-              </div>
-            )}
+          {layout === 'table' ? (
+            <PlanTable rows={section.rows} sortId={sortId} onSort={(id) => setPrefs({ sort: id })} />
+          ) : (
+            <div className="grid gap-2 lg:grid-cols-2">
+              {section.rows.map((row, i) => (
+                <PlanCard key={row.slug} row={row} index={i} />
+              ))}
+            </div>
+          )}
         </section>
       ))}
     </Page>
@@ -289,10 +306,12 @@ function HiddenBand({
   return (
     <Banner severity="info" className="mb-3 flex items-start gap-2">
       <span className="min-w-0 flex-1">
-        {parts.join(' and ')} {byShape === 1 ? 'is' : 'are'} not listed. Closed plans report no
-        work, so this page leaves them out until you ask — nothing is missing from the source.
+        {parts.join(' and ')} {byShape === 1 ? 'is' : 'are'} not listed. Closed plans report no work, so this
+        page leaves them out until you ask — nothing is missing from the source.
       </span>
-      <Button size="sm" className="shrink-0" onClick={onShowEverything}>Show everything</Button>
+      <Button size="sm" className="shrink-0" onClick={onShowEverything}>
+        Show everything
+      </Button>
       {/* Dismissing loses nothing: the counts stay on the toggles themselves and
           in the line under the controls. This silences the loud form of a fact
           that is still on screen — which is the only kind of banner that has
@@ -330,7 +349,11 @@ function AttentionBand({ rows }: { rows: PlanRow[] }) {
   const notes: StatusNote[] = broken.map((row) => ({
     id: row.slug,
     severity: 'error',
-    title: <a href={planHref(row.slug)} className="font-medium hover:text-action">{row.title}</a>,
+    title: (
+      <a href={planHref(row.slug)} className="font-medium hover:text-action">
+        {row.title}
+      </a>
+    ),
     body: row.firstIssue ?? plural(row.errors, 'error'),
   }));
 

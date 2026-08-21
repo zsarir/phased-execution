@@ -25,7 +25,12 @@ const ROUTE: RouteView = {
     { phase: 3, layer: 1, row: 1, state: 'waiting', size: 'S', gated: true, title: 'Terminal' },
     { phase: 4, layer: 2, row: 0, state: 'stuck', size: 'M', gated: false, title: 'Cutover' },
   ],
-  edges: [{ from: 1, to: 2 }, { from: 1, to: 3 }, { from: 2, to: 4 }, { from: 3, to: 4 }],
+  edges: [
+    { from: 1, to: 2 },
+    { from: 1, to: 3 },
+    { from: 2, to: 4 },
+    { from: 3, to: 4 },
+  ],
   layers: 3,
   rows: 2,
 };
@@ -79,7 +84,9 @@ describe('positions', () => {
   it('does not divide by zero on a one-phase plan', () => {
     const { width, height, points } = positions({
       nodes: [{ phase: 1, layer: 0, row: 0, state: 'ready', size: 'S', gated: false, title: 'Only' }],
-      edges: [], layers: 1, rows: 1,
+      edges: [],
+      layers: 1,
+      rows: 1,
     });
     expect(points.size).toBe(1);
     expect(width).toBe(PAD * 2 + 60);
@@ -89,7 +96,15 @@ describe('positions', () => {
 
 describe('trackPath', () => {
   const at = (x: number, y: number) => ({
-    phase: 0, layer: 0, row: 0, state: 'done', size: 'M', gated: false, title: 't', x, y,
+    phase: 0,
+    layer: 0,
+    row: 0,
+    state: 'done',
+    size: 'M',
+    gated: false,
+    title: 't',
+    x,
+    y,
   });
 
   it('draws a straight line between stations on the same row', () => {
@@ -135,7 +150,9 @@ describe('wrapLabel', () => {
 describe('<RouteMap>', () => {
   const BATCHES: SessionPlanView = {
     groups: [{ index: 1, kind: 'batch', weight: '130K', phases: [2, 3], gated: false }],
-    raw: '', budget: '200K/session', excluded: [1],
+    raw: '',
+    budget: '200K/session',
+    excluded: [1],
   };
 
   it('draws one focusable station per phase, each naming its state out loud', () => {

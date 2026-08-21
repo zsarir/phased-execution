@@ -88,9 +88,15 @@ export function Composer({
 
   return (
     <form
-      className={cn('flex shrink-0 items-end gap-1.5 border-t border-rule bg-ground-deep px-2 py-1.5', className)}
+      className={cn(
+        'flex shrink-0 items-end gap-1.5 border-t border-rule bg-ground-deep px-2 py-1.5',
+        className,
+      )}
       aria-label="Composer"
-      onSubmit={(event) => { event.preventDefault(); submit(); }}
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
     >
       {multiline ? <textarea rows={1} {...shared} /> : <input type="text" {...shared} />}
       <Button type="submit" variant="action" className="min-h-(--tap-min) shrink-0" disabled={!canSend}>

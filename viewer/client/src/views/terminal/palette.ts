@@ -20,18 +20,42 @@ export interface XtermTheme {
   cursor: string;
   cursorAccent: string;
   selectionBackground: string;
-  black: string; red: string; green: string; yellow: string;
-  blue: string; magenta: string; cyan: string; white: string;
-  brightBlack: string; brightRed: string; brightGreen: string; brightYellow: string;
-  brightBlue: string; brightMagenta: string; brightCyan: string; brightWhite: string;
+  black: string;
+  red: string;
+  green: string;
+  yellow: string;
+  blue: string;
+  magenta: string;
+  cyan: string;
+  white: string;
+  brightBlack: string;
+  brightRed: string;
+  brightGreen: string;
+  brightYellow: string;
+  brightBlue: string;
+  brightMagenta: string;
+  brightCyan: string;
+  brightWhite: string;
 }
 
 /** Night: readable on the deep blue-teal ground, hue-matched to the app. */
 const ANSI_NIGHT = {
-  black: '#33424b', red: '#ff6b68', green: '#7ec96f', yellow: '#e3b341',
-  blue: '#6cb6ff', magenta: '#d2a8ff', cyan: '#56d4dd', white: '#c9d6dd',
-  brightBlack: '#5b6f7a', brightRed: '#ff9492', brightGreen: '#a2e08f', brightYellow: '#f2cc60',
-  brightBlue: '#96d0ff', brightMagenta: '#e2c5ff', brightCyan: '#7ce8f0', brightWhite: '#eef4f7',
+  black: '#33424b',
+  red: '#ff6b68',
+  green: '#7ec96f',
+  yellow: '#e3b341',
+  blue: '#6cb6ff',
+  magenta: '#d2a8ff',
+  cyan: '#56d4dd',
+  white: '#c9d6dd',
+  brightBlack: '#5b6f7a',
+  brightRed: '#ff9492',
+  brightGreen: '#a2e08f',
+  brightYellow: '#f2cc60',
+  brightBlue: '#96d0ff',
+  brightMagenta: '#e2c5ff',
+  brightCyan: '#7ce8f0',
+  brightWhite: '#eef4f7',
 };
 
 /**
@@ -40,10 +64,22 @@ const ANSI_NIGHT = {
  * and a `ls` listing would lose half its filenames.
  */
 const ANSI_PAPER = {
-  black: '#1f2b31', red: '#b3211f', green: '#2c6e2a', yellow: '#8a6100',
-  blue: '#1b57a8', magenta: '#8b2fa0', cyan: '#0f6b74', white: '#4a5a62',
-  brightBlack: '#6a7a82', brightRed: '#d1332f', brightGreen: '#3a8a37', brightYellow: '#a97b00',
-  brightBlue: '#2a6fd0', brightMagenta: '#a63cbd', brightCyan: '#15848f', brightWhite: '#20303a',
+  black: '#1f2b31',
+  red: '#b3211f',
+  green: '#2c6e2a',
+  yellow: '#8a6100',
+  blue: '#1b57a8',
+  magenta: '#8b2fa0',
+  cyan: '#0f6b74',
+  white: '#4a5a62',
+  brightBlack: '#6a7a82',
+  brightRed: '#d1332f',
+  brightGreen: '#3a8a37',
+  brightYellow: '#a97b00',
+  brightBlue: '#2a6fd0',
+  brightMagenta: '#a63cbd',
+  brightCyan: '#15848f',
+  brightWhite: '#20303a',
 };
 
 /**

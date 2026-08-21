@@ -86,8 +86,8 @@ export function phaseActions(phase, { live, allowRun, owner = null }) {
   // the story of what failed HERE. Reading evidence changes nothing; refusing
   // to show it is what sent people to a terminal. The actions inside the
   // panel are the part that is gated.
-  const diagnose = !live
-    && ['failed', 'interrupted', 'parked', 'gated', 'awaiting-verification'].includes(status);
+  const diagnose =
+    !live && ['failed', 'interrupted', 'parked', 'gated', 'awaiting-verification'].includes(status);
 
   if (!allowRun || phase.state === 'done') {
     return { runAlone: false, retry: false, skip: false, diagnose, heldBy: held, staleLock };

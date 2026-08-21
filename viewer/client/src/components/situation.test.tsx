@@ -12,14 +12,23 @@ import { SITUATIONS, SITUATION_LABELS, situationLabel } from '@/lib/situation';
 import { SITUATIONS as SHARED } from '@shared/situation-model.js';
 
 const NEVER_STARTED = {
-  id: 'never-started', key: 'never-started', label: 'Never started', actor: 'machine',
-  blurb: 'No handoff, nothing on disk, a session that ended before it began. The phase re-boards fresh — no closeout, no person.',
+  id: 'never-started',
+  key: 'never-started',
+  label: 'Never started',
+  actor: 'machine',
+  blurb:
+    'No handoff, nothing on disk, a session that ended before it began. The phase re-boards fresh — no closeout, no person.',
   why: ['no handoff exists', 'web-admin: clean tree, 0 commits since the phase started'],
 };
 
 describe('SituationSummary', () => {
   it('names the situation, says who acts, lists why, and folds the evidence', () => {
-    render(<SituationSummary situation={NEVER_STARTED} evidence={['board: ready', 'handoff: none', 'lock: free']} />);
+    render(
+      <SituationSummary
+        situation={NEVER_STARTED}
+        evidence={['board: ready', 'handoff: none', 'lock: free']}
+      />,
+    );
     expect(screen.getByText('Never started')).toBeTruthy();
     expect(screen.getByText(/the autopilot climbs its ladder/)).toBeTruthy();
     expect(screen.getByText(/re-boards fresh/)).toBeTruthy();
@@ -31,10 +40,19 @@ describe('SituationSummary', () => {
   });
 
   it('shows the sub-kind in the key and a person-shaped actor', () => {
-    render(<SituationSummary situation={{
-      id: 'blocked-declared', sub: 'credential', key: 'blocked-declared:credential',
-      label: situationLabel('blocked-declared', 'credential'), actor: 'person', blurb: 'b', why: [],
-    }} />);
+    render(
+      <SituationSummary
+        situation={{
+          id: 'blocked-declared',
+          sub: 'credential',
+          key: 'blocked-declared:credential',
+          label: situationLabel('blocked-declared', 'credential'),
+          actor: 'person',
+          blurb: 'b',
+          why: [],
+        }}
+      />,
+    );
     expect(screen.getByText('Declared blocked · credential')).toBeTruthy();
     expect(screen.getByText('blocked-declared:credential')).toBeTruthy();
     expect(screen.getByText(/a person is needed/)).toBeTruthy();

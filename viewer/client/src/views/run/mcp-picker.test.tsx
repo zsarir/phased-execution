@@ -27,9 +27,7 @@ function server(over: Partial<McpServerView> & { id: string }): McpServerView {
 }
 
 function mount(servers: McpServerView[], props: Record<string, unknown> = {}) {
-  return render(
-    <McpPicker servers={servers} chosen={[]} onChange={vi.fn()} {...props} />,
-  );
+  return render(<McpPicker servers={servers} chosen={[]} onChange={vi.fn()} {...props} />);
 }
 
 const box = (id: string) => screen.getByRole('checkbox', { name: new RegExp(id) }) as HTMLInputElement;
@@ -57,9 +55,14 @@ describe('the MCP picker', () => {
     // The catalog's filesystem entry ships as `… ${MCP_FS_ROOT}` with an
     // authNote asking for a value. Nothing collected one, so it probes `failed`
     // forever — and it was ticked onto a real run and blocked three phases.
-    mount([server({
-      id: 'fs', transport: 'stdio', status: 'unknown', needsConfig: ['MCP_FS_ROOT'],
-    })]);
+    mount([
+      server({
+        id: 'fs',
+        transport: 'stdio',
+        status: 'unknown',
+        needsConfig: ['MCP_FS_ROOT'],
+      }),
+    ]);
     fireOpen();
     expect(box('fs').disabled).toBe(true);
     expect(screen.getByText('needs MCP_FS_ROOT')).toBeTruthy();

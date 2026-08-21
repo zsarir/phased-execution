@@ -62,20 +62,25 @@ export interface AccountLoginStart {
 export const accountsApi = {
   /* ---- Claude accounts ---- */
   accounts: () => request<AccountsState>('/api/accounts'),
-  accountAdd: (name: string, token: string) => post<{ account: AccountView }>('/api/accounts', { name, token }),
-  accountDelete: (id: string) => request<{ removed: boolean }>(`/api/accounts/${q(id)}`, { method: 'DELETE' }),
+  accountAdd: (name: string, token: string) =>
+    post<{ account: AccountView }>('/api/accounts', { name, token }),
+  accountDelete: (id: string) =>
+    request<{ removed: boolean }>(`/api/accounts/${q(id)}`, { method: 'DELETE' }),
   /** Display-name only — the id (journal key, path segment) never changes. */
-  accountRename: (id: string, name: string) => request<{ account: AccountView }>(
-    `/api/accounts/${q(id)}`,
-    { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) },
-  ),
+  accountRename: (id: string, name: string) =>
+    request<{ account: AccountView }>(`/api/accounts/${q(id)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
   accountLogin: (body: { accountId?: string; name?: string } = {}) =>
     post<AccountLoginStart>('/api/accounts/login', body),
   /** Acts NOW: a live session is checkpointed and re-attempted under the account. */
   runSwitchAccount: (slug: string, accountId: string) =>
-    post<{ ok: boolean; reason?: string; run?: RunState | null }>(
-      `/api/run/${q(slug)}/switch-account`, { accountId },
-    ),
+    post<{ ok: boolean; reason?: string; run?: RunState | null }>(`/api/run/${q(slug)}/switch-account`, {
+      accountId,
+    }),
   /** "I signed in over there — look again." Re-reads one account's identity. */
-  accountRefresh: (accountId?: string) => post<{ account: AccountView }>('/api/accounts/refresh', { accountId }),
+  accountRefresh: (accountId?: string) =>
+    post<{ account: AccountView }>('/api/accounts/refresh', { accountId }),
 };

@@ -53,7 +53,7 @@ import {
 
 /** The eight UI states, worst first. */
 export type UiState =
-  | 'needs-you' | 'failed' | 'running' | 'verifying' | 'waiting' | 'queued' | 'skipped' | 'done';
+  'needs-you' | 'failed' | 'running' | 'verifying' | 'waiting' | 'queued' | 'skipped' | 'done';
 
 /** What a UI state carries: how it is labelled and painted. */
 export type StateMeta = {
@@ -89,7 +89,8 @@ export type StatusHelp = {
 /** What each UI STATE means — the eight-row table the Guide leads with. */
 export const UI_STATE_HELP: Record<UiState, StatusHelp> = {
   'needs-you': {
-    means: 'Stopped until a person does something — an approval, a gate, a sign-in, a decision, or an errand the loop could not finish itself.',
+    means:
+      'Stopped until a person does something — an approval, a gate, a sign-in, a decision, or an errand the loop could not finish itself.',
     then: 'Read the row: it names what is needed and how. This is the only state painted amber.',
   },
   failed: {
@@ -105,11 +106,13 @@ export const UI_STATE_HELP: Record<UiState, StatusHelp> = {
     then: 'Nothing to do — green marks it done, red fails it with the evidence.',
   },
   waiting: {
-    means: 'Asleep on something that settles by itself — a dependency, a usage window, an external clock, a pause you asked for.',
+    means:
+      'Asleep on something that settles by itself — a dependency, a usage window, an external clock, a pause you asked for.',
     then: 'Nothing to do. The row says what it waits on and when it wakes.',
   },
   queued: {
-    means: 'In line — next up, or behind something holding the same repos; it starts itself when its turn comes.',
+    means:
+      'In line — next up, or behind something holding the same repos; it starts itself when its turn comes.',
     then: 'Nothing to do.',
   },
   skipped: {
@@ -249,7 +252,8 @@ export const BOARD_STATE_HELP: Record<BoardState, StatusHelp> = {
     then: 'Read the excerpt on the phase page, or use Ways forward on the run page.',
   },
   stuck: {
-    means: 'Its handoff is marked blocked or in-progress with nobody on it — the Outstanding section says why.',
+    means:
+      'Its handoff is marked blocked or in-progress with nobody on it — the Outstanding section says why.',
     then: 'Read the excerpt on the phase page, or use Ways forward on the run page.',
   },
   gated: {

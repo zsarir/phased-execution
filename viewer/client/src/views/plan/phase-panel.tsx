@@ -1,7 +1,16 @@
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip, Empty, KeyValue, StateChip,
+  Banner,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Chip,
+  Empty,
+  KeyValue,
+  StateChip,
   type Severity,
 } from '@/components/ui';
 import { Markdown, MarkdownInline } from '@/components/markdown';
@@ -34,7 +43,8 @@ function PhaseLink({ slug, phase, suffix }: { slug: string; phase: number; suffi
       href={phaseHref(slug, phase)}
       className="inline-flex items-center gap-1.5 rounded-sm border border-rule px-1.5 py-0.5 text-2xs whitespace-nowrap text-ink-muted hover:border-rule-strong hover:text-ink"
     >
-      P{phase}{suffix}
+      P{phase}
+      {suffix}
     </a>
   );
 }
@@ -52,10 +62,7 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
 
   if (!view) {
     return (
-      <Empty
-        title={`No phase ${phase} in this plan`}
-        body="The plan's graph has no row with that number."
-      />
+      <Empty title={`No phase ${phase} in this plan`} body="The plan's graph has no row with that number." />
     );
   }
 
@@ -84,7 +91,11 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
                       {view.gateKind && view.gateKind !== 'none' ? `gated·${view.gateKind}` : 'gated'}
                     </Chip>
                   )}
-                  {view.mcpServers?.map((id) => <Chip key={id} mono>mcp {id}</Chip>)}
+                  {view.mcpServers?.map((id) => (
+                    <Chip key={id} mono>
+                      mcp {id}
+                    </Chip>
+                  ))}
                   {view.analysis?.onCriticalPath && <Chip>critical path</Chip>}
                   <QaVerdict qa={view.qa} />
                 </div>
@@ -133,11 +144,7 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
               {view.handoff.outstanding.length > 900 ? '…' : ''}
             </p>
             <div className="mt-2">
-              <RecoveryActions
-                target={{ slug, phase: view.phase }}
-                ctx={{ boardState: 'stuck' }}
-                max={1}
-              />
+              <RecoveryActions target={{ slug, phase: view.phase }} ctx={{ boardState: 'stuck' }} max={1} />
             </div>
           </div>
         )}
@@ -175,7 +182,9 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
             the console HAS and cannot offer, which is what allowAgent is. */}
         {canQa(view.state) && (
           <Card>
-            <CardHeader><CardTitle>Quality</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle>Quality</CardTitle>
+            </CardHeader>
             <CardBody className="flex flex-col gap-2">
               <QaButton
                 target={{
@@ -199,42 +208,61 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
                 runningSessionId={liveQa(terminals?.sessions, { slug, phase: view.phase })?.id}
               />
               <p className="text-2xs text-ink-faint">
-                {view.qa?.report
-                  ? <>Last verdict recorded in <code className="font-mono">{view.qa.report}</code>.</>
-                  : detail.summary.qaMode === 'off'
-                    ? 'QA is off for this plan — the dialog can turn it on.'
-                    : 'A fresh session reviews the phase and records the verdict itself.'}
+                {view.qa?.report ? (
+                  <>
+                    Last verdict recorded in <code className="font-mono">{view.qa.report}</code>.
+                  </>
+                ) : detail.summary.qaMode === 'off' ? (
+                  'QA is off for this plan — the dialog can turn it on.'
+                ) : (
+                  'A fresh session reviews the phase and records the verdict itself.'
+                )}
               </p>
             </CardBody>
           </Card>
         )}
 
         <Card>
-          <CardHeader><CardTitle>Dependencies</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Dependencies</CardTitle>
+          </CardHeader>
           <CardBody>
             <KeyValue
               items={[
-                ['Depends on', view.analysis?.dependsOn.length
-                  ? (
+                [
+                  'Depends on',
+                  view.analysis?.dependsOn.length ? (
                     <div className="flex flex-wrap gap-1">
                       {view.analysis.dependsOn.map((d) => (
                         <PhaseLink key={d} slug={slug} phase={d} suffix={` · ${stateOf(d)}`} />
                       ))}
                     </div>
-                  )
-                  : <span className="text-ink-faint">nothing — a root phase</span>],
-                ['Unblocks', view.analysis?.dependents.length
-                  ? (
+                  ) : (
+                    <span className="text-ink-faint">nothing — a root phase</span>
+                  ),
+                ],
+                [
+                  'Unblocks',
+                  view.analysis?.dependents.length ? (
                     <div className="flex flex-wrap gap-1">
-                      {view.analysis.dependents.map((d) => <PhaseLink key={d} slug={slug} phase={d} />)}
+                      {view.analysis.dependents.map((d) => (
+                        <PhaseLink key={d} slug={slug} phase={d} />
+                      ))}
                     </div>
-                  )
-                  : <span className="text-ink-faint">nothing downstream</span>],
-                ['Downstream total', view.analysis?.transitiveDependents.length
-                  ? `${plural(view.analysis.transitiveDependents.length, 'phase')} (${view.analysis.unblocks} still open)`
-                  : null],
-                ['Parallel-safe with',
-                  view.row?.parallelSafe && view.row.parallelSafe !== '—' ? view.row.parallelSafe : null],
+                  ) : (
+                    <span className="text-ink-faint">nothing downstream</span>
+                  ),
+                ],
+                [
+                  'Downstream total',
+                  view.analysis?.transitiveDependents.length
+                    ? `${plural(view.analysis.transitiveDependents.length, 'phase')} (${view.analysis.unblocks} still open)`
+                    : null,
+                ],
+                [
+                  'Parallel-safe with',
+                  view.row?.parallelSafe && view.row.parallelSafe !== '—' ? view.row.parallelSafe : null,
+                ],
                 ['Repos', view.row?.repos],
                 ['Exit criteria (graph)', view.row?.exitCriteria],
               ]}
@@ -244,14 +272,19 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
 
         {view.lock && (
           <Card>
-            <CardHeader><CardTitle>Lock</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle>Lock</CardTitle>
+            </CardHeader>
             <CardBody>
               <KeyValue
                 items={[
                   ['Owner', <span className="font-mono break-all">{view.lock.owner}</span>],
-                  ['State', view.lock.expired
-                    ? 'expired — another session may take it over'
-                    : countdown(view.lock.leaseUntil)],
+                  [
+                    'State',
+                    view.lock.expired
+                      ? 'expired — another session may take it over'
+                      : countdown(view.lock.leaseUntil),
+                  ],
                 ]}
               />
             </CardBody>
@@ -269,12 +302,13 @@ export function PhasePanel({ detail, phase }: { detail: PlanDetail; phase: strin
             <CardBody className="flex flex-col gap-3">
               <KeyValue
                 items={[
-                  ['Status', <StateChip state={handoffState(view.handoff.status)} label={view.handoff.status} />],
+                  [
+                    'Status',
+                    <StateChip state={handoffState(view.handoff.status)} label={view.handoff.status} />,
+                  ],
                   ['Completed', view.handoff.completed],
                   ['Skills used', view.handoff.skillsUsed.join(', ')],
-                  ['Prompts', view.handoff.prompts
-                    ? plural(view.handoff.prompts, 'boot prompt')
-                    : null],
+                  ['Prompts', view.handoff.prompts ? plural(view.handoff.prompts, 'boot prompt') : null],
                 ]}
               />
               {view.handoff.outstanding && view.handoff.outstanding.toLowerCase() !== 'none' && (
@@ -301,8 +335,9 @@ const GATE_KIND_COPY: Record<'human' | 'ai' | 'auto', { label: string; hint: str
   },
   ai: {
     label: 'ai gate',
-    hint: 'A booted session verifies these conditions itself, does the work to make them true, '
-      + 'and records the clearance before implementing. Approving here also clears it.',
+    hint:
+      'A booted session verifies these conditions itself, does the work to make them true, ' +
+      'and records the clearance before implementing. Approving here also clears it.',
   },
   auto: {
     label: 'auto gate',
@@ -319,8 +354,16 @@ const GATE_KIND_COPY: Record<'human' | 'ai' | 'auto', { label: string; hint: str
  * ai gates say the session will clear them itself; auto gates show the live
  * verdict. The Approve button asks twice — it widens what a run may do.
  */
-function GateCard({ slug, view, gate, allowWrites }: {
-  slug: string; view: PhaseView; gate?: GateStatus; allowWrites: boolean;
+function GateCard({
+  slug,
+  view,
+  gate,
+  allowWrites,
+}: {
+  slug: string;
+  view: PhaseView;
+  gate?: GateStatus;
+  allowWrites: boolean;
 }) {
   const qc = useQueryClient();
   const [note, setNote] = useState('');
@@ -337,11 +380,12 @@ function GateCard({ slug, view, gate, allowWrites }: {
   const gatedRecord = run?.run?.phases?.[String(view.phase)]?.status === 'gated';
 
   const mutation = useMutation({
-    mutationFn: (approve: boolean) => api.approveGate(slug, view.phase, {
-      approve,
-      note: note.trim() || undefined,
-      continueRun: approve && gatedRecord && continueRun,
-    }),
+    mutationFn: (approve: boolean) =>
+      api.approveGate(slug, view.phase, {
+        approve,
+        note: note.trim() || undefined,
+        continueRun: approve && gatedRecord && continueRun,
+      }),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: keys.plan(slug) });
       void qc.invalidateQueries({ queryKey: keys.plans() });
@@ -354,7 +398,9 @@ function GateCard({ slug, view, gate, allowWrites }: {
     <Banner severity={approved || gate?.clear ? 'info' : 'warn'}>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
-          <strong>{approved ? 'Gate approved.' : gate?.clear ? 'Gate is clear.' : 'Gates must clear first.'}</strong>
+          <strong>
+            {approved ? 'Gate approved.' : gate?.clear ? 'Gate is clear.' : 'Gates must clear first.'}
+          </strong>
           <Chip tone="gate">{copy.label}</Chip>
         </div>
         <p className="mt-0.5 text-2xs text-ink-muted">{copy.hint}</p>
@@ -372,8 +418,8 @@ function GateCard({ slug, view, gate, allowWrites }: {
         )}
         {kind === 'auto' && view.gateCheck?.startsWith('cmd ') && !gate?.clear && (
           <p className="mt-1 text-2xs text-ink-faint">
-            cmd gates are executed by the autopilot, never by this page — the verdict above shows
-            the directive unevaluated.
+            cmd gates are executed by the autopilot, never by this page — the verdict above shows the
+            directive unevaluated.
           </p>
         )}
 
@@ -392,15 +438,22 @@ function GateCard({ slug, view, gate, allowWrites }: {
                   size="sm"
                   variant={confirming ? 'action' : 'default'}
                   disabled={mutation.isPending}
-                  title={'Records your approval in docs/handoffs/<slug>/gate-status.md with your note — '
-                    + 'the runner re-checks the gate and boards the phase on its next pass. '
-                    + 'Nothing bypasses the gate; this IS the gate being answered.'}
-                  onClick={() => { if (confirming) mutation.mutate(true); else setConfirming(true); }}
+                  title={
+                    'Records your approval in docs/handoffs/<slug>/gate-status.md with your note — ' +
+                    'the runner re-checks the gate and boards the phase on its next pass. ' +
+                    'Nothing bypasses the gate; this IS the gate being answered.'
+                  }
+                  onClick={() => {
+                    if (confirming) mutation.mutate(true);
+                    else setConfirming(true);
+                  }}
                 >
                   {confirming ? 'Press again to approve' : 'Approve gate'}
                 </Button>
                 {confirming && (
-                  <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>Cancel</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+                    Cancel
+                  </Button>
                 )}
                 {gatedRecord && (
                   <label className="flex items-center gap-1.5 text-2xs text-ink-muted">
@@ -416,7 +469,12 @@ function GateCard({ slug, view, gate, allowWrites }: {
               </>
             )}
             {approved && (
-              <Button size="sm" variant="ghost" disabled={mutation.isPending} onClick={() => mutation.mutate(false)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={mutation.isPending}
+                onClick={() => mutation.mutate(false)}
+              >
                 Revoke approval
               </Button>
             )}
@@ -428,10 +486,10 @@ function GateCard({ slug, view, gate, allowWrites }: {
         ) : (
           <p className="mt-2 text-2xs text-ink-faint">
             {kind === 'human'
-              ? 'Do the steps above, then approve the gate. Writes are off in this console — restart '
-                + 'with --allow-writes, or run scripts/gate-approve.sh from a terminal.'
-              : 'Writes are off in this console — approving needs --allow-writes, or '
-                + 'scripts/gate-approve.sh from a terminal.'}
+              ? 'Do the steps above, then approve the gate. Writes are off in this console — restart ' +
+                'with --allow-writes, or run scripts/gate-approve.sh from a terminal.'
+              : 'Writes are off in this console — approving needs --allow-writes, or ' +
+                'scripts/gate-approve.sh from a terminal.'}
           </p>
         )}
       </div>
@@ -452,17 +510,20 @@ function GateCard({ slug, view, gate, allowWrites }: {
  * `ready` returns nothing: there is nothing to warn about, and a banner on
  * every card would train people to stop reading them.
  */
-export function promptBanner(
-  view: { state: string; gated?: boolean; gateKind?: string },
-): { severity: Severity; text: string } | undefined {
+export function promptBanner(view: {
+  state: string;
+  gated?: boolean;
+  gateKind?: string;
+}): { severity: Severity; text: string } | undefined {
   // Checked before the state, because a gated phase can read as `ready` on the
   // board while the thing actually holding it is the gate.
   if (view.gated && view.state !== 'done') {
     if (view.gateKind === 'ai') {
       return {
         severity: 'info',
-        text: 'This phase has an ai-clearable gate — a booted session verifies and clears it '
-          + 'before implementing, so booting IS the way through.',
+        text:
+          'This phase has an ai-clearable gate — a booted session verifies and clears it ' +
+          'before implementing, so booting IS the way through.',
       };
     }
     return {
@@ -476,27 +537,31 @@ export function promptBanner(
     case 'in-progress':
       return {
         severity: 'warn',
-        text: 'A session is already on this phase — phase-lock will refuse a second one. '
-          + 'Take it over deliberately (--force) or pick another phase.',
+        text:
+          'A session is already on this phase — phase-lock will refuse a second one. ' +
+          'Take it over deliberately (--force) or pick another phase.',
       };
     case 'done':
       return {
         severity: 'info',
-        text: 'This phase has departed — the prompt is kept for reference, and for re-running it '
-          + 'on purpose.',
+        text:
+          'This phase has departed — the prompt is kept for reference, and for re-running it ' +
+          'on purpose.',
       };
     case 'stuck':
     case 'blocked':
       return {
         severity: 'warn',
-        text: 'This phase is blocked — prefer the recovery actions, which brief a session on what '
-          + 'went wrong, over booting a fresh one that will not know.',
+        text:
+          'This phase is blocked — prefer the recovery actions, which brief a session on what ' +
+          'went wrong, over booting a fresh one that will not know.',
       };
     default:
       return {
         severity: 'warn',
-        text: 'Dependencies are not met — a session booted now stops at the lock and board checks '
-          + 'its own boot prompt tells it to run.',
+        text:
+          'Dependencies are not met — a session booted now stops at the lock and board checks ' +
+          'its own boot prompt tells it to run.',
       };
   }
 }

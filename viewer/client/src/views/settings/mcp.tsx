@@ -20,8 +20,9 @@ export function McpCard() {
   const allowed = data?.allowMcp ?? false;
 
   const on = servers.filter((server) => server.enabled);
-  const attention = on.filter((server) =>
-    server.status === 'needs-auth' || server.status === 'failed' || server.toolsChanged);
+  const attention = on.filter(
+    (server) => server.status === 'needs-auth' || server.status === 'failed' || server.toolsChanged,
+  );
 
   return (
     <Card>
@@ -29,28 +30,40 @@ export function McpCard() {
         <CardTitle>MCP servers</CardTitle>
         <div className="flex items-center gap-2">
           {allowed ? <Chip tone="warn">registration enabled</Chip> : null}
-          <Button size="sm" onClick={() => navigate('mcp')}>Manage</Button>
+          <Button size="sm" onClick={() => navigate('mcp')}>
+            Manage
+          </Button>
         </div>
       </CardHeader>
       <CardBody>
         <KeyValue
           items={[
-            ['Registered', servers.length
-              ? `${servers.length} · ${on.length} switched on`
-              : 'none — sessions use this machine\'s own MCP configuration'],
-            ['Needs a person', attention.length
-              ? <span className="text-stuck">
-                {attention.map((server) => server.label).join(', ')} — phases naming
-                {attention.length === 1 ? ' it' : ' them'} will park at boarding
-              </span>
-              : on.length ? 'nothing — every switched-on server answered' : '—'],
+            [
+              'Registered',
+              servers.length
+                ? `${servers.length} · ${on.length} switched on`
+                : "none — sessions use this machine's own MCP configuration",
+            ],
+            [
+              'Needs a person',
+              attention.length ? (
+                <span className="text-stuck">
+                  {attention.map((server) => server.label).join(', ')} — phases naming
+                  {attention.length === 1 ? ' it' : ' them'} will park at boarding
+                </span>
+              ) : on.length ? (
+                'nothing — every switched-on server answered'
+              ) : (
+                '—'
+              ),
+            ],
           ]}
         />
         {!allowed && (
           <p className="border-t border-rule pt-3 text-xs text-ink-muted">
-            Start the console with <code>--allow-mcp</code> to register servers, hold their
-            credentials and attach them to plans and phases. The registry, the connection statuses
-            and the catalog above work without it.
+            Start the console with <code>--allow-mcp</code> to register servers, hold their credentials and
+            attach them to plans and phases. The registry, the connection statuses and the catalog above work
+            without it.
           </p>
         )}
       </CardBody>

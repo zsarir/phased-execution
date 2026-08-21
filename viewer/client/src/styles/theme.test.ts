@@ -25,8 +25,14 @@ const ALLOWED = [640, 900, 1200];
 
 /** The eight UI states of `shared/status-vocab.js`, as the palette names them. */
 const STATUS_TOKENS = [
-  '--status-done', '--status-running', '--status-verifying', '--status-queued',
-  '--status-waiting', '--status-needs-you', '--status-failed', '--status-skipped',
+  '--status-done',
+  '--status-running',
+  '--status-verifying',
+  '--status-queued',
+  '--status-waiting',
+  '--status-needs-you',
+  '--status-failed',
+  '--status-skipped',
 ];
 
 /** Shipped source only — a test may name a width in order to reject it. */
@@ -41,8 +47,10 @@ function walk(dir: string, out: string[] = []): string[] {
 
 describe('theme tokens', () => {
   it('declares exactly three breakpoints, at 640/900/1200', () => {
-    const declared = [...THEME.matchAll(/--breakpoint-([\w-]+):\s*(\d+)px/g)]
-      .map(([, name, value]) => ({ name, value: Number(value) }));
+    const declared = [...THEME.matchAll(/--breakpoint-([\w-]+):\s*(\d+)px/g)].map(([, name, value]) => ({
+      name,
+      value: Number(value),
+    }));
     expect(declared.map((b) => b.value)).toEqual(ALLOWED);
     // Tailwind's own sm/md/lg/xl/2xl must be cleared, or there are eight.
     expect(THEME).toMatch(/--breakpoint-\*:\s*initial/);
@@ -60,15 +68,44 @@ describe('theme tokens', () => {
 
   it('declares every token the components paint with', () => {
     const required = [
-      '--ground', '--ground-deep', '--surface', '--surface-raised', '--rule', '--rule-strong',
-      '--ink', '--ink-muted', '--ink-faint', '--track', '--hatch',
+      '--ground',
+      '--ground-deep',
+      '--surface',
+      '--surface-raised',
+      '--rule',
+      '--rule-strong',
+      '--ink',
+      '--ink-muted',
+      '--ink-faint',
+      '--track',
+      '--hatch',
       ...STATUS_TOKENS,
-      '--accent', '--action', '--focus', '--shadow-card', '--glow-action',
-      '--font-sans', '--font-display', '--font-mono',
-      '--text-2xs', '--text-xs', '--text-sm', '--text-md', '--text-lg', '--text-xl', '--text-2xl', '--text-3xl',
-      '--tap-min', '--text-input', '--app-height',
-      '--z-base', '--z-sticky', '--z-shell', '--z-scrim', '--z-toast',
-      '--rail-width', '--content-max',
+      '--accent',
+      '--action',
+      '--focus',
+      '--shadow-card',
+      '--glow-action',
+      '--font-sans',
+      '--font-display',
+      '--font-mono',
+      '--text-2xs',
+      '--text-xs',
+      '--text-sm',
+      '--text-md',
+      '--text-lg',
+      '--text-xl',
+      '--text-2xl',
+      '--text-3xl',
+      '--tap-min',
+      '--text-input',
+      '--app-height',
+      '--z-base',
+      '--z-sticky',
+      '--z-shell',
+      '--z-scrim',
+      '--z-toast',
+      '--rail-width',
+      '--content-max',
     ];
     const missing = required.filter((token) => !new RegExp(`\\${token}:`).test(THEME));
     expect(missing, `undeclared: ${missing.join(', ')}`).toEqual([]);
@@ -79,7 +116,15 @@ describe('theme tokens', () => {
     // three copies had already drifted (`--line-waiting` was missing from one).
     // `light-dark()` makes a second definition unnecessary — and a duplicate
     // here means someone started a fourth copy.
-    for (const token of [...STATUS_TOKENS, '--ground', '--ground-deep', '--surface', '--surface-raised', '--ink', '--track']) {
+    for (const token of [
+      ...STATUS_TOKENS,
+      '--ground',
+      '--ground-deep',
+      '--surface',
+      '--surface-raised',
+      '--ink',
+      '--track',
+    ]) {
       const declarations = [...THEME.matchAll(new RegExp(`^\\s*\\${token}:`, 'gm'))];
       expect(declarations.length, `${token} declared ${declarations.length}x`).toBe(1);
       const line = THEME.split('\n').find((l) => l.trim().startsWith(`${token}:`)) ?? '';
@@ -94,7 +139,8 @@ describe('theme tokens', () => {
     const weights = new Map<string, { paper: string; night: string }>();
     for (const token of STATUS_TOKENS) {
       const line = THEME.split('\n').find((l) => l.trim().startsWith(`${token}:`)) ?? '';
-      const match = /light-dark\(oklch\(([\d.]+%) ([\d.]+) [\d.]+\), oklch\(([\d.]+%) ([\d.]+) [\d.]+\)\)/.exec(line);
+      const match =
+        /light-dark\(oklch\(([\d.]+%) ([\d.]+) [\d.]+\), oklch\(([\d.]+%) ([\d.]+) [\d.]+\)\)/.exec(line);
       expect(match, `${token} is not a light-dark(oklch, oklch) pair`).toBeTruthy();
       const [, paperL, paperC, nightL, nightC] = match!;
       weights.set(token, { paper: `${paperL} ${paperC}`, night: `${nightL} ${nightC}` });
@@ -132,19 +178,31 @@ describe('theme tokens', () => {
     // The views that predate the vocabulary still paint with `--line-*` and
     // `.state-ready` & co. Until Phase 11 deletes them they must resolve — to
     // the vocabulary's own tokens, not to a literal that could drift from it.
-    for (const legacy of ['--line-done', '--line-ready', '--line-progress', '--line-waiting', '--line-blocked', '--line-stuck', '--line-gated']) {
+    for (const legacy of [
+      '--line-done',
+      '--line-ready',
+      '--line-progress',
+      '--line-waiting',
+      '--line-blocked',
+      '--line-stuck',
+      '--line-gated',
+    ]) {
       const line = THEME.split('\n').find((l) => l.trim().startsWith(`${legacy}:`)) ?? '';
       expect(line, `${legacy} must alias a --status-* token`).toMatch(/var\(--status-[a-z-]+\)/);
     }
     for (const cls of ['state-ready', 'state-in-progress', 'state-blocked', 'state-stuck', 'state-gated']) {
-      expect(THEME, `.${cls} must alias a --status-* token`).toMatch(new RegExp(`\\.${cls}\\s*\\{\\s*--state:\\s*var\\(--status-[a-z-]+\\)`));
+      expect(THEME, `.${cls} must alias a --status-* token`).toMatch(
+        new RegExp(`\\.${cls}\\s*\\{\\s*--state:\\s*var\\(--status-[a-z-]+\\)`),
+      );
     }
   });
 
   it('sets a .state-<ui> class for each of the eight UI states', () => {
     for (const token of STATUS_TOKENS) {
       const ui = token.replace('--status-', '');
-      expect(THEME, `.state-${ui}`).toMatch(new RegExp(`\\.state-${ui}\\s*\\{\\s*--state:\\s*var\\(${token}\\)`));
+      expect(THEME, `.state-${ui}`).toMatch(
+        new RegExp(`\\.state-${ui}\\s*\\{\\s*--state:\\s*var\\(${token}\\)`),
+      );
     }
   });
 
@@ -162,13 +220,19 @@ describe('theme tokens', () => {
   });
 
   it('vendors IBM Plex as exactly four woff2 files and nothing else', () => {
-    const fonts = readdirSync(here('../assets/fonts')).filter((f) => f.endsWith('.woff2')).sort();
+    const fonts = readdirSync(here('../assets/fonts'))
+      .filter((f) => f.endsWith('.woff2'))
+      .sort();
     expect(fonts).toEqual([
-      'ibm-plex-mono-400.woff2', 'ibm-plex-mono-500.woff2',
-      'ibm-plex-sans-condensed-600.woff2', 'ibm-plex-sans-var.woff2',
+      'ibm-plex-mono-400.woff2',
+      'ibm-plex-mono-500.woff2',
+      'ibm-plex-sans-condensed-600.woff2',
+      'ibm-plex-sans-var.woff2',
     ]);
     // Every @font-face points at one of them, and every one is pointed at.
-    const referenced = [...THEME.matchAll(/url\('\.\.\/assets\/fonts\/([\w.-]+\.woff2)'\)/g)].map(([, f]) => f).sort();
+    const referenced = [...THEME.matchAll(/url\('\.\.\/assets\/fonts\/([\w.-]+\.woff2)'\)/g)]
+      .map(([, f]) => f)
+      .sort();
     expect(referenced).toEqual(fonts);
     for (const f of fonts) expect(existsSync(here(`../assets/fonts/${f}`))).toBe(true);
     // The families the tokens name are the families the faces declare.

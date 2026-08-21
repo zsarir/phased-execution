@@ -69,9 +69,15 @@ function Snippet({ text, terms }: { text: string; terms: string[] }) {
 
   return (
     <span className="text-sm text-ink-muted">
-      {parts.map((part, i) => (typeof part === 'string'
-        ? <span key={i}>{part}</span>
-        : <mark key={i} className="rounded-sm bg-action/25 px-0.5 text-ink">{part.mark}</mark>))}
+      {parts.map((part, i) =>
+        typeof part === 'string' ? (
+          <span key={i}>{part}</span>
+        ) : (
+          <mark key={i} className="rounded-sm bg-action/25 px-0.5 text-ink">
+            {part.mark}
+          </mark>
+        ),
+      )}
     </span>
   );
 }
@@ -84,7 +90,9 @@ export default function SearchView({ route }: { route: { query: Record<string, s
 
   // The one thing this view is for. Focusing it on open is safe here in a way
   // it never is on a list: this page has no other purpose.
-  useEffect(() => { input.current?.focus(); }, []);
+  useEffect(() => {
+    input.current?.focus();
+  }, []);
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(value), DEBOUNCE_MS);
@@ -105,14 +113,17 @@ export default function SearchView({ route }: { route: { query: Record<string, s
   // status word and the reason, not just the fact.
   const { data: plans } = usePlans();
   const closedSlugs = useMemo(
-    () => new Map(
-      (plans ?? []).filter((p) => isClosed(p)).map((p) => [p.slug, p]),
-    ),
+    () => new Map((plans ?? []).filter((p) => isClosed(p)).map((p) => [p.slug, p])),
     [plans],
   );
 
   const terms = useMemo(
-    () => debounced.trim().toLowerCase().split(/\s+/).filter((t) => t.length > 1),
+    () =>
+      debounced
+        .trim()
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((t) => t.length > 1),
     [debounced],
   );
 
@@ -123,9 +134,13 @@ export default function SearchView({ route }: { route: { query: Record<string, s
     <Page
       title="Search"
       subtitle="Every plan section, phase block and handoff body — file paths, commit shas, exit criteria and gotchas included."
-      actions={result && !tooShort
-        ? <Chip mono>{result.total} hits in {result.groups.length} plans</Chip>
-        : undefined}
+      actions={
+        result && !tooShort ? (
+          <Chip mono>
+            {result.total} hits in {result.groups.length} plans
+          </Chip>
+        ) : undefined
+      }
     >
       <div className="mb-4 flex items-center gap-2 rounded-lg border border-rule bg-surface px-3 py-2 focus-within:border-action">
         <SearchIcon className="size-4 shrink-0 text-ink-faint" aria-hidden />
@@ -155,7 +170,9 @@ export default function SearchView({ route }: { route: { query: Record<string, s
 
       {!tooShort && !result && isFetching && (
         <div className="flex flex-col gap-2">
-          {[0, 1, 2].map((i) => <Skeleton key={i} className="h-20" />)}
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-20" />
+          ))}
         </div>
       )}
 

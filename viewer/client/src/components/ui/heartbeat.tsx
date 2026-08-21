@@ -33,19 +33,32 @@ export function Heartbeat({
   const silence = lastBeatAt != null ? Math.max(0, now - lastBeatAt) : null;
   const beating = live && silence != null && silence < staleAfterMs;
   const silent = live && silence != null && silence >= staleAfterMs;
-  const text = silence == null
-    ? (live ? 'no heartbeat' : '—')
-    : silent ? `silent ${elapsed(silence)}` : `${elapsed(silence)} ago`;
+  const text =
+    silence == null
+      ? live
+        ? 'no heartbeat'
+        : '—'
+      : silent
+        ? `silent ${elapsed(silence)}`
+        : `${elapsed(silence)} ago`;
   const state = beating ? 'running' : silent ? 'waiting' : 'queued';
   return (
     <span
       role="status"
       aria-label={`${label}: ${text}`}
       title={lastBeatAt != null ? `last heard ${new Date(lastBeatAt).toLocaleTimeString()}` : undefined}
-      className={cn('inline-flex items-center gap-1.5 font-mono text-2xs tabular-nums', silent ? 'text-waiting' : 'text-ink-muted', `state-${state}`, className)}
+      className={cn(
+        'inline-flex items-center gap-1.5 font-mono text-2xs tabular-nums',
+        silent ? 'text-waiting' : 'text-ink-muted',
+        `state-${state}`,
+        className,
+      )}
       {...props}
     >
-      <span aria-hidden className={cn('size-[7px] shrink-0 rounded-full bg-state', beating && 'animate-pulse-soft')} />
+      <span
+        aria-hidden
+        className={cn('size-[7px] shrink-0 rounded-full bg-state', beating && 'animate-pulse-soft')}
+      />
       {text}
     </span>
   );

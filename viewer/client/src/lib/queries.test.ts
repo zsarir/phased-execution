@@ -38,7 +38,12 @@ describe('SSE → Query bridge', () => {
     // `run:` + event). Listening for `phase` instead of `run:phase` is the
     // mistake this pins down.
     for (const name of [
-      'run:run', 'run:phase', 'run:stream', 'run:journal', 'run:verify', 'run:state',
+      'run:run',
+      'run:phase',
+      'run:stream',
+      'run:journal',
+      'run:verify',
+      'run:state',
       // Admission. Its own event because it changes what the console may
       // START, which none of the others describe — a phase can sit queued for
       // minutes while nothing about any run's own state changes at all.
@@ -83,8 +88,14 @@ describe('shellCounts', () => {
       4,
     );
     expect(counts).toEqual({
-      plans: 2, phases: 11, ready: 2, approvals: 1, unread: 4,
-      agentSessions: 0, terminalSessions: 0, mcpAttention: 0,
+      plans: 2,
+      phases: 11,
+      ready: 2,
+      approvals: 1,
+      unread: 4,
+      agentSessions: 0,
+      terminalSessions: 0,
+      mcpAttention: 0,
     });
   });
 
@@ -118,15 +129,21 @@ describe('shellCounts', () => {
       undefined,
       0,
     );
-    expect(counts.ready).toBe(2);   // only plan a
-    expect(counts.plans).toBe(2);   // census: both
+    expect(counts.ready).toBe(2); // only plan a
+    expect(counts.plans).toBe(2); // census: both
     expect(counts.phases).toBe(12); // census: both
   });
 
   it('survives an empty cache', () => {
     expect(shellCounts(undefined, undefined, 0)).toEqual({
-      plans: 0, phases: 0, ready: 0, approvals: 0, unread: 0,
-      agentSessions: 0, terminalSessions: 0, mcpAttention: 0,
+      plans: 0,
+      phases: 0,
+      ready: 0,
+      approvals: 0,
+      unread: 0,
+      agentSessions: 0,
+      terminalSessions: 0,
+      mcpAttention: 0,
     });
   });
 });

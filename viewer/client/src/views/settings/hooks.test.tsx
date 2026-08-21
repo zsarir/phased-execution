@@ -28,12 +28,18 @@ import { queryClientConfig } from '@/lib/queries';
 
 const HOME = '/home/sam';
 const NOT_INSTALLED: HooksStatusView = {
-  path: `${HOME}/.claude/settings.json`, exists: true, installed: false, partial: false,
+  path: `${HOME}/.claude/settings.json`,
+  exists: true,
+  installed: false,
+  partial: false,
   events: { SessionStart: false, SessionEnd: false, Stop: false },
-  command: 'bash "/opt/skill/scripts/session-hook.sh"', stale: false,
+  command: 'bash "/opt/skill/scripts/session-hook.sh"',
+  stale: false,
 };
 const INSTALLED: HooksStatusView = {
-  ...NOT_INSTALLED, installed: true, events: { SessionStart: true, SessionEnd: true, Stop: true },
+  ...NOT_INSTALLED,
+  installed: true,
+  events: { SessionStart: true, SessionEnd: true, Stop: true },
 };
 
 function state(over: Partial<ConsoleState> = {}): ConsoleState {
@@ -83,7 +89,9 @@ describe('SessionHookCard', () => {
   it('a stale or partial install reads as such and the button says Repair', async () => {
     hooksStatus.mockResolvedValue({ ...INSTALLED, installed: false, partial: true, stale: true });
     mount();
-    await waitFor(() => expect(screen.getByTestId('hook-status')).toHaveTextContent('points at another checkout'));
+    await waitFor(() =>
+      expect(screen.getByTestId('hook-status')).toHaveTextContent('points at another checkout'),
+    );
     expect(await screen.findByRole('button', { name: /repair the hook/i })).toBeTruthy();
   });
 

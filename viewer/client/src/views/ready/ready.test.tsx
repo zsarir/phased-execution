@@ -25,7 +25,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClientConfig } from '@/lib/queries';
 import type { PlanDetail, PlanSummaryFull } from '@/lib/api';
 import {
-  NO_FILTERS, applyFilters, isClaimed, load, queueTotals, rank, repoOptions, toDepartures,
+  NO_FILTERS,
+  applyFilters,
+  isClaimed,
+  load,
+  queueTotals,
+  rank,
+  repoOptions,
+  toDepartures,
   type Departure,
 } from './model';
 
@@ -51,7 +58,8 @@ const plan = (over: Partial<PlanSummaryFull> = {}): PlanSummaryFull => ({
   criticalWeight: 40_000,
   minimumSessions: 1,
   budget: 200_000,
-  skills: [], mcpServers: [],
+  skills: [],
+  mcpServers: [],
   qaMode: 'off',
   qaFailures: [],
   locks: [],
@@ -63,7 +71,7 @@ const plan = (over: Partial<PlanSummaryFull> = {}): PlanSummaryFull => ({
   ...over,
 });
 
-const detail = (phases: unknown[]): PlanDetail => ({ phases } as unknown as PlanDetail);
+const detail = (phases: unknown[]): PlanDetail => ({ phases }) as unknown as PlanDetail;
 
 const phaseView = (over: Record<string, unknown> = {}) => ({
   phase: 2,
@@ -135,19 +143,20 @@ describe('building the queue', () => {
   });
 
   it('boards the open plans in the same list', () => {
-    const queue = toDepartures([
-      plan({ slug: 'gone', status: 'abandoned', ready: [1, 2, 3] }),
-      plan({ slug: 'live', ready: [2] }),
-    ], new Map(), NOW);
+    const queue = toDepartures(
+      [plan({ slug: 'gone', status: 'abandoned', ready: [1, 2, 3] }), plan({ slug: 'live', ready: [2] })],
+      new Map(),
+      NOW,
+    );
     expect(queue.map((d) => d.key)).toEqual(['live#2']);
   });
 
   it('reads the server’s closed flag ahead of the status word', () => {
-    expect(toDepartures([plan({ status: 'shelved', closed: true, ready: [2] })], new Map(), NOW))
-      .toEqual([]);
+    expect(toDepartures([plan({ status: 'shelved', closed: true, ready: [2] })], new Map(), NOW)).toEqual([]);
     // …and an explicitly open plan boards even if the word is unfamiliar.
-    expect(toDepartures([plan({ status: 'shelved', closed: false, ready: [2] })], new Map(), NOW))
-      .toHaveLength(1);
+    expect(
+      toDepartures([plan({ status: 'shelved', closed: false, ready: [2] })], new Map(), NOW),
+    ).toHaveLength(1);
   });
 
   // A closed plan contributes no departures, so its slug is not in the set
@@ -163,19 +172,47 @@ describe('building the queue', () => {
 });
 
 describe('ranking', () => {
-  const queue = (): Departure[] => toDepartures(
-    [
-      plan({ slug: 'heavy', ready: [1], activity: NOW - 86_400_000, budget: 200_000 }),
-      plan({ slug: 'light', ready: [1], activity: NOW, budget: 200_000 }),
-      plan({ slug: 'stale', ready: [1], activity: NOW - 30 * 86_400_000, budget: 200_000 }),
-    ],
-    new Map([
-      ['heavy', detail([phaseView({ phase: 1, weight: 90_000, analysis: { unblocks: 5, onCriticalPath: false, weight: 90_000 } })])],
-      ['light', detail([phaseView({ phase: 1, weight: 15_000, analysis: { unblocks: 1, onCriticalPath: false, weight: 15_000 } })])],
-      ['stale', detail([phaseView({ phase: 1, weight: 40_000, analysis: { unblocks: 2, onCriticalPath: true, weight: 40_000 } })])],
-    ]),
-    NOW,
-  );
+  const queue = (): Departure[] =>
+    toDepartures(
+      [
+        plan({ slug: 'heavy', ready: [1], activity: NOW - 86_400_000, budget: 200_000 }),
+        plan({ slug: 'light', ready: [1], activity: NOW, budget: 200_000 }),
+        plan({ slug: 'stale', ready: [1], activity: NOW - 30 * 86_400_000, budget: 200_000 }),
+      ],
+      new Map([
+        [
+          'heavy',
+          detail([
+            phaseView({
+              phase: 1,
+              weight: 90_000,
+              analysis: { unblocks: 5, onCriticalPath: false, weight: 90_000 },
+            }),
+          ]),
+        ],
+        [
+          'light',
+          detail([
+            phaseView({
+              phase: 1,
+              weight: 15_000,
+              analysis: { unblocks: 1, onCriticalPath: false, weight: 15_000 },
+            }),
+          ]),
+        ],
+        [
+          'stale',
+          detail([
+            phaseView({
+              phase: 1,
+              weight: 40_000,
+              analysis: { unblocks: 2, onCriticalPath: true, weight: 40_000 },
+            }),
+          ]),
+        ],
+      ]),
+      NOW,
+    );
 
   it('leads with the phase that frees the most under Leverage', () => {
     expect(rank(queue(), 'leverage')[0].slug).toBe('heavy');
@@ -206,8 +243,26 @@ describe('ranking', () => {
       new Map([
         // The claimed one is the better move on every other measure, which is
         // exactly the case that must not win.
-        ['taken', detail([phaseView({ phase: 1, weight: 15_000, analysis: { unblocks: 9, onCriticalPath: true, weight: 15_000 } })])],
-        ['free', detail([phaseView({ phase: 1, weight: 90_000, analysis: { unblocks: 0, onCriticalPath: false, weight: 90_000 } })])],
+        [
+          'taken',
+          detail([
+            phaseView({
+              phase: 1,
+              weight: 15_000,
+              analysis: { unblocks: 9, onCriticalPath: true, weight: 15_000 },
+            }),
+          ]),
+        ],
+        [
+          'free',
+          detail([
+            phaseView({
+              phase: 1,
+              weight: 90_000,
+              analysis: { unblocks: 0, onCriticalPath: false, weight: 90_000 },
+            }),
+          ]),
+        ],
       ]),
       NOW,
     );
@@ -219,7 +274,18 @@ describe('ranking', () => {
   it('sorts an unsized phase last rather than as weightless', () => {
     const mixed = toDepartures(
       [plan({ slug: 'sized', ready: [1] }), plan({ slug: 'unsized', ready: [1] })],
-      new Map([['sized', detail([phaseView({ phase: 1, weight: 90_000, analysis: { unblocks: 0, onCriticalPath: false, weight: 90_000 } })])]]),
+      new Map([
+        [
+          'sized',
+          detail([
+            phaseView({
+              phase: 1,
+              weight: 90_000,
+              analysis: { unblocks: 0, onCriticalPath: false, weight: 90_000 },
+            }),
+          ]),
+        ],
+      ]),
       NOW,
     );
     expect(rank(mixed, 'quick').map((d) => d.slug)).toEqual(['sized', 'unsized']);
@@ -227,14 +293,15 @@ describe('ranking', () => {
 });
 
 describe('filtering', () => {
-  const queue = () => toDepartures(
-    [
-      plan({ slug: 'a', ready: [1], repos: ['hub'], locks: [{ phase: 1, owner: 'x', expired: false }] }),
-      plan({ slug: 'b', ready: [1], repos: ['aws', 'hub'] }),
-    ],
-    new Map([['b', detail([phaseView({ phase: 1, gated: true })])]]),
-    NOW,
-  );
+  const queue = () =>
+    toDepartures(
+      [
+        plan({ slug: 'a', ready: [1], repos: ['hub'], locks: [{ phase: 1, owner: 'x', expired: false }] }),
+        plan({ slug: 'b', ready: [1], repos: ['aws', 'hub'] }),
+      ],
+      new Map([['b', detail([phaseView({ phase: 1, gated: true })])]]),
+      NOW,
+    );
 
   it('hides claimed phases on request', () => {
     expect(applyFilters(queue(), { ...NO_FILTERS, unclaimed: true }).map((d) => d.slug)).toEqual(['b']);
@@ -254,7 +321,10 @@ describe('filtering', () => {
   });
 
   it('counts what the board is showing', () => {
-    const totals = queueTotals(queue(), [plan({ slug: 'a', remainingSessions: 2 }), plan({ slug: 'b', remainingSessions: 3 })]);
+    const totals = queueTotals(queue(), [
+      plan({ slug: 'a', remainingSessions: 2 }),
+      plan({ slug: 'b', remainingSessions: 3 }),
+    ]);
     expect(totals).toMatchObject({ phases: 2, plans: 2, claimed: 1, gated: 1, sessions: 5 });
   });
 });
@@ -364,7 +434,11 @@ describe('the board', () => {
       new Map([['alpha', detail([phaseView()])]]),
       NOW,
     );
-    expect(reasons(d).slice(0, 2).map((r) => r.key)).toContain('lock');
+    expect(
+      reasons(d)
+        .slice(0, 2)
+        .map((r) => r.key),
+    ).toContain('lock');
   });
 
   it('fetches a boot prompt only when one is asked for', async () => {
@@ -385,7 +459,8 @@ describe('the board', () => {
       plan({ slug: 'free', ready: [1] }),
     ]);
     planDetail.mockImplementation(async (slug: string) =>
-      detail([phaseView({ phase: 1, title: `${slug} work` })]));
+      detail([phaseView({ phase: 1, title: `${slug} work` })]),
+    );
 
     const { default: ReadyView } = await import('./index');
     mount(<ReadyView />);
@@ -396,16 +471,21 @@ describe('the board', () => {
   });
 
   it('changes the recommendation when the order changes', async () => {
-    plans.mockResolvedValue([
-      plan({ slug: 'big', ready: [1] }),
-      plan({ slug: 'small', ready: [1] }),
-    ]);
-    planDetail.mockImplementation(async (slug: string) => detail([phaseView({
-      phase: 1,
-      title: `${slug} work`,
-      weight: slug === 'big' ? 90_000 : 15_000,
-      analysis: { unblocks: slug === 'big' ? 5 : 0, onCriticalPath: false, weight: slug === 'big' ? 90_000 : 15_000 },
-    })]));
+    plans.mockResolvedValue([plan({ slug: 'big', ready: [1] }), plan({ slug: 'small', ready: [1] })]);
+    planDetail.mockImplementation(async (slug: string) =>
+      detail([
+        phaseView({
+          phase: 1,
+          title: `${slug} work`,
+          weight: slug === 'big' ? 90_000 : 15_000,
+          analysis: {
+            unblocks: slug === 'big' ? 5 : 0,
+            onCriticalPath: false,
+            weight: slug === 'big' ? 90_000 : 15_000,
+          },
+        }),
+      ]),
+    );
 
     const { default: ReadyView } = await import('./index');
     mount(<ReadyView />);

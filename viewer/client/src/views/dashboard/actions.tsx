@@ -35,88 +35,93 @@ export function useDemandActions(runs: readonly RunState[]): {
   const [busy, setBusy] = useState<string | undefined>();
   const [launch, setLaunch] = useState<LaunchRequest | null>(null);
 
-  const onAction = useCallback((demand: Demand, action: DemandAction) => {
-    const key = `${demand.id}:${action.id}`;
-    const slug = action.target?.slug;
-    const runId = action.target?.runId;
-    const run = runId ? runs.find((r) => r.id === runId) : undefined;
+  const onAction = useCallback(
+    (demand: Demand, action: DemandAction) => {
+      const key = `${demand.id}:${action.id}`;
+      const slug = action.target?.slug;
+      const runId = action.target?.runId;
+      const run = runId ? runs.find((r) => r.id === runId) : undefined;
 
-    setBusy(key);
-    void (async () => {
-      try {
-        switch (action.id) {
-          case 'continue': {
-            if (!slug || !run) throw new Error('That run is no longer on the board — reload.');
-            // The dialog opens seeded with the run's own settings — the same
-            // "never quietly re-send old choices" rule, now with the choices
-            // visible. It performs the start itself.
-            setLaunch({ kind: 'continue', slug, run });
-            break;
+      setBusy(key);
+      void (async () => {
+        try {
+          switch (action.id) {
+            case 'continue': {
+              if (!slug || !run) throw new Error('That run is no longer on the board — reload.');
+              // The dialog opens seeded with the run's own settings — the same
+              // "never quietly re-send old choices" rule, now with the choices
+              // visible. It performs the start itself.
+              setLaunch({ kind: 'continue', slug, run });
+              break;
+            }
+            case 'auto-recover': {
+              if (!slug) throw new Error('That run is no longer on the board — reload.');
+              const report = await api.runRecover(slug);
+              for (const step of report.steps) toast(step, 'ok');
+              toast(report.detail, report.outcome === 'errand' ? 'warn' : 'ok');
+              break;
+            }
+            case 'mcp-continue': {
+              if (!slug) throw new Error('That run is no longer on the board — reload.');
+              await api.runMcpContinue(slug);
+              toast('Carrying on without the servers that would not connect.', 'ok');
+              break;
+            }
+            case 'dismiss': {
+              if (!slug || !runId) throw new Error('That run is no longer on the board — reload.');
+              await api.runResolve(slug, runId);
+              toast('Dismissed — the run keeps its record on the Runs page', 'ok');
+              break;
+            }
+            case 'login': {
+              const result = await api.authLogin();
+              toast(
+                result.opened
+                  ? 'A terminal is open on the sign-in — finish there, then choose Check again.'
+                  : (result.detail ?? 'Run `claude auth login` in a terminal.'),
+                result.opened ? 'ok' : 'warn',
+              );
+              break;
+            }
+            case 'recheck': {
+              // Forced, not cached: the whole point is to learn that signing in
+              // over there worked.
+              const fresh = await api.auth(true);
+              client.setQueryData(keys.auth(), fresh);
+              toast(
+                fresh.loggedIn ? 'Signed in — you can continue the run.' : 'Still signed out.',
+                fresh.loggedIn ? 'ok' : 'warn',
+              );
+              break;
+            }
+            case 'start-recovery': {
+              // A live one is a link, not a button — `AttentionRow` renders it as
+              // an anchor and never calls this. Reaching here opens the launch
+              // dialog; the dialog mints the session with the chosen settings.
+              if (!slug || !action.recoveryClass) throw new Error('That card is stale — reload.');
+              setLaunch({
+                kind: 'recovery',
+                recoveryClass: action.recoveryClass,
+                slug,
+                ...(action.target?.phase != null ? { phase: action.target.phase } : {}),
+                ...(runId ? { runId } : {}),
+              });
+              break;
+            }
           }
-          case 'auto-recover': {
-            if (!slug) throw new Error('That run is no longer on the board — reload.');
-            const report = await api.runRecover(slug);
-            for (const step of report.steps) toast(step, 'ok');
-            toast(report.detail, report.outcome === 'errand' ? 'warn' : 'ok');
-            break;
-          }
-          case 'mcp-continue': {
-            if (!slug) throw new Error('That run is no longer on the board — reload.');
-            await api.runMcpContinue(slug);
-            toast('Carrying on without the servers that would not connect.', 'ok');
-            break;
-          }
-          case 'dismiss': {
-            if (!slug || !runId) throw new Error('That run is no longer on the board — reload.');
-            await api.runResolve(slug, runId);
-            toast('Dismissed — the run keeps its record on the Runs page', 'ok');
-            break;
-          }
-          case 'login': {
-            const result = await api.authLogin();
-            toast(
-              result.opened
-                ? 'A terminal is open on the sign-in — finish there, then choose Check again.'
-                : result.detail ?? 'Run `claude auth login` in a terminal.',
-              result.opened ? 'ok' : 'warn',
-            );
-            break;
-          }
-          case 'recheck': {
-            // Forced, not cached: the whole point is to learn that signing in
-            // over there worked.
-            const fresh = await api.auth(true);
-            client.setQueryData(keys.auth(), fresh);
-            toast(fresh.loggedIn ? 'Signed in — you can continue the run.' : 'Still signed out.',
-              fresh.loggedIn ? 'ok' : 'warn');
-            break;
-          }
-          case 'start-recovery': {
-            // A live one is a link, not a button — `AttentionRow` renders it as
-            // an anchor and never calls this. Reaching here opens the launch
-            // dialog; the dialog mints the session with the chosen settings.
-            if (!slug || !action.recoveryClass) throw new Error('That card is stale — reload.');
-            setLaunch({
-              kind: 'recovery',
-              recoveryClass: action.recoveryClass,
-              slug,
-              ...(action.target?.phase != null ? { phase: action.target.phase } : {}),
-              ...(runId ? { runId } : {}),
-            });
-            break;
-          }
+        } catch (error) {
+          toast((error as Error).message, 'error');
+        } finally {
+          setBusy(undefined);
+          void client.invalidateQueries({ queryKey: keys.runs() });
+          void client.invalidateQueries({ queryKey: keys.plans() });
+          void client.invalidateQueries({ queryKey: keys.stats() });
+          void client.invalidateQueries({ queryKey: keys.state() });
         }
-      } catch (error) {
-        toast((error as Error).message, 'error');
-      } finally {
-        setBusy(undefined);
-        void client.invalidateQueries({ queryKey: keys.runs() });
-        void client.invalidateQueries({ queryKey: keys.plans() });
-        void client.invalidateQueries({ queryKey: keys.stats() });
-        void client.invalidateQueries({ queryKey: keys.state() });
-      }
-    })();
-  }, [client, runs]);
+      })();
+    },
+    [client, runs],
+  );
 
   return { onAction, busy, launch, clearLaunch: useCallback(() => setLaunch(null), []) };
 }

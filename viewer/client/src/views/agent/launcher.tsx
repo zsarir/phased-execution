@@ -30,7 +30,12 @@ export interface LaunchBody {
   accountId?: string;
 }
 
-export function Launcher({ root, disabled, skillsEnabled, onLaunch }: {
+export function Launcher({
+  root,
+  disabled,
+  skillsEnabled,
+  onLaunch,
+}: {
   /** Where the session will run — the open source directory, when there is one. */
   root?: string;
   /** True at the shared session cap; the form stays visible but cannot start. */
@@ -73,10 +78,15 @@ export function Launcher({ root, disabled, skillsEnabled, onLaunch }: {
           <h2 className="font-display text-xl">New Claude session</h2>
           <p className="mt-1 text-sm text-ink-muted">
             An interactive Claude Code CLI in a terminal
-            {root
-              ? <> — running in <span className="font-mono">{root}</span></>
-              : ' — running in your home directory'}.
-            You approve its actions in the terminal itself.
+            {root ? (
+              <>
+                {' '}
+                — running in <span className="font-mono">{root}</span>
+              </>
+            ) : (
+              ' — running in your home directory'
+            )}
+            . You approve its actions in the terminal itself.
           </p>
         </div>
 
@@ -85,35 +95,50 @@ export function Launcher({ root, disabled, skillsEnabled, onLaunch }: {
             <span className="text-2xs uppercase tracking-wide text-ink-faint">Model</span>
             <select className={field} value={model} onChange={(event) => setModel(event.target.value)}>
               <option value="">default — this machine’s</option>
-              {MODELS.map((name) => <option key={name} value={name}>{name}</option>)}
+              {MODELS.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-2xs uppercase tracking-wide text-ink-faint">Effort</span>
             <select className={field} value={effort} onChange={(event) => setEffort(event.target.value)}>
               {EFFORTS.map((level) => (
-                <option key={level} value={level}>{EFFORT_NOTE[level] ?? level}</option>
+                <option key={level} value={level}>
+                  {EFFORT_NOTE[level] ?? level}
+                </option>
               ))}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-2xs uppercase tracking-wide text-ink-faint">Permissions</span>
             <select className={field} value={mode} onChange={(event) => setMode(event.target.value)}>
-              {MODES.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
+              {MODES.map((entry) => (
+                <option key={entry.value} value={entry.value}>
+                  {entry.label}
+                </option>
+              ))}
             </select>
           </label>
           {accounts.length > 0 ? (
             <label className="flex flex-col gap-1 text-sm">
               <span className="text-2xs uppercase tracking-wide text-ink-faint">Account</span>
-              <select className={field} value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+              <select
+                className={field}
+                value={accountId}
+                onChange={(event) => setAccountId(event.target.value)}
+              >
                 {accounts.map((account) => {
                   const five = account.usage?.buckets.five_hour;
                   const label = account.builtIn
                     ? `machine login${account.email ? ` (${account.email})` : ''}`
-                    : account.name ?? account.email ?? account.id;
+                    : (account.name ?? account.email ?? account.id);
                   return (
                     <option key={account.id} value={account.id}>
-                      {label}{five ? ` — 5h ${Math.round(five.utilization)}%` : ''}
+                      {label}
+                      {five ? ` — 5h ${Math.round(five.utilization)}%` : ''}
                     </option>
                   );
                 })}
@@ -149,7 +174,9 @@ export function Launcher({ root, disabled, skillsEnabled, onLaunch }: {
           <Button variant="action" disabled={disabled || busy} onClick={() => void submit()}>
             <Play size={15} aria-hidden /> Start session
           </Button>
-          {disabled && <span className="text-sm text-ink-faint">Session limit reached — close one first.</span>}
+          {disabled && (
+            <span className="text-sm text-ink-faint">Session limit reached — close one first.</span>
+          )}
         </div>
       </div>
     </div>

@@ -43,7 +43,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
-      state, terminal, agentTicket, terminalClose, skills,
+      state,
+      terminal,
+      agentTicket,
+      terminalClose,
+      skills,
       plans: plansApi,
       approvals: vi.fn(async () => []),
     },
@@ -80,18 +84,38 @@ const BASE_STATE: ConsoleState = {
 };
 
 const CLAUDE = {
-  id: 'c1', label: 'Claude: hello', kind: 'claude' as const, cwd: '/repo', shell: 'claude',
-  cols: 100, rows: 30, pid: 901, clients: 1, createdAt: 0,
+  id: 'c1',
+  label: 'Claude: hello',
+  kind: 'claude' as const,
+  cwd: '/repo',
+  shell: 'claude',
+  cols: 100,
+  rows: 30,
+  pid: 901,
+  clients: 1,
+  createdAt: 0,
   meta: { model: 'opus', claudeSessionId: '00000000-0000-4000-8000-000000000000' },
 };
 
 const SHELL = {
-  id: 's1', label: 'Terminal 1', kind: 'shell' as const, cwd: '/repo', shell: '/bin/zsh',
-  cols: 100, rows: 30, pid: 900, clients: 1, createdAt: 0,
+  id: 's1',
+  label: 'Terminal 1',
+  kind: 'shell' as const,
+  cwd: '/repo',
+  shell: '/bin/zsh',
+  cols: 100,
+  rows: 30,
+  pid: 900,
+  clients: 1,
+  createdAt: 0,
 };
 
 const TERMINALS: TerminalState = {
-  allowed: false, agentAllowed: true, available: 'yes', limit: 8, sessions: [CLAUDE, SHELL],
+  allowed: false,
+  agentAllowed: true,
+  available: 'yes',
+  limit: 8,
+  sessions: [CLAUDE, SHELL],
 };
 
 function mount(node: React.ReactElement) {
@@ -132,7 +156,11 @@ beforeEach(() => {
   skills.mockResolvedValue([]);
   plansApi.mockResolvedValue([]);
   agentTicket.mockResolvedValue({
-    ok: true, sessionId: 'a1', token: 't', expiresAt: 0, path: '/ws/terminal',
+    ok: true,
+    sessionId: 'a1',
+    token: 't',
+    expiresAt: 0,
+    path: '/ws/terminal',
     session: { ...CLAUDE, id: 'a1', label: 'Claude 1' },
   });
   terminalClose.mockResolvedValue({ closed: true, state: { ...TERMINALS, sessions: [] } });
@@ -193,14 +221,26 @@ describe('the launcher', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /start session/i }));
 
-    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'opus', effort: 'max', permissionMode: '', prompt: 'say hello',
-    })));
+    await waitFor(() =>
+      expect(agentTicket).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'opus',
+          effort: 'max',
+          permissionMode: '',
+          prompt: 'say hello',
+        }),
+      ),
+    );
     // …plus the size: the CLI is born laid out for the window it is in.
     expectSized(agentTicket.mock.calls[0]?.[0]);
-    expect(Object.keys(agentTicket.mock.calls[0][0]).sort()).toEqual(
-      ['cols', 'effort', 'model', 'permissionMode', 'prompt', 'rows'],
-    );
+    expect(Object.keys(agentTicket.mock.calls[0][0]).sort()).toEqual([
+      'cols',
+      'effort',
+      'model',
+      'permissionMode',
+      'prompt',
+      'rows',
+    ]);
     await waitFor(() => expect(window.location.hash).toBe('#/agent/a1'));
     await waitFor(() => expect(screen.getByTestId('pane')).toHaveTextContent('a1'));
 
@@ -301,9 +341,13 @@ describe('sessions', () => {
     // rather than a moment it had ~30 seconds to catch.
     expect(await screen.findByText(/exited cleanly/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /resume here/i }));
-    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith(expect.objectContaining({
-      resume: '00000000-0000-4000-8000-000000000000',
-    })));
+    await waitFor(() =>
+      expect(agentTicket).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resume: '00000000-0000-4000-8000-000000000000',
+        }),
+      ),
+    );
     expectSized(agentTicket.mock.calls[0]?.[0]);
   });
 
@@ -362,9 +406,16 @@ describe('the plan wizard', () => {
     // server defaults a plan intent to plan mode, and the select this form
     // used to offer was the one hole left in that rule — `auto` here launched
     // an authoring session that could write a plan nobody approved.
-    await waitFor(() => expect(agentTicket).toHaveBeenCalledWith(expect.objectContaining({
-      intent: 'plan', brief: 'Ship a cart API.', model: 'opus', effort: 'max',
-    })));
+    await waitFor(() =>
+      expect(agentTicket).toHaveBeenCalledWith(
+        expect.objectContaining({
+          intent: 'plan',
+          brief: 'Ship a cart API.',
+          model: 'opus',
+          effort: 'max',
+        }),
+      ),
+    );
     expectSized(agentTicket.mock.calls[0]?.[0]);
     expect(agentTicket.mock.calls[0][0]).not.toHaveProperty('permissionMode');
     await waitFor(() => expect(window.location.hash).toBe('#/agent/a1'));

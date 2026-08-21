@@ -27,7 +27,9 @@ const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 // repo, and pointing the dev server at the operator's live console to do that
 // would start a run in their working tree.
 const CONSOLE = process.env.PHASE_CONSOLE_ORIGIN ?? 'http://127.0.0.1:4123';
-const rewriteOrigin = (proxy: { on: (e: string, cb: (r: { setHeader: (k: string, v: string) => void }) => void) => void }) => {
+const rewriteOrigin = (proxy: {
+  on: (e: string, cb: (r: { setHeader: (k: string, v: string) => void }) => void) => void;
+}) => {
   proxy.on('proxyReq', (proxyReq) => proxyReq.setHeader('origin', CONSOLE));
 };
 
@@ -110,9 +112,12 @@ export default defineConfig({
         // itself — into the named chunk, which made index.html modulepreload
         // xterm for every visitor.
         globIgnores: [
-          '**/terminal-*.js', '**/terminal-*.css',
-          '**/pane-*.js', '**/pane-*.css',
-          '**/agent-*.js', '**/agent-*.css',
+          '**/terminal-*.js',
+          '**/terminal-*.css',
+          '**/pane-*.js',
+          '**/pane-*.css',
+          '**/agent-*.js',
+          '**/agent-*.css',
         ],
       },
       // No worker in dev. See the `/sw.js` proxy note above.

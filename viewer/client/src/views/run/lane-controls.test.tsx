@@ -56,7 +56,10 @@ describe('LaneControls', () => {
 
     mount(
       <LaneControls
-        slug="demo" phase={9} live allowRun
+        slug="demo"
+        phase={9}
+        live
+        allowRun
         frozen={{ at: '2026-08-06T10:00:00Z', by: 'me', escalateAt: '2026-08-06T10:15:00Z' }}
       />,
     );
@@ -83,19 +86,34 @@ describe('laneFrozen', () => {
   const ref = { at: 'a', by: 'b', escalateAt: 'c' };
 
   it('prefers the per-lane record, falls back to the single slot, and never cross-reads', () => {
-    expect(laneFrozen({
-      ...base,
-      children: { 9: { pid: 1, phase: 9, sessionId: '', startedAt: '', frozen: ref } },
-    } as RunState, 9)).toEqual(ref);
+    expect(
+      laneFrozen(
+        {
+          ...base,
+          children: { 9: { pid: 1, phase: 9, sessionId: '', startedAt: '', frozen: ref } },
+        } as RunState,
+        9,
+      ),
+    ).toEqual(ref);
 
-    expect(laneFrozen({
-      ...base,
-      freeze: { at: 'a', phase: 9, pid: 1, by: 'b', escalateAt: 'c' },
-    } as RunState, 9)).toEqual(ref);
+    expect(
+      laneFrozen(
+        {
+          ...base,
+          freeze: { at: 'a', phase: 9, pid: 1, by: 'b', escalateAt: 'c' },
+        } as RunState,
+        9,
+      ),
+    ).toEqual(ref);
 
-    expect(laneFrozen({
-      ...base,
-      freeze: { at: 'a', phase: 7, pid: 1, by: 'b', escalateAt: 'c' },
-    } as RunState, 9)).toBeNull();
+    expect(
+      laneFrozen(
+        {
+          ...base,
+          freeze: { at: 'a', phase: 7, pid: 1, by: 'b', escalateAt: 'c' },
+        } as RunState,
+        9,
+      ),
+    ).toBeNull();
   });
 });

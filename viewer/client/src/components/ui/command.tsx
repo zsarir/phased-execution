@@ -40,14 +40,22 @@ export function CommandInput({ className, ...props }: ComponentProps<typeof Comm
 export function CommandList({ className, ...props }: ComponentProps<typeof CommandPrimitive.List>) {
   return (
     <CommandPrimitive.List
-      className={cn('max-h-[min(20rem,calc(var(--app-height,100%)*0.5))] overflow-y-auto overscroll-contain p-1', className)}
+      className={cn(
+        'max-h-[min(20rem,calc(var(--app-height,100%)*0.5))] overflow-y-auto overscroll-contain p-1',
+        className,
+      )}
       {...props}
     />
   );
 }
 
 export function CommandEmpty({ className, ...props }: ComponentProps<typeof CommandPrimitive.Empty>) {
-  return <CommandPrimitive.Empty className={cn('px-3 py-6 text-center text-sm text-ink-muted', className)} {...props} />;
+  return (
+    <CommandPrimitive.Empty
+      className={cn('px-3 py-6 text-center text-sm text-ink-muted', className)}
+      {...props}
+    />
+  );
 }
 
 export function CommandGroup({ className, ...props }: ComponentProps<typeof CommandPrimitive.Group>) {
@@ -82,7 +90,9 @@ export function CommandItem({ className, ...props }: ComponentProps<typeof Comma
 }
 
 export function CommandShortcut({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
-  return <span className={cn('ml-auto font-mono text-2xs tracking-wide text-ink-faint', className)} {...props} />;
+  return (
+    <span className={cn('ml-auto font-mono text-2xs tracking-wide text-ink-faint', className)} {...props} />
+  );
 }
 
 /**
@@ -111,10 +121,7 @@ export function CommandDialog({
         hideHeader
         className="top-[max(1rem,calc(var(--app-height,100%)*0.12))] -translate-y-0 p-0 sm:w-[min(40rem,calc(100%-2rem))]"
       >
-        <Command
-          className={cn('[&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0', className)}
-          {...props}
-        >
+        <Command className={cn('[&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0', className)} {...props}>
           {children}
         </Command>
       </DialogContent>

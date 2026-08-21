@@ -20,13 +20,20 @@ async function mount(prefs: Record<string, unknown> = {}) {
   savePrefs.mockResolvedValue({});
   const { LadderCard } = await import('./ladder');
   const client = new QueryClient(queryClientConfig);
-  render(<QueryClientProvider client={client}><LadderCard /></QueryClientProvider>);
+  render(
+    <QueryClientProvider client={client}>
+      <LadderCard />
+    </QueryClientProvider>,
+  );
   await screen.findByText('Automation · the ladder');
 }
 
 const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
 
-beforeEach(() => { state.mockReset(); savePrefs.mockReset(); });
+beforeEach(() => {
+  state.mockReset();
+  savePrefs.mockReset();
+});
 
 describe('<LadderCard>', () => {
   it('reads a config from before the keys existed as the shipped defaults', async () => {

@@ -67,7 +67,9 @@ export function EndedBanner({
           <Button
             size="sm"
             disabled={atCap}
-            title={atCap ? 'Close a live session first' : 'Start a new session that continues this conversation'}
+            title={
+              atCap ? 'Close a live session first' : 'Start a new session that continues this conversation'
+            }
             onClick={() => onResume?.(resumeId)}
           >
             <RotateCcw size={14} aria-hidden /> Resume here
@@ -98,9 +100,8 @@ export function SessionGone({ kind }: { kind: 'shell' | 'claude' }) {
         title="That session is not here any more"
         body={
           <>
-            It was dismissed, or it ended more than a day ago and its record was retired.
-            Sessions themselves are not timed out — a running one stops only when you close it or
-            when the console does.
+            It was dismissed, or it ended more than a day ago and its record was retired. Sessions themselves
+            are not timed out — a running one stops only when you close it or when the console does.
           </>
         }
         action={

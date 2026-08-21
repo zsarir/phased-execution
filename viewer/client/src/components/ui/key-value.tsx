@@ -13,8 +13,7 @@ export type KeyValueItem = readonly [label: string, value: ReactNode] | null | u
  */
 export function KeyValue({ items, className }: { items: KeyValueItem[]; className?: string }) {
   const rows = items.filter(
-    (item): item is readonly [string, ReactNode] =>
-      Array.isArray(item) && item[1] != null && item[1] !== '',
+    (item): item is readonly [string, ReactNode] => Array.isArray(item) && item[1] != null && item[1] !== '',
   );
   if (!rows.length) return null;
 

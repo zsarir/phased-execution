@@ -55,11 +55,13 @@ const MAX_LEN = 64;
  * and does not split, so callers must not hand it `"hub docs"`.
  */
 export function normalizeToken(raw) {
-  let t = String(raw ?? '').trim().toLowerCase();
-  if (t === '*') return 'all';                 // the wildcard survives as `all`
-  if (t === 'and') return '';                  // a conjunction between repos
-  t = t.replace(ALLOWED, '');                  // markdown, `#`, `~`, `×`, …
-  t = t.replace(/\/{2,}/g, '/');               // `a//b` is `a/b`
+  let t = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (t === '*') return 'all'; // the wildcard survives as `all`
+  if (t === 'and') return ''; // a conjunction between repos
+  t = t.replace(ALLOWED, ''); // markdown, `#`, `~`, `×`, …
+  t = t.replace(/\/{2,}/g, '/'); // `a//b` is `a/b`
   t = t.replace(/^[^a-z0-9]+/, '').replace(/[^a-z0-9]+$/, '');
   if (t.length < MIN_LEN || t.length > MAX_LEN) return '';
   return t;
@@ -109,7 +111,7 @@ export function tokensIntersect(a, b) {
 export function scopesIntersect(a, b) {
   const left = Array.isArray(a) ? a : parseScope(a);
   const right = Array.isArray(b) ? b : parseScope(b);
-  if (!left.length || !right.length) return true;   // unknown ⇒ assume collision
+  if (!left.length || !right.length) return true; // unknown ⇒ assume collision
   return left.some((x) => right.some((y) => tokensIntersect(x, y)));
 }
 

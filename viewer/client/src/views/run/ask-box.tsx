@@ -55,9 +55,7 @@ export function AskBox({
     // its own, which no amount of client-side guarding can see.
     const key = `${mode}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     try {
-      const sent = steering
-        ? await api.runSteer(slug, body, key)
-        : await api.runAsk(slug, body, key);
+      const sent = steering ? await api.runSteer(slug, body, key) : await api.runAsk(slug, body, key);
       setText('');
       // Nothing is pushed into the console here. The server emits the line the
       // instant it writes to stdin, and the CLI's echo folds into that same line
@@ -84,9 +82,11 @@ export function AskBox({
           id={`ask-mode-${slug}`}
           value={mode}
           disabled={!enabled || sending}
-          title={steering
-            ? 'An instruction the phase should act on'
-            : 'A question that must not change what the phase is doing'}
+          title={
+            steering
+              ? 'An instruction the phase should act on'
+              : 'A question that must not change what the phase is doing'
+          }
           onChange={(e) => setMode(e.target.value as 'ask' | 'steer')}
           className="h-8 [@media(hover:none)]:min-h-(--tap-min) shrink-0 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
         >
@@ -101,11 +101,15 @@ export function AskBox({
           id={`ask-text-${slug}`}
           value={text}
           disabled={!enabled || sending}
-          placeholder={enabled
-            ? steering
-              ? `tell the session running phase ${phase} to do something differently…`
-              : `/btw ask the session running phase ${phase}…`
-            : allowRun ? 'Nothing is running to ask' : 'Asking needs --allow-run'}
+          placeholder={
+            enabled
+              ? steering
+                ? `tell the session running phase ${phase} to do something differently…`
+                : `/btw ask the session running phase ${phase}…`
+              : allowRun
+                ? 'Nothing is running to ask'
+                : 'Asking needs --allow-run'
+          }
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {

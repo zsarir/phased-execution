@@ -32,10 +32,11 @@ import { ForceReleaseButton, ReleaseStaleButton } from '@/components/release-loc
 /** Fetch-then-copy, so a prompt costs an engine run only when it is wanted. */
 function usePromptText(slug: string, phase: number) {
   const client = useQueryClient();
-  return () => client.fetchQuery({
-    queryKey: keys.prompt(slug, phase),
-    queryFn: () => api.prompt(slug, phase).then((text) => String(text).trim()),
-  });
+  return () =>
+    client.fetchQuery({
+      queryKey: keys.prompt(slug, phase),
+      queryFn: () => api.prompt(slug, phase).then((text) => String(text).trim()),
+    });
 }
 
 /* ------------------------------------------------------------------ *
@@ -61,17 +62,20 @@ export function reasons(d: Departure): { key: string; text: string; tone: 'good'
   if (d.gated) {
     out.push({
       key: 'gated',
-      text: d.gateKind === 'ai'
-        ? 'gated (ai) — the session clears it on boot'
-        : d.gateKind === 'auto'
-          ? 'gated — an automatic check must clear'
-          : 'gated — a person must approve first',
+      text:
+        d.gateKind === 'ai'
+          ? 'gated (ai) — the session clears it on boot'
+          : d.gateKind === 'auto'
+            ? 'gated — an automatic check must clear'
+            : 'gated — a person must approve first',
       tone: 'warn',
     });
   }
-  if (d.unblocks > 0) out.push({ key: 'unblocks', text: `frees ${plural(d.unblocks, 'phase')}`, tone: 'good' });
+  if (d.unblocks > 0)
+    out.push({ key: 'unblocks', text: `frees ${plural(d.unblocks, 'phase')}`, tone: 'good' });
   if (d.onCriticalPath) out.push({ key: 'critical', text: 'on the critical path', tone: 'good' });
-  if (d.idleDays >= 7) out.push({ key: 'idle', text: `untouched for ${plural(d.idleDays, 'day')}`, tone: 'warn' });
+  if (d.idleDays >= 7)
+    out.push({ key: 'idle', text: `untouched for ${plural(d.idleDays, 'day')}`, tone: 'warn' });
   return out;
 }
 
@@ -123,11 +127,12 @@ export function NextDeparture({ d, allowRun }: { d: Departure; allowRun: boolean
               {claimed ? 'Next departure — held' : 'Next departure'}
             </h2>
             <div className="flex shrink-0 items-center gap-2">
-              {claimed && (
-                d.lock?.expired
-                  ? <ReleaseStaleButton slug={d.slug} phase={d.phase} label="Release the claim" />
-                  : <ForceReleaseButton slug={d.slug} phase={d.phase} lock={d.lock!} />
-              )}
+              {claimed &&
+                (d.lock?.expired ? (
+                  <ReleaseStaleButton slug={d.slug} phase={d.phase} label="Release the claim" />
+                ) : (
+                  <ForceReleaseButton slug={d.slug} phase={d.phase} lock={d.lock!} />
+                ))}
               <StateChip state={claimed ? 'blocked' : 'ready'} board />
             </div>
           </div>
@@ -152,9 +157,7 @@ export function NextDeparture({ d, allowRun }: { d: Departure; allowRun: boolean
             </div>
           </div>
 
-          <p className="mt-3 text-sm text-ink-muted">
-            {sentence(d)}
-          </p>
+          <p className="mt-3 text-sm text-ink-muted">{sentence(d)}</p>
 
           <div className="mt-3 flex flex-col gap-2">
             {/* A meter with nothing to measure is worse than no meter: it
@@ -179,7 +182,11 @@ export function NextDeparture({ d, allowRun }: { d: Departure; allowRun: boolean
             )}
             <div className="flex flex-wrap items-center gap-1.5">
               {d.size && <Chip mono>{d.size}</Chip>}
-              {d.repos.slice(0, 3).map((repo) => <Chip key={repo} mono>{repo}</Chip>)}
+              {d.repos.slice(0, 3).map((repo) => (
+                <Chip key={repo} mono>
+                  {repo}
+                </Chip>
+              ))}
               {d.model && <Chip mono>{d.model}</Chip>}
             </div>
           </div>
@@ -201,8 +208,8 @@ export function NextDeparture({ d, allowRun }: { d: Departure; allowRun: boolean
               <Lock size={13} className="mt-0.5 shrink-0 text-blocked" aria-hidden />
               <span>
                 <span className="text-ink">{d.lock!.owner}</span> holds this phase
-                {d.lock!.leaseUntil ? ` — ${countdown(d.lock!.leaseUntil)}` : ''}. Booting a second
-                session into it is how two agents overwrite each other.
+                {d.lock!.leaseUntil ? ` — ${countdown(d.lock!.leaseUntil)}` : ''}. Booting a second session
+                into it is how two agents overwrite each other.
               </span>
             </p>
           )}
@@ -299,11 +306,13 @@ export function DepartureRow({ d, index }: { d: Departure; index: number }) {
             <ServiceNumber phase={d.phase} />
             <span className="min-w-0">
               <span className="block truncate text-md leading-snug">
-                {d.title
-                  ? plainText(d.title)
-                  : d.enriched
-                    ? `Phase ${d.phase}`
-                    : <span className="text-ink-faint">reading the plan…</span>}
+                {d.title ? (
+                  plainText(d.title)
+                ) : d.enriched ? (
+                  `Phase ${d.phase}`
+                ) : (
+                  <span className="text-ink-faint">reading the plan…</span>
+                )}
               </span>
               <span className="block truncate font-mono text-2xs text-ink-faint">{d.slug}</span>
             </span>
@@ -321,9 +330,15 @@ export function DepartureRow({ d, index }: { d: Departure; index: number }) {
           />
 
           <div className="order-4 flex basis-full flex-wrap items-center gap-1.5 md:order-3 md:basis-auto md:flex-nowrap">
-            {d.size && <Chip mono className="md:hidden">{d.size} · {meter.short}</Chip>}
+            {d.size && (
+              <Chip mono className="md:hidden">
+                {d.size} · {meter.short}
+              </Chip>
+            )}
             {why.slice(0, 2).map((r) => (
-              <Chip key={r.key} tone={TONE_CHIP[r.tone]}>{r.text}</Chip>
+              <Chip key={r.key} tone={TONE_CHIP[r.tone]}>
+                {r.text}
+              </Chip>
             ))}
           </div>
 

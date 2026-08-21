@@ -70,8 +70,12 @@ describe('Card + Tile', () => {
   it('a card is its header, title and body', () => {
     render(
       <Card>
-        <CardHeader><CardTitle>Session budget</CardTitle></CardHeader>
-        <CardBody><p>310K of 400K</p></CardBody>
+        <CardHeader>
+          <CardTitle>Session budget</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <p>310K of 400K</p>
+        </CardBody>
       </Card>,
     );
     expect(screen.getByRole('heading', { name: 'Session budget' })).toBeInTheDocument();
@@ -95,8 +99,12 @@ describe('Card + Tile', () => {
   it('has no axe violations', async () => {
     const { container } = render(
       <Card>
-        <CardHeader><CardTitle>Plan</CardTitle></CardHeader>
-        <CardBody><Tile label="done" value={6} state="state-done" /></CardBody>
+        <CardHeader>
+          <CardTitle>Plan</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <Tile label="done" value={6} state="state-done" />
+        </CardBody>
       </Card>,
     );
     await expectNoAxeViolations(container);
@@ -112,9 +120,15 @@ describe('Tabs', () => {
           <TabsTrigger value="map">Map</TabsTrigger>
           <TabsTrigger value="journal">Journal</TabsTrigger>
         </TabsList>
-        <TabsContent value="board"><p>the board</p></TabsContent>
-        <TabsContent value="map"><p>the map</p></TabsContent>
-        <TabsContent value="journal"><p>the journal</p></TabsContent>
+        <TabsContent value="board">
+          <p>the board</p>
+        </TabsContent>
+        <TabsContent value="map">
+          <p>the map</p>
+        </TabsContent>
+        <TabsContent value="journal">
+          <p>the journal</p>
+        </TabsContent>
       </Tabs>,
     );
 
@@ -158,11 +172,20 @@ describe('Table', () => {
       <TableWrap>
         <Table>
           <THead>
-            <TR><TH>Phase</TH><TH>State</TH></TR>
+            <TR>
+              <TH>Phase</TH>
+              <TH>State</TH>
+            </TR>
           </THead>
           <TBody>
-            <TR><TD>01</TD><TD>done</TD></TR>
-            <TR><TD>02</TD><TD>ready</TD></TR>
+            <TR>
+              <TD>01</TD>
+              <TD>done</TD>
+            </TR>
+            <TR>
+              <TD>02</TD>
+              <TD>ready</TD>
+            </TR>
           </TBody>
         </Table>
       </TableWrap>,
@@ -226,4 +249,3 @@ describe('Accordion', () => {
     await expectNoAxeViolations(container);
   });
 });
-

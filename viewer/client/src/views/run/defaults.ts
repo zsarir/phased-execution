@@ -105,7 +105,13 @@ export const AUTONOMY_LABEL: Record<Autonomy, string> = {
  */
 const LIVE_STATUSES = [
   // `halting` is a drain: sessions are still live and Stop must stay offered.
-  'running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting',
+  'running',
+  'waiting',
+  'pausing',
+  'stopping',
+  'frozen',
+  'queued',
+  'halting',
 ] as const;
 
 export const isLive = (status: string | undefined): boolean =>

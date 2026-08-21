@@ -16,7 +16,12 @@ vi.mock('@/lib/media', () => ({
 }));
 
 import {
-  KEYBOARD_MIN_PX, installAppHeight, registerBottomBar, useBottomBars, useKeyboardInset, useKeyboardOpen,
+  KEYBOARD_MIN_PX,
+  installAppHeight,
+  registerBottomBar,
+  useBottomBars,
+  useKeyboardInset,
+  useKeyboardOpen,
 } from './viewport';
 
 type Listener = () => void;
@@ -36,7 +41,9 @@ function fakeViewport(height: number) {
     removeEventListener(type: string, listener: Listener) {
       listeners.get(type)?.delete(listener);
     },
-    fire(type: string) { for (const listener of listeners.get(type) ?? []) listener(); },
+    fire(type: string) {
+      for (const listener of listeners.get(type) ?? []) listener();
+    },
   };
 }
 
@@ -99,17 +106,25 @@ describe('installAppHeight', () => {
   it('exposes the keyboard inset — the tallest height seen at this width, minus the current one', async () => {
     const { vv, uninstall } = install(700);
     const { result } = renderHook(() => useKeyboardInset());
-    await act(async () => { await frame(); });
+    await act(async () => {
+      await frame();
+    });
     expect(prop('--keyboard-inset')).toBe('0px');
     expect(result.current).toBe(0);
 
     vv.height = 420;
-    await act(async () => { vv.fire('resize'); await frame(); });
+    await act(async () => {
+      vv.fire('resize');
+      await frame();
+    });
     expect(prop('--keyboard-inset')).toBe('280px');
     expect(result.current).toBe(280);
 
     vv.height = 700;
-    await act(async () => { vv.fire('resize'); await frame(); });
+    await act(async () => {
+      vv.fire('resize');
+      await frame();
+    });
     expect(result.current).toBe(0);
     uninstall();
   });
@@ -117,12 +132,17 @@ describe('installAppHeight', () => {
   it('a rotation resets the baseline — a shorter landscape is not a keyboard', async () => {
     const { vv, uninstall } = install(844);
     const { result } = renderHook(() => useKeyboardInset());
-    await act(async () => { await frame(); });
+    await act(async () => {
+      await frame();
+    });
 
     Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 844 });
     Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 390 });
     vv.height = 390;
-    await act(async () => { vv.fire('resize'); await frame(); });
+    await act(async () => {
+      vv.fire('resize');
+      await frame();
+    });
     expect(result.current).toBe(0);
     uninstall();
   });
@@ -149,14 +169,19 @@ describe('useKeyboardOpen', () => {
   it('is focus AND a keyboard-sized shrink: a text field alone (a hardware keyboard) is not open', async () => {
     const { vv, uninstall } = install(700);
     const { result, unmount } = renderHook(() => useKeyboardOpen());
-    await act(async () => { await frame(); });
+    await act(async () => {
+      await frame();
+    });
     expect(result.current).toBe(false);
 
     const textarea = await focusA('textarea');
     expect(result.current).toBe(false);
 
     vv.height = 700 - KEYBOARD_MIN_PX;
-    await act(async () => { vv.fire('resize'); await frame(); });
+    await act(async () => {
+      vv.fire('resize');
+      await frame();
+    });
     expect(result.current).toBe(true);
 
     await act(async () => {
@@ -174,7 +199,10 @@ describe('useKeyboardOpen', () => {
     const { vv, uninstall } = install(700);
     const { result, unmount } = renderHook(() => useKeyboardOpen());
     vv.height = 400;
-    await act(async () => { vv.fire('resize'); await frame(); });
+    await act(async () => {
+      vv.fire('resize');
+      await frame();
+    });
     expect(result.current).toBe(false);
     unmount();
     uninstall();
@@ -185,7 +213,10 @@ describe('useKeyboardOpen', () => {
     const { result, unmount } = renderHook(() => useKeyboardOpen());
     const button = await focusA('button');
     vv.height = 400;
-    await act(async () => { vv.fire('resize'); await frame(); });
+    await act(async () => {
+      vv.fire('resize');
+      await frame();
+    });
     expect(result.current).toBe(false);
     button.remove();
     unmount();
@@ -204,15 +235,23 @@ describe('bottom bars', () => {
 
     let unregisterTab!: () => void;
     let unregisterKeys!: () => void;
-    act(() => { unregisterTab = registerBottomBar(tabBar); });
+    act(() => {
+      unregisterTab = registerBottomBar(tabBar);
+    });
     expect(prop('--bottom-bars')).toBe('60px');
-    act(() => { unregisterKeys = registerBottomBar(keyBar); });
+    act(() => {
+      unregisterKeys = registerBottomBar(keyBar);
+    });
     expect(prop('--bottom-bars')).toBe('164px');
     expect(result.current).toBe(164);
 
-    act(() => { unregisterTab(); });
+    act(() => {
+      unregisterTab();
+    });
     expect(prop('--bottom-bars')).toBe('104px');
-    act(() => { unregisterKeys(); });
+    act(() => {
+      unregisterKeys();
+    });
     expect(prop('--bottom-bars')).toBe('0px');
     tabBar.remove();
     keyBar.remove();

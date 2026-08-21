@@ -12,7 +12,12 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  AlertDialog, AlertDialogContent, AlertDialogTrigger, Button, ButtonGroup, toast,
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogTrigger,
+  Button,
+  ButtonGroup,
+  toast,
 } from '@/components/ui';
 import { api } from '@/lib/api';
 import { keys } from '@/lib/queries';
@@ -23,9 +28,7 @@ import type { ChildRef, RunState } from '@/lib/api';
  * per-lane truth — with the single-slot `freeze` as the fallback for a run
  * written by a console from before lanes carried their own.
  */
-export function laneFrozen(
-  run: RunState | null | undefined, phase: number,
-): ChildRef['frozen'] | null {
+export function laneFrozen(run: RunState | null | undefined, phase: number): ChildRef['frozen'] | null {
   if (!run) return null;
   const child = run.children?.[String(phase)];
   if (child?.frozen) return child.frozen;
@@ -35,7 +38,14 @@ export function laneFrozen(
   return null;
 }
 
-export function LaneControls({ slug, phase, live, allowRun, frozen, queued = false }: {
+export function LaneControls({
+  slug,
+  phase,
+  live,
+  allowRun,
+  frozen,
+  queued = false,
+}: {
   slug: string;
   phase: number;
   /** The lane holds (or is about to hold) a session; controls act on nothing otherwise. */
@@ -72,16 +82,18 @@ export function LaneControls({ slug, phase, live, allowRun, frozen, queued = fal
           variant="ghost"
           disabled={disabled}
           title={offTitle ?? 'Continues mid-token, in the same process'}
-          onClick={() => act('thaw', async () => {
-            const { run: after } = await api.runThaw(slug, phase);
-            const still = after ? Boolean(laneFrozen(after, phase)) : false;
-            toast(
-              still
-                ? `Phase ${phase} could not be continued — reload and look at the status`
-                : `Phase ${phase} continued — the session picks up mid-token`,
-              still ? 'warn' : 'ok',
-            );
-          })}
+          onClick={() =>
+            act('thaw', async () => {
+              const { run: after } = await api.runThaw(slug, phase);
+              const still = after ? Boolean(laneFrozen(after, phase)) : false;
+              toast(
+                still
+                  ? `Phase ${phase} could not be continued — reload and look at the status`
+                  : `Phase ${phase} continued — the session picks up mid-token`,
+                still ? 'warn' : 'ok',
+              );
+            })
+          }
         >
           {busy === 'thaw' ? 'Continuing…' : 'Continue'}
         </Button>
@@ -90,18 +102,22 @@ export function LaneControls({ slug, phase, live, allowRun, frozen, queued = fal
           size="sm"
           variant="ghost"
           disabled={disabled}
-          title={offTitle
-            ?? `Stops phase ${phase}'s session where it stands, losing nothing. The other lanes keep working.`}
-          onClick={() => act('freeze', async () => {
-            const { run: after } = await api.runFreeze(slug, phase);
-            const held = after ? Boolean(laneFrozen(after, phase)) : false;
-            toast(
-              held
-                ? `Phase ${phase} frozen — its session is stopped where it stood`
-                : `Nothing to freeze: phase ${phase} has no running session.`,
-              held ? 'ok' : 'warn',
-            );
-          })}
+          title={
+            offTitle ??
+            `Stops phase ${phase}'s session where it stands, losing nothing. The other lanes keep working.`
+          }
+          onClick={() =>
+            act('freeze', async () => {
+              const { run: after } = await api.runFreeze(slug, phase);
+              const held = after ? Boolean(laneFrozen(after, phase)) : false;
+              toast(
+                held
+                  ? `Phase ${phase} frozen — its session is stopped where it stood`
+                  : `Nothing to freeze: phase ${phase} has no running session.`,
+                held ? 'ok' : 'warn',
+              );
+            })
+          }
         >
           {busy === 'freeze' ? 'Freezing…' : 'Freeze'}
         </Button>
@@ -133,20 +149,20 @@ export function LaneControls({ slug, phase, live, allowRun, frozen, queued = fal
         >
           {queued ? (
             <p className="mt-2 text-sm text-ink-muted">
-              Nothing has been spawned yet — stopping takes this phase out of the admission line.
-              The rest of the run carries on, and Retry can put it back later.
+              Nothing has been spawned yet — stopping takes this phase out of the admission line. The rest of
+              the run carries on, and Retry can put it back later.
             </p>
           ) : (
             <p className="mt-2 text-sm text-ink-muted">
-              Only this phase&rsquo;s session ends — the other lanes keep working and the run
-              carries on scheduling. The session gets SIGTERM, so its own end-of-session hooks
-              still run, and anything already written to the repository stays written.
+              Only this phase&rsquo;s session ends — the other lanes keep working and the run carries on
+              scheduling. The session gets SIGTERM, so its own end-of-session hooks still run, and anything
+              already written to the repository stays written.
             </p>
           )}
           <p className="mt-2 text-2xs text-ink-faint">
             The phase is recorded as <strong>interrupted</strong> rather than failed
-            {queued ? '.' : ', its session id kept — Retry can resume it instead of starting over.'}
-            {' '}Phases that depend on it stay waiting until it is finished properly.
+            {queued ? '.' : ', its session id kept — Retry can resume it instead of starting over.'} Phases
+            that depend on it stay waiting until it is finished properly.
           </p>
         </AlertDialogContent>
       </AlertDialog>

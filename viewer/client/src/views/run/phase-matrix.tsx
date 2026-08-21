@@ -48,11 +48,7 @@ export function PhaseMatrix({
   const columns = 4 + (skills.length ? 1 : 0) + (servers.length ? 1 : 0);
   if (!planPhases.length) return null;
 
-  const set = (
-    phase: number,
-    key: keyof PhaseOptions,
-    value: string | string[] | boolean,
-  ) => {
+  const set = (phase: number, key: keyof PhaseOptions, value: string | string[] | boolean) => {
     const key2 = String(phase);
     const next: Record<string, PhaseOptions> = { ...overrides, [key2]: { ...(overrides[key2] ?? {}) } };
     // `false` clears for the same reason `''` and `[]` do: it is this control's
@@ -76,9 +72,7 @@ export function PhaseMatrix({
         {count ? (
           <Chip tone="ok">{count} overridden</Chip>
         ) : (
-          <span className="text-2xs text-ink-faint">
-            every phase inherits the run's model and effort
-          </span>
+          <span className="text-2xs text-ink-faint">every phase inherits the run's model and effort</span>
         )}
       </summary>
 
@@ -103,9 +97,7 @@ export function PhaseMatrix({
                 const planModel = modelAlias(p.model);
                 const planEffort = effortAlias(p.effort);
                 const inheritModel = planModel ? `${planModel} (plan)` : `${runModel} (run)`;
-                const inheritEffort = planEffort
-                  ? `${planEffort} (plan)`
-                  : `${runEffort || 'default'} (run)`;
+                const inheritEffort = planEffort ? `${planEffort} (plan)` : `${runEffort || 'default'} (run)`;
                 return [
                   <TR key={p.phase} className={p.state === 'done' ? 'text-ink-faint' : undefined}>
                     <TD className="font-mono tabular-nums">{p.phase}</TD>
@@ -169,8 +161,10 @@ export function PhaseMatrix({
                           {runSkills.length > 0 && (
                             <label
                               className="flex items-center gap-1 text-2xs text-ink-faint"
-                              title={`Run phase ${p.phase} without the run's skills `
-                                + `(${runSkills.join(', ')}). Extras chosen here still apply.`}
+                              title={
+                                `Run phase ${p.phase} without the run's skills ` +
+                                `(${runSkills.join(', ')}). Extras chosen here still apply.`
+                              }
                             >
                               <input
                                 type="checkbox"
@@ -199,9 +193,11 @@ export function PhaseMatrix({
                           {runMcp.length > 0 && (
                             <label
                               className="flex items-center gap-1 text-2xs text-ink-faint"
-                              title={`Run phase ${p.phase} without the run's MCP servers `
-                                + `(${runMcp.join(', ')}). The plan's own still apply, and so do `
-                                + 'extras chosen here.'}
+                              title={
+                                `Run phase ${p.phase} without the run's MCP servers ` +
+                                `(${runMcp.join(', ')}). The plan's own still apply, and so do ` +
+                                'extras chosen here.'
+                              }
                             >
                               <input
                                 type="checkbox"
@@ -267,8 +263,8 @@ export function PhaseMatrix({
           </Table>
         </TableWrap>
         <p className="max-w-prose px-3 py-2 text-2xs text-ink-faint">
-          A phase already running keeps what it started with — these apply to phases that have not
-          begun. Clearing a row hands it back to the plan, or to the run's own default.
+          A phase already running keeps what it started with — these apply to phases that have not begun.
+          Clearing a row hands it back to the plan, or to the run's own default.
         </p>
       </div>
     </details>

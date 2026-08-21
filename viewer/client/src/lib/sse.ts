@@ -88,7 +88,11 @@ function fanOut(name: SseEvent, data: unknown): void {
   for (const fn of listeners.get(name) ?? []) {
     // One bad listener must not stop the rest, and must not take the stream
     // down with it — this callback is on the socket's own path.
-    try { fn(data, name); } catch { /* ignore */ }
+    try {
+      fn(data, name);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -109,7 +113,11 @@ export function connect(): void {
   for (const name of SSE_EVENTS) {
     stream.addEventListener(name, (event) => {
       let data: unknown = null;
-      try { data = JSON.parse((event as MessageEvent).data); } catch { /* keep null */ }
+      try {
+        data = JSON.parse((event as MessageEvent).data);
+      } catch {
+        /* keep null */
+      }
       // Any named frame arriving proves the pipe is up, even if `onopen` was
       // missed across a background tab throttle.
       setStatus('live');
@@ -122,7 +130,10 @@ export function connect(): void {
 export function onSse(name: SseEvent, fn: SseListener): () => void {
   connect();
   let set = listeners.get(name);
-  if (!set) { set = new Set(); listeners.set(name, set); }
+  if (!set) {
+    set = new Set();
+    listeners.set(name, set);
+  }
   set.add(fn);
   return () => {
     set.delete(fn);
@@ -134,7 +145,9 @@ export function onSse(name: SseEvent, fn: SseListener): () => void {
 /** Subscribe to several at once. */
 export function onSseAll(names: readonly SseEvent[], fn: SseListener): () => void {
   const offs = names.map((name) => onSse(name, fn));
-  return () => { for (const off of offs) off(); };
+  return () => {
+    for (const off of offs) off();
+  };
 }
 
 export function getSseStatus(): SseStatus {
@@ -147,7 +160,9 @@ export function useSseStatus(): SseStatus {
     (notify) => {
       connect();
       statusListeners.add(notify);
-      return () => { statusListeners.delete(notify); };
+      return () => {
+        statusListeners.delete(notify);
+      };
     },
     () => status,
     () => 'connecting' as const,

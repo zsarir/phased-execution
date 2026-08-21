@@ -30,7 +30,12 @@ const env = { ...process.env, PC_DIST_DIR: SCRATCH };
 
 function run(label, command, args) {
   process.stdout.write(`verify-dist: ${label}\n`);
-  const result = spawnSync(command, args, { cwd: VIEWER, env, stdio: 'inherit', shell: process.platform === 'win32' });
+  const result = spawnSync(command, args, {
+    cwd: VIEWER,
+    env,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
   if (result.status !== 0) {
     process.stderr.write(`verify-dist: ${label} failed (exit ${result.status ?? 'signal'}).\n`);
     return false;
@@ -39,12 +44,15 @@ function run(label, command, args) {
 }
 
 const out = join(VIEWER, 'client', SCRATCH);
-let ok = run('vite build → client/.dist-verify', 'npx', ['vite', 'build'])
-  && run('stamp', process.execPath, [join(VIEWER, 'scripts', 'stamp-build.mjs')])
-  && run('check-dist', process.execPath, [join(VIEWER, 'scripts', 'check-dist.mjs')]);
+let ok =
+  run('vite build → client/.dist-verify', 'npx', ['vite', 'build']) &&
+  run('stamp', process.execPath, [join(VIEWER, 'scripts', 'stamp-build.mjs')]) &&
+  run('check-dist', process.execPath, [join(VIEWER, 'scripts', 'check-dist.mjs')]);
 
 if (!keep && existsSync(out)) rmSync(out, { recursive: true, force: true });
-process.stdout.write(ok
-  ? `verify-dist: OK — the tree builds and passes the gate${keep ? ` (kept ${out})` : ''}.\n`
-  : 'verify-dist: FAILED.\n');
+process.stdout.write(
+  ok
+    ? `verify-dist: OK — the tree builds and passes the gate${keep ? ` (kept ${out})` : ''}.\n`
+    : 'verify-dist: FAILED.\n',
+);
 process.exit(ok ? 0 : 1);

@@ -44,17 +44,19 @@ export function SessionVitals({ session }: { session: TerminalSession }) {
   const live = !session.exitedAt;
   const now = useNow(live);
   const { data: detail } = usePlan(slug);
-  const eta = phase != null
-    ? detail?.eta?.perPhase.find((estimate) => estimate.phase === phase)
-    : undefined;
-  const ms = Math.max(0, (live ? now : session.exitedAt ?? now) - session.createdAt);
+  const eta = phase != null ? detail?.eta?.perPhase.find((estimate) => estimate.phase === phase) : undefined;
+  const ms = Math.max(0, (live ? now : (session.exitedAt ?? now)) - session.createdAt);
   const over = Boolean(eta && ms > eta.estMs);
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2 text-2xs">
       {slug && (
         <a href={planHref(slug, 'run')} className="min-w-0">
-          <Chip mono className="max-w-56 truncate" title="The plan this session serves — opens its autopilot page.">
+          <Chip
+            mono
+            className="max-w-56 truncate"
+            title="The plan this session serves — opens its autopilot page."
+          >
             {slug}
             {phase != null ? ` · P${phase}` : ''}
           </Chip>

@@ -67,9 +67,7 @@ export default function NotificationsView({ route }: ViewProps) {
           ))}
         </TabsList>
 
-        <TabsContent value="inbox">
-          {tab === 'inbox' && <Inbox onUnread={setUnread} />}
-        </TabsContent>
+        <TabsContent value="inbox">{tab === 'inbox' && <Inbox onUnread={setUnread} />}</TabsContent>
         <TabsContent value="settings" className="pt-4">
           {tab === 'settings' && (
             <div className="flex flex-col gap-4">

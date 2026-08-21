@@ -18,7 +18,11 @@ import { request, post, q } from './client';
  * type error at the table, not a chip that silently paints grey. */
 
 export type RunStatus =
-  | 'running' | 'waiting' | 'paused' | 'pausing' | 'frozen'
+  | 'running'
+  | 'waiting'
+  | 'paused'
+  | 'pausing'
+  | 'frozen'
   // `parked` — every remaining phase needs a person. Written by `reconcileRun`
   // when a run's child is alive but nothing is driving it, and by an approval
   // that timed out. It was missing from this union while the server emitted it
@@ -34,11 +38,21 @@ export type RunStatus =
   // `run.halt`) and the remaining lanes are draining; flips to `halted` when
   // the last one settles. Live in every way that matters to the controls.
   | 'halting'
-  | 'halted' | 'finished' | 'stopping' | 'interrupted';
+  | 'halted'
+  | 'finished'
+  | 'stopping'
+  | 'interrupted';
 
 export type PhaseStatus =
-  | 'pending' | 'gated' | 'running' | 'verifying' | 'done'
-  | 'failed' | 'interrupted' | 'skipped' | 'parked'
+  | 'pending'
+  | 'gated'
+  | 'running'
+  | 'verifying'
+  | 'done'
+  | 'failed'
+  | 'interrupted'
+  | 'skipped'
+  | 'parked'
   /** Waiting on the scheduler for a scope that something else is holding. */
   | 'queued'
   /**
@@ -74,10 +88,23 @@ export interface VerifySummary {
 
 /** Mirrors `server/runner/state.ts` — the shared KIND_PROFILE covers all of these. */
 export type HaltKind =
-  | 'verify-failed' | 'no-handoff' | 'phase-blocked' | 'waiting-external-timeout'
-  | 'needs-human' | 'plan-lint' | 'phase-crashed' | 'budget' | 'plan-unreadable'
-  | 'failure-streak' | 'models-exhausted' | 'verification-preflight' | 'mcp-preflight'
-  | 'run-preflight' | 'recovery-failed' | 'orphaned-session' | 'runner-crashed';
+  | 'verify-failed'
+  | 'no-handoff'
+  | 'phase-blocked'
+  | 'waiting-external-timeout'
+  | 'needs-human'
+  | 'plan-lint'
+  | 'phase-crashed'
+  | 'budget'
+  | 'plan-unreadable'
+  | 'failure-streak'
+  | 'models-exhausted'
+  | 'verification-preflight'
+  | 'mcp-preflight'
+  | 'run-preflight'
+  | 'recovery-failed'
+  | 'orphaned-session'
+  | 'runner-crashed';
 
 /** One structured boarding-preflight finding (`preflight` is the frozen string twin). */
 export interface PreflightWarning {
@@ -474,8 +501,18 @@ export interface DecideResult {
 }
 
 export interface RecoveryAction {
-  id: 'recheck' | 'closeout' | 'resume' | 'retry' | 'skip' | 'fix-agent'
-    | 'mcp-continue' | 'continue-run' | 'release' | 'force-release' | 'dismiss';
+  id:
+    | 'recheck'
+    | 'closeout'
+    | 'resume'
+    | 'retry'
+    | 'skip'
+    | 'fix-agent'
+    | 'mcp-continue'
+    | 'continue-run'
+    | 'release'
+    | 'force-release'
+    | 'dismiss';
   label: string;
   detail: string;
   /** How it acts: check | own-session | new-agent | run-control | claim | mcp. */
@@ -506,8 +543,13 @@ export interface PhaseDiagnosis {
   actions: RecoveryAction[];
   /** The classifier's word for the phase and why (`server/runner/situation.ts`); null when it could not read. */
   situation: {
-    id: string; sub?: string; key: string; label: string; blurb: string;
-    actor: 'machine' | 'person' | 'wait' | 'none' | string; why: string[];
+    id: string;
+    sub?: string;
+    key: string;
+    label: string;
+    blurb: string;
+    actor: 'machine' | 'person' | 'wait' | 'none' | string;
+    why: string[];
   } | null;
   /** The evidence it was decided from, as short lines. Absent on older servers. */
   evidence?: string[];
@@ -578,7 +620,9 @@ export const runsApi = {
   runJournal: (slug: string, id?: number, limit?: number) =>
     request<unknown>(`/api/run/${q(slug)}/journal${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`),
   runTranscript: (slug: string, id?: string, limit?: number) =>
-    request<TranscriptEntry[]>(`/api/run/${q(slug)}/transcript${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`),
+    request<TranscriptEntry[]>(
+      `/api/run/${q(slug)}/transcript${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`,
+    ),
   runStart: (slug: string, options?: RunSettings) => post<RunEnvelope>(`/api/run/${q(slug)}/start`, options),
   runPause: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/pause`),
   runResume: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/resume`),
@@ -590,15 +634,20 @@ export const runsApi = {
   runCloseout: (slug: string, phase: number) => post<RunEnvelope>(`/api/run/${q(slug)}/closeout`, { phase }),
   /** Set the run to `continue` and retry every phase the MCP preflight parked. */
   runMcpContinue: (slug: string) => post<RunEnvelope>(`/api/run/${q(slug)}/mcp-continue`, {}),
-  runRecover: (slug: string) => post<{
-    outcome: 'running' | 'resumed' | 'recovering' | 'errand' | 'nothing-to-do';
-    detail: string; steps: string[]; run: RunState | null;
-    /** The one ask for a person, when the outcome is `errand`. */
-    errand?: Errand;
-  }>(`/api/run/${q(slug)}/recover`, {}),
+  runRecover: (slug: string) =>
+    post<{
+      outcome: 'running' | 'resumed' | 'recovering' | 'errand' | 'nothing-to-do';
+      detail: string;
+      steps: string[];
+      run: RunState | null;
+      /** The one ask for a person, when the outcome is `errand`. */
+      errand?: Errand;
+    }>(`/api/run/${q(slug)}/recover`, {}),
   runVerifyCommand: (slug: string, phase: number, command: string) =>
     post<{ ok: true; sessionId: string; token: string; expiresAt: number }>(
-      `/api/run/${q(slug)}/verify-command`, { phase, command }),
+      `/api/run/${q(slug)}/verify-command`,
+      { phase, command },
+    ),
   runResumePhase: (slug: string, phase: number, instruction?: string) =>
     post<RunEnvelope>(`/api/run/${q(slug)}/resume-phase`, { phase, instruction }),
   phaseDiagnosis: (slug: string, phase: number | string) =>
@@ -627,7 +676,10 @@ export const runsApi = {
   approvals: () => request<Approval[]>('/api/approvals'),
   decide: (id: string, decision: string, reason?: string, remember?: string, rule?: string) =>
     post<DecideResult>(`/api/approvals/${q(id)}`, {
-      decision, reason, by: 'console', ...(remember ? { remember, rule } : {}),
+      decision,
+      reason,
+      by: 'console',
+      ...(remember ? { remember, rule } : {}),
     }),
 
   /* ---- the convergence loop ---- */

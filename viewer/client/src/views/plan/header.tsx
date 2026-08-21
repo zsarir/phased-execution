@@ -42,18 +42,20 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
               changes how everything below it should be read. So: one badge,
               both words (`CLOSED · abandoned`), at a size that is seen before
               it is looked for. Non-terminal statuses keep the plain chip. */}
-          {closed
-            ? (
-              <span
-                title={closedTitle(s)}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded border border-rule-strong bg-surface-raised px-2 py-1 text-xs font-medium uppercase tracking-[0.12em] text-ink-muted"
-              >
-                <Lock size={13} className="shrink-0" aria-hidden />
-                Closed
-                {s.status && <span className="font-normal normal-case tracking-normal text-ink-faint">· {s.status}</span>}
-              </span>
-            )
-            : s.status && <Chip>{s.status}</Chip>}
+          {closed ? (
+            <span
+              title={closedTitle(s)}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded border border-rule-strong bg-surface-raised px-2 py-1 text-xs font-medium uppercase tracking-[0.12em] text-ink-muted"
+            >
+              <Lock size={13} className="shrink-0" aria-hidden />
+              Closed
+              {s.status && (
+                <span className="font-normal normal-case tracking-normal text-ink-faint">· {s.status}</span>
+              )}
+            </span>
+          ) : (
+            s.status && <Chip>{s.status}</Chip>
+          )}
           {s.kind !== 'plan' && (
             <Chip tone="warn">{s.kind === 'document' ? 'document' : 'orphan handoffs'}</Chip>
           )}
@@ -89,18 +91,20 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
             what never got done), and these are action-coloured links straight
             into a phase. Suppressed here for the same reason the ready board
             drops the plan outright. */}
-        {!closed && s.ready.map((phase) => (
-          <a
-            key={phase}
-            href={phaseHref(s.slug, phase)}
-            className="inline-flex items-center gap-1.5 rounded-sm border border-action/60 bg-action/12 px-1.5 py-0.5 text-2xs font-medium whitespace-nowrap text-action hover:bg-action/20"
-          >
-            P{phase} ready
-          </a>
-        ))}
-        {!closed && s.inProgress.map((phase) => (
-          <StateChip key={phase} state="in-progress" board label={`P${phase} on track`} />
-        ))}
+        {!closed &&
+          s.ready.map((phase) => (
+            <a
+              key={phase}
+              href={phaseHref(s.slug, phase)}
+              className="inline-flex items-center gap-1.5 rounded-sm border border-action/60 bg-action/12 px-1.5 py-0.5 text-2xs font-medium whitespace-nowrap text-action hover:bg-action/20"
+            >
+              P{phase} ready
+            </a>
+          ))}
+        {!closed &&
+          s.inProgress.map((phase) => (
+            <StateChip key={phase} state="in-progress" board label={`P${phase} on track`} />
+          ))}
       </div>
 
       <KeyValue
@@ -119,30 +123,42 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
           // question people ask as one — "how much further" — and the page could
           // only ever say the first half of it.
           s.remainingWeight
-            ? ['Left', (
+            ? [
+                'Left',
                 <span>
                   {weight(s.remainingWeight)} ≈ {plural(s.remainingSessions, 'session')}
                   {eta && (
                     <span className="text-ink-faint" title={etaTitle(eta)}>
-                      {' · '}{etaLabel(eta.lowMs, eta.highMs, eta.basis)}
+                      {' · '}
+                      {etaLabel(eta.lowMs, eta.highMs, eta.basis)}
                     </span>
                   )}
-                </span>
-              )]
+                </span>,
+              ]
             : null,
           detail.git?.sha
-            ? ['Last commit', (
+            ? [
+                'Last commit',
                 <span>
                   <span className="font-mono">{detail.git.sha}</span>
                   {detail.git.relativeDate ? ` · ${detail.git.relativeDate}` : ''}
-                  {detail.git.dirty ? <Chip tone="warn" className="ml-2">uncommitted</Chip> : null}
-                </span>
-              )]
+                  {detail.git.dirty ? (
+                    <Chip tone="warn" className="ml-2">
+                      uncommitted
+                    </Chip>
+                  ) : null}
+                </span>,
+              ]
             : null,
           budget?.skills?.length
-            ? ['Skills', budget.skills.map((skill) => (
-                <Chip key={skill} mono className="mr-1">{skill}</Chip>
-              ))]
+            ? [
+                'Skills',
+                budget.skills.map((skill) => (
+                  <Chip key={skill} mono className="mr-1">
+                    {skill}
+                  </Chip>
+                )),
+              ]
             : null,
         ]}
       />
@@ -161,9 +177,8 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
             </strong>
             {s.closedReason ? <> — {s.closedReason}</> : null}
             <div className="mt-1 text-ink-faint">
-              This plan reports no ready work, no warnings and no boot prompts, and it is left out
-              of every portfolio total. Its board below is kept in full. Reopen it to undo all of
-              that.
+              This plan reports no ready work, no warnings and no boot prompts, and it is left out of every
+              portfolio total. Its board below is kept in full. Reopen it to undo all of that.
             </div>
           </div>
         </Banner>
@@ -176,7 +191,9 @@ export function PlanHeader({ detail }: { detail: PlanDetail }) {
           <div className="min-w-0">
             <strong>{detail.lint.summary}</strong>
             <ul className="mt-1 list-disc pl-5">
-              {detail.lint.issues.map((issue, i) => <li key={i}>{issue}</li>)}
+              {detail.lint.issues.map((issue, i) => (
+                <li key={i}>{issue}</li>
+              ))}
             </ul>
           </div>
         </Banner>

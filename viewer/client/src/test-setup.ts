@@ -39,10 +39,14 @@ if (!('EventSource' in globalThis)) {
     url: string;
     onopen: (() => void) | null = null;
     onerror: (() => void) | null = null;
-    constructor(url: string) { this.url = url; }
+    constructor(url: string) {
+      this.url = url;
+    }
     addEventListener(): void {}
     removeEventListener(): void {}
-    close(): void { this.readyState = 2; }
+    close(): void {
+      this.readyState = 2;
+    }
   }
   Object.defineProperty(globalThis, 'EventSource', { value: FakeEventSource, writable: true });
 }

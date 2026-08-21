@@ -18,7 +18,10 @@ import { queryClientConfig } from '@/lib/queries';
 import type { PlanDetail } from '@/lib/api';
 
 const { state, run, auth, terminal } = vi.hoisted(() => ({
-  state: vi.fn(), run: vi.fn(), auth: vi.fn(), terminal: vi.fn(),
+  state: vi.fn(),
+  run: vi.fn(),
+  auth: vi.fn(),
+  terminal: vi.fn(),
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -28,8 +31,18 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 const DETAIL = {
   summary: {
-    slug: 'demo', title: 'demo plan', kind: 'plan', status: 'active', phases: 3, done: 1,
-    ready: [2], waiting: 1, inProgress: [], stuck: [], qaMode: 'off', budget: 200_000,
+    slug: 'demo',
+    title: 'demo plan',
+    kind: 'plan',
+    status: 'active',
+    phases: 3,
+    done: 1,
+    ready: [2],
+    waiting: 1,
+    inProgress: [],
+    stuck: [],
+    qaMode: 'off',
+    budget: 200_000,
   },
   phases: [
     { phase: 1, title: 'Foundations', state: 'done', size: 'M', weight: 40_000, gated: false, bullets: [] },
@@ -43,7 +56,11 @@ async function mount(detail: PlanDetail) {
   const client = new QueryClient(queryClientConfig);
   const { RouteCards } = await import('./route-cards');
   return render(
-    <QueryClientProvider client={client}><TooltipProvider><RouteCards detail={detail} /></TooltipProvider></QueryClientProvider>,
+    <QueryClientProvider client={client}>
+      <TooltipProvider>
+        <RouteCards detail={detail} />
+      </TooltipProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -59,8 +76,7 @@ describe('the route tab card strip', () => {
   it('a quiet plan gets the Autopilot card, its door, and nothing else', async () => {
     await mount(DETAIL);
     expect(await screen.findByText('Autopilot')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Open autopilot/ }))
-      .toHaveAttribute('href', '#/plan/demo/run');
+    expect(screen.getByRole('link', { name: /Open autopilot/ })).toHaveAttribute('href', '#/plan/demo/run');
     expect(screen.getByText(/Nothing has been run/)).toBeInTheDocument();
     expect(screen.queryByText("Something's wrong")).toBeNull();
     expect(screen.queryByText('Recovery')).toBeNull();
@@ -69,11 +85,18 @@ describe('the route tab card strip', () => {
   it('a halted run and a stuck phase fill all three cards, deduplicated', async () => {
     run.mockResolvedValue({
       run: {
-        id: 'r1', slug: 'demo', status: 'halted', model: 'opus', spentUsd: 3,
+        id: 'r1',
+        slug: 'demo',
+        status: 'halted',
+        model: 'opus',
+        spentUsd: 3,
         halt: { at: '', reason: 'phase 2 did not verify: npm test', phase: 2 },
-        phases: {}, activePhase: null, child: null,
+        phases: {},
+        activePhase: null,
+        child: null,
       },
-      history: [], eta: null,
+      history: [],
+      eta: null,
     });
     const troubled = {
       ...DETAIL,
@@ -94,7 +117,9 @@ describe('the route tab card strip', () => {
     // targets the plan, so three distinct offers stand.
     // Twice by design now: the Autopilot card's plan-level offers AND the
     // Ways-forward card both surface the class.
-    expect(screen.getAllByRole('button', { name: /Fix the failing verification|Fix with a new agent/i }).length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getAllByRole('button', { name: /Fix the failing verification|Fix with a new agent/i }).length,
+    ).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByRole('button', { name: /Recover & continue/i }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByRole('button', { name: /Repair the plan with a new agent/i }).length).toBe(2);
   });
@@ -103,11 +128,18 @@ describe('the route tab card strip', () => {
     state.mockResolvedValue({ allowAgent: false, autopilot: true });
     run.mockResolvedValue({
       run: {
-        id: 'r1', slug: 'demo', status: 'halted', model: 'opus', spentUsd: 0,
+        id: 'r1',
+        slug: 'demo',
+        status: 'halted',
+        model: 'opus',
+        spentUsd: 0,
         halt: { at: '', reason: 'phase 2 did not verify: npm test', phase: 2 },
-        phases: {}, activePhase: null, child: null,
+        phases: {},
+        activePhase: null,
+        child: null,
       },
-      history: [], eta: null,
+      history: [],
+      eta: null,
     });
     await mount(DETAIL);
     const buttons = await screen.findAllByRole('button', { name: /Fix with a new agent/i });

@@ -173,9 +173,11 @@ export function Calendar({ data, weeks = 26 }: { data: CalendarDay[]; weeks?: nu
             width="9"
             height="9"
             rx="1.5"
-            fill={cell.count
-              ? `color-mix(in oklab, ${toneVar('done')} ${Math.round(cell.intensity * 100)}%, var(--track))`
-              : 'var(--track)'}
+            fill={
+              cell.count
+                ? `color-mix(in oklab, ${toneVar('done')} ${Math.round(cell.intensity * 100)}%, var(--track))`
+                : 'var(--track)'
+            }
             onMouseEnter={() => setPicked(cell)}
             onMouseLeave={() => setPicked(null)}
             onClick={() => setPicked((current) => (current?.date === cell.date ? null : cell))}
@@ -221,7 +223,9 @@ export function BarList({
     <div className={cn('flex flex-col gap-1', className)}>
       {items.map((item) => (
         <div key={item.name} className="grid grid-cols-[minmax(0,1fr)_2.5fr_auto] items-center gap-2">
-          <span className="truncate text-xs text-ink-muted" title={item.name}>{item.name}</span>
+          <span className="truncate text-xs text-ink-muted" title={item.name}>
+            {item.name}
+          </span>
           <span className="h-1.5 overflow-hidden rounded-full bg-track">
             <span
               className="block h-full rounded-full"
@@ -229,7 +233,8 @@ export function BarList({
             />
           </span>
           <span className="text-right font-mono text-2xs tabular-nums text-ink">
-            {item.value}{unit}
+            {item.value}
+            {unit}
           </span>
         </div>
       ))}
@@ -258,8 +263,11 @@ export function StackBar({ segments }: { segments: StackSegment[] }) {
   const total = segments.reduce((sum, segment) => sum + segment.value, 0) || 1;
   return (
     <div>
-      <div className="flex h-2.5 overflow-hidden rounded-full bg-track" role="img"
-           aria-label={segments.map((s) => `${s.label} ${s.value}`).join(', ')}>
+      <div
+        className="flex h-2.5 overflow-hidden rounded-full bg-track"
+        role="img"
+        aria-label={segments.map((s) => `${s.label} ${s.value}`).join(', ')}
+      >
         {segments.map((segment) => (
           <span
             key={segment.label}
@@ -343,9 +351,7 @@ export function LoadMeter({
       </span>
       {/* A fixed width so a column of meters has its bars start and end on the
           same pixel — a ragged right edge reads as noise, not as data. */}
-      <span className="w-9 shrink-0 text-right font-mono text-2xs tabular-nums text-ink-faint">
-        {label}
-      </span>
+      <span className="w-9 shrink-0 text-right font-mono text-2xs tabular-nums text-ink-faint">{label}</span>
     </span>
   );
 }

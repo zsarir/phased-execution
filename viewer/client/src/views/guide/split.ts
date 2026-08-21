@@ -144,7 +144,10 @@ function isBulky(body: string): boolean {
 
 /** `Stop 2½ · Give yourself a launcher` → `stop-2-give-yourself-a-launcher`. */
 export function slug(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 function unique(base: string, used: Set<string>): string {

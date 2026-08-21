@@ -76,8 +76,7 @@ describe('usage alerts', () => {
     renderOverview([]);
     // The three that are easy to miss: a parked run, a failed sign-in, and the
     // fact that the meters keep working.
-    expect(await screen.findByText(/Runs still wait, switch account or pause as you asked/i))
-      .toBeTruthy();
+    expect(await screen.findByText(/Runs still wait, switch account or pause as you asked/i)).toBeTruthy();
     expect(screen.getByText(/meters above keep updating/i)).toBeTruthy();
   });
 });
@@ -86,13 +85,28 @@ describe('the compact meters read the worst account', () => {
   it('shows every account honestly in the overview, auth state included', async () => {
     renderOverview([
       {
-        id: 'default', kind: 'default', builtIn: true, email: 'main@example.com', authState: 'ok',
-        usage: { buckets: { five_hour: { utilization: 12, resetsAt: '2026-08-06T20:00:00Z' } }, fetchedAt: '2026-08-06T15:00:00Z' },
+        id: 'default',
+        kind: 'default',
+        builtIn: true,
+        email: 'main@example.com',
+        authState: 'ok',
+        usage: {
+          buckets: { five_hour: { utilization: 12, resetsAt: '2026-08-06T20:00:00Z' } },
+          fetchedAt: '2026-08-06T15:00:00Z',
+        },
       },
       {
-        id: 'info', kind: 'profile', builtIn: false, name: 'info', email: 'info@example.com',
-        signedIn: true, authState: 'expired',
-        usage: { buckets: { seven_day_fable: { utilization: 82, resetsAt: '2026-08-12T00:00:00Z' } }, fetchedAt: '2026-08-06T15:00:00Z' },
+        id: 'info',
+        kind: 'profile',
+        builtIn: false,
+        name: 'info',
+        email: 'info@example.com',
+        signedIn: true,
+        authState: 'expired',
+        usage: {
+          buckets: { seven_day_fable: { utilization: 82, resetsAt: '2026-08-12T00:00:00Z' } },
+          fetchedAt: '2026-08-06T15:00:00Z',
+        },
       },
     ]);
     // A broken login is a badge beside the account, where the meters are.

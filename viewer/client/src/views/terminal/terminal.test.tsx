@@ -47,7 +47,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
-      state, terminal, terminalTicket, terminalClose,
+      state,
+      terminal,
+      terminalTicket,
+      terminalClose,
       plans: vi.fn(async () => []),
       approvals: vi.fn(async () => []),
     },
@@ -87,8 +90,15 @@ const BASE_STATE: ConsoleState = {
 };
 
 const SESSION = {
-  id: 'abc123', label: 'Terminal 1', cwd: '/repo', shell: '/bin/zsh',
-  cols: 100, rows: 30, pid: 900, clients: 1, createdAt: 0,
+  id: 'abc123',
+  label: 'Terminal 1',
+  cwd: '/repo',
+  shell: '/bin/zsh',
+  cols: 100,
+  rows: 30,
+  pid: 900,
+  clients: 1,
+  createdAt: 0,
 };
 
 const TERMINALS: TerminalState = { allowed: true, available: 'yes', limit: 8, sessions: [SESSION] };
@@ -124,7 +134,11 @@ beforeEach(() => {
   state.mockResolvedValue(BASE_STATE);
   terminal.mockResolvedValue(TERMINALS);
   terminalTicket.mockResolvedValue({
-    ok: true, sessionId: 'new1', token: 't', expiresAt: 0, path: '/ws/terminal',
+    ok: true,
+    sessionId: 'new1',
+    token: 't',
+    expiresAt: 0,
+    path: '/ws/terminal',
     session: { ...SESSION, id: 'new1', label: 'Terminal 2' },
   });
   terminalClose.mockResolvedValue({ closed: true, state: { ...TERMINALS, sessions: [] } });
@@ -176,7 +190,7 @@ describe('sessions', () => {
     // A stateful stand-in for the server: creating a session has to show up in
     // the next listing, or this test cannot see the bug it exists for.
     const opened = { ...SESSION, id: 'new1', label: 'Terminal 2' };
-    let live: typeof SESSION[] = [];
+    let live: (typeof SESSION)[] = [];
     terminal.mockImplementation(async () => ({ ...TERMINALS, sessions: live }));
     terminalTicket.mockImplementation(async () => {
       live = [...live, opened];
@@ -242,7 +256,11 @@ describe('sessions', () => {
 
   it('shows shells only — claude sessions live on the agent page', async () => {
     const claude = {
-      ...SESSION, id: 'c1', label: 'Claude: hello', kind: 'claude' as const, shell: 'claude',
+      ...SESSION,
+      id: 'c1',
+      label: 'Claude: hello',
+      kind: 'claude' as const,
+      shell: 'claude',
     };
     terminal.mockResolvedValue({ ...TERMINALS, sessions: [SESSION, claude] });
     await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
@@ -256,7 +274,10 @@ describe('sessions', () => {
     // is full — a New button that read only its own tabs would offer a shell
     // the server must refuse.
     const many = Array.from({ length: 7 }, (_, i) => ({
-      ...SESSION, id: `c${i}`, label: `Claude ${i}`, kind: 'claude' as const,
+      ...SESSION,
+      id: `c${i}`,
+      label: `Claude ${i}`,
+      kind: 'claude' as const,
     }));
     terminal.mockResolvedValue({ ...TERMINALS, sessions: [SESSION, ...many] });
     await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
@@ -367,14 +388,34 @@ describe('the nav entry', () => {
 
   it('hides nothing else', () => {
     expect(visibleNav({ ...BASE_STATE, allowTerminal: false }).map((i) => i.id)).toEqual([
-      'dashboard', 'ready', 'plans', 'runs', 'pulse', 'notifications', 'stats', 'search', 'mcp',
-      'guide', 'settings',
+      'dashboard',
+      'ready',
+      'plans',
+      'runs',
+      'pulse',
+      'notifications',
+      'stats',
+      'search',
+      'mcp',
+      'guide',
+      'settings',
     ]);
     // With both capabilities on, the two gated entries appear in NAV order —
     // Agent, then Terminal — and everything else stays put.
     expect(visibleNav({ ...BASE_STATE, allowTerminal: true, allowAgent: true }).map((i) => i.id)).toEqual([
-      'dashboard', 'ready', 'plans', 'runs', 'pulse', 'notifications', 'stats', 'search',
-      'agent', 'terminal', 'mcp', 'guide', 'settings',
+      'dashboard',
+      'ready',
+      'plans',
+      'runs',
+      'pulse',
+      'notifications',
+      'stats',
+      'search',
+      'agent',
+      'terminal',
+      'mcp',
+      'guide',
+      'settings',
     ]);
   });
 });

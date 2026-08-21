@@ -54,7 +54,9 @@ export function DialogContent({
         {hideHeader ? (
           <>
             <DialogPrimitive.Title className="sr-only">{title}</DialogPrimitive.Title>
-            {description && <DialogPrimitive.Description className="sr-only">{description}</DialogPrimitive.Description>}
+            {description && (
+              <DialogPrimitive.Description className="sr-only">{description}</DialogPrimitive.Description>
+            )}
           </>
         ) : (
           <div className="mb-3 flex items-start justify-between gap-3">

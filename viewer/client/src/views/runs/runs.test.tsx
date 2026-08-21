@@ -27,37 +27,46 @@ import type { RunState } from '@/lib/api';
 import { isLive } from '../run/defaults';
 import { runUiState } from '@/lib/status-vocab';
 import {
-  NO_FILTERS, applyFilters, fleetTotals, groupRows, outcomeCounts, phasesOf, planOptions,
-  sortRows, stopReason, toRows,
+  NO_FILTERS,
+  applyFilters,
+  fleetTotals,
+  groupRows,
+  outcomeCounts,
+  phasesOf,
+  planOptions,
+  sortRows,
+  stopReason,
+  toRows,
 } from './model';
 
 /* ------------------------------------------------------------------ *
  * Fixtures
  * ------------------------------------------------------------------ */
 
-const run = (over: Partial<RunState> = {}): RunState => ({
-  id: 'abc123',
-  slug: 'demo',
-  root: '/repo',
-  status: 'finished',
-  autonomy: 'keep-going',
-  model: 'opus',
-  phaseBudgetUsd: null,
-  runBudgetUsd: null,
-  spentUsd: 1.65,
-  maxConsecutiveFailures: 2,
-  consecutiveFailures: 0,
-  createdAt: '2026-08-03T00:00:00Z',
-  updatedAt: '2026-08-03T01:00:00Z',
-  activePhase: null,
-  child: null,
-  waitUntil: null,
-  halt: null,
-  pause: null,
-  freeze: null,
-  phases: {},
-  ...over,
-} as unknown as RunState);
+const run = (over: Partial<RunState> = {}): RunState =>
+  ({
+    id: 'abc123',
+    slug: 'demo',
+    root: '/repo',
+    status: 'finished',
+    autonomy: 'keep-going',
+    model: 'opus',
+    phaseBudgetUsd: null,
+    runBudgetUsd: null,
+    spentUsd: 1.65,
+    maxConsecutiveFailures: 2,
+    consecutiveFailures: 0,
+    createdAt: '2026-08-03T00:00:00Z',
+    updatedAt: '2026-08-03T01:00:00Z',
+    activePhase: null,
+    child: null,
+    waitUntil: null,
+    halt: null,
+    pause: null,
+    freeze: null,
+    phases: {},
+    ...over,
+  }) as unknown as RunState;
 
 /** Phase records arrive keyed by the phase number **as a string**. */
 const phases = (...records: { phase: number; status: string; [k: string]: unknown }[]) =>
@@ -70,12 +79,32 @@ const phases = (...records: { phase: number; status: string; [k: string]: unknow
 describe('every status collapses onto the vocabulary', () => {
   it('maps every status the runner can write to one of the eight UI states', () => {
     const all = [
-      'running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting',
-      'paused', 'parked', 'halted', 'finished', 'interrupted',
+      'running',
+      'waiting',
+      'pausing',
+      'stopping',
+      'frozen',
+      'queued',
+      'halting',
+      'paused',
+      'parked',
+      'halted',
+      'finished',
+      'interrupted',
     ];
     expect(all.map(runUiState)).toEqual([
-      'running', 'waiting', 'waiting', 'waiting', 'waiting', 'queued', 'needs-you',
-      'waiting', 'needs-you', 'needs-you', 'done', 'needs-you',
+      'running',
+      'waiting',
+      'waiting',
+      'waiting',
+      'waiting',
+      'queued',
+      'needs-you',
+      'waiting',
+      'needs-you',
+      'needs-you',
+      'done',
+      'needs-you',
     ]);
   });
 
@@ -100,15 +129,20 @@ describe('every status collapses onto the vocabulary', () => {
 
 describe('why a run stopped', () => {
   it('prefers what the runner wrote down', () => {
-    expect(stopReason(run({ status: 'halted', halt: { at: '', reason: 'verification failed' } } as never)))
-      .toBe('verification failed');
-    expect(stopReason(run({ status: 'finished', finishedReason: 'phase 8 was the last one' } as never)))
-      .toBe('phase 8 was the last one');
+    expect(
+      stopReason(run({ status: 'halted', halt: { at: '', reason: 'verification failed' } } as never)),
+    ).toBe('verification failed');
+    expect(stopReason(run({ status: 'finished', finishedReason: 'phase 8 was the last one' } as never))).toBe(
+      'phase 8 was the last one',
+    );
   });
 
   it('names who froze it and where', () => {
-    expect(stopReason(run({ status: 'frozen', freeze: { at: '', phase: 3, pid: 1, by: 'mobin', escalateAt: '' } } as never)))
-      .toBe('frozen at phase 3 by mobin');
+    expect(
+      stopReason(
+        run({ status: 'frozen', freeze: { at: '', phase: 3, pid: 1, by: 'mobin', escalateAt: '' } } as never),
+      ),
+    ).toBe('frozen at phase 3 by mobin');
   });
 
   it('never leaves a row with nothing but its status', () => {
@@ -127,11 +161,13 @@ describe('why a run stopped', () => {
 
 describe('building a row', () => {
   it('reads the phase record through its string keys, in phase order', () => {
-    const state = run({ phases: phases(
-      { phase: 10, status: 'pending' },
-      { phase: 2, status: 'done' },
-      { phase: 1, status: 'done' },
-    ) as never });
+    const state = run({
+      phases: phases(
+        { phase: 10, status: 'pending' },
+        { phase: 2, status: 'done' },
+        { phase: 1, status: 'done' },
+      ) as never,
+    });
     expect(phasesOf(state).map((p) => p.phase)).toEqual([1, 2, 10]);
     expect(toRows([state])[0].phasesDone).toBe(2);
   });
@@ -150,18 +186,26 @@ describe('building a row', () => {
   it('counts time on task, not wall-clock since it was created', () => {
     // A run created three days ago and paused for two did not work for three
     // days, and the cost is against the time it actually ran.
-    const [row] = toRows([run({ phases: phases(
-      { phase: 1, status: 'done', durationMs: 60_000 },
-      { phase: 2, status: 'done', durationMs: 30_000 },
-    ) as never })]);
+    const [row] = toRows([
+      run({
+        phases: phases(
+          { phase: 1, status: 'done', durationMs: 60_000 },
+          { phase: 2, status: 'done', durationMs: 30_000 },
+        ) as never,
+      }),
+    ]);
     expect(row.workedMs).toBe(90_000);
   });
 
   it('counts retries as attempts beyond the first', () => {
-    const [row] = toRows([run({ phases: phases(
-      { phase: 1, status: 'done', attempts: 1 },
-      { phase: 2, status: 'failed', attempts: 3 },
-    ) as never })]);
+    const [row] = toRows([
+      run({
+        phases: phases(
+          { phase: 1, status: 'done', attempts: 1 },
+          { phase: 2, status: 'failed', attempts: 3 },
+        ) as never,
+      }),
+    ]);
     expect(row.retries).toBe(2);
   });
 
@@ -216,7 +260,10 @@ describe('filtering the fleet', () => {
 
   it('counts each outcome, and lists the plans busiest first', () => {
     expect(outcomeCounts(rows)).toMatchObject({ done: 1, 'needs-you': 1, running: 0 });
-    expect(planOptions(rows)).toEqual([{ slug: 'demo', runs: 1 }, { slug: 'trade', runs: 1 }]);
+    expect(planOptions(rows)).toEqual([
+      { slug: 'demo', runs: 1 },
+      { slug: 'trade', runs: 1 },
+    ]);
   });
 
   it('sums spend across what is shown, not across everything that ever ran', () => {
@@ -269,7 +316,10 @@ beforeEach(() => {
   localStorage.clear();
   setPrefs({ runsSort: 'updated', runsOutcome: '', runsGroup: false, runsConsole: false });
   state.mockResolvedValue({
-    autopilot: true, allowRun: true, allowWrites: false, unread: 0,
+    autopilot: true,
+    allowRun: true,
+    allowWrites: false,
+    unread: 0,
     root: { label: 'hub', path: '/hub', ok: true, planCount: 3 },
     repo: { available: true, branch: 'main', dirty: [] },
   });
@@ -364,9 +414,10 @@ describe('the runs page', () => {
     const { container } = mount(<RunsView />);
 
     const halted = await screen.findByRole('button', { name: 'Needs you, 1 run' });
-    const amber = () => [...container.querySelectorAll('button')]
-      .filter((b) => b.className.includes('bg-action/12'))
-      .map((b) => b.textContent?.trim());
+    const amber = () =>
+      [...container.querySelectorAll('button')]
+        .filter((b) => b.className.includes('bg-action/12'))
+        .map((b) => b.textContent?.trim());
     expect(amber().filter((label) => label !== 'Latest')).toEqual([]);
     expect(screen.getByRole('button', { name: 'Everything' }).getAttribute('aria-pressed')).toBe('true');
 
@@ -392,13 +443,7 @@ describe('lifecycle from the fleet', () => {
     const client = new QueryClient(queryClientConfig);
     render(
       <QueryClientProvider client={client}>
-        <Fleet
-          rows={rows}
-          grouped={false}
-          onWatch={() => {}}
-          onLifecycle={onLifecycle}
-          allowRun
-        />
+        <Fleet rows={rows} grouped={false} onWatch={() => {}} onLifecycle={onLifecycle} allowRun />
       </QueryClientProvider>,
     );
 
@@ -410,7 +455,9 @@ describe('lifecycle from the fleet', () => {
     expect(await screen.findByText(/interrupted/)).toBeTruthy();
     expect(onLifecycle).not.toHaveBeenCalledWith(expect.anything(), 'stop');
     fireEvent.click(screen.getByRole('button', { name: 'Stop now' }));
-    await waitFor(() => expect(onLifecycle).toHaveBeenCalledWith(expect.objectContaining({ id: 'live1' }), 'stop'));
+    await waitFor(() =>
+      expect(onLifecycle).toHaveBeenCalledWith(expect.objectContaining({ id: 'live1' }), 'stop'),
+    );
   });
 
   it('a finished row offers no lifecycle at all — there is nothing to act on', async () => {

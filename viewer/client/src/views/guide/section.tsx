@@ -105,9 +105,11 @@ export function SectionPanel({ section, card: wanted }: { section: GuideSection;
 
       {outline.intro && <StatusProse text={outline.intro} />}
 
-      {route
-        ? <RouteStrip cards={cards} activeId={target} onPick={scrollTo} />
-        : <SectionIndex cards={cards} onPick={scrollTo} />}
+      {route ? (
+        <RouteStrip cards={cards} activeId={target} onPick={scrollTo} />
+      ) : (
+        <SectionIndex cards={cards} onPick={scrollTo} />
+      )}
 
       <div className="flex justify-end">
         <Button
@@ -127,8 +129,8 @@ export function SectionPanel({ section, card: wanted }: { section: GuideSection;
         to nothing on every card. Only a banded file gets a list per band, where
         a track per sub-journey is what you actually want.
       */}
-      {banded
-        ? outline.groups.map((group) => (
+      {banded ? (
+        outline.groups.map((group) => (
           <section key={group.id} className="flex flex-col gap-3">
             {group.banded && (
               <div className="flex flex-col gap-2">
@@ -136,10 +138,18 @@ export function SectionPanel({ section, card: wanted }: { section: GuideSection;
                 {group.intro && <StatusProse text={group.intro} />}
               </div>
             )}
-            <CardList cards={group.cards} sectionId={section.id} route={route} open={open} setOpen={setOpen} />
+            <CardList
+              cards={group.cards}
+              sectionId={section.id}
+              route={route}
+              open={open}
+              setOpen={setOpen}
+            />
           </section>
         ))
-        : <CardList cards={cards} sectionId={section.id} route={route} open={open} setOpen={setOpen} />}
+      ) : (
+        <CardList cards={cards} sectionId={section.id} route={route} open={open} setOpen={setOpen} />
+      )}
     </div>
   );
 }
@@ -166,12 +176,14 @@ function CardList({
             card={card}
             sectionId={sectionId}
             open={open.has(card.id)}
-            onToggle={(next) => setOpen((prev) => {
-              const copy = new Set(prev);
-              if (next) copy.add(card.id);
-              else copy.delete(card.id);
-              return copy;
-            })}
+            onToggle={(next) =>
+              setOpen((prev) => {
+                const copy = new Set(prev);
+                if (next) copy.add(card.id);
+                else copy.delete(card.id);
+                return copy;
+              })
+            }
           />
         </li>
       ))}

@@ -90,31 +90,35 @@ const APP_SHELL = new URL('index.html', self.location.href).href;
 const LIVE = /^\/(api|events|hooks|ws)(\/|$)/;
 
 self.addEventListener('install', (event) => {
-  event.waitUntil((async () => {
-    const cache = await caches.open(CACHE);
-    // `reload` bypasses the HTTP cache: hashed assets are served with a day of
-    // max-age, and precaching a copy the browser already had would defeat the
-    // point of a fresh build.
-    await cache.addAll(SHELL.map((url) => new Request(url, { cache: 'reload' })));
-    // No `skipWaiting()` here. The old worker keeps serving the tab that is
-    // open until someone says otherwise — see the `message` listener. A worker
-    // that takes over mid-session swaps the JavaScript under a running app.
-  })());
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE);
+      // `reload` bypasses the HTTP cache: hashed assets are served with a day of
+      // max-age, and precaching a copy the browser already had would defeat the
+      // point of a fresh build.
+      await cache.addAll(SHELL.map((url) => new Request(url, { cache: 'reload' })));
+      // No `skipWaiting()` here. The old worker keeps serving the tab that is
+      // open until someone says otherwise — see the `message` listener. A worker
+      // that takes over mid-session swaps the JavaScript under a running app.
+    })(),
+  );
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil((async () => {
-    const names = await caches.keys();
-    await Promise.all(
-      names
-        .filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE)
-        .map((name) => caches.delete(name)),
-    );
-    // Control the pages that are already open. On a first install this is what
-    // makes the worker useful without a reload; on an update it has already
-    // been asked for explicitly.
-    await self.clients.claim();
-  })());
+  event.waitUntil(
+    (async () => {
+      const names = await caches.keys();
+      await Promise.all(
+        names
+          .filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE)
+          .map((name) => caches.delete(name)),
+      );
+      // Control the pages that are already open. On a first install this is what
+      // makes the worker useful without a reload; on an update it has already
+      // been asked for explicitly.
+      await self.clients.claim();
+    })(),
+  );
 });
 
 /**
@@ -182,9 +186,7 @@ async function precached(request: Request): Promise<Response> {
 
 self.addEventListener('push', (event) => {
   const data = parsePayload(event.data ? event.data.text() : null);
-  event.waitUntil(
-    self.registration.showNotification(notificationTitle(data), notificationOptions(data)),
-  );
+  event.waitUntil(self.registration.showNotification(notificationTitle(data), notificationOptions(data)));
 });
 
 self.addEventListener('notificationclick', (event) => {
@@ -197,48 +199,56 @@ self.addEventListener('notificationclick', (event) => {
   const target = clickTarget(info, self.location.origin);
   const decision = decisionOf(event.action);
 
-  event.waitUntil((async () => {
-    const read = readRequest(info.notificationId);
-    if (read) {
-      try {
-        await fetch(read.url, read.init);
-      } catch { /* the row simply stays unread */ }
-    }
+  event.waitUntil(
+    (async () => {
+      const read = readRequest(info.notificationId);
+      if (read) {
+        try {
+          await fetch(read.url, read.init);
+        } catch {
+          /* the row simply stays unread */
+        }
+      }
 
-    if (decision && info.approvalId) {
-      let answered = false;
-      try {
-        const { url, init } = decisionRequest(info.approvalId, decision);
-        const response = await fetch(url, init);
-        answered = response.ok;
-      } catch { /* fall through to opening the queue */ }
+      if (decision && info.approvalId) {
+        let answered = false;
+        try {
+          const { url, init } = decisionRequest(info.approvalId, decision);
+          const response = await fetch(url, init);
+          answered = response.ok;
+        } catch {
+          /* fall through to opening the queue */
+        }
 
-      if (answered) {
-        // The decision landed and is already broadcast to every open client.
-        // Opening a window on top of that would be the console interrupting you
-        // a second time for something you have finished with.
-        const [title, options] = answeredNotification(decision, info);
-        await self.registration.showNotification(title, options);
+        if (answered) {
+          // The decision landed and is already broadcast to every open client.
+          // Opening a window on top of that would be the console interrupting you
+          // a second time for something you have finished with.
+          const [title, options] = answeredNotification(decision, info);
+          await self.registration.showNotification(title, options);
+          return;
+        }
+        // It did not land — the run may have ended, or this console may have been
+        // started without --allow-run. Open the queue so it can be seen.
+      }
+
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      // Reuse a window that is already here rather than opening a third console.
+      for (const client of windows) {
+        if (new URL(client.url).origin !== self.location.origin) continue;
+        await client.focus();
+        if ('navigate' in client) {
+          try {
+            await client.navigate(target);
+          } catch {
+            /* focus alone is enough */
+          }
+        }
         return;
       }
-      // It did not land — the run may have ended, or this console may have been
-      // started without --allow-run. Open the queue so it can be seen.
-    }
-
-    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    // Reuse a window that is already here rather than opening a third console.
-    for (const client of windows) {
-      if (new URL(client.url).origin !== self.location.origin) continue;
-      await client.focus();
-      if ('navigate' in client) {
-        try {
-          await client.navigate(target);
-        } catch { /* focus alone is enough */ }
-      }
-      return;
-    }
-    if (self.clients.openWindow) await self.clients.openWindow(target);
-  })());
+      if (self.clients.openWindow) await self.clients.openWindow(target);
+    })(),
+  );
 });
 
 /**
@@ -247,17 +257,21 @@ self.addEventListener('notificationclick', (event) => {
  * notified. The browser tells us exactly once, here.
  */
 self.addEventListener('pushsubscriptionchange', (event) => {
-  event.waitUntil((async () => {
-    try {
-      const response = await fetch('/api/push');
-      const { publicKey } = await response.json() as { publicKey?: string };
-      if (!publicKey) return;
-      const subscription = await self.registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: publicKey,
-      });
-      const { url, init } = resubscribeRequest(subscription.toJSON());
-      await fetch(url, init);
-    } catch { /* nothing here can usefully report a failure */ }
-  })());
+  event.waitUntil(
+    (async () => {
+      try {
+        const response = await fetch('/api/push');
+        const { publicKey } = (await response.json()) as { publicKey?: string };
+        if (!publicKey) return;
+        const subscription = await self.registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: publicKey,
+        });
+        const { url, init } = resubscribeRequest(subscription.toJSON());
+        await fetch(url, init);
+      } catch {
+        /* nothing here can usefully report a failure */
+      }
+    })(),
+  );
 });

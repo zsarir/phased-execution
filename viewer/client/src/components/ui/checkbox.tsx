@@ -27,9 +27,11 @@ export function Checkbox({ className, ...props }: ComponentProps<typeof Checkbox
       {...props}
     >
       <CheckboxPrimitive.Indicator className="grid place-items-center">
-        {props.checked === 'indeterminate'
-          ? <Minus size={12} strokeWidth={3} aria-hidden />
-          : <Check size={12} strokeWidth={3} aria-hidden />}
+        {props.checked === 'indeterminate' ? (
+          <Minus size={12} strokeWidth={3} aria-hidden />
+        ) : (
+          <Check size={12} strokeWidth={3} aria-hidden />
+        )}
       </CheckboxPrimitive.Indicator>
     </CheckboxPrimitive.Root>
   );

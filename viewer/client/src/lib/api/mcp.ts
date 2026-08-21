@@ -93,10 +93,12 @@ export const mcpApi = {
     request<McpCatalogResult>(`/api/mcp/catalog?q=${q(query)}${registry ? '' : '&registry=0'}`),
   mcpAdd: (body: Record<string, unknown>) => post<{ server: McpServerView }>('/api/mcp', body),
   mcpDelete: (id: string) => request<{ removed: boolean }>(`/api/mcp/${q(id)}`, { method: 'DELETE' }),
-  mcpPatch: (id: string, body: Record<string, unknown>) => request<{ server: McpServerView }>(
-    `/api/mcp/${q(id)}`,
-    { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) },
-  ),
+  mcpPatch: (id: string, body: Record<string, unknown>) =>
+    request<{ server: McpServerView }>(`/api/mcp/${q(id)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
   /** Starts `claude mcp login <id> --no-browser` where a person can answer it. */
   mcpLogin: (id: string) => post<McpLoginStart>(`/api/mcp/${q(id)}/login`, {}),
   /** Re-probe every enabled server. Not behind the flag — checking changes nothing. */

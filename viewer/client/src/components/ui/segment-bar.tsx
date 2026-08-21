@@ -29,7 +29,9 @@ export function SegmentBar({
   label?: string;
   height?: 'sm' | 'md';
 } & HTMLAttributes<HTMLSpanElement>) {
-  const segments = UI_STATES.map((state) => ({ state, value: Math.max(0, counts[state] ?? 0) })).filter((s) => s.value > 0);
+  const segments = UI_STATES.map((state) => ({ state, value: Math.max(0, counts[state] ?? 0) })).filter(
+    (s) => s.value > 0,
+  );
   const sum = segments.reduce((acc, s) => acc + s.value, 0);
   const denominator = Math.max(total ?? sum, sum, 1);
   const name = segments.length

@@ -23,8 +23,16 @@ import type { PhaseRecord, PhaseStatus, QueueEntry, RunState, TranscriptEntry } 
 import { forPhase } from './console';
 import { livePhases } from './header';
 import {
-  QueuedPane, SessionPanes, crossLaneId, holderLabel, laneId, lanesAcross, lanesOf,
-  queueEntryFor, resolveTab, waitingLabel,
+  QueuedPane,
+  SessionPanes,
+  crossLaneId,
+  holderLabel,
+  laneId,
+  lanesAcross,
+  lanesOf,
+  queueEntryFor,
+  resolveTab,
+  waitingLabel,
 } from './session-panes';
 
 /* ------------------------------------------------------------------ *
@@ -55,7 +63,10 @@ class DrivableEventSource {
 
   addEventListener(name: string, fn: (event: MessageEvent) => void): void {
     let set = this.listeners.get(name);
-    if (!set) { set = new Set(); this.listeners.set(name, set); }
+    if (!set) {
+      set = new Set();
+      this.listeners.set(name, set);
+    }
     set.add(fn);
   }
 
@@ -63,7 +74,9 @@ class DrivableEventSource {
     this.listeners.get(name)?.delete(fn);
   }
 
-  close(): void { this.readyState = 2; }
+  close(): void {
+    this.readyState = 2;
+  }
 
   /** Deliver one named frame exactly as the browser would. */
   send(name: string, data: unknown): void {
@@ -74,7 +87,9 @@ class DrivableEventSource {
 
 /** Push a server frame and let React flush it. */
 const emit = (name: string, data: unknown) =>
-  act(() => { DrivableEventSource.latest?.send(name, data); });
+  act(() => {
+    DrivableEventSource.latest?.send(name, data);
+  });
 
 // Assignment, not `defineProperty`: `test-setup.ts` installs its own fake with
 // `writable: true` and no `configurable`, which defaults to false — so the slot
@@ -160,10 +175,16 @@ describe('two lanes of one run', () => {
   it('resets the task list only for the phase whose session restarted', () => {
     twoLanes();
     emit('run:stream', {
-      runId: 'r1', phase: 6, kind: 'todos', items: [{ content: 'six is working', status: 'pending' }],
+      runId: 'r1',
+      phase: 6,
+      kind: 'todos',
+      items: [{ content: 'six is working', status: 'pending' }],
     });
     emit('run:stream', {
-      runId: 'r1', phase: 7, kind: 'todos', items: [{ content: 'seven is working', status: 'pending' }],
+      runId: 'r1',
+      phase: 7,
+      kind: 'todos',
+      items: [{ content: 'seven is working', status: 'pending' }],
     });
     expect(pane(6).getByText('six is working')).toBeInTheDocument();
     expect(pane(7).getByText('seven is working')).toBeInTheDocument();
@@ -212,7 +233,8 @@ describe('forPhase', () => {
     seq,
     at: '2026-08-04T00:00:00Z',
     event: 'stream',
-    data: phase == null ? { kind: 'text', text: `line ${seq}` } : { phase, kind: 'text', text: `line ${seq}` },
+    data:
+      phase == null ? { kind: 'text', text: `line ${seq}` } : { phase, kind: 'text', text: `line ${seq}` },
   });
 
   it('keeps the lane asked for and drops the others', () => {
@@ -236,15 +258,16 @@ describe('forPhase', () => {
  * Which lanes exist at all
  * ------------------------------------------------------------------ */
 
-const run = (over: Partial<RunState> = {}): RunState => ({
-  id: 'r1',
-  slug: 'demo',
-  status: 'running',
-  phases: {},
-  child: null,
-  activePhase: null,
-  ...over,
-} as unknown as RunState);
+const run = (over: Partial<RunState> = {}): RunState =>
+  ({
+    id: 'r1',
+    slug: 'demo',
+    status: 'running',
+    phases: {},
+    child: null,
+    activePhase: null,
+    ...over,
+  }) as unknown as RunState;
 
 /** Phase records arrive keyed by the phase number **as a string**. */
 const phases = (...records: { phase: number; status: PhaseStatus }[]): Record<string, PhaseRecord> =>
@@ -252,16 +275,18 @@ const phases = (...records: { phase: number; status: PhaseStatus }[]): Record<st
 
 describe('lanesOf', () => {
   it('is every phase with a pane worth showing, lowest first', () => {
-    const lanes = lanesOf(run({
-      phases: phases(
-        { phase: 7, status: 'running' },
-        { phase: 2, status: 'done' },
-        { phase: 4, status: 'queued' },
-        { phase: 5, status: 'verifying' },
-        { phase: 9, status: 'pending' },
-        { phase: 3, status: 'awaiting-verification' },
-      ),
-    }) as RunState);
+    const lanes = lanesOf(
+      run({
+        phases: phases(
+          { phase: 7, status: 'running' },
+          { phase: 2, status: 'done' },
+          { phase: 4, status: 'queued' },
+          { phase: 5, status: 'verifying' },
+          { phase: 9, status: 'pending' },
+          { phase: 3, status: 'awaiting-verification' },
+        ),
+      }) as RunState,
+    );
 
     expect(lanes.map((l) => l.phase)).toEqual([3, 4, 5, 7]);
     expect(lanes.map((l) => l.queued)).toEqual([false, true, false, false]);
@@ -335,13 +360,13 @@ const holder = (over: Partial<QueueEntry['waitingOn'][number]> = {}) => ({
 describe('waitingLabel', () => {
   it('names the holder rather than repeating the state', () => {
     // "queued" alone is the same non-answer `pausing` used to be.
-    expect(waitingLabel(entry({ waitingOn: [holder()] })))
-      .toBe('queued — waiting on other-plan P2');
+    expect(waitingLabel(entry({ waitingOn: [holder()] }))).toBe('queued — waiting on other-plan P2');
   });
 
   it('counts the rest instead of running off the end of the cell', () => {
-    expect(waitingLabel(entry({ waitingOn: [holder(), holder({ slug: 'third' })] })))
-      .toBe('queued — waiting on other-plan P2 +1');
+    expect(waitingLabel(entry({ waitingOn: [holder(), holder({ slug: 'third' })] }))).toBe(
+      'queued — waiting on other-plan P2 +1',
+    );
   });
 
   it('falls back to the bare word when the scheduler has named nobody', () => {
@@ -424,7 +449,10 @@ describe('the run-level pane', () => {
   it('never renders the task panels — the lanes own them, so no lane start can wipe another', () => {
     runPane();
     emit('run:stream', {
-      runId: 'r1', phase: 6, kind: 'todos', items: [{ content: 'six is working', status: 'pending' }],
+      runId: 'r1',
+      phase: 6,
+      kind: 'todos',
+      items: [{ content: 'six is working', status: 'pending' }],
     });
     emit('run:phase', { runId: 'r1', phase: 7, status: 'running', model: 'opus' });
 

@@ -29,14 +29,22 @@ vi.mock('@/lib/api', async (importOriginal) => {
 });
 
 const SELF = {
-  hostName: 'alpha', dnsName: 'alpha.example.ts.net', ips: ['100.64.0.1'], os: 'macOS', online: true,
+  hostName: 'alpha',
+  dnsName: 'alpha.example.ts.net',
+  ips: ['100.64.0.1'],
+  os: 'macOS',
+  online: true,
 };
 
 const PEERS = [
   { hostName: 'beta', dnsName: 'beta.example.ts.net', ips: ['100.64.0.2'], os: 'iOS', online: true },
   {
-    hostName: 'gamma', dnsName: 'gamma.example.ts.net', ips: ['100.64.0.3'], os: 'windows',
-    online: false, lastSeen: '2026-06-01T10:00:00Z',
+    hostName: 'gamma',
+    dnsName: 'gamma.example.ts.net',
+    ips: ['100.64.0.3'],
+    os: 'windows',
+    online: false,
+    lastSeen: '2026-06-01T10:00:00Z',
   },
 ];
 
@@ -161,7 +169,7 @@ describe('the degenerate machines', () => {
     expect(screen.queryByText('this machine')).toBeNull();
   });
 
-  it('repeats the CLI\'s own word for a daemon that is not running', async () => {
+  it("repeats the CLI's own word for a daemon that is not running", async () => {
     tailscale.mockResolvedValue({ state: 'installed-not-running', detail: 'NeedsLogin' });
     mount({});
     expect(await screen.findByText('NeedsLogin')).toBeTruthy();
@@ -172,15 +180,14 @@ describe('the degenerate machines', () => {
     // settles, so this waits longer than the default second.
     tailscale.mockRejectedValue(new Error('404'));
     mount({});
-    await waitFor(
-      () => expect(screen.getByText(/started before this feature existed/)).toBeTruthy(),
-      { timeout: 4000 },
-    );
+    await waitFor(() => expect(screen.getByText(/started before this feature existed/)).toBeTruthy(), {
+      timeout: 4000,
+    });
   });
 });
 
 describe('the commands it prints', () => {
-  it('embeds the console\'s real port, not a hard-coded 4123', async () => {
+  it("embeds the console's real port, not a hard-coded 4123", async () => {
     tailscale.mockResolvedValue(running({ active: false, forOurPort: false }));
     mount({ port: 5000, remoteHosts: [] });
     // Publishing the wrong port produces a 502 that reads as a Tailscale fault.

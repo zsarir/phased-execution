@@ -187,7 +187,10 @@ export function MoreSheet({
                 key={item.id}
                 type="button"
                 aria-current={current === item.id ? 'page' : undefined}
-                onClick={() => { navigate(item.id); onOpenChange(false); }}
+                onClick={() => {
+                  navigate(item.id);
+                  onOpenChange(false);
+                }}
                 className={cn(
                   'flex min-h-(--tap-min) items-center gap-3 rounded px-2 py-2 text-left',
                   current === item.id ? 'bg-surface-raised' : 'hover:bg-surface-raised',
@@ -214,7 +217,10 @@ export function MoreSheet({
             <Button
               size="sm"
               className="min-w-0 max-w-[60%]"
-              onClick={() => { onPickSource(); onOpenChange(false); }}
+              onClick={() => {
+                onPickSource();
+                onOpenChange(false);
+              }}
             >
               <span className="truncate">{state?.root?.label ?? 'Choose a directory'}</span>
             </Button>
@@ -239,9 +245,13 @@ export function MoreSheet({
 
           <div className="flex items-center justify-between gap-2">
             <span className="text-2xs tracking-widest text-ink-faint uppercase">Writes</span>
-            {state?.allowWrites
-              ? <Chip tone="warn">enabled</Chip>
-              : <Chip title="Start with --allow-writes to enable scaffolding, QA records and locks">read-only</Chip>}
+            {state?.allowWrites ? (
+              <Chip tone="warn">enabled</Chip>
+            ) : (
+              <Chip title="Start with --allow-writes to enable scaffolding, QA records and locks">
+                read-only
+              </Chip>
+            )}
           </div>
         </div>
       </SheetContent>

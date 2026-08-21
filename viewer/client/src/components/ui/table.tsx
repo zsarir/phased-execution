@@ -16,7 +16,10 @@ export function TableWrap({ className, ...props }: HTMLAttributes<HTMLDivElement
       // `overflow-y` auto, so a height-capped wrapper becomes a second
       // vertical scroller that captures touch flicks meant for the page.
       // Height always fits content here, so no vertical gesture is consumed.
-      className={cn('w-full max-w-full overflow-x-auto overscroll-x-contain rounded-lg border border-rule', className)}
+      className={cn(
+        'w-full max-w-full overflow-x-auto overscroll-x-contain rounded-lg border border-rule',
+        className,
+      )}
       {...props}
     />
   );
@@ -32,10 +35,7 @@ export function THead({ className, ...props }: HTMLAttributes<HTMLTableSectionEl
     // wrapper — which never scrolls vertically — so it was pure paint cost
     // that also promoted a layer on every table.
     <thead
-      className={cn(
-        'bg-surface-raised text-left text-2xs uppercase tracking-wide text-ink-muted',
-        className,
-      )}
+      className={cn('bg-surface-raised text-left text-2xs uppercase tracking-wide text-ink-muted', className)}
       {...props}
     />
   );

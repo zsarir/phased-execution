@@ -44,8 +44,11 @@ function tone(pct: number): string {
 function Meter({ pct, className }: { pct: number; className?: string }) {
   const clamped = Math.max(0, Math.min(100, pct));
   return (
-    <div className={cn('h-1.5 w-full overflow-hidden rounded-full bg-track', className)} role="img"
-      aria-label={`${Math.round(clamped)}% used`}>
+    <div
+      className={cn('h-1.5 w-full overflow-hidden rounded-full bg-track', className)}
+      role="img"
+      aria-label={`${Math.round(clamped)}% used`}
+    >
       <div className={cn('h-full', tone(clamped))} style={{ width: `${clamped}%` }} />
     </div>
   );
@@ -110,18 +113,23 @@ export function LimitsWidget({ variant }: { variant: 'rail' | 'phone' | 'sheet' 
   // Stale is about the number on screen: the account SUPPLYING a meter could
   // not be read, so the bar may be older than it looks.
   const stale = Boolean(
-    five?.account.usage?.error || five?.account.usage?.unsupported
-    || weekly?.account.usage?.error || weekly?.account.usage?.unsupported
-    || (!five && accounts?.some((a) => a.usage?.error || a.usage?.unsupported)),
+    five?.account.usage?.error ||
+    five?.account.usage?.unsupported ||
+    weekly?.account.usage?.error ||
+    weekly?.account.usage?.unsupported ||
+    (!five && accounts?.some((a) => a.usage?.error || a.usage?.unsupported)),
   );
 
   const fiveTitle = five && several ? `5-hour — ${accountName(five.account)}` : '5-hour window';
-  const weeklyTitle = weekly && several
-    ? `${bucketLabel(weekly.key)} — ${accountName(weekly.account)}`
-    : weekly ? bucketLabel(weekly.key) : undefined;
+  const weeklyTitle =
+    weekly && several
+      ? `${bucketLabel(weekly.key)} — ${accountName(weekly.account)}`
+      : weekly
+        ? bucketLabel(weekly.key)
+        : undefined;
 
-  const trigger = variant === 'phone'
-    ? (
+  const trigger =
+    variant === 'phone' ? (
       <button
         type="button"
         onClick={() => setOpen(true)}
@@ -132,52 +140,55 @@ export function LimitsWidget({ variant }: { variant: 'rail' | 'phone' | 'sheet' 
         <Gauge size={16} aria-hidden />
         {five ? <span>{Math.round(five.bucket.utilization)}%</span> : null}
       </button>
-    )
-    : variant === 'sheet'
-      ? (
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="flex min-h-(--tap-min) w-full items-center justify-between gap-2 text-sm"
-        >
-          <span className="flex items-center gap-2"><Gauge size={16} aria-hidden /> Usage limits</span>
-          <span className="text-xs text-ink-muted">
-            {five ? `5h ${Math.round(five.bucket.utilization)}%` : 'no data'}
+    ) : variant === 'sheet' ? (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex min-h-(--tap-min) w-full items-center justify-between gap-2 text-sm"
+      >
+        <span className="flex items-center gap-2">
+          <Gauge size={16} aria-hidden /> Usage limits
+        </span>
+        <span className="text-xs text-ink-muted">
+          {five ? `5h ${Math.round(five.bucket.utilization)}%` : 'no data'}
+        </span>
+      </button>
+    ) : (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex min-w-0 flex-col gap-1 rounded-md px-2 py-1.5 text-left hover:bg-surface-raised"
+        aria-label="Claude usage limits"
+        title={
+          several ? 'Claude usage limits — the worst window across every account' : 'Claude usage limits'
+        }
+      >
+        <span className="flex items-center gap-1 text-2xs uppercase tracking-wide text-ink-faint">
+          <Gauge size={12} aria-hidden /> Usage
+          {stale ? <span className="text-ink-faint">·&nbsp;stale</span> : null}
+        </span>
+        {five ? (
+          <span
+            className="flex items-center gap-1.5"
+            title={`${fiveTitle} at ${Math.round(five.bucket.utilization)}%`}
+          >
+            <span className="w-4 text-2xs text-ink-faint">5h</span>
+            <Meter pct={five.bucket.utilization} />
           </span>
-        </button>
-      )
-      : (
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="flex min-w-0 flex-col gap-1 rounded-md px-2 py-1.5 text-left hover:bg-surface-raised"
-          aria-label="Claude usage limits"
-          title={several
-            ? 'Claude usage limits — the worst window across every account'
-            : 'Claude usage limits'}
-        >
-          <span className="flex items-center gap-1 text-2xs uppercase tracking-wide text-ink-faint">
-            <Gauge size={12} aria-hidden /> Usage
-            {stale ? <span className="text-ink-faint">·&nbsp;stale</span> : null}
+        ) : (
+          <span className="text-2xs text-ink-faint">no data yet</span>
+        )}
+        {weekly ? (
+          <span
+            className="flex items-center gap-1.5"
+            title={`${weeklyTitle} at ${Math.round(weekly.bucket.utilization)}%`}
+          >
+            <span className="w-4 text-2xs text-ink-faint">wk</span>
+            <Meter pct={weekly.bucket.utilization} />
           </span>
-          {five
-            ? (
-              <span className="flex items-center gap-1.5" title={`${fiveTitle} at ${Math.round(five.bucket.utilization)}%`}>
-                <span className="w-4 text-2xs text-ink-faint">5h</span>
-                <Meter pct={five.bucket.utilization} />
-              </span>
-            )
-            : <span className="text-2xs text-ink-faint">no data yet</span>}
-          {weekly
-            ? (
-              <span className="flex items-center gap-1.5" title={`${weeklyTitle} at ${Math.round(weekly.bucket.utilization)}%`}>
-                <span className="w-4 text-2xs text-ink-faint">wk</span>
-                <Meter pct={weekly.bucket.utilization} />
-              </span>
-            )
-            : null}
-        </button>
-      );
+        ) : null}
+      </button>
+    );
 
   return (
     <>
@@ -218,34 +229,41 @@ export function LimitsOverview({ accounts }: { accounts: AccountView[] | undefin
               {account.kind === 'token' ? <Chip>token</Chip> : null}
               {account.kind === 'profile' && account.signedIn === false ? <Chip>not signed in</Chip> : null}
               {account.authState === 'expired' ? <Chip tone="bad">login expired</Chip> : null}
-              {account.authState === 'signed-out' && account.signedIn !== false
-                ? <Chip tone="bad">signed out</Chip> : null}
-              {fetched !== undefined
-                ? <span className="text-2xs text-ink-faint">as of {relativeTime(fetched)}</span>
-                : null}
+              {account.authState === 'signed-out' && account.signedIn !== false ? (
+                <Chip tone="bad">signed out</Chip>
+              ) : null}
+              {fetched !== undefined ? (
+                <span className="text-2xs text-ink-faint">as of {relativeTime(fetched)}</span>
+              ) : null}
             </header>
-            {account.usage?.unsupported
-              ? (
-                <p className="text-xs text-ink-muted">
-                  The usage endpoint does not serve this credential — limits are learned when a run hits one.
-                </p>
-              )
-              : buckets.length
-                ? buckets.map(([key, bucket]) => (
-                  <div key={key} className="flex items-center gap-2 text-xs">
-                    <span className="w-40 shrink-0 truncate text-ink-muted">{bucketLabel(key)}</span>
-                    <Meter pct={bucket.utilization} className="flex-1" />
-                    <span className="w-9 shrink-0 text-right">{Math.round(bucket.utilization)}%</span>
-                    <span className="w-20 shrink-0 truncate text-right text-ink-faint" title={new Date(bucket.resetsAt).toLocaleString()}>
-                      {countdown(Date.parse(bucket.resetsAt)) || '—'}
-                    </span>
-                  </div>
-                ))
-                : <p className="text-xs text-ink-faint">No usage data{account.usage?.error ? ` — ${account.usage.error}` : ' yet'}.</p>}
+            {account.usage?.unsupported ? (
+              <p className="text-xs text-ink-muted">
+                The usage endpoint does not serve this credential — limits are learned when a run hits one.
+              </p>
+            ) : buckets.length ? (
+              buckets.map(([key, bucket]) => (
+                <div key={key} className="flex items-center gap-2 text-xs">
+                  <span className="w-40 shrink-0 truncate text-ink-muted">{bucketLabel(key)}</span>
+                  <Meter pct={bucket.utilization} className="flex-1" />
+                  <span className="w-9 shrink-0 text-right">{Math.round(bucket.utilization)}%</span>
+                  <span
+                    className="w-20 shrink-0 truncate text-right text-ink-faint"
+                    title={new Date(bucket.resetsAt).toLocaleString()}
+                  >
+                    {countdown(Date.parse(bucket.resetsAt)) || '—'}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-ink-faint">
+                No usage data{account.usage?.error ? ` — ${account.usage.error}` : ' yet'}.
+              </p>
+            )}
             {Object.entries(account.limitedUntil ?? {}).map(([bucket, iso]) => (
               <p key={bucket} className="text-xs font-medium text-ink-muted">
-                Hit its {bucketLabel(bucket).toLowerCase()} limit — {countdown(Date.parse(iso)) || 'reset due'}
-                {' '}({new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}).
+                Hit its {bucketLabel(bucket).toLowerCase()} limit —{' '}
+                {countdown(Date.parse(iso)) || 'reset due'} (
+                {new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}).
               </p>
             ))}
           </section>
@@ -287,7 +305,9 @@ function UsageAlerts() {
     // A delta, not the whole map: the server merges it over what is stored, so
     // two tabs toggling different categories do not overwrite each other.
     mutationFn: (next: boolean) => api.savePrefs({ notify: { limits: next } }),
-    onSuccess: async () => { await client.invalidateQueries({ queryKey: keys.state() }); },
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: keys.state() });
+    },
     onError: (error: Error) => toast(String(error.message ?? error), 'error'),
   });
 
@@ -309,14 +329,14 @@ function UsageAlerts() {
       </div>
       <p className="text-2xs text-ink-faint">
         {on
-          ? 'The console announces a window that was hit, a run that parked waiting for one to '
-            + 'reopen, and an account that could not sign in. Turning this off silences all of '
-            + 'them everywhere — inbox, push and any notify command. The meters above keep '
-            + 'updating, and the early "usage climbing" warning has its own switch under '
-            + 'Notifications (off unless you turn it on).'
-          : 'Silenced everywhere — inbox, push and any notify command. Runs still wait, switch '
-            + 'account or pause as you asked; they just do it without telling you. The meters '
-            + 'above keep updating.'}
+          ? 'The console announces a window that was hit, a run that parked waiting for one to ' +
+            'reopen, and an account that could not sign in. Turning this off silences all of ' +
+            'them everywhere — inbox, push and any notify command. The meters above keep ' +
+            'updating, and the early "usage climbing" warning has its own switch under ' +
+            'Notifications (off unless you turn it on).'
+          : 'Silenced everywhere — inbox, push and any notify command. Runs still wait, switch ' +
+            'account or pause as you asked; they just do it without telling you. The meters ' +
+            'above keep updating.'}
       </p>
     </div>
   );

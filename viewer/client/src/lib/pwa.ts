@@ -95,7 +95,11 @@ export async function applyUpdateNow(
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return 'unsupported';
   const reg = await registerServiceWorker();
   if (!reg) return 'unsupported';
-  try { await reg.update(); } catch { /* offline — judge from what is already here */ }
+  try {
+    await reg.update();
+  } catch {
+    /* offline — judge from what is already here */
+  }
   const waiting = reg.waiting;
   if (!waiting) return 'current';
   await new Promise<void>((resolve) => {
@@ -130,18 +134,13 @@ export function useServiceWorker(): void {
 
     const offer = (worker: ServiceWorker) => {
       if (cancelled || offered !== null) return;
-      offered = toast(
-        'A new version of the console is ready.',
-        'info',
-        0,
-        {
-          label: 'Reload',
-          onSelect: () => {
-            applying = true;
-            worker.postMessage({ type: 'SKIP_WAITING' });
-          },
+      offered = toast('A new version of the console is ready.', 'info', 0, {
+        label: 'Reload',
+        onSelect: () => {
+          applying = true;
+          worker.postMessage({ type: 'SKIP_WAITING' });
         },
-      );
+      });
     };
 
     const onControllerChange = () => {
@@ -160,8 +159,10 @@ export function useServiceWorker(): void {
     const autoApplySafe = () => {
       if (/^#\/(terminal|agent)/.test(window.location.hash)) return false;
       const active = document.activeElement;
-      if (active instanceof HTMLElement
-        && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+      if (
+        active instanceof HTMLElement &&
+        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)
+      ) {
         return false;
       }
       return true;
@@ -169,11 +170,17 @@ export function useServiceWorker(): void {
     const autoApply = (worker: ServiceWorker): boolean => {
       if (!autoApplySafe()) return false;
       let last: { at?: number } = {};
-      try { last = JSON.parse(sessionStorage.getItem(AUTO_KEY) ?? '{}') as typeof last; }
-      catch { /* an unreadable marker is no marker */ }
+      try {
+        last = JSON.parse(sessionStorage.getItem(AUTO_KEY) ?? '{}') as typeof last;
+      } catch {
+        /* an unreadable marker is no marker */
+      }
       if (typeof last.at === 'number' && Date.now() - last.at < 60_000) return false;
-      try { sessionStorage.setItem(AUTO_KEY, JSON.stringify({ at: Date.now() })); }
-      catch { /* private mode — the toast path still works */ }
+      try {
+        sessionStorage.setItem(AUTO_KEY, JSON.stringify({ at: Date.now() }));
+      } catch {
+        /* private mode — the toast path still works */
+      }
       applying = true;
       worker.postMessage({ type: 'SKIP_WAITING' });
       return true;
@@ -212,7 +219,9 @@ export function useServiceWorker(): void {
       // One check per load. The browser does this on its own schedule too, but
       // its schedule can be a day, and "I just deployed and it is still old" is
       // exactly the confusion this is here to prevent.
-      void reg.update().catch(() => { /* offline, or the server is gone */ });
+      void reg.update().catch(() => {
+        /* offline, or the server is gone */
+      });
     });
 
     // …and one per return to the tab. A console left open across a deploy
@@ -221,9 +230,10 @@ export function useServiceWorker(): void {
     // nothing was mid-read — so a waiting worker applies here too.
     const onVisible = () => {
       if (document.visibilityState !== 'visible' || !registration || cancelled) return;
-      void registration.update().catch(() => { /* offline */ });
-      if (registration.waiting && navigator.serviceWorker.controller
-        && !autoApply(registration.waiting)) {
+      void registration.update().catch(() => {
+        /* offline */
+      });
+      if (registration.waiting && navigator.serviceWorker.controller && !autoApply(registration.waiting)) {
         offer(registration.waiting);
       }
     };

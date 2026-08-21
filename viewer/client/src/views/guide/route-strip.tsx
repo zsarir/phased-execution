@@ -67,8 +67,12 @@ export function RouteStrip({
         ))}
       </ol>
       <p className="guide-strip-key">
-        <span data-actor="machine"><i className="guide-strip-dot" aria-hidden /> the machine does this</span>
-        <span data-actor="person"><i className="guide-strip-dot" aria-hidden /> you do this</span>
+        <span data-actor="machine">
+          <i className="guide-strip-dot" aria-hidden /> the machine does this
+        </span>
+        <span data-actor="person">
+          <i className="guide-strip-dot" aria-hidden /> you do this
+        </span>
       </p>
     </nav>
   );

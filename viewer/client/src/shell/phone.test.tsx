@@ -26,14 +26,22 @@ vi.mock('@/router', () => ({ navigate: vi.fn() }));
 // The header now carries the usage meters, which read the accounts query — so
 // the harness provides a client the way `app.test.tsx` does. `retry: false`
 // keeps a missing mock from stalling a test on retries.
-const render = (ui: ReactElement) => renderBare(
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    {ui}
-  </QueryClientProvider>,
-);
+const render = (ui: ReactElement) =>
+  renderBare(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      {ui}
+    </QueryClientProvider>,
+  );
 
 const counts = (over: Partial<ShellCounts> = {}): ShellCounts => ({
-  plans: 0, phases: 0, ready: 0, approvals: 0, unread: 0, agentSessions: 0, terminalSessions: 0, mcpAttention: 0,
+  plans: 0,
+  phases: 0,
+  ready: 0,
+  approvals: 0,
+  unread: 0,
+  agentSessions: 0,
+  terminalSessions: 0,
+  mcpAttention: 0,
   ...over,
 });
 
@@ -61,9 +69,7 @@ describe('the notification count in the header', () => {
   });
 
   it('draws nothing at all when there is nothing unread', () => {
-    render(
-      <TopBar state={undefined} counts={counts()} head="dashboard" onPickSource={() => {}} />,
-    );
+    render(<TopBar state={undefined} counts={counts()} head="dashboard" onPickSource={() => {}} />);
     const bell = screen.getByRole('button', { name: 'Notifications' });
     expect(bell.textContent).toBe('');
   });

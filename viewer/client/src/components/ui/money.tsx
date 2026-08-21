@@ -23,7 +23,11 @@ export function MoneyAmount({
   return (
     <span
       className={cn('font-mono tabular-nums', over ? 'text-failed' : undefined, className)}
-      title={against != null && against > 0 ? `${money(usd)} of a ${money(against)} budget${over ? ' — over' : ''}` : undefined}
+      title={
+        against != null && against > 0
+          ? `${money(usd)} of a ${money(against)} budget${over ? ' — over' : ''}`
+          : undefined
+      }
       {...props}
     >
       {usd == null ? '—' : money(usd)}

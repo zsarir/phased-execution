@@ -27,15 +27,33 @@ vi.mock('@/lib/api', async (importOriginal) => {
 const PORTFOLIO: Portfolio = {
   generatedAt: Date.parse('2026-08-03T12:00:00Z'),
   totals: {
-    plans: 4, documents: 1, orphans: 0, closed: 1, phases: 30, done: 21, ready: 3, waiting: 5,
-    inProgress: 1, stuck: 0, percent: 70, remainingWeight: 310_000, remainingSessions: 2,
+    plans: 4,
+    documents: 1,
+    orphans: 0,
+    closed: 1,
+    phases: 30,
+    done: 21,
+    ready: 3,
+    waiting: 5,
+    inProgress: 1,
+    stuck: 0,
+    percent: 70,
+    remainingWeight: 310_000,
+    remainingSessions: 2,
   },
   byStatus: [
     { status: 'active', count: 3, closed: false },
     { status: 'complete', count: 1, closed: true },
   ],
   activeLocks: [
-    { slug: 'demo', phase: 5, owner: 'claude-a/p5', expired: false, leaseUntil: Date.now() + 900_000, closed: false },
+    {
+      slug: 'demo',
+      phase: 5,
+      owner: 'claude-a/p5',
+      expired: false,
+      leaseUntil: Date.now() + 900_000,
+      closed: false,
+    },
     // A lapsed lease on a CLOSED plan: debris, not a chore. `phase-lock.sh
     // conflicts` skips it, so it blocks nobody and must not be counted as an
     // expired lease needing release.
@@ -46,10 +64,17 @@ const PORTFOLIO: Portfolio = {
     { slug: 'other', severity: 'error', kind: 'cycle', message: 'phase 3 depends on itself' },
     { slug: 'demo', severity: 'info', kind: 'note', message: 'no QA recorded' },
   ],
-  velocity: [{ week: '2026-W30', count: 2 }, { week: '2026-W31', count: 4 }],
+  velocity: [
+    { week: '2026-W30', count: 2 },
+    { week: '2026-W31', count: 4 },
+  ],
   calendar: [{ date: '2026-08-01', count: 2 }],
   medianCycleDays: 0,
-  sizeMix: [{ size: 'S', count: 4 }, { size: 'M', count: 18 }, { size: 'L', count: 8 }],
+  sizeMix: [
+    { size: 'S', count: 4 },
+    { size: 'M', count: 18 },
+    { size: 'L', count: 8 },
+  ],
   repos: [{ repo: 'skill', count: 8 }],
   skills: [],
   models: [{ model: 'claude-opus-5', count: 4 }],
@@ -59,9 +84,13 @@ const PORTFOLIO: Portfolio = {
 
 function mount() {
   const client = new QueryClient(queryClientConfig);
-  return import('./stats').then(({ default: StatsView }) => render(
-    <QueryClientProvider client={client}><StatsView /></QueryClientProvider>,
-  ));
+  return import('./stats').then(({ default: StatsView }) =>
+    render(
+      <QueryClientProvider client={client}>
+        <StatsView />
+      </QueryClientProvider>,
+    ),
+  );
 }
 
 beforeEach(() => {
@@ -87,8 +116,7 @@ describe('statistics', () => {
     await mount();
     // Anchored, so the Errors tile's "1 warning · 1 note" hint is not mistaken
     // for an issue row.
-    const kinds = (await screen.findAllByText(/^(cycle|handoff-drift|note)$/))
-      .map((el) => el.textContent);
+    const kinds = (await screen.findAllByText(/^(cycle|handoff-drift|note)$/)).map((el) => el.textContent);
     expect(kinds).toEqual(['cycle', 'handoff-drift', 'note']);
   });
 
@@ -193,8 +221,7 @@ describe('statistics', () => {
     await mount();
     // The shared client config retries once before giving up, so the error is
     // two round trips away — past the 1s default of `findBy`.
-    expect(await screen.findByText('the engine is not there', undefined, { timeout: 5000 }))
-      .toBeTruthy();
+    expect(await screen.findByText('the engine is not there', undefined, { timeout: 5000 })).toBeTruthy();
   });
 });
 
@@ -203,14 +230,16 @@ describe('recentRate — how long a phase actually takes', () => {
     // "60 ms per unit of weight" is the right thing to store and an unreadable
     // thing to print. M is the size the sizing constants are anchored on.
     const { recentRate } = await import('./stats');
-    expect(recentRate({ ratePerWeight: 60, basis: 'plan', samples: 5, spread: 0.35 }, 40_000))
-      .toBe(' · recent rate ≈ 40 min per M phase');
+    expect(recentRate({ ratePerWeight: 60, basis: 'plan', samples: 5, spread: 0.35 }, 40_000)).toBe(
+      ' · recent rate ≈ 40 min per M phase',
+    );
   });
 
-  it('scales with the machine\'s own sizing rather than a baked-in 40K', async () => {
+  it("scales with the machine's own sizing rather than a baked-in 40K", async () => {
     const { recentRate } = await import('./stats');
-    expect(recentRate({ ratePerWeight: 60, basis: 'portfolio', samples: 5, spread: 0.5 }, 20_000))
-      .toContain('20 min');
+    expect(recentRate({ ratePerWeight: 60, basis: 'portfolio', samples: 5, spread: 0.5 }, 20_000)).toContain(
+      '20 min',
+    );
   });
 
   it('says nothing at all when there is nothing to say', async () => {

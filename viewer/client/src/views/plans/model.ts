@@ -295,8 +295,7 @@ export const SORTS = [
 
 export type SortId = (typeof SORTS)[number]['id'];
 
-export const isSortId = (value: string): value is SortId =>
-  SORTS.some((s) => s.id === value);
+export const isSortId = (value: string): value is SortId => SORTS.some((s) => s.id === value);
 
 const byName = (a: PlanRow, b: PlanRow): number =>
   a.title.localeCompare(b.title) || a.slug.localeCompare(b.slug);
@@ -306,27 +305,27 @@ const COMPARE: Record<SortId, (a: PlanRow, b: PlanRow) => number> = {
   // Complete plans sink: "closest to done" asked for the ones you can still
   // finish, and a wall of 100% bars answers a question nobody had.
   progress: (a, b) =>
-    Number(a.isComplete) - Number(b.isComplete)
-    || b.percent - a.percent
-    || (a.phases - a.done) - (b.phases - b.done)
-    || byName(a, b),
+    Number(a.isComplete) - Number(b.isComplete) ||
+    b.percent - a.percent ||
+    a.phases - a.done - (b.phases - b.done) ||
+    byName(a, b),
   // Closed plans sink in both work-shaped orders. Their `readyPhases` are real —
   // the engine reports what never got done — but "most ready" and "needs
   // attention" are both the question *where should I go next*, and a plan the
   // operator has closed is never the answer. Sunk rather than dropped: the
   // filter decides what is on the list, a sort only decides where.
   ready: (a, b) =>
-    Number(a.isClosed) - Number(b.isClosed)
-    || b.readyPhases.length - a.readyPhases.length
-    || b.remainingSessions - a.remainingSessions
-    || b.activity - a.activity
-    || byName(a, b),
+    Number(a.isClosed) - Number(b.isClosed) ||
+    b.readyPhases.length - a.readyPhases.length ||
+    b.remainingSessions - a.remainingSessions ||
+    b.activity - a.activity ||
+    byName(a, b),
   attention: (a, b) =>
-    Number(a.isClosed) - Number(b.isClosed)
-    || severity(a) - severity(b)
-    || concerns(b).length - concerns(a).length
-    || b.idleDays - a.idleDays
-    || byName(a, b),
+    Number(a.isClosed) - Number(b.isClosed) ||
+    severity(a) - severity(b) ||
+    concerns(b).length - concerns(a).length ||
+    b.idleDays - a.idleDays ||
+    byName(a, b),
   name: byName,
 };
 
@@ -580,7 +579,10 @@ export function rowTotals(rows: readonly PlanRow[]) {
     else documents++;
     phases += row.phases;
     done += row.done;
-    if (row.isClosed) { closed++; continue; }
+    if (row.isClosed) {
+      closed++;
+      continue;
+    }
     ready += row.readyPhases.length;
     sessions += row.remainingSessions;
     if (row.errors) errors++;

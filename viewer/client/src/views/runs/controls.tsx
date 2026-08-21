@@ -29,12 +29,14 @@ export interface ControlsProps {
 }
 
 const fieldClass =
-  'h-9 min-w-0 rounded border border-rule bg-surface px-2 text-sm text-ink '
-  + 'hover:border-rule-strong [@media(hover:none)]:min-h-(--tap-min)';
+  'h-9 min-w-0 rounded border border-rule bg-surface px-2 text-sm text-ink ' +
+  'hover:border-rule-strong [@media(hover:none)]:min-h-(--tap-min)';
 
 /** A state with no runs in it is not a filter, it is a dead button. */
 function OutcomeChips({
-  counts, value, onChange,
+  counts,
+  value,
+  onChange,
 }: {
   counts: Record<UiState, number>;
   value: string;
@@ -49,11 +51,7 @@ function OutcomeChips({
           the resting state, and amber is reserved for a view you have
           narrowed. `aria-pressed` still carries the state for anyone who
           cannot see which chips are lit. */}
-      <Button
-        size="sm"
-        aria-pressed={value === ''}
-        onClick={() => onChange('')}
-      >
+      <Button size="sm" aria-pressed={value === ''} onClick={() => onChange('')}>
         Everything
       </Button>
       {live.map((outcome) => (
@@ -78,7 +76,9 @@ function OutcomeChips({
 }
 
 function SearchBox({
-  value, onChange, className,
+  value,
+  onChange,
+  className,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -110,9 +110,17 @@ function SearchBox({
 }
 
 function SortAndGroup({
-  sortId, onSort, grouped, onGrouped, filters, onFilters, plans, wrap,
-}: Pick<ControlsProps, 'sortId' | 'onSort' | 'grouped' | 'onGrouped' | 'filters' | 'onFilters' | 'plans'>
-  & { wrap: boolean }) {
+  sortId,
+  onSort,
+  grouped,
+  onGrouped,
+  filters,
+  onFilters,
+  plans,
+  wrap,
+}: Pick<ControlsProps, 'sortId' | 'onSort' | 'grouped' | 'onGrouped' | 'filters' | 'onFilters' | 'plans'> & {
+  wrap: boolean;
+}) {
   const sortButtons = SORTS.map((s) => (
     <Button
       key={s.id}
@@ -128,7 +136,11 @@ function SortAndGroup({
 
   return (
     <div className={cn('flex gap-2', wrap ? 'flex-col' : 'flex-wrap items-center')}>
-      {wrap ? <div className="flex flex-wrap gap-1.5">{sortButtons}</div> : <ButtonGroup>{sortButtons}</ButtonGroup>}
+      {wrap ? (
+        <div className="flex flex-wrap gap-1.5">{sortButtons}</div>
+      ) : (
+        <ButtonGroup>{sortButtons}</ButtonGroup>
+      )}
       <Button
         size="sm"
         variant={grouped ? 'action' : 'default'}
@@ -148,7 +160,9 @@ function SortAndGroup({
           >
             <option value="">every plan</option>
             {plans.map((p) => (
-              <option key={p.slug} value={p.slug}>{p.slug} ({p.runs})</option>
+              <option key={p.slug} value={p.slug}>
+                {p.slug} ({p.runs})
+              </option>
             ))}
           </select>
         </label>
@@ -169,43 +183,39 @@ export function Controls(props: ControlsProps) {
         onChange={(outcome) => props.onFilters({ outcome })}
       />
 
-      {phone
-        ? (
-          <div className="flex items-center gap-2">
-            <SearchBox
-              value={props.filters.query}
-              onChange={(query) => props.onFilters({ query })}
-              className="flex-1"
-            />
-            <Sheet>
-              <SheetTrigger asChild>
-                <Button size="sm" className="shrink-0">
-                  <SlidersHorizontal size={14} aria-hidden />
-                  Sort
-                  {active > 0 && <Chip tone="warn">{active}</Chip>}
-                </Button>
-              </SheetTrigger>
-              <SheetContent title="Sort and filter the fleet">
-                <p className="mb-2 text-2xs uppercase tracking-wide text-ink-faint">Order by</p>
-                <SortAndGroup {...props} wrap />
-              </SheetContent>
-            </Sheet>
-          </div>
-        )
-        : (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <SearchBox
-              value={props.filters.query}
-              onChange={(query) => props.onFilters({ query })}
-              className="w-52"
-            />
-            <SortAndGroup {...props} wrap={false} />
-          </div>
-        )}
-
-      {props.hidden > 0 && (
-        <p className="text-2xs text-ink-faint">{props.hidden} hidden by filters</p>
+      {phone ? (
+        <div className="flex items-center gap-2">
+          <SearchBox
+            value={props.filters.query}
+            onChange={(query) => props.onFilters({ query })}
+            className="flex-1"
+          />
+          <Sheet>
+            <SheetTrigger asChild>
+              <Button size="sm" className="shrink-0">
+                <SlidersHorizontal size={14} aria-hidden />
+                Sort
+                {active > 0 && <Chip tone="warn">{active}</Chip>}
+              </Button>
+            </SheetTrigger>
+            <SheetContent title="Sort and filter the fleet">
+              <p className="mb-2 text-2xs uppercase tracking-wide text-ink-faint">Order by</p>
+              <SortAndGroup {...props} wrap />
+            </SheetContent>
+          </Sheet>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <SearchBox
+            value={props.filters.query}
+            onChange={(query) => props.onFilters({ query })}
+            className="w-52"
+          />
+          <SortAndGroup {...props} wrap={false} />
+        </div>
       )}
+
+      {props.hidden > 0 && <p className="text-2xs text-ink-faint">{props.hidden} hidden by filters</p>}
     </div>
   );
 }

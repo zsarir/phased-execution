@@ -17,8 +17,13 @@ import { Button, ButtonGroup, Chip, Sheet, SheetContent, SheetTrigger } from '@/
 import { usePhone } from '@/lib/media';
 import { cn } from '@/lib/cn';
 import {
-  CLOSED_ONLY, OPEN_ONLY, SORTS,
-  type Filters, type GroupBy, type HiddenBreakdown, type SortId,
+  CLOSED_ONLY,
+  OPEN_ONLY,
+  SORTS,
+  type Filters,
+  type GroupBy,
+  type HiddenBreakdown,
+  type SortId,
 } from './model';
 
 export interface ControlsProps {
@@ -39,8 +44,8 @@ export interface ControlsProps {
 }
 
 const fieldClass =
-  'h-9 min-w-0 rounded border border-rule bg-surface px-2 text-sm text-ink '
-  + 'hover:border-rule-strong [@media(hover:none)]:min-h-(--tap-min)';
+  'h-9 min-w-0 rounded border border-rule bg-surface px-2 text-sm text-ink ' +
+  'hover:border-rule-strong [@media(hover:none)]:min-h-(--tap-min)';
 
 /**
  * How many filters are away from their default.
@@ -55,8 +60,12 @@ function countedLabel(label: string, count: number): string {
 }
 
 export function activeFilterCount(filters: Filters): number {
-  return Number(filters.showDocuments) + Number(filters.showClosed)
-    + Number(Boolean(filters.repo)) + Number(Boolean(filters.status));
+  return (
+    Number(filters.showDocuments) +
+    Number(filters.showClosed) +
+    Number(Boolean(filters.repo)) +
+    Number(Boolean(filters.status))
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -172,9 +181,17 @@ function LayoutToggle({
 }
 
 function FilterFields({
-  filters, onFilters, group, onGroup, repos, statuses, hiddenBy, stacked,
-}: Pick<ControlsProps, 'filters' | 'onFilters' | 'group' | 'onGroup' | 'repos' | 'statuses' | 'hiddenBy'>
-  & { stacked: boolean }) {
+  filters,
+  onFilters,
+  group,
+  onGroup,
+  repos,
+  statuses,
+  hiddenBy,
+  stacked,
+}: Pick<ControlsProps, 'filters' | 'onFilters' | 'group' | 'onGroup' | 'repos' | 'statuses' | 'hiddenBy'> & {
+  stacked: boolean;
+}) {
   return (
     <div className={cn('flex gap-2', stacked ? 'flex-col' : 'flex-wrap items-center')}>
       <div className="flex flex-wrap gap-1.5">
@@ -196,7 +213,9 @@ function FilterFields({
         >
           Documents
           {!filters.showDocuments && hiddenBy.documents > 0 && (
-            <span aria-hidden className="font-mono tabular-nums text-ink-faint">+{hiddenBy.documents}</span>
+            <span aria-hidden className="font-mono tabular-nums text-ink-faint">
+              +{hiddenBy.documents}
+            </span>
           )}
         </Button>
         {/* "Show closed" rather than "Hide closed", so pressed still means the
@@ -216,7 +235,9 @@ function FilterFields({
         >
           Show closed
           {!filters.showClosed && hiddenBy.closed > 0 && (
-            <span aria-hidden className="font-mono tabular-nums text-ink-faint">+{hiddenBy.closed}</span>
+            <span aria-hidden className="font-mono tabular-nums text-ink-faint">
+              +{hiddenBy.closed}
+            </span>
           )}
         </Button>
       </div>
@@ -231,7 +252,11 @@ function FilterFields({
               onChange={(e) => onFilters({ repo: e.target.value })}
             >
               <option value="">every repo</option>
-              {repos.map((repo) => <option key={repo} value={repo}>{repo}</option>)}
+              {repos.map((repo) => (
+                <option key={repo} value={repo}>
+                  {repo}
+                </option>
+              ))}
             </select>
           </label>
         )}
@@ -253,7 +278,11 @@ function FilterFields({
                 <option value={CLOSED_ONLY}>closed only</option>
               </optgroup>
               <optgroup label="by status">
-                {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+                {statuses.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
               </optgroup>
             </select>
           </label>
@@ -316,7 +345,12 @@ export function Controls(props: ControlsProps) {
         </div>
         <p className="min-w-0 text-2xs text-ink-faint">
           <span className="text-ink-muted">{sort.label}</span> — {sort.hint}
-          {props.hiddenBy.total > 0 && <> · <HiddenNote hiddenBy={props.hiddenBy} onShowEverything={props.onShowEverything} /></>}
+          {props.hiddenBy.total > 0 && (
+            <>
+              {' '}
+              · <HiddenNote hiddenBy={props.hiddenBy} onShowEverything={props.onShowEverything} />
+            </>
+          )}
         </p>
       </div>
     );
@@ -338,7 +372,12 @@ export function Controls(props: ControlsProps) {
       </div>
       <p className="text-2xs text-ink-faint">
         {sort.blurb}
-        {props.hiddenBy.total > 0 && <> · <HiddenNote hiddenBy={props.hiddenBy} onShowEverything={props.onShowEverything} /></>}
+        {props.hiddenBy.total > 0 && (
+          <>
+            {' '}
+            · <HiddenNote hiddenBy={props.hiddenBy} onShowEverything={props.onShowEverything} />
+          </>
+        )}
       </p>
     </div>
   );
@@ -362,7 +401,8 @@ function HiddenNote({
 }) {
   const parts: string[] = [];
   if (hiddenBy.closed) parts.push(`${hiddenBy.closed} closed`);
-  if (hiddenBy.documents) parts.push(`${hiddenBy.documents} ${hiddenBy.documents === 1 ? 'document' : 'documents'}`);
+  if (hiddenBy.documents)
+    parts.push(`${hiddenBy.documents} ${hiddenBy.documents === 1 ? 'document' : 'documents'}`);
   if (hiddenBy.search) parts.push(`${hiddenBy.search} by the search`);
 
   return (

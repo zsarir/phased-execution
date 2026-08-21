@@ -43,7 +43,9 @@ const DIST = resolve(join(VIEWER, 'client'), process.env.PC_DIST_DIR || 'dist');
 const BUDGET_GZ = 300 * 1024;
 
 if (!existsSync(join(DIST, 'index.html'))) {
-  process.stderr.write(`check-dist: no ${DIST.replace(VIEWER + '/', '')}/index.html — run \`npm run build\` first.\n`);
+  process.stderr.write(
+    `check-dist: no ${DIST.replace(VIEWER + '/', '')}/index.html — run \`npm run build\` first.\n`,
+  );
   process.exit(1);
 }
 
@@ -54,8 +56,10 @@ function check(name, condition, detail = '') {
 
 const html = readFileSync(join(DIST, 'index.html'), 'utf8');
 
-check('index.html starts with <!doctype html> (standards mode)',
-  /^<!doctype html>/i.test(html.trimStart().slice(0, 40)));
+check(
+  'index.html starts with <!doctype html> (standards mode)',
+  /^<!doctype html>/i.test(html.trimStart().slice(0, 40)),
+);
 check('<html> declares lang', /<html[^>]+lang=/.test(html));
 check('index.html links the manifest', /<link[^>]+rel="manifest"/.test(html));
 check('manifest.webmanifest is in dist', existsSync(join(DIST, 'manifest.webmanifest')));
@@ -65,15 +69,27 @@ const swPath = join(DIST, 'sw.js');
 check('sw.js is at the ROOT of dist (subscriptions are bound to /sw.js)', existsSync(swPath));
 
 const sw = existsSync(swPath) ? readFileSync(swPath, 'utf8') : '';
-check('the worker still handles push', /addEventListener\((["'`])push\1/.test(sw),
-  'a worker without a push listener silently ends notifications for every subscribed device');
+check(
+  'the worker still handles push',
+  /addEventListener\((["'`])push\1/.test(sw),
+  'a worker without a push listener silently ends notifications for every subscribed device',
+);
 check('the precache includes index.html (the offline shell)', sw.includes('index.html'));
-check('the precache does NOT include the terminal chunk', !sw.includes('terminal-'),
-  'xterm is no use to someone who cannot open a shell, and it is 89 KB');
-check('the precache does NOT include the pane chunk (where xterm lives)', !sw.includes('pane-'),
-  'the shared emulator chunk both terminal routes lazy-load — same reasoning, same 89 KB');
-check('the precache does NOT include the agent chunk', !sw.includes('agent-'),
-  'the agent route is no use to someone whose console has no --allow-agent');
+check(
+  'the precache does NOT include the terminal chunk',
+  !sw.includes('terminal-'),
+  'xterm is no use to someone who cannot open a shell, and it is 89 KB',
+);
+check(
+  'the precache does NOT include the pane chunk (where xterm lives)',
+  !sw.includes('pane-'),
+  'the shared emulator chunk both terminal routes lazy-load — same reasoning, same 89 KB',
+);
+check(
+  'the precache does NOT include the agent chunk',
+  !sw.includes('agent-'),
+  'the agent route is no use to someone whose console has no --allow-agent',
+);
 
 /* The entry — parsed from the document, not guessed from filenames. */
 const entryMatch = /<script[^>]+type="module"[^>]+src="\/assets\/(index-[^"]+\.js)"/.exec(html);
@@ -82,23 +98,41 @@ check('index.html references exactly one module entry under /assets/', Boolean(e
 if (entryMatch) {
   const entry = readFileSync(join(DIST, 'assets', entryMatch[1]), 'utf8');
   const gz = gzipSync(entry).length;
-  check(`entry ${entryMatch[1]} is under the budget (${(gz / 1024).toFixed(1)} KB gz of ${BUDGET_GZ / 1024} KB)`,
-    gz <= BUDGET_GZ);
-  check('the entry registers the worker at /sw.js', /["'`]\/sw\.js["'`]/.test(entry),
-    'the registration URL is the contract the two live subscriptions depend on');
+  check(
+    `entry ${entryMatch[1]} is under the budget (${(gz / 1024).toFixed(1)} KB gz of ${BUDGET_GZ / 1024} KB)`,
+    gz <= BUDGET_GZ,
+  );
+  check(
+    'the entry registers the worker at /sw.js',
+    /["'`]\/sw\.js["'`]/.test(entry),
+    'the registration URL is the contract the two live subscriptions depend on',
+  );
 }
 
 const assets = existsSync(join(DIST, 'assets')) ? readdirSync(join(DIST, 'assets')) : [];
-check('the terminal is its own lazy chunk', assets.some((name) => /^terminal-.*\.js$/.test(name)));
-check('the agent page is its own lazy chunk', assets.some((name) => /^agent-.*\.js$/.test(name)));
-check('xterm rides in one shared lazy pane-* chunk (the name the globIgnores exclude)',
+check(
+  'the terminal is its own lazy chunk',
+  assets.some((name) => /^terminal-.*\.js$/.test(name)),
+);
+check(
+  'the agent page is its own lazy chunk',
+  assets.some((name) => /^agent-.*\.js$/.test(name)),
+);
+check(
+  'xterm rides in one shared lazy pane-* chunk (the name the globIgnores exclude)',
   assets.some((name) => /^pane-.*\.js$/.test(name)),
-  'if the bundler renamed the shared chunk, update vite.config.ts globIgnores AND this check together');
-check('index.html never references the terminal chunk', !html.includes('terminal-'),
-  'referenced from the document, it would load for every reader of a route map');
-check('index.html never references the pane or agent chunks',
+  'if the bundler renamed the shared chunk, update vite.config.ts globIgnores AND this check together',
+);
+check(
+  'index.html never references the terminal chunk',
+  !html.includes('terminal-'),
+  'referenced from the document, it would load for every reader of a route map',
+);
+check(
+  'index.html never references the pane or agent chunks',
   !html.includes('pane-') && !html.includes('agent-'),
-  'referenced from the document, they would load for every reader of a route map');
+  'referenced from the document, they would load for every reader of a route map',
+);
 
 /*
  * The same promise as the three precache checks above, asserted against the
@@ -115,18 +149,19 @@ check('index.html never references the pane or agent chunks',
  * So: find whichever asset actually contains the emulator, and assert the
  * worker does not precache that one. Rename-proof by construction.
  */
-const xtermChunks = assets.filter((name) => name.endsWith('.js')
-  && readFileSync(join(DIST, 'assets', name), 'utf8').includes('xterm'));
-check('the terminal emulator is in a chunk at all (nothing to check otherwise)',
-  xtermChunks.length > 0);
+const xtermChunks = assets.filter(
+  (name) => name.endsWith('.js') && readFileSync(join(DIST, 'assets', name), 'utf8').includes('xterm'),
+);
+check('the terminal emulator is in a chunk at all (nothing to check otherwise)', xtermChunks.length > 0);
 const precachedXterm = xtermChunks.filter((name) => sw.includes(name));
-check(`the precache excludes the emulator, whatever the chunk is called (${xtermChunks.join(', ') || 'none'})`,
+check(
+  `the precache excludes the emulator, whatever the chunk is called (${xtermChunks.join(', ') || 'none'})`,
   precachedXterm.length === 0,
-  `precached: ${precachedXterm.join(', ')} — add it to globIgnores in vite.config.ts. `
-  + 'A renamed shared chunk is the usual cause; see the note in views/terminal/pane.tsx.');
+  `precached: ${precachedXterm.join(', ')} — add it to globIgnores in vite.config.ts. ` +
+    'A renamed shared chunk is the usual cause; see the note in views/terminal/pane.tsx.',
+);
 
-check('dist/.build-rev exists (npm run build stamps what it built)',
-  existsSync(join(DIST, '.build-rev')));
+check('dist/.build-rev exists (npm run build stamps what it built)', existsSync(join(DIST, '.build-rev')));
 
 /* ------------------------------------------------------------------ */
 
@@ -138,7 +173,9 @@ for (const { name, condition, detail } of results) {
     if (detail) process.stdout.write(`  ${detail}\n`);
   }
 }
-process.stdout.write(failed === 0
-  ? `check-dist: all ${results.length} checks passed.\n`
-  : `check-dist: ${failed} of ${results.length} checks FAILED.\n`);
+process.stdout.write(
+  failed === 0
+    ? `check-dist: all ${results.length} checks passed.\n`
+    : `check-dist: ${failed} of ${results.length} checks FAILED.\n`,
+);
 process.exit(failed === 0 ? 0 : 1);

@@ -17,7 +17,15 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import {
-  BarList, Bars, CHART_TONES, Calendar, LoadMeter, RouteStrip, RunStrip, StackBar, toneVar,
+  BarList,
+  Bars,
+  CHART_TONES,
+  Calendar,
+  LoadMeter,
+  RouteStrip,
+  RunStrip,
+  StackBar,
+  toneVar,
 } from './charts';
 
 /** Anything that is a colour but not a token reference. */
@@ -50,7 +58,16 @@ const CALENDAR = [
 
 describe('the chart palette', () => {
   it('resolves every tone — the eight UI states — to a --status-* custom property', () => {
-    expect([...CHART_TONES]).toEqual(['needs-you', 'failed', 'running', 'verifying', 'waiting', 'queued', 'skipped', 'done']);
+    expect([...CHART_TONES]).toEqual([
+      'needs-you',
+      'failed',
+      'running',
+      'verifying',
+      'waiting',
+      'queued',
+      'skipped',
+      'done',
+    ]);
     for (const tone of CHART_TONES) {
       expect(toneVar(tone)).toBe(`var(--status-${tone})`);
     }
@@ -75,7 +92,12 @@ describe('the chart palette', () => {
   it('paints BarList and StackBar with tokens only', () => {
     const { container } = render(
       <>
-        <BarList items={[{ name: 'aws', value: 4 }, { name: 'hub', value: 1 }]} />
+        <BarList
+          items={[
+            { name: 'aws', value: 4 },
+            { name: 'hub', value: 1 },
+          ]}
+        />
         <StackBar
           segments={[
             { label: 'done', value: 3, tone: 'done' },
@@ -104,10 +126,16 @@ describe('the charts as charts', () => {
 
   it('scales BarList against its own maximum', () => {
     const { container } = render(
-      <BarList items={[{ name: 'a', value: 10 }, { name: 'b', value: 5 }]} />,
+      <BarList
+        items={[
+          { name: 'a', value: 10 },
+          { name: 'b', value: 5 },
+        ]}
+      />,
     );
-    const widths = [...container.querySelectorAll<HTMLElement>('span[style*="width"]')]
-      .map((el) => el.style.width);
+    const widths = [...container.querySelectorAll<HTMLElement>('span[style*="width"]')].map(
+      (el) => el.style.width,
+    );
     expect(widths).toEqual(['100%', '50%']);
   });
 
@@ -125,17 +153,16 @@ describe('the charts as charts', () => {
         ]}
       />,
     );
-    const widths = [...container.querySelectorAll<HTMLElement>('span[style*="width"]')]
-      .map((el) => el.style.width);
+    const widths = [...container.querySelectorAll<HTMLElement>('span[style*="width"]')].map(
+      (el) => el.style.width,
+    );
     expect(widths).toEqual(['75%', '25%']);
     expect(container.textContent).toContain('done');
     expect(container.textContent).toContain('next up');
   });
 
   it('does not divide by zero when every segment is empty', () => {
-    const { container } = render(
-      <StackBar segments={[{ label: 'done', value: 0, tone: 'done' }]} />,
-    );
+    const { container } = render(<StackBar segments={[{ label: 'done', value: 0, tone: 'done' }]} />);
     expect(container.querySelector<HTMLElement>('span[style*="width"]')!.style.width).toBe('0%');
   });
 
@@ -143,7 +170,12 @@ describe('the charts as charts', () => {
     const { container } = render(
       <>
         <LoadMeter fraction={0.4} label="40%" description="40% of a session" />
-        <RouteStrip phases={[{ phase: 1, state: 'done' }, { phase: 2, state: 'ready' }]} />
+        <RouteStrip
+          phases={[
+            { phase: 1, state: 'done' },
+            { phase: 2, state: 'ready' },
+          ]}
+        />
       </>,
     );
     for (const value of paints(container)) expect(value, value).not.toMatch(LITERAL_COLOUR);
@@ -167,20 +199,20 @@ describe('the charts as charts', () => {
     // new engine word and paint the segment invisible — which reads as "this
     // phase does not exist" rather than "we do not know what this is". The
     // vocabulary's unknown state is `waiting`: never amber, never green.
-    const { container } = render(
-      <RouteStrip phases={[{ phase: 1, state: 'quantum-superposition' }]} />,
-    );
+    const { container } = render(<RouteStrip phases={[{ phase: 1, state: 'quantum-superposition' }]} />);
     const segment = container.querySelector<HTMLElement>('[title^="P1"]')!;
     expect(segment.style.background).toBe(toneVar('waiting'));
   });
 
   it('gives a strip one segment per phase and names the progress', () => {
     const { container } = render(
-      <RouteStrip phases={[
-        { phase: 1, state: 'done' },
-        { phase: 2, state: 'done' },
-        { phase: 3, state: 'ready' },
-      ]} />,
+      <RouteStrip
+        phases={[
+          { phase: 1, state: 'done' },
+          { phase: 2, state: 'done' },
+          { phase: 3, state: 'ready' },
+        ]}
+      />,
     );
     const strip = container.querySelector('[role="img"]')!;
     expect(strip.getAttribute('aria-label')).toBe('3 phases, 2 done');
@@ -189,18 +221,19 @@ describe('the charts as charts', () => {
 
   it('paints a run strip with tokens only, including a status it has not been taught', () => {
     const { container } = render(
-      <RunStrip phases={[
-        { phase: 1, status: 'done' },
-        { phase: 2, status: 'failed' },
-        { phase: 3, status: 'quantum-superposition' },
-      ]} />,
+      <RunStrip
+        phases={[
+          { phase: 1, status: 'done' },
+          { phase: 2, status: 'failed' },
+          { phase: 3, status: 'quantum-superposition' },
+        ]}
+      />,
     );
     for (const value of paints(container)) expect(value, value).not.toMatch(LITERAL_COLOUR);
     // Same fallback the route strip makes: the unknown state says "we do not
     // know what this is", where an interpolated `var(--status-<new word>)`
     // would say nothing at all by painting the segment invisible.
-    expect(container.querySelector<HTMLElement>('[title^="P3"]')!.style.background)
-      .toBe(toneVar('waiting'));
+    expect(container.querySelector<HTMLElement>('[title^="P3"]')!.style.background).toBe(toneVar('waiting'));
   });
 
   it('reads a run phase with the runner vocabulary, not the plan one', () => {
@@ -208,33 +241,40 @@ describe('the charts as charts', () => {
     // both would have to answer what a `blocked` run phase is, and there is no
     // such thing.
     const { container } = render(
-      <RunStrip phases={[
-        { phase: 1, status: 'failed' },
-        { phase: 2, status: 'parked' },
-        { phase: 3, status: 'awaiting-verification' },
-        { phase: 4, status: 'skipped' },
-      ]} />,
+      <RunStrip
+        phases={[
+          { phase: 1, status: 'failed' },
+          { phase: 2, status: 'parked' },
+          { phase: 3, status: 'awaiting-verification' },
+          { phase: 4, status: 'skipped' },
+        ]}
+      />,
     );
-    const fills = [...container.querySelector('[role="img"]')!.children]
-      .map((c) => (c as HTMLElement).style.background);
+    const fills = [...container.querySelector('[role="img"]')!.children].map(
+      (c) => (c as HTMLElement).style.background,
+    );
     // `parked` is a queue of questions, not a failure — it needs a person,
     // never red; `awaiting-verification` likewise; `skipped` is its own word.
     expect(fills).toEqual([
-      toneVar('failed'), toneVar('needs-you'), toneVar('needs-you'), toneVar('skipped'),
+      toneVar('failed'),
+      toneVar('needs-you'),
+      toneVar('needs-you'),
+      toneVar('skipped'),
     ]);
   });
 
   it('counts a run strip by what actually finished', () => {
     const { container } = render(
-      <RunStrip phases={[
-        { phase: 1, status: 'done' },
-        { phase: 2, status: 'skipped' },
-        { phase: 3, status: 'failed' },
-      ]} />,
+      <RunStrip
+        phases={[
+          { phase: 1, status: 'done' },
+          { phase: 2, status: 'skipped' },
+          { phase: 3, status: 'failed' },
+        ]}
+      />,
     );
     // A skipped phase is not a done one, however the run ended.
-    expect(container.querySelector('[role="img"]')!.getAttribute('aria-label'))
-      .toBe('3 phases, 1 done');
+    expect(container.querySelector('[role="img"]')!.getAttribute('aria-label')).toBe('3 phases, 1 done');
   });
 
   it('gives every chart an accessible name — they are img roles, not decoration', () => {

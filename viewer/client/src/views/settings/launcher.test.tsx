@@ -42,8 +42,14 @@ const PLAN: LauncherPlanView = {
   path: `${HOME}/Desktop/Phase Console.command`,
   note: 'Double-click it. The first run may install the launchd agent, which builds the client once.',
   rootOpen: true,
-  fullFlags: ['--allow-writes', '--allow-run', '--allow-terminal', '--allow-agent',
-    '--allow-accounts', '--allow-mcp'],
+  fullFlags: [
+    '--allow-writes',
+    '--allow-run',
+    '--allow-terminal',
+    '--allow-agent',
+    '--allow-accounts',
+    '--allow-mcp',
+  ],
 };
 
 const STATE: ConsoleState = {

@@ -6,7 +6,13 @@ import { useOnline, useServiceWorker } from '@/lib/pwa';
 import { onSse, useSseStatus } from '@/lib/sse';
 import { useConsoleStopped } from '@/lib/shutdown';
 import {
-  shellCounts, useApprovals, useConsoleState, useLiveData, useMcp, usePlans, useSessions,
+  shellCounts,
+  useApprovals,
+  useConsoleState,
+  useLiveData,
+  useMcp,
+  usePlans,
+  useSessions,
 } from '@/lib/queries';
 import { Banner, Spinner, Toaster, TooltipProvider, toast } from '@/components/ui';
 import { installAppHeight, useKeyboardOpen } from '@/lib/viewport';
@@ -17,7 +23,13 @@ import { MoreSheet, TabBar, TopBar } from '@/shell/phone';
 
 /** `head` → shortcut, for a keyboard on a desktop. */
 const SHORTCUTS: Record<string, string> = {
-  '/': 'search', r: 'ready', p: 'plans', d: 'dashboard', s: 'stats', g: 'guide', n: 'notifications',
+  '/': 'search',
+  r: 'ready',
+  p: 'plans',
+  d: 'dashboard',
+  s: 'stats',
+  g: 'guide',
+  n: 'notifications',
 };
 
 /**
@@ -28,35 +40,42 @@ const SHORTCUTS: Record<string, string> = {
  * invalidation lives in `patchSessions`; this is only the sentence.
  */
 function useRecoveryOutcomeToasts(): void {
-  useEffect(() => onSse('sessions', (data) => {
-    const record = data as {
-      type?: string;
-      recovery?: { fixed?: boolean; headline?: string; detail?: string; synced?: boolean };
-    };
-    if (record.type !== 'recovery-outcome' || !record.recovery) return;
-    const { fixed, noDefect, headline, detail, synced } = record.recovery as {
-      fixed?: boolean; noDefect?: boolean; headline?: string; detail?: string; synced?: boolean;
-    };
-    if (fixed) {
-      toast(
-        `${headline ?? 'Recovery finished'}${synced ? ' — the run record moved with it' : ''}`,
-        'ok',
-      );
-    } else if (noDefect) {
-      // The recovery LOOKED and found nothing wrong — a verdict, not a
-      // failure. This used to toast as a warning ("ended without moving the
-      // board"), the exact inversion of what happened.
-      toast(
-        `${headline ?? 'Recovery verified'} — nothing was wrong; the halt is stood down and the board is unchanged.`,
-        'ok',
-      );
-    } else {
-      toast(
-        headline ? `${headline} — ${detail ?? 'inspect the session'}` : 'Recovery ended without moving the board',
-        'warn',
-      );
-    }
-  }), []);
+  useEffect(
+    () =>
+      onSse('sessions', (data) => {
+        const record = data as {
+          type?: string;
+          recovery?: { fixed?: boolean; headline?: string; detail?: string; synced?: boolean };
+        };
+        if (record.type !== 'recovery-outcome' || !record.recovery) return;
+        const { fixed, noDefect, headline, detail, synced } = record.recovery as {
+          fixed?: boolean;
+          noDefect?: boolean;
+          headline?: string;
+          detail?: string;
+          synced?: boolean;
+        };
+        if (fixed) {
+          toast(`${headline ?? 'Recovery finished'}${synced ? ' — the run record moved with it' : ''}`, 'ok');
+        } else if (noDefect) {
+          // The recovery LOOKED and found nothing wrong — a verdict, not a
+          // failure. This used to toast as a warning ("ended without moving the
+          // board"), the exact inversion of what happened.
+          toast(
+            `${headline ?? 'Recovery verified'} — nothing was wrong; the halt is stood down and the board is unchanged.`,
+            'ok',
+          );
+        } else {
+          toast(
+            headline
+              ? `${headline} — ${detail ?? 'inspect the session'}`
+              : 'Recovery ended without moving the board',
+            'warn',
+          );
+        }
+      }),
+    [],
+  );
 }
 
 export function App() {
@@ -91,7 +110,12 @@ export function App() {
   // queries re-read themselves off (`patchSessions`).
   useRecoveryOutcomeToasts();
 
-  const { data: state, error: stateError, isFetching: stateFetching, refetch: refetchState } = useConsoleState();
+  const {
+    data: state,
+    error: stateError,
+    isFetching: stateFetching,
+    refetch: refetchState,
+  } = useConsoleState();
   const rootOk = Boolean(state?.root?.ok);
   const { data: plans } = usePlans(rootOk);
   // Nothing to poll on a server that predates the runner — asking anyway just
@@ -106,8 +130,12 @@ export function App() {
 
   // Going anywhere closes the sheet — including "back", which is the gesture a
   // sheet is most often dismissed with.
-  useEffect(() => { setMoreOpen(false); }, [route.path]);
-  useEffect(() => { if (!phone) setMoreOpen(false); }, [phone]);
+  useEffect(() => {
+    setMoreOpen(false);
+  }, [route.path]);
+  useEffect(() => {
+    if (!phone) setMoreOpen(false);
+  }, [phone]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -155,7 +183,9 @@ export function App() {
       <Disconnected
         online={online}
         detail={String((stateError as Error).message ?? stateError)}
-        onRetry={() => { void refetchState(); }}
+        onRetry={() => {
+          void refetchState();
+        }}
         retrying={stateFetching}
       />
     );
@@ -179,7 +209,13 @@ export function App() {
     const SourceView = resolveView('source');
     return (
       <TooltipProvider delayDuration={300}>
-        <Suspense fallback={<div className="grid min-h-dvh place-items-center"><Spinner /></div>}>
+        <Suspense
+          fallback={
+            <div className="grid min-h-dvh place-items-center">
+              <Spinner />
+            </div>
+          }
+        >
           <SourceView route={route} />
         </Suspense>
         <Toaster />
@@ -199,8 +235,8 @@ export function App() {
           // iOS. The token falls back to 100dvh where visualViewport is absent.
           'grid h-(--app-height) overflow-hidden bg-ground',
           phone
-            // rows: top bar · the only scrolling region · tab bar
-            ? 'is-phone grid-rows-[auto_minmax(0,1fr)_auto]'
+            ? // rows: top bar · the only scrolling region · tab bar
+              'is-phone grid-rows-[auto_minmax(0,1fr)_auto]'
             : 'grid-cols-[auto_minmax(0,1fr)]',
         )}
       >
@@ -216,21 +252,22 @@ export function App() {
             above the tab bar. */}
         <main
           ref={main}
-          className={FULL_HEIGHT_HEADS.has(head ?? '')
-            // Terminal/agent own their height: banners stay in flow and the
-            // frame gets the definite remainder — never a second scroller.
-            ? 'flex min-w-0 flex-col overflow-hidden'
-            : 'min-w-0 overflow-y-auto overscroll-none'}
+          className={
+            FULL_HEIGHT_HEADS.has(head ?? '')
+              ? // Terminal/agent own their height: banners stay in flow and the
+                // frame gets the definite remainder — never a second scroller.
+                'flex min-w-0 flex-col overflow-hidden'
+              : 'min-w-0 overflow-y-auto overscroll-none'
+          }
         >
           {(state.serverStale || stopped || !online || sse !== 'live') && (
             <div className="flex shrink-0 flex-col gap-2 px-3 pt-3 md:px-5">
               {state.serverStale && (
                 <Banner severity="warn">
                   <div className="min-w-0">
-                    <strong>This console is running older code than is on disk.</strong>{' '}
-                    Node loads the server once, at startup — the page reloads from disk but the
-                    process cannot. Restart it, or a fix you already have will look like it did
-                    not work.
+                    <strong>This console is running older code than is on disk.</strong> Node loads the server
+                    once, at startup — the page reloads from disk but the process cannot. Restart it, or a fix
+                    you already have will look like it did not work.
                   </div>
                 </Banner>
               )}
@@ -250,28 +287,40 @@ export function App() {
                     Start it again with <code className="font-mono text-2xs">{stopped.hint}</code>.
                   </div>
                 </Banner>
-              ) : (!online || sse !== 'live') && (
-                <Banner severity={!online || sse === 'offline' ? 'error' : 'info'}>
-                  <WifiOff size={15} className="mt-0.5 shrink-0" aria-hidden />
-                  <div className="min-w-0">
-                    {/* Being offline outranks whatever the stream thinks: it
+              ) : (
+                (!online || sse !== 'live') && (
+                  <Banner severity={!online || sse === 'offline' ? 'error' : 'info'}>
+                    <WifiOff size={15} className="mt-0.5 shrink-0" aria-hidden />
+                    <div className="min-w-0">
+                      {/* Being offline outranks whatever the stream thinks: it
                         explains the stream, and it is the one the reader can
                         actually do something about. */}
-                    {!online
-                      ? 'This device is offline. Everything below was loaded before that and is no longer updating.'
-                      : sse === 'offline'
-                        ? 'Live updates stopped. Reload to reconnect.'
-                        : 'Reconnecting to the console — the board may be a moment behind.'}
-                  </div>
-                </Banner>
+                      {!online
+                        ? 'This device is offline. Everything below was loaded before that and is no longer updating.'
+                        : sse === 'offline'
+                          ? 'Live updates stopped. Reload to reconnect.'
+                          : 'Reconnecting to the console — the board may be a moment behind.'}
+                    </div>
+                  </Banner>
+                )
               )}
             </div>
           )}
 
-          <Suspense fallback={<div className="grid place-items-center py-16"><Spinner /></div>}>
-            {FULL_HEIGHT_HEADS.has(head ?? '')
-              ? <div className="min-h-0 flex-1"><View route={route} /></div>
-              : <View route={route} />}
+          <Suspense
+            fallback={
+              <div className="grid place-items-center py-16">
+                <Spinner />
+              </div>
+            }
+          >
+            {FULL_HEIGHT_HEADS.has(head ?? '') ? (
+              <div className="min-h-0 flex-1">
+                <View route={route} />
+              </div>
+            ) : (
+              <View route={route} />
+            )}
           </Suspense>
         </main>
 

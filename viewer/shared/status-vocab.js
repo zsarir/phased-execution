@@ -29,16 +29,18 @@ import { SITUATION_ACTOR } from './situation-model.js';
  * that is several states at once is the one that needs a person soonest.
  * @type {readonly UiState[]}
  */
-export const UI_STATES = Object.freeze(/** @type {const} */ ([
-  'needs-you',
-  'failed',
-  'running',
-  'verifying',
-  'waiting',
-  'queued',
-  'skipped',
-  'done',
-]));
+export const UI_STATES = Object.freeze(
+  /** @type {const} */ ([
+    'needs-you',
+    'failed',
+    'running',
+    'verifying',
+    'waiting',
+    'queued',
+    'skipped',
+    'done',
+  ]),
+);
 
 /**
  * What each state is called, which hue token paints it (`--status-<hue>`),
@@ -51,13 +53,13 @@ export const UI_STATES = Object.freeze(/** @type {const} */ ([
  */
 export const STATE_META = Object.freeze({
   'needs-you': { label: 'Needs you', hue: 'needs-you', tone: 'accent', icon: 'hand' },
-  'failed': { label: 'Failed', hue: 'failed', tone: 'bad', icon: 'circle-x' },
-  'running': { label: 'Running', hue: 'running', tone: 'live', icon: 'circle-play' },
-  'verifying': { label: 'Verifying', hue: 'verifying', tone: 'live', icon: 'search-check' },
-  'waiting': { label: 'Waiting', hue: 'waiting', tone: 'wait', icon: 'hourglass' },
-  'queued': { label: 'Queued', hue: 'queued', tone: 'neutral', icon: 'circle-dashed' },
-  'skipped': { label: 'Skipped', hue: 'skipped', tone: 'neutral', icon: 'circle-slash' },
-  'done': { label: 'Done', hue: 'done', tone: 'ok', icon: 'circle-check' },
+  failed: { label: 'Failed', hue: 'failed', tone: 'bad', icon: 'circle-x' },
+  running: { label: 'Running', hue: 'running', tone: 'live', icon: 'circle-play' },
+  verifying: { label: 'Verifying', hue: 'verifying', tone: 'live', icon: 'search-check' },
+  waiting: { label: 'Waiting', hue: 'waiting', tone: 'wait', icon: 'hourglass' },
+  queued: { label: 'Queued', hue: 'queued', tone: 'neutral', icon: 'circle-dashed' },
+  skipped: { label: 'Skipped', hue: 'skipped', tone: 'neutral', icon: 'circle-slash' },
+  done: { label: 'Done', hue: 'done', tone: 'ok', icon: 'circle-check' },
 });
 
 /**
@@ -152,17 +154,29 @@ export function isUiState(value) {
 
 /** The UI state of a run status word; unknown words read as `UNKNOWN_STATE`. @param {string|null|undefined} status @returns {UiState} */
 export function runUiState(status) {
-  return /** @type {UiState|undefined} */ (RUN_STATUS_UI[/** @type {keyof typeof RUN_STATUS_UI} */ (status ?? '')]) ?? UNKNOWN_STATE;
+  return (
+    /** @type {UiState|undefined} */ (
+      RUN_STATUS_UI[/** @type {keyof typeof RUN_STATUS_UI} */ (status ?? '')]
+    ) ?? UNKNOWN_STATE
+  );
 }
 
 /** The UI state of a phase record status word. @param {string|null|undefined} status @returns {UiState} */
 export function phaseUiState(status) {
-  return /** @type {UiState|undefined} */ (PHASE_STATUS_UI[/** @type {keyof typeof PHASE_STATUS_UI} */ (status ?? '')]) ?? UNKNOWN_STATE;
+  return (
+    /** @type {UiState|undefined} */ (
+      PHASE_STATUS_UI[/** @type {keyof typeof PHASE_STATUS_UI} */ (status ?? '')]
+    ) ?? UNKNOWN_STATE
+  );
 }
 
 /** The UI state of a board state word. @param {string|null|undefined} state @returns {UiState} */
 export function boardUiState(state) {
-  return /** @type {UiState|undefined} */ (BOARD_STATE_UI[/** @type {keyof typeof BOARD_STATE_UI} */ (state ?? '')]) ?? UNKNOWN_STATE;
+  return (
+    /** @type {UiState|undefined} */ (
+      BOARD_STATE_UI[/** @type {keyof typeof BOARD_STATE_UI} */ (state ?? '')]
+    ) ?? UNKNOWN_STATE
+  );
 }
 
 /**
@@ -183,7 +197,10 @@ export function boardLabel(state) {
  */
 export function actorUiState(actor, opts = {}) {
   if (actor === 'machine' && opts.errand) return 'needs-you';
-  return /** @type {UiState|undefined} */ (ACTOR_UI[/** @type {keyof typeof ACTOR_UI} */ (actor ?? '')]) ?? UNKNOWN_STATE;
+  return (
+    /** @type {UiState|undefined} */ (ACTOR_UI[/** @type {keyof typeof ACTOR_UI} */ (actor ?? '')]) ??
+    UNKNOWN_STATE
+  );
 }
 
 /**
@@ -228,7 +245,8 @@ export function worstOf(states) {
  */
 export function uiState(facts = {}) {
   const { run, record, board, situation, errand, approvals } = facts;
-  if (board != null && BOARD_STATE_UI[/** @type {keyof typeof BOARD_STATE_UI} */ (board)] === 'done') return 'done';
+  if (board != null && BOARD_STATE_UI[/** @type {keyof typeof BOARD_STATE_UI} */ (board)] === 'done')
+    return 'done';
   /** @type {UiState[]} */
   const states = [];
   if (approvals) states.push('needs-you');
@@ -236,7 +254,11 @@ export function uiState(facts = {}) {
   if (situation != null) {
     if (typeof situation === 'string') {
       // A situation id, or a bare actor word — ids win, actors are the fallback.
-      states.push(situation in SITUATION_ACTOR ? situationUiState(situation, { errand }) : actorUiState(situation, { errand }));
+      states.push(
+        situation in SITUATION_ACTOR
+          ? situationUiState(situation, { errand })
+          : actorUiState(situation, { errand }),
+      );
     } else if (situation.actor != null) {
       states.push(actorUiState(situation.actor, { errand }));
     } else if (situation.id != null) {

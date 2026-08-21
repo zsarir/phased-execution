@@ -61,10 +61,15 @@ describe('LockChip', () => {
 
   it('carries host, claim time and scope in its tooltip', () => {
     render(
-      <LockChip lock={{
-        owner: 'someone/else', expired: false, host: 'their-box',
-        claimedAt: Date.now() - 3_600_000, scope: ['app', 'api'],
-      }} />,
+      <LockChip
+        lock={{
+          owner: 'someone/else',
+          expired: false,
+          host: 'their-box',
+          claimedAt: Date.now() - 3_600_000,
+          scope: ['app', 'api'],
+        }}
+      />,
     );
     const title = screen.getByText(/held by/).getAttribute('title') ?? '';
     expect(title).toContain('their-box');
@@ -103,9 +108,14 @@ describe('DepsCell', () => {
   });
 
   it('falls back to the plan graph when the engine analysis is absent', () => {
-    render(<DepsCell slug="alpha" phase={phase({
-      row: { phase: 4, title: 't', dependsOn: [1], parallelSafe: '', repos: 'app', exitCriteria: '' },
-    })} />);
+    render(
+      <DepsCell
+        slug="alpha"
+        phase={phase({
+          row: { phase: 4, title: 't', dependsOn: [1], parallelSafe: '', repos: 'app', exitCriteria: '' },
+        })}
+      />,
+    );
     expect(screen.getByText('P1')).toBeTruthy();
   });
 
@@ -117,7 +127,9 @@ describe('DepsCell', () => {
 
 describe('SizeCell and FlagsCell', () => {
   it('the size carries its weight in the tooltip and its estimate beneath', () => {
-    render(<SizeCell phase={phase()} eta={{ phase: 4, weight: 3, estMs: 1, basis: 'plan', label: '~40m' }} />);
+    render(
+      <SizeCell phase={phase()} eta={{ phase: 4, weight: 3, estMs: 1, basis: 'plan', label: '~40m' }} />,
+    );
     expect(screen.getByText('M').getAttribute('title')).toContain('weight');
     expect(screen.getByText('~40m')).toBeTruthy();
   });
@@ -141,13 +153,18 @@ describe('SizeCell and FlagsCell', () => {
 
 describe('PhaseDetails', () => {
   it('carries the fields no row has room for', () => {
-    render(<PhaseDetails slug="alpha" phase={phase({
-      goal: 'Wire the relay so a write lands.',
-      gates: 'P3 handoff merged',
-      model: 'opus',
-      effort: 'high',
-      analysis: analysis({ onCriticalPath: true }),
-    })} />);
+    render(
+      <PhaseDetails
+        slug="alpha"
+        phase={phase({
+          goal: 'Wire the relay so a write lands.',
+          gates: 'P3 handoff merged',
+          model: 'opus',
+          effort: 'high',
+          analysis: analysis({ onCriticalPath: true }),
+        })}
+      />,
+    );
 
     expect(screen.getByText(/Wire the relay so a write lands/)).toBeTruthy();
     expect(screen.getByText('P3 handoff merged')).toBeTruthy();
@@ -158,9 +175,19 @@ describe('PhaseDetails', () => {
   it('spells out the whole claim, including a scope nobody stated', () => {
     // An absent scope is not "no scope" — the engine treats it as colliding
     // with everything, which is the opposite of what a blank would suggest.
-    render(<PhaseDetails slug="alpha" phase={phase({
-      lock: { owner: 'someone/else', expired: false, host: 'their-box', leaseUntil: Date.now() + 600_000 },
-    })} />);
+    render(
+      <PhaseDetails
+        slug="alpha"
+        phase={phase({
+          lock: {
+            owner: 'someone/else',
+            expired: false,
+            host: 'their-box',
+            leaseUntil: Date.now() + 600_000,
+          },
+        })}
+      />,
+    );
 
     expect(screen.getByText('someone/else')).toBeTruthy();
     expect(screen.getByText('their-box')).toBeTruthy();

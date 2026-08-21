@@ -15,18 +15,17 @@ import type { SkillInfo } from '@/lib/api';
 
 const SKILLS: SkillInfo[] = [
   { id: 'graph-tool', name: 'graph-tool', description: 'keeps an index', source: 'personal', path: '/x' },
-  { id: 'investigate', name: 'investigate', description: 'systematic debugging', source: 'personal', path: '/y' },
+  {
+    id: 'investigate',
+    name: 'investigate',
+    description: 'systematic debugging',
+    source: 'personal',
+    path: '/y',
+  },
 ];
 
 function mount(props: Partial<Parameters<typeof SkillPicker>[0]> = {}) {
-  return render(
-    <SkillPicker
-      skills={SKILLS}
-      chosen={[]}
-      onChange={vi.fn()}
-      {...props}
-    />,
-  );
+  return render(<SkillPicker skills={SKILLS} chosen={[]} onChange={vi.fn()} {...props} />);
 }
 
 describe('SkillPicker default badges', () => {

@@ -29,11 +29,7 @@ describe('Skeleton', () => {
 describe('Empty', () => {
   it('says what is missing, why, and what to do about it', () => {
     render(
-      <Empty
-        title="No plans yet"
-        body="This repo has no docs/plans."
-        action={<Button>Create one</Button>}
-      />,
+      <Empty title="No plans yet" body="This repo has no docs/plans." action={<Button>Create one</Button>} />,
     );
     expect(screen.getByText('No plans yet')).toBeInTheDocument();
     expect(screen.getByText('This repo has no docs/plans.')).toBeInTheDocument();
@@ -133,7 +129,14 @@ describe('KeyValue', () => {
   });
 
   it('has no axe violations', async () => {
-    const { container } = render(<KeyValue items={[['Owner', 'mobin'], ['Lease', '18m left']]} />);
+    const { container } = render(
+      <KeyValue
+        items={[
+          ['Owner', 'mobin'],
+          ['Lease', '18m left'],
+        ]}
+      />,
+    );
     await expectNoAxeViolations(container);
   });
 });

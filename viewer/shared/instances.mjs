@@ -29,7 +29,17 @@
  */
 
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
@@ -161,14 +171,17 @@ export function stateHome(env = process.env) {
  */
 function guardTestState(resolved, real, envName) {
   const env = process.env;
-  const testing = env.NODE_TEST_CONTEXT || env.VITEST
-    || process.argv.includes('--test') || process.argv.some((a) => a.startsWith('--test-'));
+  const testing =
+    env.NODE_TEST_CONTEXT ||
+    env.VITEST ||
+    process.argv.includes('--test') ||
+    process.argv.some((a) => a.startsWith('--test-'));
   if (!testing || env.PHASE_CONSOLE_ALLOW_REAL_STATE) return;
   if (resolved === real) {
     throw new Error(
-      `a test process resolved the REAL ${envName === 'XDG_STATE_HOME' ? 'state' : 'config'} `
-      + `directory (${join(real, 'phase-console')}) — import viewer/test/state-sandbox.ts before `
-      + `any server import, or set ${envName}. Deliberate real reads: PHASE_CONSOLE_ALLOW_REAL_STATE=1.`,
+      `a test process resolved the REAL ${envName === 'XDG_STATE_HOME' ? 'state' : 'config'} ` +
+        `directory (${join(real, 'phase-console')}) — import viewer/test/state-sandbox.ts before ` +
+        `any server import, or set ${envName}. Deliberate real reads: PHASE_CONSOLE_ALLOW_REAL_STATE=1.`,
     );
   }
 }
@@ -214,11 +227,13 @@ function stripControl(value) {
 }
 
 function safeId(id) {
-  return String(id ?? '')
-    .replace(/[^\w.-]/g, '-')
-    .replace(/\.{2,}/g, '.')
-    .replace(/^[.-]+/, '')
-    .slice(0, 80) || 'unnamed';
+  return (
+    String(id ?? '')
+      .replace(/[^\w.-]/g, '-')
+      .replace(/\.{2,}/g, '.')
+      .replace(/^[.-]+/, '')
+      .slice(0, 80) || 'unnamed'
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -283,11 +298,19 @@ export function writeRegistry(registry, env = process.env) {
   const tmp = `${file}.tmp.${process.pid}`;
   try {
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(tmp, `${JSON.stringify({ version: REGISTRY_VERSION, instances: registry.instances ?? {} }, null, 2)}\n`, 'utf8');
+    writeFileSync(
+      tmp,
+      `${JSON.stringify({ version: REGISTRY_VERSION, instances: registry.instances ?? {} }, null, 2)}\n`,
+      'utf8',
+    );
     renameSync(tmp, file);
     return true;
   } catch {
-    try { rmSync(tmp, { force: true }); } catch { /* the temp file is not the point */ }
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* the temp file is not the point */
+    }
     return false;
   }
 }
@@ -324,8 +347,19 @@ export function withRegistry(mutate, env = process.env) {
         // Someone holds it. If their file is stale they are gone — clear it and
         // try again immediately. If they are alive, give them a moment.
         let age = 0;
-        try { age = Date.now() - statSync(lock).mtimeMs; } catch { age = LOCK_STALE_MS + 1; }
-        if (age > LOCK_STALE_MS) { try { rmSync(lock, { force: true }); } catch { /* raced */ } continue; }
+        try {
+          age = Date.now() - statSync(lock).mtimeMs;
+        } catch {
+          age = LOCK_STALE_MS + 1;
+        }
+        if (age > LOCK_STALE_MS) {
+          try {
+            rmSync(lock, { force: true });
+          } catch {
+            /* raced */
+          }
+          continue;
+        }
         if (waited >= LOCK_WAIT_MS) break;
         sleepSync(LOCK_POLL_MS);
       }
@@ -338,7 +372,13 @@ export function withRegistry(mutate, env = process.env) {
   } catch {
     return readRegistry(env);
   } finally {
-    if (held) { try { rmSync(lock, { force: true }); } catch { /* released by expiry */ } }
+    if (held) {
+      try {
+        rmSync(lock, { force: true });
+      } catch {
+        /* released by expiry */
+      }
+    }
   }
 }
 
@@ -401,9 +441,10 @@ export function registerInstance(root, patch = {}, env = process.env) {
   const id = instanceId(path);
   withRegistry((registry) => {
     const previous = registry.instances[id] ?? {};
-    const elected = patch.default === 'auto'
-      ? Object.entries(registry.instances).every(([other, value]) => other === id || value.default !== true)
-      : patch.default;
+    const elected =
+      patch.default === 'auto'
+        ? Object.entries(registry.instances).every(([other, value]) => other === id || value.default !== true)
+        : patch.default;
     const entry = {
       ...previous,
       ...stripUndefined(patch),
@@ -427,7 +468,10 @@ export function updateInstance(id, patch = {}, env = process.env) {
   withRegistry((registry) => {
     const previous = registry.instances[id];
     if (!previous) return null;
-    return { ...registry, instances: { ...registry.instances, [id]: { ...previous, ...stripUndefined(patch) } } };
+    return {
+      ...registry,
+      instances: { ...registry.instances, [id]: { ...previous, ...stripUndefined(patch) } },
+    };
   }, env);
   return getInstance(id, env);
 }
@@ -470,7 +514,8 @@ export function resolveInstance(cwd = process.cwd(), env = process.env) {
   for (let dir = start; ; dir = dirname(dir)) {
     const id = instanceId(dir);
     if (instances[id]) return { kind: 'registered', id, root: dir, ...instances[id] };
-    if (!candidate && looksLikeProject(dir)) candidate = { kind: 'candidate', id, root: dir, name: basename(dir) || id };
+    if (!candidate && looksLikeProject(dir))
+      candidate = { kind: 'candidate', id, root: dir, name: basename(dir) || id };
     if (dirname(dir) === dir) break;
   }
   return candidate ?? { kind: 'none', root: start };
@@ -478,9 +523,11 @@ export function resolveInstance(cwd = process.cwd(), env = process.env) {
 
 /** A directory the console could open: it has plans, or it says it is one. */
 export function looksLikeProject(dir) {
-  return existsSync(join(dir, 'docs', 'plans'))
-    || existsSync(join(dir, 'plans'))
-    || existsSync(join(dir, PROJECT_FILE));
+  return (
+    existsSync(join(dir, 'docs', 'plans')) ||
+    existsSync(join(dir, 'plans')) ||
+    existsSync(join(dir, PROJECT_FILE))
+  );
 }
 
 /**
@@ -541,7 +588,12 @@ export function selectRoot(root, env = process.env) {
   const id = instanceId(path);
   const entry = getInstance(id, env);
   if (entry) return { kind: 'registered', ...entry };
-  return { kind: 'candidate', id, root: path, name: readProjectFile(path, env).name ?? (basename(path) || id) };
+  return {
+    kind: 'candidate',
+    id,
+    root: path,
+    name: readProjectFile(path, env).name ?? (basename(path) || id),
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -722,7 +774,9 @@ export function runCli(argv, env = process.env) {
     const i = rest.indexOf(`--${name}`);
     return i >= 0 ? rest[i + 1] : undefined;
   };
-  const positional = rest.filter((arg, i) => !arg.startsWith('--') && !(i > 0 && rest[i - 1].startsWith('--')));
+  const positional = rest.filter(
+    (arg, i) => !arg.startsWith('--') && !(i > 0 && rest[i - 1].startsWith('--')),
+  );
   const num = (value) => (value === undefined ? undefined : Number(value));
 
   switch (op) {
@@ -730,27 +784,35 @@ export function runCli(argv, env = process.env) {
       return { out: instanceId(positional[0] ?? '.'), code: 0 };
 
     case 'register': {
-      const entry = registerInstance(positional[0] ?? '.', {
-        name: flag('name'),
-        port: num(flag('port')),
-        unit: flag('unit'),
-        pid: num(flag('pid')),
-        startedAt: flag('started-at'),
-        default: rest.includes('--default') ? true : undefined,
-      }, env);
+      const entry = registerInstance(
+        positional[0] ?? '.',
+        {
+          name: flag('name'),
+          port: num(flag('port')),
+          unit: flag('unit'),
+          pid: num(flag('pid')),
+          startedAt: flag('started-at'),
+          default: rest.includes('--default') ? true : undefined,
+        },
+        env,
+      );
       return { out: JSON.stringify(entry), code: entry ? 0 : 1 };
     }
 
     case 'update': {
-      const entry = updateInstance(positional[0] ?? '', {
-        name: flag('name'),
-        root: flag('root'),
-        port: num(flag('port')),
-        unit: flag('unit'),
-        pid: num(flag('pid')),
-        startedAt: flag('started-at'),
-        default: rest.includes('--default') ? true : undefined,
-      }, env);
+      const entry = updateInstance(
+        positional[0] ?? '',
+        {
+          name: flag('name'),
+          root: flag('root'),
+          port: num(flag('port')),
+          unit: flag('unit'),
+          pid: num(flag('pid')),
+          startedAt: flag('started-at'),
+          default: rest.includes('--default') ? true : undefined,
+        },
+        env,
+      );
       if (!entry) return { err: `no such instance: ${positional[0] ?? ''}`, code: 1 };
       return { out: JSON.stringify(entry), code: 0 };
     }
@@ -764,7 +826,12 @@ export function runCli(argv, env = process.env) {
       const entries = listInstances(env);
       if (rest.includes('--json')) return { out: JSON.stringify(entries), code: 0 };
       // Tab-separated so `cut -f` and `while read` both work without quoting.
-      return { out: entries.map((e) => [e.id, e.name ?? '', e.port ?? '', e.default ? 'default' : '', e.root].join('\t')).join('\n'), code: 0 };
+      return {
+        out: entries
+          .map((e) => [e.id, e.name ?? '', e.port ?? '', e.default ? 'default' : '', e.root].join('\t'))
+          .join('\n'),
+        code: 0,
+      };
     }
 
     case 'resolve':
@@ -793,8 +860,8 @@ export function runCli(argv, env = process.env) {
       if (found.kind !== 'registered' && found.kind !== 'candidate') {
         return { err: selectionError(found), code: 1 };
       }
-      const isDefault = found.default === true
-        || (found.kind === 'candidate' && isDefaultRoot(found.root, env));
+      const isDefault =
+        found.default === true || (found.kind === 'candidate' && isDefaultRoot(found.root, env));
       const instance = { id: found.id, default: isDefault };
       const unit = unitName(instance, flag('platform') ?? process.platform);
       const port = found.port ?? preferredPort(found.root, { isDefault }, env);
@@ -826,8 +893,9 @@ export function runCli(argv, env = process.env) {
 
     default:
       return {
-        err: 'usage: instances.mjs id|register|update|remove|list|resolve|select|shell|port|url [<path-or-selector>]'
-          + ' [--name n] [--port p] [--unit u] [--pid n] [--started-at s] [--cwd d] [--platform p] [--default] [--json]',
+        err:
+          'usage: instances.mjs id|register|update|remove|list|resolve|select|shell|port|url [<path-or-selector>]' +
+          ' [--name n] [--port p] [--unit u] [--pid n] [--started-at s] [--cwd d] [--platform p] [--default] [--json]',
         code: 2,
       };
   }

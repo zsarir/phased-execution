@@ -1,6 +1,17 @@
 import {
-  Card, CardBody, CardHeader, CardTitle, Chip, StateChip,
-  Table, TableWrap, TBody, TD, TH, THead, TR,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Chip,
+  StateChip,
+  Table,
+  TableWrap,
+  TBody,
+  TD,
+  TH,
+  THead,
+  TR,
 } from '@/components/ui';
 import { RouteMap } from '@/components/dag';
 import { PromptCard } from '@/components/prompt-card';
@@ -54,10 +65,7 @@ function DeparturesBoard({ detail }: { detail: PlanDetail }) {
           </THead>
           <TBody>
             {detail.phases.map((phase) => (
-              <TR
-                key={phase.phase}
-                className={phase.state === 'ready' ? 'relative state-ready' : 'relative'}
-              >
+              <TR key={phase.phase} className={phase.state === 'ready' ? 'relative state-ready' : 'relative'}>
                 <TD className="font-mono text-lg text-ink-faint">
                   <a
                     href={phaseHref(slug, phase.phase)}
@@ -66,18 +74,32 @@ function DeparturesBoard({ detail }: { detail: PlanDetail }) {
                     {pad2(phase.phase)}
                   </a>
                 </TD>
-                <TD><TitleCell phase={phase} /></TD>
-                <TD><StateChip state={phase.state} board /></TD>
+                <TD>
+                  <TitleCell phase={phase} />
+                </TD>
+                <TD>
+                  <StateChip state={phase.state} board />
+                </TD>
                 {/* Both directions, always — this cell used to appear only
                     while a phase was held, so the plan's shape was invisible on
                     every row that was moving. */}
-                <TD><DepsCell slug={slug} phase={phase} /></TD>
-                <TD><LockCell lock={phase.lock} /></TD>
-                <TD><SizeCell phase={phase} eta={etaFor(detail, phase.phase)} /></TD>
+                <TD>
+                  <DepsCell slug={slug} phase={phase} />
+                </TD>
+                <TD>
+                  <LockCell lock={phase.lock} />
+                </TD>
+                <TD>
+                  <SizeCell phase={phase} eta={etaFor(detail, phase.phase)} />
+                </TD>
                 {/* Chips, not the raw graph cell. This was the one table of
                     three printing Repos as a string. */}
-                <TD><ScopeCell phase={phase} /></TD>
-                <TD><FlagsCell slug={slug} phase={phase} /></TD>
+                <TD>
+                  <ScopeCell phase={phase} />
+                </TD>
+                <TD>
+                  <FlagsCell slug={slug} phase={phase} />
+                </TD>
               </TR>
             ))}
           </TBody>
@@ -117,13 +139,11 @@ export function RouteTab({ detail }: { detail: PlanDetail }) {
             <span className="text-xs text-ink-faint">this plan is closed</span>
           </CardHeader>
           <CardBody className="text-sm text-ink-muted">
-            {detail.summary.closedReason
-              ? <p className="mb-1">{detail.summary.closedReason}</p>
-              : null}
+            {detail.summary.closedReason ? <p className="mb-1">{detail.summary.closedReason}</p> : null}
             <p>
-              The engine stops batching a closed plan, so there is nothing to suggest. The route
-              above is kept in full — it is the record of where the work stopped. Reopen the plan
-              to put its remaining phases back on the board.
+              The engine stops batching a closed plan, so there is nothing to suggest. The route above is kept
+              in full — it is the record of where the work stopped. Reopen the plan to put its remaining
+              phases back on the board.
             </p>
           </CardBody>
         </Card>

@@ -28,11 +28,14 @@ const OFF_HINT = 'Writes are disabled. Restart the console with --allow-writes t
 /** Everything a release touches: the board, the portfolio, the plan's own detail. */
 function useAfterRelease() {
   const client = useQueryClient();
-  return useCallback((slug?: string) => {
-    void client.invalidateQueries({ queryKey: keys.plans() });
-    void client.invalidateQueries({ queryKey: keys.stats() });
-    if (slug) void client.invalidateQueries({ queryKey: keys.plan(slug) });
-  }, [client]);
+  return useCallback(
+    (slug?: string) => {
+      void client.invalidateQueries({ queryKey: keys.plans() });
+      void client.invalidateQueries({ queryKey: keys.stats() });
+      if (slug) void client.invalidateQueries({ queryKey: keys.plan(slug) });
+    },
+    [client],
+  );
 }
 
 export function useReleaseLock(): {
@@ -43,27 +46,30 @@ export function useReleaseLock(): {
   const [busy, setBusy] = useState(false);
   const after = useAfterRelease();
 
-  const release = useCallback(async (slug: string, phase: number, force = false) => {
-    setBusy(true);
-    try {
-      const result = await api.releaseLock(slug, phase, force);
-      toast(
-        result.owner
-          ? `Released ${slug} P${phase} — it was held by ${result.owner}`
-          : `${slug} P${phase} was already free`,
-        'ok',
-      );
-      return true;
-    } catch (error) {
-      // The 409 refusal carries its own sentence ("… is still working this
-      // phase"), so this is the server's words, not a substitute for them.
-      toast((error as Error).message, 'warn');
-      return false;
-    } finally {
-      setBusy(false);
-      after(slug);
-    }
-  }, [after]);
+  const release = useCallback(
+    async (slug: string, phase: number, force = false) => {
+      setBusy(true);
+      try {
+        const result = await api.releaseLock(slug, phase, force);
+        toast(
+          result.owner
+            ? `Released ${slug} P${phase} — it was held by ${result.owner}`
+            : `${slug} P${phase} was already free`,
+          'ok',
+        );
+        return true;
+      } catch (error) {
+        // The 409 refusal carries its own sentence ("… is still working this
+        // phase"), so this is the server's words, not a substitute for them.
+        toast((error as Error).message, 'warn');
+        return false;
+      } finally {
+        setBusy(false);
+        after(slug);
+      }
+    },
+    [after],
+  );
 
   const releaseAllExpired = useCallback(async () => {
     setBusy(true);
@@ -170,15 +176,16 @@ export function ForceReleaseButton({
         description={
           <>
             <span className="block font-mono text-xs text-ink">
-              {lock.owner}{lock.host ? ` on ${lock.host}` : ''}
+              {lock.owner}
+              {lock.host ? ` on ${lock.host}` : ''}
             </span>
             <span className="mt-1 block">
               {lock.claimedAt ? `Claimed ${relativeTime(lock.claimedAt)}` : 'Claimed'}
               {left && left !== '—' ? ` · the lease runs ${left} more.` : '.'}
             </span>
             <span className="mt-2 block">
-              Booting a second session into this phase is how two agents overwrite each other.
-              Release it only if you know that session has stopped.
+              Booting a second session into this phase is how two agents overwrite each other. Release it only
+              if you know that session has stopped.
             </span>
           </>
         }

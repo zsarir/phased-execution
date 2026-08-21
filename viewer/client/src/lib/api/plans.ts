@@ -275,8 +275,12 @@ export interface PlanDetail {
   qa: { phase: number; result: string; report?: string }[];
   locks: PhaseLock[];
   git: {
-    sha?: string; subject?: string; author?: string; date?: string;
-    relativeDate?: string; dirty?: boolean;
+    sha?: string;
+    subject?: string;
+    author?: string;
+    date?: string;
+    relativeDate?: string;
+    dirty?: boolean;
   };
   memory: { key: string; path: string; text: string; indexLines: string[] } | null;
 }
@@ -361,13 +365,19 @@ export const plansApi = {
   prompt: (slug: string, phase: number | string) => request<string>(`/api/plans/${q(slug)}/prompt/${phase}`),
   nextPrompt: (slug: string, phase?: number | string) =>
     request<string>(`/api/plans/${q(slug)}/next-prompt/${phase ?? 'none'}`),
-  qaPrompt: (slug: string, phase: number | string) => request<string>(`/api/plans/${q(slug)}/qa-prompt/${phase}`),
+  qaPrompt: (slug: string, phase: number | string) =>
+    request<string>(`/api/plans/${q(slug)}/qa-prompt/${phase}`),
   boardText: (slug: string) => request<string>(`/api/plans/${q(slug)}/board`),
   memoryBlock: (slug: string) => request<string>(`/api/plans/${q(slug)}/memory-block`),
   gate: (slug: string, phase: number | string) => request<GateStatus>(`/api/plans/${q(slug)}/gate/${phase}`),
-  approveGate: (slug: string, phase: number, body: { approve: boolean; by?: string; note?: string; continueRun?: boolean }) =>
+  approveGate: (
+    slug: string,
+    phase: number,
+    body: { approve: boolean; by?: string; note?: string; continueRun?: boolean },
+  ) =>
     post<{ ok: boolean; gate: GateStatus | null; detail: string; resumed?: boolean }>(
-      `/api/plans/${q(slug)}/gate/${phase}`, body,
+      `/api/plans/${q(slug)}/gate/${phase}`,
+      body,
     ),
   sessionPlan: (slug: string, model?: string) =>
     request<unknown>(`/api/plans/${q(slug)}/session-plan${model ? `?model=${q(model)}` : ''}`),

@@ -32,7 +32,9 @@ describe('InfoTip on touch', () => {
     const trigger = screen.getByRole('button', { name: 'About Retry' });
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
 
-    await act(async () => { fireEvent.click(trigger); });
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     expect(await screen.findAllByText(/Resets this phase/)).not.toHaveLength(0);
 
@@ -45,15 +47,21 @@ describe('InfoTip on touch', () => {
   it('a second tap on the trigger closes it', async () => {
     mount();
     const trigger = screen.getByRole('button', { name: 'About Retry' });
-    await act(async () => { fireEvent.click(trigger); });
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
-    await act(async () => { fireEvent.click(trigger); });
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('renders nothing for an empty blurb', () => {
     const { container } = render(
-      <TooltipProvider><InfoTip content="" /></TooltipProvider>,
+      <TooltipProvider>
+        <InfoTip content="" />
+      </TooltipProvider>,
     );
     expect(container.querySelector('button')).toBeNull();
   });

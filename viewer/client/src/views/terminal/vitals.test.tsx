@@ -22,7 +22,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 import { SessionVitals, sessionLinkage } from './vitals';
 
-beforeEach(() => { plan.mockReset(); });
+beforeEach(() => {
+  plan.mockReset();
+});
 
 const session = (over: Partial<TerminalSession> = {}): TerminalSession => ({
   id: 't1',
@@ -45,25 +47,32 @@ function mount(node: React.ReactElement) {
 
 describe('sessionLinkage', () => {
   it('reads the recovery meta, then the QA meta, and otherwise claims nothing', () => {
-    expect(sessionLinkage(session({ meta: { recovery: { kind: 'halted-verification', slug: 'alpha', phase: 3 } } })))
-      .toEqual({ slug: 'alpha', phase: 3 });
-    expect(sessionLinkage(session({ meta: { qa: { slug: 'beta', phase: 5 } } })))
-      .toEqual({ slug: 'beta', phase: 5 });
+    expect(
+      sessionLinkage(
+        session({ meta: { recovery: { kind: 'halted-verification', slug: 'alpha', phase: 3 } } }),
+      ),
+    ).toEqual({ slug: 'alpha', phase: 3 });
+    expect(sessionLinkage(session({ meta: { qa: { slug: 'beta', phase: 5 } } }))).toEqual({
+      slug: 'beta',
+      phase: 5,
+    });
     expect(sessionLinkage(session())).toEqual({});
   });
 });
 
 describe('SessionVitals', () => {
-  it('shows plan · phase · elapsed · the phase\'s own estimate for a linked session', async () => {
+  it("shows plan · phase · elapsed · the phase's own estimate for a linked session", async () => {
     plan.mockResolvedValue({
       eta: {
         plan: null,
         perPhase: [{ phase: 3, weight: 1, estMs: 10 * 60_000, basis: 'plan', label: '~10m (estimate)' }],
       },
     });
-    mount(<SessionVitals
-      session={session({ meta: { recovery: { kind: 'halted-verification', slug: 'alpha', phase: 3 } } })}
-    />);
+    mount(
+      <SessionVitals
+        session={session({ meta: { recovery: { kind: 'halted-verification', slug: 'alpha', phase: 3 } } })}
+      />,
+    );
 
     expect(screen.getByText('alpha · P3')).toBeInTheDocument();
     expect(screen.getByText('2:00')).toBeInTheDocument();
@@ -85,9 +94,11 @@ describe('SessionVitals', () => {
         perPhase: [{ phase: 3, weight: 1, estMs: 60_000, basis: 'plan', label: '~1m (estimate)' }],
       },
     });
-    mount(<SessionVitals
-      session={session({ meta: { recovery: { kind: 'halted-verification', slug: 'alpha', phase: 3 } } })}
-    />);
+    mount(
+      <SessionVitals
+        session={session({ meta: { recovery: { kind: 'halted-verification', slug: 'alpha', phase: 3 } } })}
+      />,
+    );
     expect(await screen.findByText(/over the ~/)).toBeInTheDocument();
     expect(screen.getByText(/estimate/)).toBeInTheDocument();
   });

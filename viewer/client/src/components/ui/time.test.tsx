@@ -107,7 +107,11 @@ describe('Duration', () => {
   });
 
   it('has no axe violations', async () => {
-    const { container } = render(<p>took <Duration ms={252_000} /></p>);
+    const { container } = render(
+      <p>
+        took <Duration ms={252_000} />
+      </p>,
+    );
     await expectNoAxeViolations(container);
   });
 });
@@ -136,14 +140,18 @@ describe('RelativeTime', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('live re-reads the clock on the caller\'s cadence', () => {
+  it("live re-reads the clock on the caller's cadence", () => {
     pinClock();
     render(<RelativeTime at={NOW - 60_000} live intervalMs={1_000} />);
     expect(vi.getTimerCount()).toBeGreaterThan(0);
   });
 
   it('has no axe violations', async () => {
-    const { container } = render(<p>updated <RelativeTime at={Date.now() - 90_000} live={false} /></p>);
+    const { container } = render(
+      <p>
+        updated <RelativeTime at={Date.now() - 90_000} live={false} />
+      </p>,
+    );
     await expectNoAxeViolations(container);
   });
 });

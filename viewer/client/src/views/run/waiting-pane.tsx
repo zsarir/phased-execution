@@ -73,8 +73,8 @@ export function WaitingPane({ rows }: { rows: readonly WaitingRow[] }) {
   return (
     <div className="flex flex-col gap-3">
       <p className="max-w-prose text-2xs text-ink-faint">
-        The autopilot keeps going until the whole graph is done — these phases have not been
-        skipped, their dependencies just are not finished yet.
+        The autopilot keeps going until the whole graph is done — these phases have not been skipped, their
+        dependencies just are not finished yet.
       </p>
       {rows.map((row) => (
         <Card key={row.phase}>
@@ -86,9 +86,7 @@ export function WaitingPane({ rows }: { rows: readonly WaitingRow[] }) {
             <div className="flex flex-wrap items-center gap-1.5">
               <Chip tone={row.stuck ? 'bad' : 'neutral'}>{row.stuck ? 'stuck' : 'waiting'}</Chip>
               {row.estMs != null && (
-                <span className="font-mono text-2xs text-ink-faint tabular-nums">
-                  ~{elapsed(row.estMs)}
-                </span>
+                <span className="font-mono text-2xs text-ink-faint tabular-nums">~{elapsed(row.estMs)}</span>
               )}
             </div>
           </CardHeader>
@@ -105,8 +103,13 @@ export function WaitingPane({ rows }: { rows: readonly WaitingRow[] }) {
             )}
             {row.gated && (
               <p className="text-2xs text-ink-faint">
-                Gated{row.gates ? <>: <code className="font-mono">{row.gates}</code></> : null} —
-                the gate is checked again right before it would start.
+                Gated
+                {row.gates ? (
+                  <>
+                    : <code className="font-mono">{row.gates}</code>
+                  </>
+                ) : null}{' '}
+                — the gate is checked again right before it would start.
               </p>
             )}
             <p className="text-2xs text-ink-faint">

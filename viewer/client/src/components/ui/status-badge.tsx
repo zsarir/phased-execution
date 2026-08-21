@@ -1,11 +1,24 @@
 import {
-  CircleCheck, CircleDashed, CirclePlay, CircleSlash, CircleX, Hand, Hourglass, SearchCheck,
+  CircleCheck,
+  CircleDashed,
+  CirclePlay,
+  CircleSlash,
+  CircleX,
+  Hand,
+  Hourglass,
+  SearchCheck,
   type LucideIcon,
 } from 'lucide-react';
 import type { HTMLAttributes, ReactNode } from 'react';
 import { cn } from '@/lib/cn';
 import {
-  STATE_META, UNKNOWN_STATE, isUiState, uiStateTitle, wordTitle, wordUiState, type UiState,
+  STATE_META,
+  UNKNOWN_STATE,
+  isUiState,
+  uiStateTitle,
+  wordTitle,
+  wordUiState,
+  type UiState,
 } from '@/lib/status-vocab';
 import { badgeVariants } from './badge';
 
@@ -24,11 +37,11 @@ import { badgeVariants } from './badge';
 
 /** `STATE_META[*].icon` → the lucide component. `status-badge.test.tsx` holds it total. */
 export const STATE_ICONS: Readonly<Record<string, LucideIcon>> = Object.freeze({
-  'hand': Hand,
+  hand: Hand,
   'circle-x': CircleX,
   'circle-play': CirclePlay,
   'search-check': SearchCheck,
-  'hourglass': Hourglass,
+  hourglass: Hourglass,
   'circle-dashed': CircleDashed,
   'circle-slash': CircleSlash,
   'circle-check': CircleCheck,
@@ -55,7 +68,10 @@ export function statusBadgeClass(state: UiState, opts: { mono?: boolean } = {}):
 export function decorateStatusWord(word: string): { className: string; title: string } | null {
   const state = wordUiState(word);
   if (!state) return null;
-  return { className: statusBadgeClass(state, { mono: true }), title: wordTitle(word) ?? uiStateTitle(state) ?? '' };
+  return {
+    className: statusBadgeClass(state, { mono: true }),
+    title: wordTitle(word) ?? uiStateTitle(state) ?? '',
+  };
 }
 
 export interface StatusBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'children'> {
@@ -72,7 +88,15 @@ export interface StatusBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, 
 }
 
 export function StatusBadge({
-  state, label, icon = true, pulse = false, size = 'sm', mono = false, className, title, ...props
+  state,
+  label,
+  icon = true,
+  pulse = false,
+  size = 'sm',
+  mono = false,
+  className,
+  title,
+  ...props
 }: StatusBadgeProps) {
   const ui = asUiState(state);
   const meta = STATE_META[ui];
@@ -103,7 +127,15 @@ export function StatusBadge({
  * A bare state dot for dense rows — the hue and nothing else, so it MUST sit
  * beside the word it colours (the label or the row's own text).
  */
-export function StatusDot({ state, pulse = false, className }: { state: UiState | string; pulse?: boolean; className?: string }) {
+export function StatusDot({
+  state,
+  pulse = false,
+  className,
+}: {
+  state: UiState | string;
+  pulse?: boolean;
+  className?: string;
+}) {
   const ui = asUiState(state);
   return (
     <span

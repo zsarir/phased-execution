@@ -83,21 +83,31 @@ describe('Textarea', () => {
 
 describe('Label', () => {
   it('required draws the mark as decoration only', () => {
-    const { container } = render(<Label htmlFor="x" required>Name</Label>);
+    const { container } = render(
+      <Label htmlFor="x" required>
+        Name
+      </Label>,
+    );
     const mark = container.querySelector('[aria-hidden]');
     expect(mark).not.toBeNull();
     expect(mark).toHaveTextContent('*');
   });
 
   it('carries an inline hint', () => {
-    render(<Label htmlFor="x" hint="optional">Alias</Label>);
+    render(
+      <Label htmlFor="x" hint="optional">
+        Alias
+      </Label>,
+    );
     expect(screen.getByText('optional')).toBeInTheDocument();
   });
 
   it('has no axe violations', async () => {
     const { container } = render(
       <div>
-        <Label htmlFor="name" required hint="as git knows you">Name</Label>
+        <Label htmlFor="name" required hint="as git knows you">
+          Name
+        </Label>
         <Input id="name" aria-required />
       </div>,
     );

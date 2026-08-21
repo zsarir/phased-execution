@@ -27,7 +27,10 @@ import { demands } from './now';
  * ------------------------------------------------------------------ */
 
 const RUN = {
-  id: 'r1', slug: 'alpha', status: 'halted', halt: { at: '', reason: 'verification failed' },
+  id: 'r1',
+  slug: 'alpha',
+  status: 'halted',
+  halt: { at: '', reason: 'verification failed' },
 } as unknown as RunState;
 
 describe('what is waiting on a person', () => {
@@ -104,11 +107,31 @@ const PLAN = {
 const STATS = {
   generatedAt: Date.UTC(2026, 7, 3),
   totals: {
-    plans: 1, documents: 0, orphans: 0, closed: 0, phases: 3, done: 1, ready: 1, waiting: 1,
-    inProgress: 0, stuck: 0, percent: 33, remainingWeight: 80_000, remainingSessions: 1,
+    plans: 1,
+    documents: 0,
+    orphans: 0,
+    closed: 0,
+    phases: 3,
+    done: 1,
+    ready: 1,
+    waiting: 1,
+    inProgress: 0,
+    stuck: 0,
+    percent: 33,
+    remainingWeight: 80_000,
+    remainingSessions: 1,
   },
-  byStatus: [], activeLocks: [], issues: [], velocity: [{ week: '2026-W31', count: 2 }],
-  calendar: [], sizeMix: [], repos: [], skills: [], models: [], stalled: [], busiest: [],
+  byStatus: [],
+  activeLocks: [],
+  issues: [],
+  velocity: [{ week: '2026-W31', count: 2 }],
+  calendar: [],
+  sizeMix: [],
+  repos: [],
+  skills: [],
+  models: [],
+  stalled: [],
+  busiest: [],
 };
 
 function mount(node: React.ReactElement) {
@@ -119,7 +142,11 @@ function mount(node: React.ReactElement) {
 beforeEach(() => {
   vi.clearAllMocks();
   state.mockResolvedValue({
-    autopilot: true, allowRun: true, allowWrites: true, allowTerminal: false, unread: 0,
+    autopilot: true,
+    allowRun: true,
+    allowWrites: true,
+    allowTerminal: false,
+    unread: 0,
     // `planCount` counts documents, not plans — deliberately different from the
     // one plan in `plans` below, which is the disagreement this page had.
     root: { label: 'hub', path: '/hub', ok: true, planCount: 9 },
@@ -128,14 +155,26 @@ beforeEach(() => {
   });
   plans.mockResolvedValue([PLAN, { ...PLAN, slug: 'doc', kind: 'document', ready: [] }]);
   planDetail.mockResolvedValue({
-    phases: [{ phase: 2, title: 'Wire the ingest', state: 'ready', size: 'M', weight: 40_000, gated: false, bullets: [] }],
+    phases: [
+      {
+        phase: 2,
+        title: 'Wire the ingest',
+        state: 'ready',
+        size: 'M',
+        weight: 40_000,
+        gated: false,
+        bullets: [],
+      },
+    ],
     route: {
       nodes: [
         { phase: 1, state: 'done', title: 'a', layer: 0, row: 0, size: 'M', gated: false },
         { phase: 2, state: 'ready', title: 'b', layer: 1, row: 0, size: 'M', gated: false },
         { phase: 3, state: 'waiting', title: 'c', layer: 2, row: 0, size: 'M', gated: false },
       ],
-      edges: [], layers: 3, rows: 1,
+      edges: [],
+      layers: 3,
+      rows: 1,
     },
   });
   stats.mockResolvedValue(STATS);
@@ -167,7 +206,11 @@ describe('the dashboard', () => {
   describe('starting a new plan', () => {
     it('offers the card, and opens the wizard', async () => {
       state.mockResolvedValue({
-        autopilot: true, allowRun: true, allowWrites: true, allowAgent: true, unread: 0,
+        autopilot: true,
+        allowRun: true,
+        allowWrites: true,
+        allowAgent: true,
+        unread: 0,
         root: { label: 'hub', path: '/hub', ok: true, planCount: 9 },
         repo: { available: true, branch: 'main', dirty: [] },
       });
@@ -177,13 +220,12 @@ describe('the dashboard', () => {
       // The card renders before `/api/state` answers, and renders DISABLED
       // while it has no capability to go on — so the wait is for the button to
       // become enabled, not merely to exist.
-      await waitFor(() => expect(
-        screen.getAllByRole('button', { name: /new plan with ai/i })[0],
-      ).toBeEnabled());
+      await waitFor(() =>
+        expect(screen.getAllByRole('button', { name: /new plan with ai/i })[0]).toBeEnabled(),
+      );
 
       fireEvent.click(screen.getAllByRole('button', { name: /new plan with ai/i })[0]);
-      expect(await screen.findByPlaceholderText(/what should this plan achieve/i))
-        .toBeInTheDocument();
+      expect(await screen.findByPlaceholderText(/what should this plan achieve/i)).toBeInTheDocument();
     });
 
     it('without --allow-agent the card stays, disabled, and names the flag', async () => {
@@ -198,19 +240,29 @@ describe('the dashboard', () => {
   });
 
   it('shows the live run with its phase instead of the quiet state', async () => {
-    runs.mockResolvedValue([{
-      id: 'r9', slug: 'alpha', status: 'running', activePhase: 2, model: 'opus', spentUsd: 1.5,
-      child: { pid: 1, phase: 2, sessionId: 's', startedAt: new Date().toISOString() },
-    } as unknown as RunState]);
+    runs.mockResolvedValue([
+      {
+        id: 'r9',
+        slug: 'alpha',
+        status: 'running',
+        activePhase: 2,
+        model: 'opus',
+        spentUsd: 1.5,
+        child: { pid: 1, phase: 2, sessionId: 's', startedAt: new Date().toISOString() },
+      } as unknown as RunState,
+    ]);
 
     const { default: DashboardView } = await import('./index');
     mount(<DashboardView />);
 
     // A function matcher on textContent: the status word carries its own
     // explanatory title span now, which splits the line into elements.
-    expect(await screen.findByText((_, element) =>
-      element?.textContent === 'phase 2 · running · opus'
-      && element.className.includes('truncate'))).toBeTruthy();
+    expect(
+      await screen.findByText(
+        (_, element) =>
+          element?.textContent === 'phase 2 · running · opus' && element.className.includes('truncate'),
+      ),
+    ).toBeTruthy();
     expect(screen.queryByText(/Nothing is running/)).toBeNull();
   });
 
@@ -251,8 +303,16 @@ describe('the dashboard', () => {
 
   it('does not put a closed plan in flight, in the counts, or up as the next move', async () => {
     plans.mockResolvedValue([
-      { ...PLAN, slug: 'gone', title: 'Walked away', status: 'abandoned', closed: true,
-        ready: [2, 3], inProgress: [1], nextBest: { phase: 2, unblocks: 9 } },
+      {
+        ...PLAN,
+        slug: 'gone',
+        title: 'Walked away',
+        status: 'abandoned',
+        closed: true,
+        ready: [2, 3],
+        inProgress: [1],
+        nextBest: { phase: 2, unblocks: 9 },
+      },
     ]);
     const { default: DashboardView } = await import('./index');
     mount(<DashboardView />);
@@ -267,18 +327,14 @@ describe('the dashboard', () => {
     await waitFor(() => expect(screen.getByText('Ready now')).toBeTruthy());
     // A tile renders as `<value><label><hint>`, so the count is the leading run
     // of digits — `\b0\b` would not survive `0Ready now`.
-    const tile = (label: string) =>
-      screen.getByText(label).closest('div')?.parentElement?.textContent ?? '';
+    const tile = (label: string) => screen.getByText(label).closest('div')?.parentElement?.textContent ?? '';
     expect(tile('Ready now')).toMatch(/^0Ready now/);
     expect(tile('In flight')).toMatch(/^0In flight0 plans unfinished/);
   });
 
   it('still recommends the open plan sitting beside a closed one', async () => {
     // The control: the gate must be closure, not the fixture losing its plans.
-    plans.mockResolvedValue([
-      { ...PLAN, slug: 'gone', status: 'abandoned', closed: true, ready: [2] },
-      PLAN,
-    ]);
+    plans.mockResolvedValue([{ ...PLAN, slug: 'gone', status: 'abandoned', closed: true, ready: [2] }, PLAN]);
     const { default: DashboardView } = await import('./index');
     mount(<DashboardView />);
     await waitFor(() => expect(screen.getByText(/alpha phase 2/)).toBeTruthy());

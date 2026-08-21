@@ -39,27 +39,29 @@
  * @type {Record<Mechanism, { badge: string, blurb: string }>}
  */
 export const MECHANISMS = {
-  'check': {
+  check: {
     badge: 'check',
     blurb: 'A deterministic re-read: board, §Verification commands, validate.sh. No AI session. Free.',
   },
   'own-session': {
     badge: 'own session',
-    blurb: "Resumes this phase's OWN Claude session (claude -p --resume) inside the runner — its context is intact, and the run's settings, deny rules and hooks all apply.",
+    blurb:
+      "Resumes this phase's OWN Claude session (claude -p --resume) inside the runner — its context is intact, and the run's settings, deny rules and hooks all apply.",
   },
   'new-agent': {
     badge: 'new agent',
-    blurb: 'Opens a FRESH interactive Claude session briefed by the console with the evidence. Fresh eyes — it knows the facts, not the conversation. Costs a full session.',
+    blurb:
+      'Opens a FRESH interactive Claude session briefed by the console with the evidence. Fresh eyes — it knows the facts, not the conversation. Costs a full session.',
   },
   'run-control': {
     badge: 'run',
     blurb: 'Acts on the run record and the loop — no new AI session by itself.',
   },
-  'claim': {
+  claim: {
     badge: 'claim',
     blurb: 'Edits the phase-lock file only.',
   },
-  'mcp': {
+  mcp: {
     badge: 'MCP',
     blurb: "Changes this run's MCP policy and retries only the phases that policy parked.",
   },
@@ -67,9 +69,9 @@ export const MECHANISMS = {
 
 /** The one-line legend shown when both AI mechanisms are on offer together. */
 export const MECHANISM_LEGEND =
-  'Two ways to hand this to AI: resume the phase\'s own session (cheap — its '
-  + 'context is intact), or brief a new agent (fresh eyes — it knows the '
-  + 'evidence, not the conversation).';
+  "Two ways to hand this to AI: resume the phase's own session (cheap — its " +
+  'context is intact), or brief a new agent (fresh eyes — it knows the ' +
+  'evidence, not the conversation).';
 
 /* ------------------------------------------------------------------ *
  * Halt kinds — one profile, three consumers
@@ -96,10 +98,10 @@ export const HALT_KINDS = [
   'verification-preflight',
   'mcp-preflight',
   // Kinds added when the formerly-kindless halt sites were named:
-  'run-preflight',      // start() refused: auth/config preflight failed
-  'recovery-failed',    // a recovery attempt crashed or explained why it could not finish
-  'orphaned-session',   // adopt() found a live session from an earlier console
-  'runner-crashed',     // the drive loop itself threw
+  'run-preflight', // start() refused: auth/config preflight failed
+  'recovery-failed', // a recovery attempt crashed or explained why it could not finish
+  'orphaned-session', // adopt() found a live session from an earlier console
+  'runner-crashed', // the drive loop itself threw
 ];
 
 /**
@@ -129,23 +131,44 @@ export const HALT_KINDS = [
  * @type {Record<string, { sessionShaped: boolean, humanClass: string|null, autoClass: string|null, park?: boolean }>}
  */
 export const KIND_PROFILE = {
-  'verify-failed':            { sessionShaped: true,  humanClass: 'halted-verification',    autoClass: 'halted-verification' },
-  'no-handoff':               { sessionShaped: true,  humanClass: 'halted-missing-handoff', autoClass: 'halted-missing-handoff' },
-  'phase-blocked':            { sessionShaped: false, humanClass: null,                     autoClass: 'ladder:unblock' },
-  'waiting-external-timeout': { sessionShaped: true,  humanClass: 'halted-missing-handoff', autoClass: 'halted-missing-handoff' },
-  'needs-human':              { sessionShaped: false, humanClass: null,                     autoClass: null },
-  'plan-lint':                { sessionShaped: false, humanClass: 'plan-repair',            autoClass: 'halted-verification' },
-  'phase-crashed':            { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: 'interrupted-resume' },
-  'budget':                   { sessionShaped: false, humanClass: null,                     autoClass: 'ladder:resource' },
-  'plan-unreadable':          { sessionShaped: false, humanClass: 'plan-repair',            autoClass: null },
-  'failure-streak':           { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: 'ladder' },
-  'models-exhausted':         { sessionShaped: false, humanClass: null,                     autoClass: 'ladder:resource' },
-  'verification-preflight':   { sessionShaped: false, humanClass: 'plan-repair',            autoClass: 'plan-repair', park: true },
-  'mcp-preflight':            { sessionShaped: false, humanClass: null,                     autoClass: null, park: true },
-  'run-preflight':            { sessionShaped: false, humanClass: null,                     autoClass: 'ladder:resource', park: true },
-  'recovery-failed':          { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: 'ladder' },
-  'orphaned-session':         { sessionShaped: false, humanClass: null,                     autoClass: null, park: true },
-  'runner-crashed':           { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: 'ladder' },
+  'verify-failed': {
+    sessionShaped: true,
+    humanClass: 'halted-verification',
+    autoClass: 'halted-verification',
+  },
+  'no-handoff': {
+    sessionShaped: true,
+    humanClass: 'halted-missing-handoff',
+    autoClass: 'halted-missing-handoff',
+  },
+  'phase-blocked': { sessionShaped: false, humanClass: null, autoClass: 'ladder:unblock' },
+  'waiting-external-timeout': {
+    sessionShaped: true,
+    humanClass: 'halted-missing-handoff',
+    autoClass: 'halted-missing-handoff',
+  },
+  'needs-human': { sessionShaped: false, humanClass: null, autoClass: null },
+  'plan-lint': { sessionShaped: false, humanClass: 'plan-repair', autoClass: 'halted-verification' },
+  'phase-crashed': {
+    sessionShaped: false,
+    humanClass: 'interrupted-resume',
+    autoClass: 'interrupted-resume',
+  },
+  budget: { sessionShaped: false, humanClass: null, autoClass: 'ladder:resource' },
+  'plan-unreadable': { sessionShaped: false, humanClass: 'plan-repair', autoClass: null },
+  'failure-streak': { sessionShaped: false, humanClass: 'interrupted-resume', autoClass: 'ladder' },
+  'models-exhausted': { sessionShaped: false, humanClass: null, autoClass: 'ladder:resource' },
+  'verification-preflight': {
+    sessionShaped: false,
+    humanClass: 'plan-repair',
+    autoClass: 'plan-repair',
+    park: true,
+  },
+  'mcp-preflight': { sessionShaped: false, humanClass: null, autoClass: null, park: true },
+  'run-preflight': { sessionShaped: false, humanClass: null, autoClass: 'ladder:resource', park: true },
+  'recovery-failed': { sessionShaped: false, humanClass: 'interrupted-resume', autoClass: 'ladder' },
+  'orphaned-session': { sessionShaped: false, humanClass: null, autoClass: null, park: true },
+  'runner-crashed': { sessionShaped: false, humanClass: 'interrupted-resume', autoClass: 'ladder' },
 };
 
 /**
@@ -168,9 +191,12 @@ export function isLadderClass(value) {
  * @type {Record<string, string>}
  */
 export const LADDER_CLASS_BLURBS = {
-  'ladder': 'The autopilot classifies the phase (never-started, work in progress, done but unrecorded, verification red…) and climbs that situation\'s ladder — its own session first, a fresh briefed session next — within the caps in Settings ▸ Automation; exhausted, it leaves one errand.',
-  'ladder:unblock': 'The autopilot reads the blocker the session declared: a lock queues, an external wait parks, a credential or gate goes straight to you, and anything else gets ONE bounded unblock session allowed to do the work — then an errand.',
-  'ladder:resource': 'The autopilot climbs the resource ladder by itself: an account with headroom or a signed-in one, the next model, the window\'s reset, a single budget raise within the policy cap — and leaves an errand only when none of those holds.',
+  ladder:
+    "The autopilot classifies the phase (never-started, work in progress, done but unrecorded, verification red…) and climbs that situation's ladder — its own session first, a fresh briefed session next — within the caps in Settings ▸ Automation; exhausted, it leaves one errand.",
+  'ladder:unblock':
+    'The autopilot reads the blocker the session declared: a lock queues, an external wait parks, a credential or gate goes straight to you, and anything else gets ONE bounded unblock session allowed to do the work — then an errand.',
+  'ladder:resource':
+    "The autopilot climbs the resource ladder by itself: an account with headroom or a signed-in one, the next model, the window's reset, a single budget raise within the policy cap — and leaves an errand only when none of those holds.",
 };
 
 /**
@@ -239,9 +265,9 @@ export const RECOVERY_LABELS = {
 
 /** Appended to every agent blurb — the cost is part of the promise. */
 const AGENT_COST =
-  ' Opens a fresh interactive session — a new conversation, not the phase\'s '
-  + 'own — briefed with the evidence. Costs a full session; you choose model '
-  + 'and skills next, and watch it in the Agent tab.';
+  " Opens a fresh interactive session — a new conversation, not the phase's " +
+  'own — briefed with the evidence. Costs a full session; you choose model ' +
+  'and skills next, and watch it in the Agent tab.';
 
 /**
  * What each agent class will actually do — the tooltip contract: exactly what
@@ -255,12 +281,9 @@ export const RECOVERY_BLURBS = {
     'Checks the phase against the repository and writes the handoff it never wrote.' + AGENT_COST,
   'interrupted-resume':
     'Reads the working tree, claims the phase and carries it to its exit criteria.' + AGENT_COST,
-  'auth-interrupted':
-    'Picks the phase up now that the CLI is signed in again.' + AGENT_COST,
-  'stale-claim-takeover':
-    'Takes the expired claim and finishes the phase.' + AGENT_COST,
-  'plan-repair':
-    'Repairs the plan, its handoffs or its INDEX until validate.sh passes.' + AGENT_COST,
+  'auth-interrupted': 'Picks the phase up now that the CLI is signed in again.' + AGENT_COST,
+  'stale-claim-takeover': 'Takes the expired claim and finishes the phase.' + AGENT_COST,
+  'plan-repair': 'Repairs the plan, its handoffs or its INDEX until validate.sh passes.' + AGENT_COST,
 };
 
 /** What every surface heads its action group with. */
@@ -288,46 +311,52 @@ export const WAYS_FORWARD = 'Ways forward';
  * @type {Record<string, { label: string, blurb: string, mechanism: Mechanism, flag: 'run'|'agent'|'writes'|null }>}
  */
 export const ACTION_VOCAB = {
-  'recheck': {
+  recheck: {
     label: 'Re-check',
     mechanism: 'check',
     flag: 'run',
-    blurb: 'Re-reads the board, re-runs this phase\'s §Verification commands and validate.sh. '
-      + 'Starts no session and costs nothing; if the work is already done on disk this closes the phase and clears the halt.',
+    blurb:
+      "Re-reads the board, re-runs this phase's §Verification commands and validate.sh. " +
+      'Starts no session and costs nothing; if the work is already done on disk this closes the phase and clears the halt.',
   },
-  'closeout': {
+  closeout: {
     label: 'Finish in its own session',
     mechanism: 'own-session',
     flag: 'run',
-    blurb: 'Resumes this phase\'s own session (claude -p --resume) through the runner and asks it to '
-      + 'verify, commit and write the handoff — nothing else. Its context is intact; the run\'s settings, deny rules and hooks all apply.',
+    blurb:
+      "Resumes this phase's own session (claude -p --resume) through the runner and asks it to " +
+      "verify, commit and write the handoff — nothing else. Its context is intact; the run's settings, deny rules and hooks all apply.",
   },
-  'resume': {
+  resume: {
     label: 'Resume with an instruction',
     mechanism: 'own-session',
     flag: 'run',
-    blurb: 'The same resume of the phase\'s own session, carrying the words you type first — '
-      + 'for when it must fix something before closing out.',
+    blurb:
+      "The same resume of the phase's own session, carrying the words you type first — " +
+      'for when it must fix something before closing out.',
   },
-  'retry': {
+  retry: {
     label: 'Retry from scratch',
     mechanism: 'run-control',
     flag: 'run',
-    blurb: 'Resets this phase\'s record and continues the run from here: a fresh session boots from the '
-      + 'phase\'s boot prompt, under normal admission. Discards the stopped session\'s conversation; committed work stays.',
+    blurb:
+      "Resets this phase's record and continues the run from here: a fresh session boots from the " +
+      "phase's boot prompt, under normal admission. Discards the stopped session's conversation; committed work stays.",
   },
-  'skip': {
+  skip: {
     label: 'Skip',
     mechanism: 'run-control',
     flag: 'run',
-    blurb: 'Marks the phase abandoned in this run and moves on. The board will still read it as not done; nothing on disk is deleted.',
+    blurb:
+      'Marks the phase abandoned in this run and moves on. The board will still read it as not done; nothing on disk is deleted.',
   },
   'mcp-continue': {
     label: 'Continue without these servers',
     mechanism: 'mcp',
     flag: 'run',
-    blurb: 'Sets this run\'s MCP policy to continue and retries exactly the phases that parked on unreachable '
-      + 'servers. They run without those servers, are told so in their prompt, and record it in the handoff.',
+    blurb:
+      "Sets this run's MCP policy to continue and retries exactly the phases that parked on unreachable " +
+      'servers. They run without those servers, are told so in their prompt, and record it in the handoff.',
   },
   'continue-run': {
     label: 'Continue',
@@ -335,35 +364,38 @@ export const ACTION_VOCAB = {
     flag: 'run',
     blurb: 'Restarts the loop from the board — nothing is re-run; the board decides what is next.',
   },
-  'release': {
+  release: {
     label: 'Release the claim',
     mechanism: 'claim',
     flag: 'writes',
-    blurb: 'Deletes the expired lock file so the phase reads free again. Nobody is in it — the lease ran out.',
+    blurb:
+      'Deletes the expired lock file so the phase reads free again. Nobody is in it — the lease ran out.',
   },
   'force-release': {
     label: 'Force release',
     mechanism: 'claim',
     flag: 'writes',
-    blurb: 'Deletes a LIVE claim held by someone else. Only do this if you know that session is dead — '
-      + 'two sessions on one phase overwrite each other\'s work.',
+    blurb:
+      'Deletes a LIVE claim held by someone else. Only do this if you know that session is dead — ' +
+      "two sessions on one phase overwrite each other's work.",
   },
   'auto-recover': {
     label: 'Recover & continue',
     mechanism: 'run-control',
     flag: 'run',
-    blurb: 'One press, three honest steps: re-reads the board and stands down any halt it has '
-      + 'already moved past (retracting the stale alarm); if a REAL halt remains, arms bounded '
-      + 'auto-recovery and launches the right vehicle — the phase\'s own session for paperwork '
-      + 'and verification, a fresh briefed agent for the rest (that leg costs a session); and '
-      + 'continues the run when the board reads clean. Anything only a person can settle is '
-      + 'reported back by name instead of being retried blindly.',
+    blurb:
+      'One press, three honest steps: re-reads the board and stands down any halt it has ' +
+      'already moved past (retracting the stale alarm); if a REAL halt remains, arms bounded ' +
+      "auto-recovery and launches the right vehicle — the phase's own session for paperwork " +
+      'and verification, a fresh briefed agent for the rest (that leg costs a session); and ' +
+      'continues the run when the board reads clean. Anything only a person can settle is ' +
+      'reported back by name instead of being retried blindly.',
   },
-  'dismiss': {
+  dismiss: {
     label: 'Dismiss',
     mechanism: 'run-control',
     flag: 'run',
-    blurb: 'Stops this run\'s card asking for attention. The record is untouched and stays on the Runs page.',
+    blurb: "Stops this run's card asking for attention. The record is untouched and stays on the Runs page.",
   },
 };
 
@@ -375,8 +407,7 @@ export const FLAG_OFF = {
 };
 
 /** The mutual-exclusion sentence both AI families show while one is live. */
-export const RECOVERY_BUSY =
-  'A recovery session is already working on this phase — open it instead.';
+export const RECOVERY_BUSY = 'A recovery session is already working on this phase — open it instead.';
 
 /* ------------------------------------------------------------------ *
  * Classification — one place
@@ -405,7 +436,7 @@ export function classifyRun(run, opts = {}) {
   if (run.resolved) return undefined;
   if (run.status === 'parked') {
     const profile = run.halt?.kind ? KIND_PROFILE[run.halt.kind] : undefined;
-    return profile?.park ? profile.humanClass ?? undefined : undefined;
+    return profile?.park ? (profile.humanClass ?? undefined) : undefined;
   }
   if (run.status !== 'halted' && run.status !== 'interrupted') return undefined;
   if (opts.authFailure) return 'auth-interrupted';
@@ -437,7 +468,8 @@ export function classifyPhase(status, run, opts = {}) {
       const kind = run?.halt?.kind;
       if (kind && KIND_PROFILE[kind]) return KIND_PROFILE[kind].humanClass ?? undefined;
       return NO_HANDOFF_OFFER_RE.test(run?.halt?.reason ?? '')
-        ? 'halted-missing-handoff' : 'halted-verification';
+        ? 'halted-missing-handoff'
+        : 'halted-verification';
     }
     case 'interrupted':
     case 'running':
@@ -495,18 +527,25 @@ export function classifyBoardPhase(state) {
  */
 export function leadActionFor(id, sub, resumable) {
   switch (id) {
-    case 'never-started': return 'retry';
-    case 'work-in-progress': return resumable ? 'resume' : 'retry';
-    case 'done-unrecorded': return resumable ? 'closeout' : 'recheck';
-    case 'verify-red': return resumable ? 'resume' : undefined;
+    case 'never-started':
+      return 'retry';
+    case 'work-in-progress':
+      return resumable ? 'resume' : 'retry';
+    case 'done-unrecorded':
+      return resumable ? 'closeout' : 'recheck';
+    case 'verify-red':
+      return resumable ? 'resume' : undefined;
     case 'blocked-declared':
       if (sub === 'lock') return 'retry';
       if (sub === 'external') return 'recheck';
       if (sub === 'unknown' || sub == null) return resumable ? 'resume' : undefined;
       return undefined;
-    case 'plan-broken': return 'plan-repair';
-    case 'superseded': return 'recheck';
-    default: return undefined;
+    case 'plan-broken':
+      return 'plan-repair';
+    case 'superseded':
+      return 'recheck';
+    default:
+      return undefined;
   }
 }
 
@@ -540,18 +579,38 @@ export function recoveryActionsFor(ctx = {}) {
     if (flag === 'writes' && flags.allowWrites === false) return FLAG_OFF.writes;
     return undefined;
   };
-  const push = (/** @type {string} */ id, /** @type {'primary'|'secondary'|'overflow'} */ group, disabled = undefined) => {
+  const push = (
+    /** @type {string} */ id,
+    /** @type {'primary'|'secondary'|'overflow'} */ group,
+    disabled = undefined,
+  ) => {
     const vocab = ACTION_VOCAB[id];
     if (!vocab || out.some((a) => a.id === id)) return;
     const disabledReason = disabled ?? gate(vocab.flag);
-    out.push({ id, mechanism: vocab.mechanism, label: vocab.label, blurb: vocab.blurb, flag: vocab.flag, group, ...(disabledReason ? { disabledReason } : {}) });
+    out.push({
+      id,
+      mechanism: vocab.mechanism,
+      label: vocab.label,
+      blurb: vocab.blurb,
+      flag: vocab.flag,
+      group,
+      ...(disabledReason ? { disabledReason } : {}),
+    });
   };
-  const pushAgent = (/** @type {string|undefined} */ cls, /** @type {'primary'|'secondary'|'overflow'} */ group) => {
+  const pushAgent = (
+    /** @type {string|undefined} */ cls,
+    /** @type {'primary'|'secondary'|'overflow'} */ group,
+  ) => {
     if (!cls || out.some((a) => a.id === 'fix-agent')) return;
     const disabledReason = busy ?? gate('agent');
     out.push({
-      id: 'fix-agent', mechanism: 'new-agent', label: RECOVERY_LABELS[cls],
-      blurb: RECOVERY_BLURBS[cls], flag: 'agent', group, recoveryClass: cls,
+      id: 'fix-agent',
+      mechanism: 'new-agent',
+      label: RECOVERY_LABELS[cls],
+      blurb: RECOVERY_BLURBS[cls],
+      flag: 'agent',
+      group,
+      recoveryClass: cls,
       ...(disabledReason ? { disabledReason } : {}),
     });
   };
@@ -588,8 +647,10 @@ export function recoveryActionsFor(ctx = {}) {
     }
     push('recheck', out.length ? 'secondary' : 'primary');
     pushAgent(
-      authFailure ? 'auth-interrupted'
-        : run ? (classifyRun(run, { authFailure }) ?? classifyPhase(status ?? '', run, { authFailure }))
+      authFailure
+        ? 'auth-interrupted'
+        : run
+          ? (classifyRun(run, { authFailure }) ?? classifyPhase(status ?? '', run, { authFailure }))
           : classifyPhase(status ?? '', run, { authFailure }),
       out.some((a) => a.group === 'primary') ? 'secondary' : 'primary',
     );

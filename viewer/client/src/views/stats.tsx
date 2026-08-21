@@ -14,7 +14,17 @@ import { countdown, plural, weight } from '@/lib/format';
 import { isClosed } from '@/lib/closure';
 import { phaseHref, planHref } from '@shared/routes.js';
 import {
-  Banner, Button, ButtonGroup, Card, CardBody, CardHeader, CardTitle, Chip, Empty, Skeleton, Tile,
+  Banner,
+  Button,
+  ButtonGroup,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Chip,
+  Empty,
+  Skeleton,
+  Tile,
 } from '@/components/ui';
 import { BarList, Bars, Calendar, StackBar, type ChartTone } from '@/components/charts';
 import { ReleaseAllStaleButton, ReleaseStaleButton } from '@/components/release-lock';
@@ -42,10 +52,7 @@ type Severity = 'all' | HealthIssue['severity'];
  * placeholder when there is no evidence: this rides on the end of a hint that
  * already says something, and `· unknown` is worse than silence.
  */
-export function recentRate(
-  rate: Portfolio['rate'],
-  mediumWeight = 40_000,
-): string {
+export function recentRate(rate: Portfolio['rate'], mediumWeight = 40_000): string {
   if (!rate || rate.basis === 'heuristic' || !(rate.ratePerWeight > 0)) return '';
   const minutes = Math.round((rate.ratePerWeight * mediumWeight) / 60_000);
   if (!minutes) return '';
@@ -83,9 +90,11 @@ export default function StatsView() {
     if (!stats) return [];
     return [...stats.issues]
       .filter((issue) => severity === 'all' || issue.severity === severity)
-      .sort((a, b) =>
-        (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3)
-        || a.slug.localeCompare(b.slug));
+      .sort(
+        (a, b) =>
+          (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3) ||
+          a.slug.localeCompare(b.slug),
+      );
   }, [stats, severity]);
 
   if (error) {
@@ -100,10 +109,14 @@ export default function StatsView() {
     return (
       <Page title="Statistics" subtitle="Reading every plan">
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-20" />)}
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-20" />
+          ))}
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
-          {[0, 1].map((i) => <Skeleton key={i} className="h-40" />)}
+          {[0, 1].map((i) => (
+            <Skeleton key={i} className="h-40" />
+          ))}
         </div>
       </Page>
     );
@@ -120,7 +133,11 @@ export default function StatsView() {
         <>
           <Chip mono>{plural(t.plans, 'plan')}</Chip>
           <Chip mono>{plural(t.documents, 'document')}</Chip>
-          {t.orphans > 0 && <Chip mono tone="warn">{plural(t.orphans, 'orphan folder')}</Chip>}
+          {t.orphans > 0 && (
+            <Chip mono tone="warn">
+              {plural(t.orphans, 'orphan folder')}
+            </Chip>
+          )}
         </>
       }
     >
@@ -161,8 +178,10 @@ export default function StatsView() {
               <span className="font-mono">{stats.velocity[0]?.week}</span>
               <span>
                 median gap between phases{' '}
-                {stats.medianCycleDays == null ? '—'
-                  : stats.medianCycleDays === 0 ? 'same day'
+                {stats.medianCycleDays == null
+                  ? '—'
+                  : stats.medianCycleDays === 0
+                    ? 'same day'
                     : `${stats.medianCycleDays}d`}
               </span>
               <span className="font-mono">{stats.velocity.at(-1)?.week}</span>
@@ -171,14 +190,20 @@ export default function StatsView() {
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Completions by day</CardTitle></CardHeader>
-          <CardBody><Calendar data={stats.calendar} /></CardBody>
+          <CardHeader>
+            <CardTitle>Completions by day</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <Calendar data={stats.calendar} />
+          </CardBody>
         </Card>
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
         <Card>
-          <CardHeader><CardTitle>Phase states</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Phase states</CardTitle>
+          </CardHeader>
           <CardBody>
             <StackBar
               segments={[
@@ -209,7 +234,9 @@ export default function StatsView() {
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Phase sizes</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Phase sizes</CardTitle>
+          </CardHeader>
           <CardBody>
             <StackBar
               segments={stats.sizeMix.map((row, i) => ({
@@ -227,21 +254,29 @@ export default function StatsView() {
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
         <Card>
-          <CardHeader><CardTitle>Repos touched</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Repos touched</CardTitle>
+          </CardHeader>
           <CardBody>
             <BarList items={stats.repos.map((row) => ({ name: row.repo, value: row.count }))} />
           </CardBody>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Skills used</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Skills used</CardTitle>
+          </CardHeader>
           <CardBody>
-            {stats.skills.length
-              ? <BarList items={stats.skills.map((row) => ({ name: row.skill, value: row.count }))} />
-              : <span className="text-sm text-ink-faint">No handoff records a skill yet.</span>}
+            {stats.skills.length ? (
+              <BarList items={stats.skills.map((row) => ({ name: row.skill, value: row.count }))} />
+            ) : (
+              <span className="text-sm text-ink-faint">No handoff records a skill yet.</span>
+            )}
           </CardBody>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Target models</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Target models</CardTitle>
+          </CardHeader>
           <CardBody>
             <BarList items={stats.models.map((row) => ({ name: row.model, value: row.count }))} />
           </CardBody>
@@ -274,11 +309,25 @@ export default function StatsView() {
                           blocks nobody and painting it `bad` would be inventing a
                           chore. Still listed and still releasable — this card is
                           the lock inventory — just not shouted about. */}
-                      {lock.closed
-                        ? <Chip title="This plan is closed, so the lock is leftover debris — phase-lock.sh skips it and it blocks no session. Releasing it is tidying, not a fix.">debris</Chip>
-                        : lock.expired
-                          ? <Chip tone="bad" title="The lease ran out and nobody renewed it — the session is gone. Safe to release (Plans page offers it), and a takeover recovery may claim the phase.">expired</Chip>
-                          : <Chip tone="busy" title="A live lease — a session is (or very recently was) working this phase. Never release a live lease.">{countdown(lock.leaseUntil)}</Chip>}
+                      {lock.closed ? (
+                        <Chip title="This plan is closed, so the lock is leftover debris — phase-lock.sh skips it and it blocks no session. Releasing it is tidying, not a fix.">
+                          debris
+                        </Chip>
+                      ) : lock.expired ? (
+                        <Chip
+                          tone="bad"
+                          title="The lease ran out and nobody renewed it — the session is gone. Safe to release (Plans page offers it), and a takeover recovery may claim the phase."
+                        >
+                          expired
+                        </Chip>
+                      ) : (
+                        <Chip
+                          tone="busy"
+                          title="A live lease — a session is (or very recently was) working this phase. Never release a live lease."
+                        >
+                          {countdown(lock.leaseUntil)}
+                        </Chip>
+                      )}
                       {/* The owner is right there in the row and the server
                           reads it from the file — nobody retypes it. */}
                       {lock.expired && (
@@ -295,7 +344,8 @@ export default function StatsView() {
                 {expiredLocks > 1 && (
                   <div className="flex items-center gap-2 border-t border-rule pt-2">
                     <span className="flex-1 text-2xs text-ink-faint">
-                      {plural(expiredLocks, 'lease')} ran out — the phases read as taken and nobody is in them.
+                      {plural(expiredLocks, 'lease')} ran out — the phases read as taken and nobody is in
+                      them.
                     </span>
                     <ReleaseAllStaleButton count={expiredLocks} allowWrites={allowWrites} />
                   </div>
@@ -325,18 +375,15 @@ export default function StatsView() {
         <CardHeader>
           <CardTitle>Health</CardTitle>
           <ButtonGroup>
-            {([
-              ['all', `All ${stats.issues.length}`],
-              ['error', `Errors ${counts.error}`],
-              ['warning', `Warnings ${counts.warning}`],
-              ['info', `Info ${counts.info}`],
-            ] as [Severity, string][]).map(([id, label]) => (
-              <Button
-                key={id}
-                size="sm"
-                aria-pressed={severity === id}
-                onClick={() => setSeverity(id)}
-              >
+            {(
+              [
+                ['all', `All ${stats.issues.length}`],
+                ['error', `Errors ${counts.error}`],
+                ['warning', `Warnings ${counts.warning}`],
+                ['info', `Info ${counts.info}`],
+              ] as [Severity, string][]
+            ).map(([id, label]) => (
+              <Button key={id} size="sm" aria-pressed={severity === id} onClick={() => setSeverity(id)}>
                 {label}
               </Button>
             ))}
@@ -347,12 +394,15 @@ export default function StatsView() {
             <ul className="flex flex-col gap-1.5">
               {issues.map((issue, i) => (
                 <li key={`${issue.slug}-${issue.kind}-${i}`} className="flex flex-wrap items-baseline gap-2">
-                  <Chip tone={SEVERITY_TONE[issue.severity]} title={issue.message}>{issue.kind}</Chip>
+                  <Chip tone={SEVERITY_TONE[issue.severity]} title={issue.message}>
+                    {issue.kind}
+                  </Chip>
                   <a
                     href={issue.phase ? phaseHref(issue.slug, issue.phase) : planHref(issue.slug)}
                     className="font-mono text-2xs text-ink hover:text-action"
                   >
-                    {issue.slug}{issue.phase ? ` P${issue.phase}` : ''}
+                    {issue.slug}
+                    {issue.phase ? ` P${issue.phase}` : ''}
                   </a>
                   {closedSlugs.has(issue.slug) && (
                     <Chip title="This plan is closed. What is left here is structural — the engine kept it and demoted it, so it is a record, not a job.">
@@ -378,9 +428,11 @@ export default function StatsView() {
           ) : (
             <Empty
               title="Nothing flagged"
-              body={severity === 'all'
-                ? 'Plans, handoffs, indexes and locks all agree.'
-                : `No ${severity}-level issues. Other severities may still have some.`}
+              body={
+                severity === 'all'
+                  ? 'Plans, handoffs, indexes and locks all agree.'
+                  : `No ${severity}-level issues. Other severities may still have some.`
+              }
             />
           )}
         </CardBody>

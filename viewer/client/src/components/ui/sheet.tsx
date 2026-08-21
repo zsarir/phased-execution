@@ -63,7 +63,9 @@ export function SheetContent({
           // vertical scroller of its own, not an overflow-x wrapper).
           <div className="sticky top-0 z-(--z-base) bg-surface pt-2">
             <div className="mx-auto h-1 w-9 rounded-full bg-rule-strong" aria-hidden />
-            <DialogPrimitive.Title className={showTitle ? 'px-3 pt-2 font-display text-lg' : 'sr-only'}>{title}</DialogPrimitive.Title>
+            <DialogPrimitive.Title className={showTitle ? 'px-3 pt-2 font-display text-lg' : 'sr-only'}>
+              {title}
+            </DialogPrimitive.Title>
             {description != null && (
               <DialogPrimitive.Description className={showTitle ? 'px-3 text-sm text-ink-muted' : 'sr-only'}>
                 {description}
@@ -75,7 +77,9 @@ export function SheetContent({
             <div className="min-w-0">
               <DialogPrimitive.Title className="font-display text-lg">{title}</DialogPrimitive.Title>
               {description != null && (
-                <DialogPrimitive.Description className="mt-0.5 text-sm text-ink-muted">{description}</DialogPrimitive.Description>
+                <DialogPrimitive.Description className="mt-0.5 text-sm text-ink-muted">
+                  {description}
+                </DialogPrimitive.Description>
               )}
             </div>
             <DialogPrimitive.Close

@@ -11,7 +11,12 @@
 /* ---- words, states and numbers ---- */
 export { Badge, badgeVariants, type BadgeProps, type BadgeTone } from './badge';
 export {
-  StatusBadge, StatusDot, STATE_ICONS, asUiState, decorateStatusWord, statusBadgeClass,
+  StatusBadge,
+  StatusDot,
+  STATE_ICONS,
+  asUiState,
+  decorateStatusWord,
+  statusBadgeClass,
   type StatusBadgeProps,
 } from './status-badge';
 export { CountBadge } from './count-badge';
@@ -25,8 +30,15 @@ export { SegmentBar, type SegmentCounts } from './segment-bar';
 export { Progress } from './progress';
 /* 2.x aliases over Badge/StatusBadge — deleted with the old views in Phase 11. */
 export {
-  Chip, StateChip, chipVariants, asPhaseState, PHASE_STATES, LEGACY_TONE,
-  type ChipProps, type ChipTone, type PhaseState,
+  Chip,
+  StateChip,
+  chipVariants,
+  asPhaseState,
+  PHASE_STATES,
+  LEGACY_TONE,
+  type ChipProps,
+  type ChipTone,
+  type PhaseState,
 } from './chip';
 
 /* ---- actions ---- */
@@ -43,29 +55,56 @@ export { TableWrap, Table, THead, TBody, TR, TH, TD } from './table';
 export { DataList, type DataListProps } from './data-list';
 export { KeyValue, type KeyValueItem } from './key-value';
 export {
-  Banner, StatusStack, noteVariants,
-  type Severity, type StatusNote, type NoteOrder,
+  Banner,
+  StatusStack,
+  noteVariants,
+  type Severity,
+  type StatusNote,
+  type NoteOrder,
 } from './status-stack';
 export { Skeleton, Empty, Spinner } from './feedback';
 
 /* ---- overlays ---- */
 export {
-  Dialog, DialogTrigger, DialogClose, DialogContent, DialogFooter, DialogTitle, DialogDescription,
+  Dialog,
+  DialogTrigger,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
 } from './dialog';
 export { Sheet, SheetTrigger, SheetClose, SheetContent, type SheetSide } from './sheet';
 export { AlertDialog, AlertDialogTrigger, AlertDialogContent } from './alert-dialog';
 export { Popover, PopoverTrigger, PopoverAnchor, PopoverClose, PopoverContent } from './popover';
 export {
-  DropdownMenu, DropdownMenuTrigger, DropdownMenuGroup, DropdownMenuSub, DropdownMenuRadioGroup,
-  DropdownMenuContent, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuRadioItem,
-  DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuSubTrigger,
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuGroup,
+  DropdownMenuSub,
+  DropdownMenuRadioGroup,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuRadioItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from './dropdown-menu';
 export { InfoTip, Tooltip, TooltipProvider } from './tooltip';
 export { Toaster, toast, copy, dismissToast, useToasts, type ToastKind, type ToastRecord } from './toast';
 export {
-  Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandSeparator, CommandItem,
-  CommandShortcut, CommandDialog,
+  Command,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandSeparator,
+  CommandItem,
+  CommandShortcut,
+  CommandDialog,
 } from './command';
 
 /* ---- forms ---- */
@@ -73,7 +112,16 @@ export { field } from './field';
 export { Input, type InputProps } from './input';
 export { Textarea, type TextareaProps } from './textarea';
 export { Label } from './label';
-export { Select, SelectGroup, SelectValue, SelectTrigger, SelectContent, SelectLabel, SelectItem, SelectSeparator } from './select';
+export {
+  Select,
+  SelectGroup,
+  SelectValue,
+  SelectTrigger,
+  SelectContent,
+  SelectLabel,
+  SelectItem,
+  SelectSeparator,
+} from './select';
 export { Combobox, type ComboboxOption } from './combobox';
 export { Switch } from './switch';
 export { Checkbox } from './checkbox';

@@ -26,33 +26,54 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Errand, HealthIssue, RunState, TerminalSession } from '@/lib/api';
 import { AttentionRow, demands, errandText, issueHref, type Demand, type DemandAction } from './now';
 
-const halted = (over: Partial<RunState> = {}): RunState => ({
-  id: 'r1', slug: 'alpha', status: 'halted',
-  halt: { at: '2026-08-03T02:55:04.476Z', reason: 'the session for phase 6 ended cleanly but the board still reads "ready"', phase: 6 },
-  ...over,
-} as unknown as RunState);
+const halted = (over: Partial<RunState> = {}): RunState =>
+  ({
+    id: 'r1',
+    slug: 'alpha',
+    status: 'halted',
+    halt: {
+      at: '2026-08-03T02:55:04.476Z',
+      reason: 'the session for phase 6 ended cleanly but the board still reads "ready"',
+      phase: 6,
+    },
+    ...over,
+  }) as unknown as RunState;
 
-const authInterrupted = (over: Partial<RunState> = {}): RunState => ({
-  id: 'r2', slug: 'beta', status: 'interrupted',
-  halt: { at: '', reason: 'authentication failed — the session\'s Claude login is expired or signed out; sign that account in again, then continue the run', phase: 14 },
-  ...over,
-} as unknown as RunState);
+const authInterrupted = (over: Partial<RunState> = {}): RunState =>
+  ({
+    id: 'r2',
+    slug: 'beta',
+    status: 'interrupted',
+    halt: {
+      at: '',
+      reason:
+        "authentication failed — the session's Claude login is expired or signed out; sign that account in again, then continue the run",
+      phase: 14,
+    },
+    ...over,
+  }) as unknown as RunState;
 
 const errand = (over: Partial<Errand> = {}): Errand => ({
-  phase: 4, situation: 'blocked-declared:credential', tried: [],
-  need: 'The SSH key the session named.', how: 'Provide it where the handoff says, then Retry.',
+  phase: 4,
+  situation: 'blocked-declared:credential',
+  tried: [],
+  need: 'The SSH key the session named.',
+  how: 'Provide it where the handoff says, then Retry.',
   at: '2026-08-20T10:00:00.000Z',
   ...over,
 });
 
 /** A parked run the ladder left an errand on. */
-const parkedWithErrand = (over: Partial<RunState> = {}): RunState => ({
-  id: 'r9', slug: 'gamma', status: 'parked',
-  halt: { at: '', reason: 'nothing left to run on its own — phase 4 is parked' },
-  autoRecover: { attempts: 2 },
-  recoveries: { '4': { attempts: 1, lastAt: '', errand: errand() } },
-  ...over,
-} as unknown as RunState);
+const parkedWithErrand = (over: Partial<RunState> = {}): RunState =>
+  ({
+    id: 'r9',
+    slug: 'gamma',
+    status: 'parked',
+    halt: { at: '', reason: 'nothing left to run on its own — phase 4 is parked' },
+    autoRecover: { attempts: 2 },
+    recoveries: { '4': { attempts: 1, lastAt: '', errand: errand() } },
+    ...over,
+  }) as unknown as RunState;
 
 const ids = (actions: DemandAction[]) => actions.map((a) => a.id);
 const only = (items: Demand[], id: string) => items.find((i) => i.id === id)!;
@@ -69,7 +90,9 @@ describe('an errand the ladder left', () => {
     expect(card.id).toBe('errand-r9');
     expect(card.label).toBe('gamma — phase 4 needs you');
     // The situation in words, then need and how — ahead of the halt's own sentence.
-    expect(card.detail).toMatch(/^Declared blocked · credential: phase 4 needs you — The SSH key the session named\. \(Provide it/);
+    expect(card.detail).toMatch(
+      /^Declared blocked · credential: phase 4 needs you — The SSH key the session named\. \(Provide it/,
+    );
     expect(card.errands).toEqual([errand()]);
     // The honest press after doing the errand: re-read the board, stand down
     // what the errand settled, continue or climb what is left. No agent button:
@@ -84,7 +107,16 @@ describe('an errand the ladder left', () => {
     const run = parkedWithErrand({
       recoveries: {
         '4': { attempts: 1, lastAt: '', errand: errand() },
-        '7': { attempts: 1, lastAt: '', errand: errand({ phase: 7, situation: 'gated-manual', need: 'A person to clear the manual gate.', how: 'Do the steps, then Approve.' }) },
+        '7': {
+          attempts: 1,
+          lastAt: '',
+          errand: errand({
+            phase: 7,
+            situation: 'gated-manual',
+            need: 'A person to clear the manual gate.',
+            how: 'Do the steps, then Approve.',
+          }),
+        },
       },
     } as Partial<RunState>);
     const [card] = demands({ approvals: 0, runs: [run], allowRun: true });
@@ -100,8 +132,14 @@ describe('an errand the ladder left', () => {
 
   it('leads with signing in when the errand is an auth wall', () => {
     const run = halted({
-      id: 'r3', recoveries: {},
-      errand: errand({ phase: 0, situation: 'resource-wall:auth', need: 'A signed-in Claude account for this run.', how: 'Run claude login, then Continue.' }),
+      id: 'r3',
+      recoveries: {},
+      errand: errand({
+        phase: 0,
+        situation: 'resource-wall:auth',
+        need: 'A signed-in Claude account for this run.',
+        how: 'Run claude login, then Continue.',
+      }),
     });
     const [card] = demands({ approvals: 0, runs: [run], allowRun: true, allowAgent: true });
     expect(card.label).toBe('alpha — needs you');
@@ -111,7 +149,18 @@ describe('an errand the ladder left', () => {
 
   it('leads with continue-without-servers when the errand is an MCP wall', () => {
     const run = parkedWithErrand({
-      recoveries: { '2': { attempts: 1, lastAt: '', errand: errand({ phase: 2, situation: 'mcp-unavailable', need: 'The server signed in.', how: 'Sign it in, or continue without it.' }) } },
+      recoveries: {
+        '2': {
+          attempts: 1,
+          lastAt: '',
+          errand: errand({
+            phase: 2,
+            situation: 'mcp-unavailable',
+            need: 'The server signed in.',
+            how: 'Sign it in, or continue without it.',
+          }),
+        },
+      },
     } as Partial<RunState>);
     const [card] = demands({ approvals: 0, runs: [run], allowRun: true });
     expect(ids(card.actions)).toEqual(['mcp-continue', 'continue', 'dismiss']);
@@ -120,7 +169,20 @@ describe('an errand the ladder left', () => {
   it('disables what needs --allow-run, and says why, but never Dismiss', () => {
     // A halted run with an errand: its halt kind still earns an agent button,
     // which needs --allow-agent and says so — each remedy names ITS flag.
-    const run = halted({ recoveries: { '6': { attempts: 1, lastAt: '', errand: errand({ phase: 6, situation: 'done-unrecorded', need: 'A complete handoff.', how: 'Run new-handoff.sh, or Resume the session.' }) } } });
+    const run = halted({
+      recoveries: {
+        '6': {
+          attempts: 1,
+          lastAt: '',
+          errand: errand({
+            phase: 6,
+            situation: 'done-unrecorded',
+            need: 'A complete handoff.',
+            how: 'Run new-handoff.sh, or Resume the session.',
+          }),
+        },
+      },
+    });
     const [card] = demands({ approvals: 0, runs: [run] });
     expect(card.id).toBe('errand-r1');
     expect(act(card.actions, 'continue').disabled).toMatch(/--allow-run/);
@@ -129,7 +191,13 @@ describe('an errand the ladder left', () => {
   });
 
   it('raises no card at all once the run is resolved — errand or not', () => {
-    const resolved = parkedWithErrand({ resolved: { at: '2026-08-04T00:00:00.000Z', auto: true, reason: 'superseded — the board shows phase 4 done' } });
+    const resolved = parkedWithErrand({
+      resolved: {
+        at: '2026-08-04T00:00:00.000Z',
+        auto: true,
+        reason: 'superseded — the board shows phase 4 done',
+      },
+    });
     expect(demands({ approvals: 0, runs: [resolved] })).toEqual([]);
     const dismissed = halted({ resolved: { at: '', auto: false, reason: 'dismissed by the operator' } });
     expect(demands({ approvals: 0, runs: [dismissed] })).toEqual([]);
@@ -138,7 +206,15 @@ describe('an errand the ladder left', () => {
   it('errandText reads every errand, phase ones first, the run-level one last', () => {
     expect(errandText(parkedWithErrand())).toMatch(/^phase 4 needs you — The SSH key/);
     expect(errandText(halted())).toBeUndefined();
-    const runLevel = halted({ recoveries: {}, errand: errand({ phase: 0, situation: 'resource-wall:auth', need: 'A signed-in account.', how: 'Sign in, then Continue.' }) });
+    const runLevel = halted({
+      recoveries: {},
+      errand: errand({
+        phase: 0,
+        situation: 'resource-wall:auth',
+        need: 'A signed-in account.',
+        how: 'Sign in, then Continue.',
+      }),
+    });
     expect(errandText(runLevel)).toBe('A signed-in account. (Sign in, then Continue.)');
   });
 });
@@ -207,10 +283,18 @@ describe('what the row no longer carries', () => {
     const items = demands({ approvals: 0, runs: [], allowRun: true });
     expect(items).toEqual([]);
     // The helpers those cards used still link an issue where it lives.
-    const qaFail: HealthIssue = { slug: 'delta', severity: 'error', kind: 'qa-fail', message: 'Phase 10 QA recorded fail', phase: 10 };
+    const qaFail: HealthIssue = {
+      slug: 'delta',
+      severity: 'error',
+      kind: 'qa-fail',
+      message: 'Phase 10 QA recorded fail',
+      phase: 10,
+    };
     expect(issueHref(qaFail)).toBe('#/plan/delta/phase/10');
     expect(issueHref({ ...qaFail, phase: undefined })).toBe('#/plan/delta/handoffs');
-    expect(issueHref({ slug: 'other', severity: 'error', kind: 'undefined-dep', message: 'x', phase: 3 })).toBe('#/plan/other/route');
+    expect(
+      issueHref({ slug: 'other', severity: 'error', kind: 'undefined-dep', message: 'x', phase: 3 }),
+    ).toBe('#/plan/other/route');
   });
 
   it('still leads with permission cards', () => {
@@ -225,19 +309,38 @@ describe('what the row no longer carries', () => {
  * ------------------------------------------------------------------ */
 
 describe('a recovery already running', () => {
-  const link = (over: Record<string, unknown> = {}) =>
-    ({ kind: 'halted-verification', slug: 'alpha', phase: 6, ...over });
-
-  const recovering = (over: Partial<TerminalSession> = {}): TerminalSession => ({
-    id: 'sess-live', label: 'Recover alpha P6', kind: 'claude',
-    cwd: '/w', shell: 'claude', cols: 80, rows: 24, pid: 4242, clients: 0, createdAt: 0,
-    meta: { intent: 'recovery', recovery: link() },
+  const link = (over: Record<string, unknown> = {}) => ({
+    kind: 'halted-verification',
+    slug: 'alpha',
+    phase: 6,
     ...over,
-  } as unknown as TerminalSession);
+  });
 
-  const cardFor = (sessions: TerminalSession[], over: { allowAgent?: boolean } = {}) => demands({
-    approvals: 0, runs: [halted()], allowRun: true, allowAgent: true, sessions, ...over,
-  })[0];
+  const recovering = (over: Partial<TerminalSession> = {}): TerminalSession =>
+    ({
+      id: 'sess-live',
+      label: 'Recover alpha P6',
+      kind: 'claude',
+      cwd: '/w',
+      shell: 'claude',
+      cols: 80,
+      rows: 24,
+      pid: 4242,
+      clients: 0,
+      createdAt: 0,
+      meta: { intent: 'recovery', recovery: link() },
+      ...over,
+    }) as unknown as TerminalSession;
+
+  const cardFor = (sessions: TerminalSession[], over: { allowAgent?: boolean } = {}) =>
+    demands({
+      approvals: 0,
+      runs: [halted()],
+      allowRun: true,
+      allowAgent: true,
+      sessions,
+      ...over,
+    })[0];
 
   it('offers the session that is already working, not a second launch', () => {
     const action = act(cardFor([recovering()]).actions, 'start-recovery');
@@ -309,13 +412,20 @@ describe('the attention row', () => {
   });
 
   it('marks the action in flight as busy without freezing the others', () => {
-    render(<AttentionRow items={demands({ approvals: 0, runs: [parkedWithErrand()], allowRun: true })} busy="errand-r9:continue" />);
+    render(
+      <AttentionRow
+        items={demands({ approvals: 0, runs: [parkedWithErrand()], allowRun: true })}
+        busy="errand-r9:continue"
+      />,
+    );
     expect(screen.getByRole('button', { name: 'Continue' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByRole('button', { name: 'Dismiss' }).hasAttribute('disabled')).toBe(false);
   });
 
   it('keeps the card heading a link — the buttons are siblings, not children of it', () => {
-    const { container } = render(<AttentionRow items={demands({ approvals: 0, runs: [parkedWithErrand()], allowRun: true })} />);
+    const { container } = render(
+      <AttentionRow items={demands({ approvals: 0, runs: [parkedWithErrand()], allowRun: true })} />,
+    );
     const link = screen.getByRole('link', { name: /gamma — phase 4 needs you/ });
     expect(link.getAttribute('href')).toBe('#/plan/gamma/run');
     // An anchor wrapping a button is invalid, and it is exactly why nothing

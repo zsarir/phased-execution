@@ -135,7 +135,12 @@ export interface Portfolio {
   /** `closed`: the lock's plan is terminal, so the lock is debris — `phase-lock.sh
    * conflicts` skips it and it blocks nobody. Optional for an older server. */
   activeLocks: {
-    slug: string; phase: number; owner: string; expired: boolean; leaseUntil?: number; closed?: boolean;
+    slug: string;
+    phase: number;
+    owner: string;
+    expired: boolean;
+    leaseUntil?: number;
+    closed?: boolean;
   }[];
   issues: HealthIssue[];
   velocity: { week: string; count: number }[];

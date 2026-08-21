@@ -76,7 +76,9 @@ export function InfoTip({
       if (target && trigger.current?.contains(target)) return; // the toggle handles itself
       setOpen(false);
     };
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKey);
     return () => {
@@ -90,8 +92,13 @@ export function InfoTip({
   return (
     <TooltipPrimitive.Root
       {...(touch
-        // Controlled on touch: Radix would close it on its own hover logic.
-        ? { open, onOpenChange: (next: boolean) => { if (next) setOpen(true); } }
+        ? // Controlled on touch: Radix would close it on its own hover logic.
+          {
+            open,
+            onOpenChange: (next: boolean) => {
+              if (next) setOpen(true);
+            },
+          }
         : {})}
     >
       <TooltipPrimitive.Trigger asChild>

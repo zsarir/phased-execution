@@ -51,11 +51,7 @@ function excerpt(text: string | undefined, max = 300): string | undefined {
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }
 
-export function nextStepRows(
-  slug: string,
-  planPhases: readonly PhaseView[],
-  run: RunState | null,
-): Row[] {
+export function nextStepRows(slug: string, planPhases: readonly PhaseView[], run: RunState | null): Row[] {
   const rows: Row[] = [];
   for (const p of planPhases) {
     const record = run?.phases?.[String(p.phase)];
@@ -72,9 +68,10 @@ export function nextStepRows(
           phase: p.phase,
           title: p.title,
           state: 'done',
-          why: `this run's own attempt stopped (${excerpt(record.note ?? record.status, 160)})`
-            + ' — but the phase was finished outside it, and the board reads done.'
-            + ' The record reconciles to done on the next run tick; nothing needs fixing.',
+          why:
+            `this run's own attempt stopped (${excerpt(record.note ?? record.status, 160)})` +
+            ' — but the phase was finished outside it, and the board reads done.' +
+            ' The record reconciles to done on the next run tick; nothing needs fixing.',
           readMore: phaseHref(slug, p.phase),
         });
       }
@@ -86,8 +83,9 @@ export function nextStepRows(
         phase: p.phase,
         title: p.title,
         state: p.state,
-        why: excerpt(p.handoff?.outstanding)
-          ?? `its handoff is marked ${p.handoff?.status ?? 'blocked'} and records no Outstanding section.`,
+        why:
+          excerpt(p.handoff?.outstanding) ??
+          `its handoff is marked ${p.handoff?.status ?? 'blocked'} and records no Outstanding section.`,
         stuck: true,
         readMore: p.handoff?.file ? phaseHref(slug, p.phase) : undefined,
       });
@@ -99,8 +97,9 @@ export function nextStepRows(
         phase: p.phase,
         title: p.title,
         state: p.state,
-        why: record?.note
-          ?? (p.gateKind === 'ai'
+        why:
+          record?.note ??
+          (p.gateKind === 'ai'
             ? `gated (ai-clearable) — a booted session verifies and clears it itself${p.gates ? `: ${excerpt(p.gates, 200)}` : '.'}`
             : p.gates
               ? `gated — the plan asks a person to confirm first: ${excerpt(p.gates, 220)}`
@@ -123,7 +122,7 @@ export function nextStepRows(
         state: record.status,
         why: errand
           ? errand.need
-          : excerpt(record.note ?? haltHere) ?? `this run recorded it ${record.status}, without a note.`,
+          : (excerpt(record.note ?? haltHere) ?? `this run recorded it ${record.status}, without a note.`),
         record: {
           status: record.status,
           resumable: Boolean(record.sessionId ?? record.resumeSessionId),
@@ -168,7 +167,10 @@ export function NextSteps({
       <CardBody className="flex flex-col gap-3">
         {rows.map((row) => {
           return (
-            <div key={row.phase} className="flex flex-col gap-1.5 border-b border-rule pb-3 last:border-0 last:pb-0">
+            <div
+              key={row.phase}
+              className="flex flex-col gap-1.5 border-b border-rule pb-3 last:border-0 last:pb-0"
+            >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-mono text-2xs text-ink-faint">P{row.phase}</span>
                 <span className="min-w-0 truncate text-sm font-medium">{row.title}</span>
@@ -179,13 +181,15 @@ export function NextSteps({
                 {(row.record || row.stuck) && (
                   <RecoveryActions
                     target={{ slug, phase: row.phase, ...(run?.id ? { runId: run.id } : {}) }}
-                    ctx={row.record
-                      ? {
-                        ...(run ? { run } : {}),
-                        record: row.record,
-                        ...(authFailure ? { authFailure: true } : {}),
-                      }
-                      : { boardState: 'stuck' }}
+                    ctx={
+                      row.record
+                        ? {
+                            ...(run ? { run } : {}),
+                            record: row.record,
+                            ...(authFailure ? { authFailure: true } : {}),
+                          }
+                        : { boardState: 'stuck' }
+                    }
                     max={2}
                   />
                 )}
@@ -204,12 +208,17 @@ export function NextSteps({
                     <a href={row.readMore}>
                       {row.state === 'stuck'
                         ? 'Read the full handoff'
-                        : row.state === 'done' ? 'Open the phase' : 'Read the gate (plan)'}
+                        : row.state === 'done'
+                          ? 'Open the phase'
+                          : 'Read the gate (plan)'}
                     </a>
                   </Button>
                 )}
                 {row.retry === 'rechecks-gate' && (
-                  <Chip tone="gate" title="A gate is a decision the plan reserved for a person. The console can re-check it, never take it for you.">
+                  <Chip
+                    tone="gate"
+                    title="A gate is a decision the plan reserved for a person. The console can re-check it, never take it for you."
+                  >
                     needs your confirmation
                   </Chip>
                 )}

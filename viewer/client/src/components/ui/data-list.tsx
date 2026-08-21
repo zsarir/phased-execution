@@ -75,7 +75,11 @@ export function DataList<T>({
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {rows.map((row) => {
               const style: CSSProperties = {
-                position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${row.start}px)`,
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                transform: `translateY(${row.start}px)`,
               };
               return (
                 <div

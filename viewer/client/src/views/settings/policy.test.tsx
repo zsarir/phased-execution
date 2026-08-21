@@ -29,7 +29,9 @@ const POLICY = {
   // `sudo` is struck (absent from effective, listed under removed); `task
   // nuke` is the operator's own deny rule.
   extra: {
-    deny: ['Bash(task nuke:*)'], ask: [], allow: [],
+    deny: ['Bash(task nuke:*)'],
+    ask: [],
+    allow: [],
     removed: { deny: ['Bash(sudo:*)'], ask: [], allow: [] },
   },
   plan: null,
@@ -39,7 +41,12 @@ const POLICY = {
     allow: ['Bash(ls:*)'],
   },
   file: '/tmp/autopilot.json',
-  profiles: [], inert: [], support: [], hookTools: ['Bash'], wrappersNotStripped: [], seen: [],
+  profiles: [],
+  inert: [],
+  support: [],
+  hookTools: ['Bash'],
+  wrappersNotStripped: [],
+  seen: [],
 };
 
 vi.mock('@/lib/queries', async (importOriginal) => {
@@ -55,7 +62,9 @@ async function mount() {
   const client = new QueryClient(queryClientConfig);
   const { PolicyCard } = await import('./policy');
   return render(
-    <QueryClientProvider client={client}><PolicyCard allowWrites /></QueryClientProvider>,
+    <QueryClientProvider client={client}>
+      <PolicyCard allowWrites />
+    </QueryClientProvider>,
   );
 }
 
@@ -74,9 +83,11 @@ describe('deny parity in the editor', () => {
     expect(editPolicy).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove it' }));
-    await waitFor(() => expect(editPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: 'global', remove: { deny: ['Bash(git push:*)'] } }),
-    ));
+    await waitFor(() =>
+      expect(editPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'global', remove: { deny: ['Bash(git push:*)'] } }),
+      ),
+    );
   });
 
   it('cancelling the confirm writes nothing', async () => {
@@ -91,26 +102,32 @@ describe('deny parity in the editor', () => {
     await mount();
     fireEvent.click(await screen.findByRole('button', { name: 'Remove Bash(task nuke:*)' }));
     expect(screen.queryByText('Remove a shipped deny rule?')).toBeNull();
-    await waitFor(() => expect(editPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ remove: { deny: ['Bash(task nuke:*)'] } }),
-    ));
+    await waitFor(() =>
+      expect(editPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({ remove: { deny: ['Bash(task nuke:*)'] } }),
+      ),
+    );
   });
 
   it('a shipped ask removal stays one tap too', async () => {
     await mount();
     fireEvent.click(await screen.findByRole('button', { name: 'Remove Bash(git commit:*)' }));
     expect(screen.queryByText('Remove a shipped deny rule?')).toBeNull();
-    await waitFor(() => expect(editPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ remove: { ask: ['Bash(git commit:*)'] } }),
-    ));
+    await waitFor(() =>
+      expect(editPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({ remove: { ask: ['Bash(git commit:*)'] } }),
+      ),
+    );
   });
 
   it('a struck deny rule renders with a way back, and ↩ restores it as a default', async () => {
     await mount();
     const restore = await screen.findByRole('button', { name: 'Restore Bash(sudo:*)' });
     fireEvent.click(restore);
-    await waitFor(() => expect(editPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ restore: { deny: ['Bash(sudo:*)'] } }),
-    ));
+    await waitFor(() =>
+      expect(editPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({ restore: { deny: ['Bash(sudo:*)'] } }),
+      ),
+    );
   });
 });

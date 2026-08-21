@@ -37,8 +37,8 @@ export function NewPlanCard({ allowAgent }: { allowAgent: boolean }) {
       </CardHeader>
       <CardBody className="flex flex-col gap-2.5">
         <p className="text-2xs text-ink-muted">
-          Describe the work and a Claude session drafts the phase graph with you, then scaffolds,
-          validates and commits <code className="font-mono">docs/plans/&lt;slug&gt;.md</code>.
+          Describe the work and a Claude session drafts the phase graph with you, then scaffolds, validates
+          and commits <code className="font-mono">docs/plans/&lt;slug&gt;.md</code>.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <Button

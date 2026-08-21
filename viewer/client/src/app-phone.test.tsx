@@ -57,7 +57,11 @@ function mount() {
     ...queryClientConfig,
     defaultOptions: { queries: { ...queryClientConfig.defaultOptions?.queries, retry: false } },
   });
-  return render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={client}>
+      <App />
+    </QueryClientProvider>,
+  );
 }
 
 beforeEach(() => {
@@ -72,10 +76,20 @@ describe('the phone shell', () => {
     // shell mirrors it into --app-height and reads the keyboard's share.
     const listeners = new Set<() => void>();
     const vv = {
-      height: 844, width: 390, offsetTop: 0, offsetLeft: 0, scale: 1,
-      addEventListener: (_type: string, fn: () => void) => { listeners.add(fn); },
-      removeEventListener: (_type: string, fn: () => void) => { listeners.delete(fn); },
-      fire: () => { for (const fn of listeners) fn(); },
+      height: 844,
+      width: 390,
+      offsetTop: 0,
+      offsetLeft: 0,
+      scale: 1,
+      addEventListener: (_type: string, fn: () => void) => {
+        listeners.add(fn);
+      },
+      removeEventListener: (_type: string, fn: () => void) => {
+        listeners.delete(fn);
+      },
+      fire: () => {
+        for (const fn of listeners) fn();
+      },
     };
     Object.defineProperty(window, 'visualViewport', { configurable: true, writable: true, value: vv });
     Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 844 });
@@ -83,7 +97,9 @@ describe('the phone shell', () => {
 
     mount();
     expect(await screen.findByRole('navigation', { name: 'Main' })).toBeInTheDocument();
-    await act(async () => { await frame(); });
+    await act(async () => {
+      await frame();
+    });
 
     const textarea = document.createElement('textarea');
     document.body.appendChild(textarea);
@@ -97,7 +113,10 @@ describe('the phone shell', () => {
 
     // The software keyboard opens: the visual viewport shrinks by ~300px.
     vv.height = 520;
-    await act(async () => { vv.fire(); await frame(); });
+    await act(async () => {
+      vv.fire();
+      await frame();
+    });
     expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull();
 
     await act(async () => {
@@ -113,7 +132,7 @@ describe('the phone shell', () => {
 
   it('resets the one scroller to the top when the route changes', async () => {
     mount();
-    const main = await screen.findByRole('main') as HTMLElement & { __scrollToCalls?: unknown[][] };
+    const main = (await screen.findByRole('main')) as HTMLElement & { __scrollToCalls?: unknown[][] };
     const before = main.__scrollToCalls?.length ?? 0;
 
     await act(async () => {

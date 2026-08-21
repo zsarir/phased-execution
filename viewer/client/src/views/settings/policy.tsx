@@ -24,7 +24,15 @@ import { X } from 'lucide-react';
 import { api, type PolicyLists } from '@/lib/api';
 import { keys, usePlans, usePolicy } from '@/lib/queries';
 import {
-  AlertDialog, AlertDialogContent, Banner, Button, Card, CardBody, CardHeader, CardTitle, toast,
+  AlertDialog,
+  AlertDialogContent,
+  Banner,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  toast,
 } from '@/components/ui';
 
 /** The rule forms, and what each one builds. */
@@ -114,27 +122,39 @@ const FORMS = [
 const LIST_COPY: Record<keyof PolicyLists, { title: string; detail: string }> = {
   deny: {
     title: 'Denied — the wall.',
-    detail: 'Evaluated inside the CLI, with no network involved. Verified to hold with this console '
-      + 'stopped. Nothing can approve past it at run time — and removing a rule here is the one edit '
-      + 'that widens what every future run may do, so it asks you to confirm.',
+    detail:
+      'Evaluated inside the CLI, with no network involved. Verified to hold with this console ' +
+      'stopped. Nothing can approve past it at run time — and removing a rule here is the one edit ' +
+      'that widens what every future run may do, so it asks you to confirm.',
   },
   ask: {
     title: 'Asked — the workflow.',
-    detail: 'These raise a card and wait for you. They go through the HTTP hook, and that hook FAILS '
-      + 'OPEN: if this console is not running, the call proceeds unasked. Useful, and never the thing '
-      + 'to rely on for anything that must not happen.',
+    detail:
+      'These raise a card and wait for you. They go through the HTTP hook, and that hook FAILS ' +
+      'OPEN: if this console is not running, the call proceeds unasked. Useful, and never the thing ' +
+      'to rely on for anything that must not happen.',
   },
   allow: {
     title: 'Allowed.',
-    detail: 'Never round-trip to the hook. The shipped ones are read-only work a phase does constantly; '
-      + 'the ones you add also outrank the ask list, which is what makes “Always allow this” on a card '
-      + 'actually stop the asking.',
+    detail:
+      'Never round-trip to the hook. The shipped ones are read-only work a phase does constantly; ' +
+      'the ones you add also outrank the ask list, which is what makes “Always allow this” on a card ' +
+      'actually stop the asking.',
   },
 };
 
 const FALLBACK_TOOLS = [
-  'Read', 'Edit', 'Write', 'Agent', 'Cd', 'Glob', 'Grep', 'NotebookEdit',
-  'WebFetch', 'WebSearch', 'TodoWrite',
+  'Read',
+  'Edit',
+  'Write',
+  'Agent',
+  'Cd',
+  'Glob',
+  'Grep',
+  'NotebookEdit',
+  'WebFetch',
+  'WebSearch',
+  'TodoWrite',
 ];
 
 export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
@@ -170,11 +190,14 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
       client.setQueryData(keys.policy(slug || ''), next);
       void client.invalidateQueries({ queryKey: ['policy'] });
       const added = patch.add && Object.entries(patch.add)[0];
-      toast(patch.reset?.length
-        ? `Restored ${patch.reset.join(', ')} to the shipped defaults${planScope ? ` for ${slug}` : ''}`
-        : added
-          ? `Added ${added[1]?.[0]} to ${added[0]}${planScope ? ` for ${slug}` : ''}`
-          : 'Removed', 'ok');
+      toast(
+        patch.reset?.length
+          ? `Restored ${patch.reset.join(', ')} to the shipped defaults${planScope ? ` for ${slug}` : ''}`
+          : added
+            ? `Added ${added[1]?.[0]} to ${added[0]}${planScope ? ` for ${slug}` : ''}`
+            : 'Removed',
+        'ok',
+      );
     },
     onError: (error: Error) => toast(String(error.message ?? error), 'error'),
   });
@@ -190,7 +213,7 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
 
   // The rules the CURRENT scope's file holds — removable by dropping the line.
   const mine = (name: keyof PolicyLists): string[] =>
-    (planScope ? policy.plan?.extra?.[name] ?? [] : policy.extra[name] ?? []);
+    planScope ? (policy.plan?.extra?.[name] ?? []) : (policy.extra[name] ?? []);
 
   // Shipped defaults this scope has struck by name — all three lists alike.
   // They vanish from the effective list, so they render below the chips with a
@@ -213,8 +236,7 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
       <CardHeader>
         <CardTitle>What an unattended session may do</CardTitle>
         <span className="text-2xs text-ink-faint">
-          yours are highlighted ·{' '}
-          <code>{planScope && policy.plan ? policy.plan.path : policy.file}</code>
+          yours are highlighted · <code>{planScope && policy.plan ? policy.plan.path : policy.file}</code>
         </span>
       </CardHeader>
       <CardBody className="flex flex-col gap-3">
@@ -245,7 +267,11 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
                 className="min-h-(--tap-min) rounded border border-rule bg-ground px-2 text-sm text-ink"
               >
                 <option value="">choose a plan…</option>
-                {(plans ?? []).map((p) => <option key={p.slug} value={p.slug}>{p.slug}</option>)}
+                {(plans ?? []).map((p) => (
+                  <option key={p.slug} value={p.slug}>
+                    {p.slug}
+                  </option>
+                ))}
               </select>
             </label>
           )}
@@ -329,7 +355,9 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
             profile, with this console dead — so it is named before it lands. */}
         <AlertDialog
           open={confirmStrike != null}
-          onOpenChange={(open) => { if (!open) setConfirmStrike(null); }}
+          onOpenChange={(open) => {
+            if (!open) setConfirmStrike(null);
+          }}
         >
           <AlertDialogContent
             title="Remove a shipped deny rule?"
@@ -343,15 +371,21 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
             }}
           >
             <p className="mt-2 text-sm text-ink-muted">
-              <code className="rounded bg-surface-raised px-1 font-mono">{confirmStrike}</code> is
-              part of the shipped deny list — the layer enforced inside the CLI, which holds even
-              with this console stopped. Removed at{' '}
-              {planScope ? <>the <code className="font-mono">{slug}</code> scope</> : 'the global scope'},
-              every future run — on every profile — may then do it without asking.
+              <code className="rounded bg-surface-raised px-1 font-mono">{confirmStrike}</code> is part of the
+              shipped deny list — the layer enforced inside the CLI, which holds even with this console
+              stopped. Removed at{' '}
+              {planScope ? (
+                <>
+                  the <code className="font-mono">{slug}</code> scope
+                </>
+              ) : (
+                'the global scope'
+              )}
+              , every future run — on every profile — may then do it without asking.
             </p>
             <p className="mt-2 text-2xs text-ink-faint">
-              Reversible from this screen: the struck rule stays listed with ↩, and Restore defaults
-              brings the whole wall back. The edit is written with your name on it and journaled.
+              Reversible from this screen: the struck rule stays listed with ↩, and Restore defaults brings
+              the whole wall back. The edit is written with your name on it and journaled.
             </p>
           </AlertDialogContent>
         </AlertDialog>
@@ -361,7 +395,9 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
             <strong>These parse and do nothing.</strong>
             <ul className="mt-1.5 list-disc pl-5">
               {policy.inert.map((r) => (
-                <li key={r.raw}><code>{r.raw}</code> — {r.note}</li>
+                <li key={r.raw}>
+                  <code>{r.raw}</code> — {r.note}
+                </li>
               ))}
             </ul>
           </Banner>
@@ -384,7 +420,11 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
                   }}
                   className="min-h-(--tap-min) rounded border border-rule bg-ground px-2 text-sm text-ink"
                 >
-                  {FORMS.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
+                  {FORMS.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}
+                    </option>
+                  ))}
                 </select>
               </label>
 
@@ -413,7 +453,12 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
                     disabled={busy}
                     spellCheck={false}
                     onChange={(event) => setValue(event.target.value)}
-                    onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); add(); } }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        add();
+                      }
+                    }}
                     className="min-h-(--tap-min) w-full rounded border border-rule bg-ground px-2 font-mono text-sm text-ink"
                   />
                 </label>
@@ -435,7 +480,9 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
             </div>
 
             <datalist id="policy-tools">
-              {toolOptions.map((t) => <option key={t} value={t} />)}
+              {toolOptions.map((t) => (
+                <option key={t} value={t} />
+              ))}
             </datalist>
 
             <p className="text-2xs text-ink-faint">{form.hint}</p>
@@ -444,7 +491,9 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-2xs text-ink-faint">Tools this console has been asked about:</span>
                 {policy.seen.map((t) => (
-                  <Button key={t} size="sm" disabled={busy} onClick={() => setTool(t)}>{t}</Button>
+                  <Button key={t} size="sm" disabled={busy} onClick={() => setTool(t)}>
+                    {t}
+                  </Button>
                 ))}
               </div>
             ) : null}
@@ -462,17 +511,17 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
             <Banner severity={list === 'allow' ? 'warn' : 'info'}>
               {list === 'allow' ? (
                 <span>
-                  <strong>This widens what an unattended run may do.</strong> It is written with
-                  your name on it, recorded in the live run&rsquo;s journal, and removable with the
-                  × on its chip. <code>deny</code> still refuses it whatever this says.
+                  <strong>This widens what an unattended run may do.</strong> It is written with your name on
+                  it, recorded in the live run&rsquo;s journal, and removable with the × on its chip.{' '}
+                  <code>deny</code> still refuses it whatever this says.
                 </span>
               ) : (
                 <span>
-                  Adding to <code>deny</code> or <code>ask</code> makes a run more careful. Every
-                  rule is removable with the × on its chip — shipped defaults are struck by name and{' '}
-                  <em>Restore defaults</em> brings them back. Removing a shipped <code>deny</code>{' '}
-                  rule is the widest edit this page can make (the wall moves for every future run,
-                  with this console dead included), so that one asks you to confirm first.
+                  Adding to <code>deny</code> or <code>ask</code> makes a run more careful. Every rule is
+                  removable with the × on its chip — shipped defaults are struck by name and{' '}
+                  <em>Restore defaults</em> brings them back. Removing a shipped <code>deny</code> rule is the
+                  widest edit this page can make (the wall moves for every future run, with this console dead
+                  included), so that one asks you to confirm first.
                 </span>
               )}
             </Banner>
@@ -493,25 +542,33 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
                     irrelevant — a more specific rule does not beat an earlier one.
                   </li>
                   <li>
-                    Wrappers are seen through: <code>timeout time nice nohup stdbuf command builtin
-                    noglob</code> and bare <code>xargs</code>. <b>Not</b>{' '}
-                    {(policy.wrappersNotStripped ?? []).map((w) => <code key={w}> {w}</code>)} — a
-                    rule about what those run will not fire.
+                    Wrappers are seen through:{' '}
+                    <code>timeout time nice nohup stdbuf command builtin noglob</code> and bare{' '}
+                    <code>xargs</code>. <b>Not</b>{' '}
+                    {(policy.wrappersNotStripped ?? []).map((w) => (
+                      <code key={w}> {w}</code>
+                    ))}{' '}
+                    — a rule about what those run will not fire.
                   </li>
                   <li>
-                    <code>watch</code>, <code>setsid</code>, <code>flock</code> and{' '}
-                    <code>find -exec</code> never auto-approve: what they actually run cannot be seen
-                    from the outside, so they get a card.
+                    <code>watch</code>, <code>setsid</code>, <code>flock</code> and <code>find -exec</code>{' '}
+                    never auto-approve: what they actually run cannot be seen from the outside, so they get a
+                    card.
                   </li>
                   <li>
                     Only <code>Read(…)</code> and <code>Edit(…)</code> path rules are consulted.{' '}
-                    <code>Write(…)</code>, <code>NotebookEdit(…)</code> and <code>Glob(…)</code>{' '}
-                    paths are ignored.
+                    <code>Write(…)</code>, <code>NotebookEdit(…)</code> and <code>Glob(…)</code> paths are
+                    ignored.
                   </li>
-                  <li><code>Bash(command:rm *)</code> looks like a parameter rule and is dropped.</li>
                   <li>
-                    Only {(policy.hookTools ?? []).map((t) => <code key={t}>{t} </code>)} reach this
-                    console&rsquo;s hook. Rules about anything else are real, but the CLI enforces
+                    <code>Bash(command:rm *)</code> looks like a parameter rule and is dropped.
+                  </li>
+                  <li>
+                    Only{' '}
+                    {(policy.hookTools ?? []).map((t) => (
+                      <code key={t}>{t} </code>
+                    ))}{' '}
+                    reach this console&rsquo;s hook. Rules about anything else are real, but the CLI enforces
                     them and nothing here can show you them being hit.
                   </li>
                 </ul>
@@ -520,8 +577,8 @@ export function PolicyCard({ allowWrites }: { allowWrites: boolean }) {
           </div>
         ) : (
           <p className="text-2xs text-ink-faint">
-            Restart with <code>--allow-writes</code> to edit rules here, or edit{' '}
-            <code>{policy.file}</code> directly.
+            Restart with <code>--allow-writes</code> to edit rules here, or edit <code>{policy.file}</code>{' '}
+            directly.
           </p>
         )}
       </CardBody>

@@ -28,7 +28,14 @@
  */
 
 import { isLive } from '../run/defaults';
-import { STATE_META, UI_STATES, UI_STATE_HELP, isUiState, runUiState, type UiState } from '@/lib/status-vocab';
+import {
+  STATE_META,
+  UI_STATES,
+  UI_STATE_HELP,
+  isUiState,
+  runUiState,
+  type UiState,
+} from '@/lib/status-vocab';
 import type { PhaseRecord, RunResolution, RunState } from '@/lib/api';
 
 /**
@@ -38,7 +45,9 @@ import type { PhaseRecord, RunResolution, RunState } from '@/lib/api';
  * no second table of "outcomes" here any more.
  */
 export const FLEET_STATES: readonly { id: UiState; label: string; hint: string }[] = UI_STATES.map((id) => ({
-  id, label: STATE_META[id].label, hint: UI_STATE_HELP[id].means,
+  id,
+  label: STATE_META[id].label,
+  hint: UI_STATE_HELP[id].means,
 }));
 
 export interface RunRow {

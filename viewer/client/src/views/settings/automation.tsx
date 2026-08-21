@@ -24,7 +24,9 @@ export function AutomationCard() {
     // One key at a time, merged server-side — two tabs flipping different
     // knobs must not overwrite each other.
     mutationFn: (patch: Record<string, unknown>) => api.savePrefs(patch),
-    onSuccess: async () => { await client.invalidateQueries({ queryKey: keys.state() }); },
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: keys.state() });
+    },
     onError: (error: Error) => toast(String(error.message ?? error), 'error'),
   });
 
@@ -36,27 +38,33 @@ export function AutomationCard() {
 
   const row = 'flex flex-wrap items-center justify-between gap-2';
   const onOff = (value: boolean, key: string, on = 'On', off = 'Off') => (
-    <Button
-      size="sm"
-      aria-pressed={value}
-      disabled={busy}
-      onClick={() => save.mutate({ [key]: !value })}
-    >
+    <Button size="sm" aria-pressed={value} disabled={busy} onClick={() => save.mutate({ [key]: !value })}>
       {value ? on : off}
     </Button>
   );
 
   return (
     <Card>
-      <CardHeader><CardTitle>Automation</CardTitle></CardHeader>
+      <CardHeader>
+        <CardTitle>Automation</CardTitle>
+      </CardHeader>
       <CardBody className="flex flex-col gap-3">
         <div className={row}>
           <span className="min-w-0">
             <span className="text-sm text-ink">Attach default skills to new sessions</span>
             <span className="mt-0.5 block text-2xs text-ink-muted">
-              {defaultSkills.length
-                ? <>This machine's list: {defaultSkills.map((s) => <code key={s} className="mr-1">{s}</code>)}</>
-                : 'This machine has no default skills configured.'}
+              {defaultSkills.length ? (
+                <>
+                  This machine's list:{' '}
+                  {defaultSkills.map((s) => (
+                    <code key={s} className="mr-1">
+                      {s}
+                    </code>
+                  ))}
+                </>
+              ) : (
+                'This machine has no default skills configured.'
+              )}
             </span>
           </span>
           {onOff(prefs.attachDefaultSkills, 'attachDefaultSkills')}
@@ -73,7 +81,9 @@ export function AutomationCard() {
         </div>
 
         <div className={row}>
-          <label htmlFor="automation-git-mode" className="text-sm text-ink">Branch</label>
+          <label htmlFor="automation-git-mode" className="text-sm text-ink">
+            Branch
+          </label>
           <select
             id="automation-git-mode"
             value={prefs.gitMode}
@@ -98,8 +108,7 @@ export function AutomationCard() {
           </div>
         ) : (
           <p className="text-2xs text-ink-faint">
-            PR-on-completion applies to work-branch runs; pick “Create a work branch per run” to
-            use it.
+            PR-on-completion applies to work-branch runs; pick “Create a work branch per run” to use it.
           </p>
         )}
 
@@ -107,9 +116,9 @@ export function AutomationCard() {
           <span className="min-w-0">
             <span className="text-sm text-ink">Auto-recover halted runs</span>
             <span className="mt-0.5 block text-2xs text-ink-muted">
-              A halt an agent can clear (failed verification, missing handoff, a crashed phase)
-              launches the fix agent by itself — at most 2 tries per phase, 5 per run, never the
-              same failure twice, and never for the halts only you can clear.
+              A halt an agent can clear (failed verification, missing handoff, a crashed phase) launches the
+              fix agent by itself — at most 2 tries per phase, 5 per run, never the same failure twice, and
+              never for the halts only you can clear.
             </span>
           </span>
           {onOff(prefs.autoRecoverByDefault, 'autoRecoverByDefault')}
@@ -119,8 +128,8 @@ export function AutomationCard() {
           <span className="min-w-0">
             <span className="text-sm text-ink">Continue runs a recovery fixed</span>
             <span className="mt-0.5 block text-2xs text-ink-muted">
-              When a recovery session ends and the board reads fixed, the run resumes by itself —
-              manual Fix-with-AI sessions included.
+              When a recovery session ends and the board reads fixed, the run resumes by itself — manual
+              Fix-with-AI sessions included.
             </span>
           </span>
           {onOff(prefs.autoContinueRecovery, 'autoContinueRecovery')}
@@ -132,8 +141,7 @@ export function AutomationCard() {
               When an MCP server is unavailable
             </label>
             <span className="mt-0.5 block text-2xs text-ink-muted">
-              A plan or a single phase can still demand its servers — this is only where every run
-              starts.
+              A plan or a single phase can still demand its servers — this is only where every run starts.
             </span>
           </span>
           <select
@@ -152,16 +160,16 @@ export function AutomationCard() {
           <span className="min-w-0">
             <span className="text-sm text-ink">Repository guard</span>
             <span className="mt-0.5 block text-2xs text-ink-muted">
-              Queue runs whose repositories overlap. Off: overlapping runs may start at once, and
-              a work-branch run sharing a repo is steered into a git worktree.
+              Queue runs whose repositories overlap. Off: overlapping runs may start at once, and a
+              work-branch run sharing a repo is steered into a git worktree.
             </span>
           </span>
           {onOff(prefs.repoGuard, 'repoGuard')}
         </div>
 
         <p className="text-2xs text-ink-muted">
-          Stored with the console — these are the opening values for every launch dialog; each
-          launch can still override them for itself.
+          Stored with the console — these are the opening values for every launch dialog; each launch can
+          still override them for itself.
         </p>
       </CardBody>
     </Card>

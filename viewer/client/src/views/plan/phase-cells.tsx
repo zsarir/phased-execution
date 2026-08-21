@@ -46,17 +46,23 @@ const scopeOf = scopeOfRow as (cell: string | undefined) => string[];
 export function LockChip({ lock, compact = false }: { lock?: PhaseLock; compact?: boolean }) {
   if (!lock) return null;
   const left = countdown(lock.leaseUntil);
-  const title = lockTitle(lock.expired ? 'stale' : 'live')
-    + `\n\n${lock.owner}${lock.host ? ` on ${lock.host}` : ''}`
-    + (lock.claimedAt ? `\nclaimed ${relativeTime(lock.claimedAt)}` : '')
-    + (lock.scope?.length ? `\nscope: ${lock.scope.join(', ')}` : '');
+  const title =
+    lockTitle(lock.expired ? 'stale' : 'live') +
+    `\n\n${lock.owner}${lock.host ? ` on ${lock.host}` : ''}` +
+    (lock.claimedAt ? `\nclaimed ${relativeTime(lock.claimedAt)}` : '') +
+    (lock.scope?.length ? `\nscope: ${lock.scope.join(', ')}` : '');
 
   if (lock.expired) {
-    return <Chip tone="warn" title={title}>stale claim{compact ? '' : ` · ${lock.owner}`}</Chip>;
+    return (
+      <Chip tone="warn" title={title}>
+        stale claim{compact ? '' : ` · ${lock.owner}`}
+      </Chip>
+    );
   }
   return (
     <Chip tone="busy" title={title}>
-      held{compact ? '' : ` by ${lock.owner}`}{left && left !== '—' ? ` · ${left}` : ''}
+      held{compact ? '' : ` by ${lock.owner}`}
+      {left && left !== '—' ? ` · ${left}` : ''}
     </Chip>
   );
 }
@@ -71,15 +77,24 @@ export function LockCell({ lock, compact }: { lock?: PhaseLock; compact?: boolea
 
 /** A phase number as a chip-sized link — every dependency edge is one of these. */
 export function PhaseLink({
-  slug, phase, suffix, title,
-}: { slug: string; phase: number; suffix?: ReactNode; title?: string }) {
+  slug,
+  phase,
+  suffix,
+  title,
+}: {
+  slug: string;
+  phase: number;
+  suffix?: ReactNode;
+  title?: string;
+}) {
   return (
     <a
       href={phaseHref(slug, phase)}
       title={title}
       className="inline-flex items-center gap-1.5 rounded-sm border border-rule px-1.5 py-0.5 text-2xs whitespace-nowrap text-ink-muted hover:border-rule-strong hover:text-ink"
     >
-      P{phase}{suffix}
+      P{phase}
+      {suffix}
     </a>
   );
 }
@@ -97,8 +112,14 @@ export function PhaseLink({
  * what a phase unblocks.
  */
 export function DepsCell({
-  slug, phase, linked = true,
-}: { slug: string; phase: PhaseView; linked?: boolean }) {
+  slug,
+  phase,
+  linked = true,
+}: {
+  slug: string;
+  phase: PhaseView;
+  linked?: boolean;
+}) {
   const needs = phase.analysis?.dependsOn ?? phase.row?.dependsOn ?? [];
   const unblocks = phase.analysis?.unblocks ?? 0;
   const downstream = phase.analysis?.transitiveDependents?.length ?? 0;
@@ -113,9 +134,11 @@ export function DepsCell({
           {/* `linked` off where the cell sits inside a link already — the phone
               list is one tap target per phase, and an anchor inside an anchor
               is invalid markup that browsers resolve by dropping one of them. */}
-          {linked
-            ? needs.map((dep) => <PhaseLink key={dep} slug={slug} phase={dep} />)
-            : <span className="font-mono text-2xs text-ink-muted">{needs.map((d) => `P${d}`).join(' · ')}</span>}
+          {linked ? (
+            needs.map((dep) => <PhaseLink key={dep} slug={slug} phase={dep} />)
+          ) : (
+            <span className="font-mono text-2xs text-ink-muted">{needs.map((d) => `P${d}`).join(' · ')}</span>
+          )}
         </div>
       )}
       {unblocks > 0 && (
@@ -123,7 +146,8 @@ export function DepsCell({
           className="text-2xs text-ink-faint"
           title={downstream > unblocks ? `${downstream} phases downstream in total` : undefined}
         >
-          unblocks {unblocks}{downstream > unblocks ? ` · ${downstream} downstream` : ''}
+          unblocks {unblocks}
+          {downstream > unblocks ? ` · ${downstream} downstream` : ''}
         </span>
       )}
     </div>
@@ -136,7 +160,9 @@ export function DepsCell({
 export function SizeCell({ phase, eta }: { phase: PhaseView; eta?: PhaseEta | undefined }) {
   return (
     <div className="flex flex-col items-start gap-1">
-      <Chip mono title={`weight ${weight(phase.weight)}`}>{phase.size}</Chip>
+      <Chip mono title={`weight ${weight(phase.weight)}`}>
+        {phase.size}
+      </Chip>
       {eta?.label && <span className="text-2xs whitespace-nowrap text-ink-faint">{eta.label}</span>}
     </div>
   );
@@ -152,15 +178,27 @@ export function SizeCell({ phase, eta }: { phase: PhaseView; eta?: PhaseEta | un
  * column.
  */
 export function FlagsCell({
-  slug, phase, showQa = true, linked = true,
-}: { slug: string; phase: PhaseView; showQa?: boolean; linked?: boolean }) {
+  slug,
+  phase,
+  showQa = true,
+  linked = true,
+}: {
+  slug: string;
+  phase: PhaseView;
+  showQa?: boolean;
+  linked?: boolean;
+}) {
   const chips: ReactNode[] = [];
   if (phase.gated) {
     const kind = phase.gateKind && phase.gateKind !== 'none' ? `·${phase.gateKind}` : '';
     chips.push(<Chip key="gated" tone="gate" title={boardStateTitle('gated')}>{`gated${kind}`}</Chip>);
   }
   if (phase.analysis?.onCriticalPath) {
-    chips.push(<Chip key="crit" title="On the longest remaining chain">critical</Chip>);
+    chips.push(
+      <Chip key="crit" title="On the longest remaining chain">
+        critical
+      </Chip>,
+    );
   }
   if (showQa && phase.qa) {
     chips.push(
@@ -196,11 +234,11 @@ export function NumberCell({ slug, phase }: { slug: string; phase: number }) {
 export function TitleCell({ phase }: { phase: PhaseView }) {
   return (
     <>
-      <div className="font-medium text-ink"><MarkdownInline text={phase.title} /></div>
+      <div className="font-medium text-ink">
+        <MarkdownInline text={phase.title} />
+      </div>
       {phase.goal && (
-        <div className="line-clamp-2 max-w-[46ch] text-2xs text-ink-faint">
-          {plainText(phase.goal)}
-        </div>
+        <div className="line-clamp-2 max-w-[46ch] text-2xs text-ink-faint">{plainText(phase.goal)}</div>
       )}
     </>
   );
@@ -218,7 +256,8 @@ export function ScopeCell({ phase, conflicts }: { phase: PhaseView; conflicts?: 
 
 /* ---------------- the expanded sheet ---------------- */
 
-const prose = (text?: string) => (text ? <span className="whitespace-pre-wrap">{plainText(text)}</span> : null);
+const prose = (text?: string) =>
+  text ? <span className="whitespace-pre-wrap">{plainText(text)}</span> : null;
 
 /**
  * Everything about a phase that does not fit in a row.
@@ -232,8 +271,14 @@ const prose = (text?: string) => (text ? <span className="whitespace-pre-wrap">{
  * line rather than a line with an em-dash in it.
  */
 export function PhaseDetails({
-  slug, phase, eta,
-}: { slug: string; phase: PhaseView; eta?: PhaseEta | undefined }) {
+  slug,
+  phase,
+  eta,
+}: {
+  slug: string;
+  phase: PhaseView;
+  eta?: PhaseEta | undefined;
+}) {
   const a = phase.analysis;
   const lock = phase.lock;
   const h = phase.handoff;
@@ -243,12 +288,15 @@ export function PhaseDetails({
       <KeyValue
         items={[
           ['Goal', prose(phase.goal)],
-          ['Gates', phase.gates ? (
-            <span>
-              {plainText(phase.gates)}
-              {phase.gateCheck && <span className="text-ink-faint"> · {phase.gateCheck}</span>}
-            </span>
-          ) : null],
+          [
+            'Gates',
+            phase.gates ? (
+              <span>
+                {plainText(phase.gates)}
+                {phase.gateCheck && <span className="text-ink-faint"> · {phase.gateCheck}</span>}
+              </span>
+            ) : null,
+          ],
           ['Read first', prose(phase.readFirst)],
           ['Files', prose(phase.files)],
           ['Steps', prose(phase.steps)],
@@ -264,16 +312,26 @@ export function PhaseDetails({
           ['Estimate', eta?.label ? `${eta.label} (${eta.basis})` : null],
           ['Model', phase.model],
           ['Effort', phase.effort],
-          ['Depends on', a?.dependsOn.length ? (
-            <span className="flex flex-wrap gap-1">
-              {a.dependsOn.map((d) => <PhaseLink key={d} slug={slug} phase={d} />)}
-            </span>
-          ) : null],
-          ['Unblocks', a?.dependents.length ? (
-            <span className="flex flex-wrap gap-1">
-              {a.dependents.map((d) => <PhaseLink key={d} slug={slug} phase={d} />)}
-            </span>
-          ) : null],
+          [
+            'Depends on',
+            a?.dependsOn.length ? (
+              <span className="flex flex-wrap gap-1">
+                {a.dependsOn.map((d) => (
+                  <PhaseLink key={d} slug={slug} phase={d} />
+                ))}
+              </span>
+            ) : null,
+          ],
+          [
+            'Unblocks',
+            a?.dependents.length ? (
+              <span className="flex flex-wrap gap-1">
+                {a.dependents.map((d) => (
+                  <PhaseLink key={d} slug={slug} phase={d} />
+                ))}
+              </span>
+            ) : null,
+          ],
           ['Downstream', a?.transitiveDependents.length ? `${a.transitiveDependents.length} phases` : null],
           ['Critical path', a?.onCriticalPath ? 'on the longest remaining chain' : null],
           ['Parallel-safe with', phase.row?.parallelSafe],
@@ -284,13 +342,19 @@ export function PhaseDetails({
       {lock && (
         <KeyValue
           items={[
-            ['Claimed by', <span key="o" className="font-mono">{lock.owner}</span>],
+            [
+              'Claimed by',
+              <span key="o" className="font-mono">
+                {lock.owner}
+              </span>,
+            ],
             ['Host', lock.host ? <span className="font-mono">{lock.host}</span> : null],
             ['Claimed', lock.claimedAt ? relativeTime(lock.claimedAt) : null],
-            ['Lease', lock.expired
-              ? 'lapsed — free to take over'
-              : `${countdown(lock.leaseUntil)} left`],
-            ['Claim scope', lock.scope?.length ? lock.scope.join(', ') : 'unstated — collides with everything'],
+            ['Lease', lock.expired ? 'lapsed — free to take over' : `${countdown(lock.leaseUntil)} left`],
+            [
+              'Claim scope',
+              lock.scope?.length ? lock.scope.join(', ') : 'unstated — collides with everything',
+            ],
           ]}
         />
       )}
@@ -298,7 +362,12 @@ export function PhaseDetails({
       {h && (
         <KeyValue
           items={[
-            ['Handoff', <a key="f" href={`#/plan/${slug}/handoff/${phase.phase}`} className="hover:underline">{h.title || h.file}</a>],
+            [
+              'Handoff',
+              <a key="f" href={`#/plan/${slug}/handoff/${phase.phase}`} className="hover:underline">
+                {h.title || h.file}
+              </a>,
+            ],
             ['Handoff status', h.status],
             ['Completed', h.completed],
             ['Outstanding', prose(h.outstanding)],

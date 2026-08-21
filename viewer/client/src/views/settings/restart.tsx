@@ -48,8 +48,7 @@ export function RestartButton({ verbose = false }: { verbose?: boolean }) {
   if (!state?.allowRun) {
     return (
       <span className="text-2xs text-ink-muted">
-        Restarting is a run-class action — this console was started without{' '}
-        <code>--allow-run</code>.
+        Restarting is a run-class action — this console was started without <code>--allow-run</code>.
       </span>
     );
   }
@@ -58,7 +57,9 @@ export function RestartButton({ verbose = false }: { verbose?: boolean }) {
     return (
       <div className="flex flex-col items-start gap-1">
         <span className="text-2xs text-ink-muted">Cannot restart from here — {readiness.reason}</span>
-        <Button variant="ghost" size="sm" onClick={() => void refetch()}>Check again</Button>
+        <Button variant="ghost" size="sm" onClick={() => void refetch()}>
+          Check again
+        </Button>
       </div>
     );
   }
@@ -84,9 +85,7 @@ export function RestartButton({ verbose = false }: { verbose?: boolean }) {
           <StopInventory items={stopList(readiness.sessions, readiness.run)} />
         </AlertDialogContent>
       </AlertDialog>
-      {verbose && (
-        <span className="text-2xs text-ink-muted">{readiness.supervisor?.detail}</span>
-      )}
+      {verbose && <span className="text-2xs text-ink-muted">{readiness.supervisor?.detail}</span>}
     </div>
   );
 }

@@ -144,8 +144,8 @@ function ApprovalCard({
 
       {asking && (
         <p className="mt-2 max-w-prose text-2xs text-ink-faint">
-          The runner will not execute prose out of a plan file, so these were left for you. Marking
-          them verified records that you checked them, against this phase, with your name on it.
+          The runner will not execute prose out of a plan file, so these were left for you. Marking them
+          verified records that you checked them, against this phase, with your name on it.
         </p>
       )}
 
@@ -207,8 +207,8 @@ function ApprovalCard({
                 </Button>
               </div>
               <p className="max-w-prose text-2xs text-ink-faint">
-                Allows and answers this call in one step. Written with your name on it and recorded
-                in the run's journal; removable from Settings → Permissions.
+                Allows and answers this call in one step. Written with your name on it and recorded in the
+                run's journal; removable from Settings → Permissions.
               </p>
             </div>
           )}

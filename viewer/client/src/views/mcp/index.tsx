@@ -24,8 +24,21 @@ import { keys, useMcp, useMcpCatalog } from '@/lib/queries';
 import { api, type McpCatalogEntry, type McpServerView } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import {
-  AlertDialog, AlertDialogContent, Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip,
-  Dialog, DialogContent, Empty, Skeleton, copy, toast,
+  AlertDialog,
+  AlertDialogContent,
+  Banner,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Chip,
+  Dialog,
+  DialogContent,
+  Empty,
+  Skeleton,
+  copy,
+  toast,
 } from '@/components/ui';
 import { navigate } from '@/router';
 import type { ViewProps } from '@/router';
@@ -55,11 +68,11 @@ export default function McpView({ route }: ViewProps) {
     <Page
       title="MCP servers"
       subtitle="Tools your sessions may connect to — registered here, named by plans, attached per run"
-      actions={(
+      actions={
         <Button size="sm" onClick={() => refresh.mutate()} disabled={refresh.isPending || !attached.length}>
           {refresh.isPending ? 'Checking…' : 'Re-check all'}
         </Button>
-      )}
+      }
     >
       {attention.length > 0 && (
         <Banner severity="error" className="mb-3">
@@ -69,10 +82,7 @@ export default function McpView({ route }: ViewProps) {
         </Banner>
       )}
 
-      <Tabs.Root
-        value={tab}
-        onValueChange={(next) => navigate(next === 'catalog' ? 'mcp/catalog' : 'mcp')}
-      >
+      <Tabs.Root value={tab} onValueChange={(next) => navigate(next === 'catalog' ? 'mcp/catalog' : 'mcp')}>
         <Tabs.List className="mb-3 flex gap-1 border-b border-rule">
           {(['registry', 'catalog'] as const).map((id) => (
             <Tabs.Trigger
@@ -87,9 +97,14 @@ export default function McpView({ route }: ViewProps) {
         </Tabs.List>
 
         <Tabs.Content value="registry">
-          {isPending
-            ? <div className="grid gap-3"><Skeleton className="h-32" /><Skeleton className="h-32" /></div>
-            : <Registry servers={servers} allowed={allowed} />}
+          {isPending ? (
+            <div className="grid gap-3">
+              <Skeleton className="h-32" />
+              <Skeleton className="h-32" />
+            </div>
+          ) : (
+            <Registry servers={servers} allowed={allowed} />
+          )}
         </Tabs.Content>
 
         <Tabs.Content value="catalog">
@@ -127,13 +142,15 @@ function Registry({ servers, allowed }: { servers: McpServerView[]; allowed: boo
     <>
       {attached > COMFORTABLE && (
         <Banner severity="warn" className="mb-3">
-          {attached} servers are switched on. Every one of them costs context on every turn and adds
-          tool names that can collide with another server's — three to six is the range people
-          settle at. The run page shows which ones a phase actually called.
+          {attached} servers are switched on. Every one of them costs context on every turn and adds tool
+          names that can collide with another server's — three to six is the range people settle at. The run
+          page shows which ones a phase actually called.
         </Banner>
       )}
       <div className="grid gap-3">
-        {servers.map((server) => <ServerCard key={server.id} server={server} allowed={allowed} />)}
+        {servers.map((server) => (
+          <ServerCard key={server.id} server={server} allowed={allowed} />
+        ))}
       </div>
       {!allowed && <FlagNote />}
     </>
@@ -143,8 +160,8 @@ function Registry({ servers, allowed }: { servers: McpServerView[]; allowed: boo
 function FlagNote() {
   return (
     <p className="mt-3 border-t border-rule pt-3 text-xs text-ink-muted">
-      Start the console with <code>--allow-mcp</code> to register servers, hold their credentials and
-      attach them to plans. Reading the registry, the statuses and the catalog works without it.
+      Start the console with <code>--allow-mcp</code> to register servers, hold their credentials and attach
+      them to plans. Reading the registry, the statuses and the catalog works without it.
     </p>
   );
 }
@@ -160,7 +177,9 @@ function ServerCard({ server, allowed }: { server: McpServerView; allowed: boole
 
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => api.mcpPatch(server.id, { enabled }),
-    onSuccess: () => { void invalidate(); },
+    onSuccess: () => {
+      void invalidate();
+    },
     onError: fail,
   });
   const remove = useMutation({
@@ -200,13 +219,17 @@ function ServerCard({ server, allowed }: { server: McpServerView; allowed: boole
       setSecret('');
       void invalidate();
       toast('Stored. Re-checking the connection…', 'ok');
-      void api.mcpRefresh().catch(() => { /* the card will say if it did not help */ });
+      void api.mcpRefresh().catch(() => {
+        /* the card will say if it did not help */
+      });
     },
     onError: fail,
   });
   const acknowledge = useMutation({
     mutationFn: () => api.mcpAcknowledge(server.id),
-    onSuccess: () => { void invalidate(); },
+    onSuccess: () => {
+      void invalidate();
+    },
     onError: fail,
   });
 
@@ -236,14 +259,14 @@ function ServerCard({ server, allowed }: { server: McpServerView; allowed: boole
             <p>
               This server now advertises different tools than it did{' '}
               {relativeTime(Date.parse(server.toolsChanged.seenAt))}.
-              {server.toolsChanged.added.length
-                ? ` Added: ${server.toolsChanged.added.join(', ')}.` : ''}
+              {server.toolsChanged.added.length ? ` Added: ${server.toolsChanged.added.join(', ')}.` : ''}
               {server.toolsChanged.removed.length
-                ? ` Removed: ${server.toolsChanged.removed.join(', ')}.` : ''}
+                ? ` Removed: ${server.toolsChanged.removed.join(', ')}.`
+                : ''}
             </p>
             <p className="mt-1">
-              A server whose tools change under you is how a trusted integration becomes an untrusted
-              one. Check what changed before the next run attaches it.
+              A server whose tools change under you is how a trusted integration becomes an untrusted one.
+              Check what changed before the next run attaches it.
             </p>
             <Button size="sm" className="mt-2" onClick={() => acknowledge.mutate()}>
               I have checked it
@@ -253,9 +276,10 @@ function ServerCard({ server, allowed }: { server: McpServerView; allowed: boole
 
         {server.interactiveTools?.length ? (
           <Banner severity="warn">
-            {server.interactiveTools.join(', ')} require a person to approve every call, which an
-            unattended run can never do. A phase that needs {server.interactiveTools.length === 1
-              ? 'that tool' : 'those tools'} will stall rather than finish.
+            {server.interactiveTools.join(', ')} require a person to approve every call, which an unattended
+            run can never do. A phase that needs{' '}
+            {server.interactiveTools.length === 1 ? 'that tool' : 'those tools'} will stall rather than
+            finish.
           </Banner>
         ) : null}
 
@@ -266,7 +290,10 @@ function ServerCard({ server, allowed }: { server: McpServerView; allowed: boole
               <Button
                 size="sm"
                 className="ml-2"
-                onClick={() => { setSecretFor(held.ref); setSecret(''); }}
+                onClick={() => {
+                  setSecretFor(held.ref);
+                  setSecret('');
+                }}
               >
                 {held.held ? 'Replace' : 'Set'}
               </Button>
@@ -289,7 +316,9 @@ function ServerCard({ server, allowed }: { server: McpServerView; allowed: boole
                 {server.status === 'connected' ? 'Sign in again' : 'Sign in'}
               </Button>
             )}
-            <Button size="sm" onClick={() => setRemoving(true)}>Remove</Button>
+            <Button size="sm" onClick={() => setRemoving(true)}>
+              Remove
+            </Button>
           </div>
         )}
       </CardBody>
@@ -303,18 +332,23 @@ function ServerCard({ server, allowed }: { server: McpServerView; allowed: boole
           onConfirm={() => remove.mutate()}
         >
           <p className="text-sm">
-            The registration and anything this console holds for it — keychain entries, stored
-            headers — are deleted. Any plan that names <code>{server.id}</code> will park at boarding
-            until it is registered again or the name is dropped from the plan.
+            The registration and anything this console holds for it — keychain entries, stored headers — are
+            deleted. Any plan that names <code>{server.id}</code> will park at boarding until it is registered
+            again or the name is dropped from the plan.
           </p>
           <p className="mt-2 text-sm text-ink-muted">
-            An OAuth sign-in stays where it is: <code>claude mcp logout {server.id}</code> is what
-            clears that, because the CLI owns it and this console never writes to its credential store.
+            An OAuth sign-in stays where it is: <code>claude mcp logout {server.id}</code> is what clears
+            that, because the CLI owns it and this console never writes to its credential store.
           </p>
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={secretFor !== null} onOpenChange={(open) => { if (!open) setSecretFor(null); }}>
+      <Dialog
+        open={secretFor !== null}
+        onOpenChange={(open) => {
+          if (!open) setSecretFor(null);
+        }}
+      >
         <DialogContent title={`Set ${secretFor ?? ''}`}>
           <p className="text-sm text-ink-muted">
             Stored in this machine's keychain, never in the registry file and never shown again.
@@ -335,7 +369,9 @@ function ServerCard({ server, allowed }: { server: McpServerView; allowed: boole
             >
               Store it
             </Button>
-            <Button size="sm" onClick={() => setSecretFor(null)}>Cancel</Button>
+            <Button size="sm" onClick={() => setSecretFor(null)}>
+              Cancel
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -352,11 +388,16 @@ function ServerCard({ server, allowed }: { server: McpServerView; allowed: boole
 function StatusChip({ server }: { server: McpServerView }) {
   if (!server.enabled) return <Chip>switched off</Chip>;
   switch (server.status) {
-    case 'connected': return <Chip tone="ok">connected</Chip>;
-    case 'needs-auth': return <Chip tone="bad">needs sign-in</Chip>;
-    case 'failed': return <Chip tone="bad">will not connect</Chip>;
-    case 'pending': return <Chip>connects on first use</Chip>;
-    default: return <Chip>not checked</Chip>;
+    case 'connected':
+      return <Chip tone="ok">connected</Chip>;
+    case 'needs-auth':
+      return <Chip tone="bad">needs sign-in</Chip>;
+    case 'failed':
+      return <Chip tone="bad">will not connect</Chip>;
+    case 'pending':
+      return <Chip>connects on first use</Chip>;
+    default:
+      return <Chip>not checked</Chip>;
   }
 }
 
@@ -384,15 +425,15 @@ function Catalog({ allowed, registered }: { allowed: boolean; registered: Set<st
 
       {data?.registryError && (
         <Banner severity="warn">
-          The official registry could not be reached ({data.registryError}), so this is the curated
-          list only. Everything below still works.
+          The official registry could not be reached ({data.registryError}), so this is the curated list only.
+          Everything below still works.
         </Banner>
       )}
 
       <p className="text-xs text-ink-muted">
-        Keep the attached set small — three to six. Every server costs context on every turn, and a
-        server you add is a server whose tool descriptions enter your prompts: only connect ones you
-        would trust with the repository this console is pointed at.
+        Keep the attached set small — three to six. Every server costs context on every turn, and a server you
+        add is a server whose tool descriptions enter your prompts: only connect ones you would trust with the
+        repository this console is pointed at.
       </p>
 
       {isFetching && !entries.length ? <Skeleton className="h-24" /> : null}
@@ -423,7 +464,12 @@ function Catalog({ allowed, registered }: { allowed: boolean; registered: Set<st
   );
 }
 
-function CatalogRow({ entry, allowed, already, onAdd }: {
+function CatalogRow({
+  entry,
+  allowed,
+  already,
+  onAdd,
+}: {
   entry: McpCatalogEntry;
   allowed: boolean;
   already: boolean;
@@ -442,20 +488,23 @@ function CatalogRow({ entry, allowed, already, onAdd }: {
         <p className="text-sm text-ink-muted">{entry.description}</p>
         {entry.authNote && <p className="text-xs text-ink-faint">{entry.authNote}</p>}
         <div className="flex flex-wrap items-center gap-2">
-          {already
-            ? <Chip tone="ok">registered</Chip>
-            : allowed
-              ? <Button size="sm" onClick={onAdd}>Add</Button>
-              : <span className="text-xs text-ink-faint">needs <code>--allow-mcp</code></span>}
+          {already ? (
+            <Chip tone="ok">registered</Chip>
+          ) : allowed ? (
+            <Button size="sm" onClick={onAdd}>
+              Add
+            </Button>
+          ) : (
+            <span className="text-xs text-ink-faint">
+              needs <code>--allow-mcp</code>
+            </span>
+          )}
           {entry.homepage && (
             <a className="text-xs underline" href={entry.homepage} target="_blank" rel="noreferrer">
               docs
             </a>
           )}
-          <Button
-            size="sm"
-            onClick={() => void copy(addCommand(entry), 'Command copied')}
-          >
+          <Button size="sm" onClick={() => void copy(addCommand(entry), 'Command copied')}>
             Copy CLI command
           </Button>
         </div>
@@ -484,19 +533,18 @@ function AddDialog({ entry, onClose }: { entry: McpCatalogEntry; onClose: () => 
   const ref = entry.secretRefs?.[0];
 
   const add = useMutation({
-    mutationFn: () => api.mcpAdd({
-      id: entry.id,
-      label: entry.label,
-      transport: entry.transport,
-      ...(entry.url ? { url: entry.url } : {}),
-      ...(entry.command ? { command: entry.command } : {}),
-      ...(entry.args ? { args: entry.args } : {}),
-      ...(entry.secretRefs ? { secretRefs: entry.secretRefs } : {}),
-      ...(ref && secret.trim()
-        ? { secrets: { [`${ref.kind}:${ref.name}`]: secret.trim() } }
-        : {}),
-      source: 'catalog',
-    }),
+    mutationFn: () =>
+      api.mcpAdd({
+        id: entry.id,
+        label: entry.label,
+        transport: entry.transport,
+        ...(entry.url ? { url: entry.url } : {}),
+        ...(entry.command ? { command: entry.command } : {}),
+        ...(entry.args ? { args: entry.args } : {}),
+        ...(entry.secretRefs ? { secretRefs: entry.secretRefs } : {}),
+        ...(ref && secret.trim() ? { secrets: { [`${ref.kind}:${ref.name}`]: secret.trim() } } : {}),
+        source: 'catalog',
+      }),
     onSuccess: () => {
       onClose();
       void client.invalidateQueries({ queryKey: keys.mcp() });
@@ -511,19 +559,24 @@ function AddDialog({ entry, onClose }: { entry: McpCatalogEntry; onClose: () => 
   });
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
       <DialogContent title={`Add ${entry.label}`}>
         <p className="text-sm text-ink-muted">{entry.description}</p>
         <p className="mt-2 text-xs text-ink-faint">
           It registers as <code>{entry.id}</code> — the name a plan uses on its
-          <code> **MCP servers (every session):** </code> line, and the name a permission rule uses
-          as <code>mcp__{entry.id}</code>.
+          <code> **MCP servers (every session):** </code> line, and the name a permission rule uses as{' '}
+          <code>mcp__{entry.id}</code>.
         </p>
 
         {entry.auth === 'oauth' && (
           <p className="mt-2 text-sm">
-            Signs in with OAuth. Register it now, then use Sign in — the token goes to the Claude
-            CLI's own store, which this console never reads or writes.
+            Signs in with OAuth. Register it now, then use Sign in — the token goes to the Claude CLI's own
+            store, which this console never reads or writes.
           </p>
         )}
         {entry.authNote && <p className="mt-2 text-sm">{entry.authNote}</p>}
@@ -546,7 +599,9 @@ function AddDialog({ entry, onClose }: { entry: McpCatalogEntry; onClose: () => 
           <Button size="sm" onClick={() => add.mutate()} disabled={add.isPending}>
             {add.isPending ? 'Adding…' : 'Add server'}
           </Button>
-          <Button size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={onClose}>
+            Cancel
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

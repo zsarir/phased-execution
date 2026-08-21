@@ -17,7 +17,10 @@ import { queryClientConfig } from '@/lib/queries';
 import type { RunState } from '@/lib/api';
 
 const { state, skills, runStart, agentTicket } = vi.hoisted(() => ({
-  state: vi.fn(), skills: vi.fn(), runStart: vi.fn(), agentTicket: vi.fn(),
+  state: vi.fn(),
+  skills: vi.fn(),
+  runStart: vi.fn(),
+  agentTicket: vi.fn(),
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -26,13 +29,23 @@ vi.mock('@/lib/api', async (importOriginal) => {
 });
 
 const RUN = {
-  id: 'run-1', slug: 'alpha', status: 'halted', model: 'sonnet', effort: 'high',
-  autonomy: 'keep-going', permissionProfile: 'trusted', skills: ['design-review'],
-  phaseBudgetUsd: 5, runBudgetUsd: 40, phases: {},
+  id: 'run-1',
+  slug: 'alpha',
+  status: 'halted',
+  model: 'sonnet',
+  effort: 'high',
+  autonomy: 'keep-going',
+  permissionProfile: 'trusted',
+  skills: ['design-review'],
+  phaseBudgetUsd: 5,
+  runBudgetUsd: 40,
+  phases: {},
 } as unknown as RunState;
 
 async function mount(
-  request: unknown, prefs: Record<string, unknown> = {}, extra: Record<string, unknown> = {},
+  request: unknown,
+  prefs: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {},
 ) {
   state.mockResolvedValue({ prefs, defaultSkills: ['graph-tool'], ...extra });
   const client = new QueryClient(queryClientConfig);
@@ -65,9 +78,9 @@ describe('the field matrix', () => {
     await mount({ kind: 'phase', slug: 'alpha', phase: 3, run: null });
     await screen.findByText('Branch');
     expect(screen.queryByText(/Open a PR when the plan completes/)).toBeNull();
-    const branch = screen.getAllByRole('combobox').find(
-      (el) => (el as HTMLSelectElement).value === 'default-branch',
-    )!;
+    const branch = screen
+      .getAllByRole('combobox')
+      .find((el) => (el as HTMLSelectElement).value === 'default-branch')!;
     fireEvent.change(branch, { target: { value: 'new-branch' } });
     expect(await screen.findByText(/Open a PR when the plan completes/)).toBeTruthy();
   });
@@ -108,9 +121,9 @@ describe('the field matrix', () => {
     );
     await screen.findByText('Branch');
     expect(screen.getByRole('button', { name: 'Attached' }).getAttribute('aria-pressed')).toBe('true');
-    expect((screen.getAllByRole('combobox').find(
-      (el) => (el as HTMLSelectElement).value === 'new-branch',
-    ))).toBeTruthy();
+    expect(
+      screen.getAllByRole('combobox').find((el) => (el as HTMLSelectElement).value === 'new-branch'),
+    ).toBeTruthy();
     expect((screen.getByRole('checkbox', { name: /Open a PR/ }) as HTMLInputElement).checked).toBe(false);
   });
 });
@@ -119,33 +132,35 @@ describe('the submits', () => {
   it('a phase launch sends exactly what the dialog shows, scoped to its phase', async () => {
     await mount({ kind: 'phase', slug: 'alpha', phase: 3, run: RUN, qaMode: 'off', allowWrites: true });
     await screen.findByText('Branch');
-    fireEvent.click(screen.getByRole('button', { name: 'Off' }));       // attach defaults on
+    fireEvent.click(screen.getByRole('button', { name: 'Off' })); // attach defaults on
     fireEvent.click(screen.getByRole('checkbox', { name: /Turn the QA gate on/ })); // QA gate on
     fireEvent.click(screen.getByRole('button', { name: 'Run phase 3' }));
-    await waitFor(() => expect(runStart).toHaveBeenCalledWith('alpha', {
-      model: 'sonnet',
-      effort: 'high',
-      // The dialog's deliberate default: switch to the account with headroom
-      // at the usage wall, degrading to `wait` when there is only one login.
-      onLimit: 'switch',
-      autonomy: 'keep-going',
-      phaseBudgetUsd: 5,
-      runBudgetUsd: 40,
-      permissionProfile: 'trusted',
-      skills: ['design-review'],
-      // Always sent as shown, like `autoRecover` below. `continue` is the
-      // shipped default: an unreachable MCP server makes a phase report what it
-      // could not do, rather than stopping the plan.
-      mcpPolicy: 'continue',
-      attachDefaultSkills: true,
-      gitMode: 'default-branch',
-      qa: true,
-      // Always sent as shown: this console has no --allow-agent, so the box is
-      // off and the run is written without the option — never silently.
-      autoRecover: false,
-      resumeRunId: 'run-1',
-      onlyPhases: [3],
-    }));
+    await waitFor(() =>
+      expect(runStart).toHaveBeenCalledWith('alpha', {
+        model: 'sonnet',
+        effort: 'high',
+        // The dialog's deliberate default: switch to the account with headroom
+        // at the usage wall, degrading to `wait` when there is only one login.
+        onLimit: 'switch',
+        autonomy: 'keep-going',
+        phaseBudgetUsd: 5,
+        runBudgetUsd: 40,
+        permissionProfile: 'trusted',
+        skills: ['design-review'],
+        // Always sent as shown, like `autoRecover` below. `continue` is the
+        // shipped default: an unreachable MCP server makes a phase report what it
+        // could not do, rather than stopping the plan.
+        mcpPolicy: 'continue',
+        attachDefaultSkills: true,
+        gitMode: 'default-branch',
+        qa: true,
+        // Always sent as shown: this console has no --allow-agent, so the box is
+        // off and the run is written without the option — never silently.
+        autoRecover: false,
+        resumeRunId: 'run-1',
+        onlyPhases: [3],
+      }),
+    );
   });
 
   it('a continue resumes the run and never narrows it', async () => {
@@ -159,8 +174,10 @@ describe('the submits', () => {
   });
 
   it('a recovery submit merges the attached defaults into the skills it sends', async () => {
-    await mount({ kind: 'recovery', recoveryClass: 'plan-repair', slug: 'alpha' },
-      { attachDefaultSkills: true });
+    await mount(
+      { kind: 'recovery', recoveryClass: 'plan-repair', slug: 'alpha' },
+      { attachDefaultSkills: true },
+    );
     await screen.findByText('Model');
     fireEvent.click(screen.getByRole('button', { name: /Repair the plan with a new agent/ }));
     await waitFor(() => expect(agentTicket).toHaveBeenCalled());
@@ -175,8 +192,11 @@ describe('the submits', () => {
 
 describe('a claimed phase', () => {
   const HELD = {
-    owner: 'someone/else', expired: false, host: 'their-box',
-    leaseUntil: Date.now() + 18 * 60_000, claimedAt: Date.now() - 12 * 60_000,
+    owner: 'someone/else',
+    expired: false,
+    host: 'their-box',
+    leaseUntil: Date.now() + 18 * 60_000,
+    claimedAt: Date.now() - 12 * 60_000,
   };
 
   it('refuses to submit, and says who holds it', async () => {

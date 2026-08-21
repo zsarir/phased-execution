@@ -66,9 +66,9 @@ export function RunHeader({
   const { data: accountsState } = useAccounts();
   const accountLabel = run.accountId
     ? (() => {
-      const view = accountsState?.accounts.find((candidate) => candidate.id === run.accountId);
-      return view ? view.name ?? view.email ?? view.id : run.accountId;
-    })()
+        const view = accountsState?.accounts.find((candidate) => candidate.id === run.accountId);
+        return view ? (view.name ?? view.email ?? view.id) : run.accountId;
+      })()
     : null;
 
   const runMs = ticking
@@ -77,9 +77,8 @@ export function RunHeader({
 
   const startedAt = run.child?.startedAt ? Date.parse(run.child.startedAt) : null;
   const frozenAt = run.freeze?.at ? Date.parse(run.freeze.at) : null;
-  const phaseMs = startedAt == null
-    ? null
-    : (frozenAt ?? (ticking ? now : Date.parse(run.updatedAt))) - startedAt;
+  const phaseMs =
+    startedAt == null ? null : (frozenAt ?? (ticking ? now : Date.parse(run.updatedAt))) - startedAt;
 
   // Which phases this run holds a session on right now. `children` is the full
   // set; `child` is the mirror of the lowest-numbered one, and the fallback for a
@@ -92,7 +91,13 @@ export function RunHeader({
   return (
     <header className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge state={runUiState(run.status)} label={run.status} mono title={runStatusTitle(run.status)} pulse={run.status === 'running'} />
+        <StatusBadge
+          state={runUiState(run.status)}
+          label={run.status}
+          mono
+          title={runStatusTitle(run.status)}
+          pulse={run.status === 'running'}
+        />
         {accountLabel ? (
           <Chip title="Which Claude account this run's sessions spend. Absent means the machine login.">
             {accountLabel}
@@ -106,9 +111,7 @@ export function RunHeader({
             </Chip>
           </>
         ) : (
-          run.activePhase != null && (
-            <span className="font-display text-sm">phase {run.activePhase}</span>
-          )
+          run.activePhase != null && <span className="font-display text-sm">phase {run.activePhase}</span>
         )}
         {/* The biggest thing on the line, because it is the figure people come
             back to the page for. It was `text-sm` beside four other `text-sm`
@@ -122,14 +125,16 @@ export function RunHeader({
               'inline-flex items-center gap-1.5 font-mono text-base font-semibold tabular-nums md:text-lg',
               frozenAt ? 'text-ink-faint' : 'text-ink',
             )}
-            title={frozenAt
-              ? 'The session is stopped where it stood, so this clock is stopped too.'
-              : lanes.length > 1
-                // The mirror is the lowest-numbered lane, so with several running
-                // this is the oldest of them — saying "the phase" would be a
-                // claim about whichever one the reader happens to be watching.
-                ? `How long phase ${lanes[0]}, the earliest of ${lanes.length} running, has been going`
-                : 'How long the phase running now has been going'}
+            title={
+              frozenAt
+                ? 'The session is stopped where it stood, so this clock is stopped too.'
+                : lanes.length > 1
+                  ? // The mirror is the lowest-numbered lane, so with several running
+                    // this is the oldest of them — saying "the phase" would be a
+                    // claim about whichever one the reader happens to be watching.
+                    `How long phase ${lanes[0]}, the earliest of ${lanes.length} running, has been going`
+                  : 'How long the phase running now has been going'
+            }
           >
             <Timer size={16} className="shrink-0 text-ink-faint" aria-hidden />
             {elapsed(phaseMs)}
@@ -138,7 +143,10 @@ export function RunHeader({
         {/* Against the estimate for the SAME lane the clock beside it counts —
             the mirror — so the two figures are about one phase. */}
         {phaseMs != null && mirrorEta && (
-          <span className="text-2xs text-ink-faint" title={`Phase ${mirrorEta.phase} was expected to take about ${mirrorEta.label.replace('~', '')}.`}>
+          <span
+            className="text-2xs text-ink-faint"
+            title={`Phase ${mirrorEta.phase} was expected to take about ${mirrorEta.label.replace('~', '')}.`}
+          >
             / {phaseProgress(phaseMs, mirrorEta.estMs)}
           </span>
         )}
@@ -168,9 +176,7 @@ export function RunHeader({
             from: the thing being predicted is a model's throughput on work
             nobody has looked at yet. `basis` is what stops a plan with no
             history from showing a number that reads like a measurement. */}
-        {eta && (
-          <span title={etaTitle(eta)}>{etaLabel(eta.lowMs, eta.highMs, eta.basis)} left</span>
-        )}
+        {eta && <span title={etaTitle(eta)}>{etaLabel(eta.lowMs, eta.highMs, eta.basis)} left</span>}
         {/* The promise people came to this page doubting: the queue only shows
             what can run NOW, and phases waiting on dependencies looked like
             phases the run would never reach. Scoped and halt-on-everything
@@ -244,9 +250,9 @@ export function RunTiles({ run, phases }: { run: RunState; phases: PhaseRecord[]
         <Tile
           label={`${(limits.window ?? 'usage').replace(/_/g, ' ')} window`}
           value={`${Math.round(limits.utilization * 100)}%`}
-          hint={limits.resetsAt
-            ? `used · resets ${new Date(limits.resetsAt * 1000).toLocaleString()}`
-            : 'used'}
+          hint={
+            limits.resetsAt ? `used · resets ${new Date(limits.resetsAt * 1000).toLocaleString()}` : 'used'
+          }
         />
       ) : (
         <Tile label="Updated" value={relativeTime(Date.parse(run.updatedAt))} />

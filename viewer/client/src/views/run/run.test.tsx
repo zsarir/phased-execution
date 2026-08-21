@@ -102,7 +102,8 @@ describe('the console model, as React consumes it', () => {
 
   it('resets the task list when a new phase starts', () => {
     const withTodos = activity(NO_ACTIVITY, 'stream', {
-      kind: 'todos', items: [{ content: 'do it', status: 'pending' }],
+      kind: 'todos',
+      items: [{ content: 'do it', status: 'pending' }],
     });
     expect(withTodos.todos).toHaveLength(1);
     const next = activity(withTodos, 'phase', { phase: 2, status: 'running' });
@@ -251,9 +252,15 @@ describe('phaseProgress — a running phase against its estimate', () => {
  */
 describe('the run header emphasis', () => {
   const RUN = {
-    id: 'r1', slug: 'demo', status: 'running', model: 'opus', effort: 'max',
-    autonomy: 'keep-going', spentUsd: 0,
-    createdAt: '2026-08-04T10:00:00Z', updatedAt: '2026-08-04T10:20:00Z',
+    id: 'r1',
+    slug: 'demo',
+    status: 'running',
+    model: 'opus',
+    effort: 'max',
+    autonomy: 'keep-going',
+    spentUsd: 0,
+    createdAt: '2026-08-04T10:00:00Z',
+    updatedAt: '2026-08-04T10:20:00Z',
     activePhase: 2,
     child: { pid: 1, phase: 2, sessionId: 's', startedAt: '2026-08-04T10:10:00Z' },
   } as unknown as RunState;
@@ -288,19 +295,23 @@ describe('the run header emphasis', () => {
 
 describe('the completion promise', () => {
   const LIVE = {
-    id: 'r1', slug: 'demo', status: 'running', model: 'opus',
-    autonomy: 'keep-going', spentUsd: 0,
-    maxConsecutiveFailures: 2, consecutiveFailures: 0,
-    createdAt: '2026-08-04T10:00:00Z', updatedAt: '2026-08-04T10:20:00Z',
-    activePhase: 2, child: null, phases: {},
+    id: 'r1',
+    slug: 'demo',
+    status: 'running',
+    model: 'opus',
+    autonomy: 'keep-going',
+    spentUsd: 0,
+    maxConsecutiveFailures: 2,
+    consecutiveFailures: 0,
+    createdAt: '2026-08-04T10:00:00Z',
+    updatedAt: '2026-08-04T10:20:00Z',
+    activePhase: 2,
+    child: null,
+    phases: {},
   } as unknown as RunState;
 
   it('a keep-going unscoped run says it drives to plan completion, with the budget when spent', () => {
-    mount(<RunHeader
-      run={{ ...LIVE, consecutiveFailures: 1 } as RunState}
-      live
-      eta={null}
-    />);
+    mount(<RunHeader run={{ ...LIVE, consecutiveFailures: 1 } as RunState} live eta={null} />);
     expect(screen.getByText('runs to plan completion')).toBeTruthy();
     expect(screen.getByText('failures 1/2')).toBeTruthy();
   });

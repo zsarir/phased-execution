@@ -59,7 +59,12 @@ function publishInset(next: number): void {
 /** The pixels the software keyboard currently occupies (0 when closed). */
 export function useKeyboardInset(): number {
   return useSyncExternalStore(
-    (notify) => { insetListeners.add(notify); return () => { insetListeners.delete(notify); }; },
+    (notify) => {
+      insetListeners.add(notify);
+      return () => {
+        insetListeners.delete(notify);
+      };
+    },
     () => inset,
     () => 0,
   );
@@ -79,7 +84,10 @@ export function installAppHeight(): () => void {
     const height = Math.round(Math.min(vv.height * vv.scale, window.innerHeight));
     if (!(height > 0)) return;
     root.style.setProperty('--app-height', `${height}px`);
-    if (window.innerWidth !== baselineWidth) { baselineWidth = window.innerWidth; baseline = 0; }
+    if (window.innerWidth !== baselineWidth) {
+      baselineWidth = window.innerWidth;
+      baseline = 0;
+    }
     if (height > baseline) baseline = height;
     const taken = Math.max(0, baseline - height);
     root.style.setProperty('--keyboard-inset', `${taken}px`);
@@ -92,7 +100,9 @@ export function installAppHeight(): () => void {
       window.scrollTo(0, 0);
     }
   };
-  const schedule = () => { if (!raf) raf = requestAnimationFrame(apply); };
+  const schedule = () => {
+    if (!raf) raf = requestAnimationFrame(apply);
+  };
   vv.addEventListener('resize', schedule);
   vv.addEventListener('scroll', schedule);
   window.addEventListener('orientationchange', schedule);
@@ -126,13 +136,24 @@ export function useKeyboardOpen(): boolean {
   const taken = useKeyboardInset();
   const [focused, setFocused] = useState(false);
   useEffect(() => {
-    if (!touch) { setFocused(false); return; }
+    if (!touch) {
+      setFocused(false);
+      return;
+    }
     let raf = 0;
-    const sync = () => { raf = 0; setFocused(editable(document.activeElement)); };
-    const onFocus = () => { if (raf) cancelAnimationFrame(raf); sync(); };
+    const sync = () => {
+      raf = 0;
+      setFocused(editable(document.activeElement));
+    };
+    const onFocus = () => {
+      if (raf) cancelAnimationFrame(raf);
+      sync();
+    };
     // Blur waits one frame: a field-to-field move blurs then focuses, and the
     // tab bar must not flicker through the gap.
-    const onBlur = () => { if (!raf) raf = requestAnimationFrame(sync); };
+    const onBlur = () => {
+      if (!raf) raf = requestAnimationFrame(sync);
+    };
     document.addEventListener('focusin', onFocus);
     document.addEventListener('focusout', onBlur);
     return () => {
@@ -164,7 +185,10 @@ function publishBars(): void {
  * ResizeObserver) joins `--bottom-bars`; the returned function withdraws it.
  */
 export function registerBottomBar(element: HTMLElement): () => void {
-  const measure = () => { bars.set(element, element.offsetHeight); publishBars(); };
+  const measure = () => {
+    bars.set(element, element.offsetHeight);
+    publishBars();
+  };
   measure();
   const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
   observer?.observe(element);
@@ -187,7 +211,12 @@ export function useBottomBar(ref: RefObject<HTMLElement | null>, active = true):
 /** The current sum of registered bottom bars, in px. */
 export function useBottomBars(): number {
   return useSyncExternalStore(
-    (notify) => { barListeners.add(notify); return () => { barListeners.delete(notify); }; },
+    (notify) => {
+      barListeners.add(notify);
+      return () => {
+        barListeners.delete(notify);
+      };
+    },
     () => barsTotal,
     () => 0,
   );

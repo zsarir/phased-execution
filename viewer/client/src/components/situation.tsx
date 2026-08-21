@@ -35,7 +35,18 @@ export function SituationSummary({
     <div className="flex flex-col gap-1 text-2xs" data-testid="situation">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-ink-faint">Situation</span>
-        <Chip title={situation.blurb} tone={situation.actor === 'person' ? 'warn' : situation.actor === 'machine' ? 'busy' : situation.actor === 'none' ? 'ok' : 'neutral'}>
+        <Chip
+          title={situation.blurb}
+          tone={
+            situation.actor === 'person'
+              ? 'warn'
+              : situation.actor === 'machine'
+                ? 'busy'
+                : situation.actor === 'none'
+                  ? 'ok'
+                  : 'neutral'
+          }
+        >
           {situation.label}
         </Chip>
         <span className="text-ink-faint">· {actor}</span>

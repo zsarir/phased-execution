@@ -3,13 +3,7 @@ import { cn } from '@/lib/cn';
 
 /** A loading placeholder shaped like the thing that is coming. */
 export function Skeleton({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      aria-hidden
-      className={cn('animate-pulse rounded bg-rule/60', className)}
-      {...props}
-    />
-  );
+  return <div aria-hidden className={cn('animate-pulse rounded bg-rule/60', className)} {...props} />;
 }
 
 /**
@@ -47,10 +41,7 @@ export function Empty({
 export function Spinner({ label, className }: { label?: string; className?: string }) {
   return (
     <div className={cn('flex items-center gap-2 text-sm text-ink-muted', className)} role="status">
-      <span
-        className="size-4 animate-spin rounded-full border-2 border-rule border-t-action"
-        aria-hidden
-      />
+      <span className="size-4 animate-spin rounded-full border-2 border-rule border-t-action" aria-hidden />
       {label && <span>{label}</span>}
     </div>
   );

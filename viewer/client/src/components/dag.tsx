@@ -170,7 +170,12 @@ export interface MapView {
  * rather than a statement about a rectangle. A viewBox says the thing directly:
  * this is the part of the map you can see.
  */
-export function useMapView({ width, contentH, fitKey, interactive = true }: {
+export function useMapView({
+  width,
+  contentH,
+  fitKey,
+  interactive = true,
+}: {
   width: number;
   contentH: number;
   /** Changes when the drawing changes — a new plan refits, a resize does not. */
@@ -190,24 +195,28 @@ export function useMapView({ width, contentH, fitKey, interactive = true }: {
   // Live pointers by id — two of them is a pinch, one is a drag.
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const gesture = useRef<
-    | { kind: 'drag'; x: number; y: number }
-    | { kind: 'pinch'; dist: number; k: number }
-    | null
+    { kind: 'drag'; x: number; y: number } | { kind: 'pinch'; dist: number; k: number } | null
   >(null);
   // A drag that passes over a station must not also count as choosing it.
   const dragged = useRef(false);
 
-  const fitTo = useCallback((w: number, h: number) => ({
-    k: clamp(Math.min(w / Math.max(width, 1), h / Math.max(contentH, 1)), MIN_K, FIT_MAX_K),
-    w,
-    h,
-  }), [width, contentH]);
+  const fitTo = useCallback(
+    (w: number, h: number) => ({
+      k: clamp(Math.min(w / Math.max(width, 1), h / Math.max(contentH, 1)), MIN_K, FIT_MAX_K),
+      w,
+      h,
+    }),
+    [width, contentH],
+  );
 
-  const centred = useCallback((k: number, w: number, h: number): MapView => ({
-    k,
-    x: (width - w / k) / 2,
-    y: (contentH - h / k) / 2,
-  }), [width, contentH]);
+  const centred = useCallback(
+    (k: number, w: number, h: number): MapView => ({
+      k,
+      x: (width - w / k) / 2,
+      y: (contentH - h / k) / 2,
+    }),
+    [width, contentH],
+  );
 
   /* Fit once per plan — and once the frame has actually been measured, which
      on a first paint is a tick later. A later resize deliberately does NOT
@@ -282,7 +291,11 @@ export function useMapView({ width, contentH, fitKey, interactive = true }: {
     // Capture keeps a drag alive past the edge of the frame. It throws rather
     // than no-ops when the id is not an active pointer, and an exception here
     // would take the rest of the gesture with it.
-    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* not capturable */ }
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      /* not capturable */
+    }
 
     if (pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()];
@@ -319,7 +332,10 @@ export function useMapView({ width, contentH, fitKey, interactive = true }: {
 
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     pointers.current.delete(event.pointerId);
-    if (pointers.current.size === 0) { gesture.current = null; return; }
+    if (pointers.current.size === 0) {
+      gesture.current = null;
+      return;
+    }
     // A pinch that loses one finger becomes a drag with the one left, rather
     // than a dead gesture you have to lift and start again.
     const [rest] = [...pointers.current.values()];
@@ -332,8 +348,7 @@ export function useMapView({ width, contentH, fitKey, interactive = true }: {
     setView(centred(k, size.w, size.h));
   };
 
-  const zoomCentre = (factor: number) =>
-    zoomAt((size.w || 0) / 2, (size.h || 0) / 2, (k) => k * factor);
+  const zoomCentre = (factor: number) => zoomAt((size.w || 0) / 2, (size.h || 0) / 2, (k) => k * factor);
 
   return {
     frame,
@@ -361,7 +376,9 @@ function StationLabel({ node }: { node: PlacedNode }) {
   return (
     <text className="station-label" x={node.x} y={node.y + R + 16} textAnchor="middle">
       {lines.map((line, i) => (
-        <tspan key={i} x={node.x} dy={i === 0 ? 0 : 12}>{line}</tspan>
+        <tspan key={i} x={node.x} dy={i === 0 ? 0 : 12}>
+          {line}
+        </tspan>
       ))}
     </text>
   );
@@ -469,17 +486,25 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
    * as a box around them — a bounding box would enclose bystanders that are
    * not in the batch at all, which is exactly the wrong thing to imply.
    */
-  const trains = useMemo<Train[]>(() => (batches?.groups ?? []).map((group) => {
-    const nodes = group.phases.map((phase) => points.get(phase)).filter((n): n is PlacedNode => Boolean(n));
-    if (!nodes.length) return null;
-    const ordered = [...nodes].sort((a, b) => a.layer - b.layer || a.row - b.row);
-    return {
-      ...group,
-      nodes: ordered,
-      path: ordered.map((node, i) => `${i === 0 ? 'M' : 'L'}${node.x},${node.y}`).join(' '),
-      head: ordered[0],
-    };
-  }).filter((t): t is Train => Boolean(t)), [batches, points]);
+  const trains = useMemo<Train[]>(
+    () =>
+      (batches?.groups ?? [])
+        .map((group) => {
+          const nodes = group.phases
+            .map((phase) => points.get(phase))
+            .filter((n): n is PlacedNode => Boolean(n));
+          if (!nodes.length) return null;
+          const ordered = [...nodes].sort((a, b) => a.layer - b.layer || a.row - b.row);
+          return {
+            ...group,
+            nodes: ordered,
+            path: ordered.map((node, i) => `${i === 0 ? 'M' : 'L'}${node.x},${node.y}`).join(' '),
+            head: ordered[0],
+          };
+        })
+        .filter((t): t is Train => Boolean(t)),
+    [batches, points],
+  );
 
   /* The window, in plan units. Falls back to the content box until the frame
      has been measured, so the first paint draws the whole map rather than a
@@ -518,9 +543,11 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
             size="sm"
             aria-pressed={prefs.mapPanZoom}
             aria-label="Pan and zoom"
-            title={prefs.mapPanZoom
-              ? 'Lock the map — the page scrolls over it again.'
-              : 'Unlock to pan, drag and pinch the map. The − / + / Fit buttons always work.'}
+            title={
+              prefs.mapPanZoom
+                ? 'Lock the map — the page scrolls over it again.'
+                : 'Unlock to pan, drag and pinch the map. The − / + / Fit buttons always work.'
+            }
             onClick={() => setPrefs({ mapPanZoom: !prefs.mapPanZoom })}
           >
             {prefs.mapPanZoom ? <Unlock size={13} aria-hidden /> : <Lock size={13} aria-hidden />}
@@ -530,19 +557,20 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
             {Math.round(view.k * 100)}%
           </span>
           <ButtonGroup>
-            <Button size="sm" onClick={() => zoomCentre(0.9)} aria-label="Zoom out">−</Button>
-            <Button size="sm" onClick={() => zoomCentre(1.1)} aria-label="Zoom in">+</Button>
-            <Button size="sm" onClick={fit}>Fit</Button>
+            <Button size="sm" onClick={() => zoomCentre(0.9)} aria-label="Zoom out">
+              −
+            </Button>
+            <Button size="sm" onClick={() => zoomCentre(1.1)} aria-label="Zoom in">
+              +
+            </Button>
+            <Button size="sm" onClick={fit}>
+              Fit
+            </Button>
           </ButtonGroup>
         </div>
       </div>
 
-      <div
-        className="route-frame"
-        ref={frame}
-        data-interactive={prefs.mapPanZoom || undefined}
-        {...handlers}
-      >
+      <div className="route-frame" ref={frame} data-interactive={prefs.mapPanZoom || undefined} {...handlers}>
         <svg
           className="route-svg"
           width="100%"
@@ -553,7 +581,13 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
           aria-label="Phase dependency map"
         >
           <defs>
-            <pattern id="gate-hatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+            <pattern
+              id="gate-hatch"
+              width="6"
+              height="6"
+              patternTransform="rotate(45)"
+              patternUnits="userSpaceOnUse"
+            >
               <line x1="0" y1="0" x2="0" y2="6" stroke="var(--line-gated)" strokeWidth="3" opacity="0.5" />
             </pattern>
           </defs>
@@ -566,7 +600,8 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
                   <circle key={node.phase} className="train-ring" cx={node.x} cy={node.y} r={R + 7} />
                 ))}
                 <text x={train.head.x} y={train.head.y - R - 14} className="band-label" textAnchor="middle">
-                  S{train.index} · {train.weight ?? ''}{budget ? `/${weight(budget)}` : ''}
+                  S{train.index} · {train.weight ?? ''}
+                  {budget ? `/${weight(budget)}` : ''}
                   {train.gated ? ' · gated' : ''}
                 </text>
               </g>
@@ -609,7 +644,9 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
                   tabIndex={0}
                   role="button"
                   aria-label={`Phase ${node.phase}: ${node.title}, ${boardLabel(state)}`}
-                  onClick={() => { if (!dragged.current) onSelect?.(node.phase); }}
+                  onClick={() => {
+                    if (!dragged.current) onSelect?.(node.phase);
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
@@ -624,12 +661,7 @@ export function RouteMap({ route, batches, budget, onSelect, selected, className
                     <circle className="gate-ring" cx={node.x} cy={node.y} r={R + 6} fill="url(#gate-hatch)" />
                   )}
                   {node.locked && (
-                    <circle
-                      className={cn('claim-ring', node.locked)}
-                      cx={node.x}
-                      cy={node.y}
-                      r={R + 4}
-                    />
+                    <circle className={cn('claim-ring', node.locked)} cx={node.x} cy={node.y} r={R + 4} />
                   )}
                   <circle className="halo" cx={node.x} cy={node.y} r={R + 5} />
                   <circle className="dot" cx={node.x} cy={node.y} r={R} />

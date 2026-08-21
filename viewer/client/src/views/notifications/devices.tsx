@@ -24,7 +24,15 @@ import { api, type PushDevice } from '@/lib/api';
 import { askToNotify, notifyState, type NotifyState } from '@/lib/notify';
 import { blocker, currentEndpoint, describeBrowser, disable, enable, iosNeedsInstall } from '@/lib/push';
 import {
-  Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip, Skeleton, toast,
+  Banner,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Chip,
+  Skeleton,
+  toast,
 } from '@/components/ui';
 import { plural } from '@/lib/format';
 
@@ -38,7 +46,9 @@ export function DevicesCard() {
   const [endpoint, setEndpoint] = useState<string | null>(null);
   const [inTab, setInTab] = useState<NotifyState>(() => notifyState());
 
-  useEffect(() => { void currentEndpoint().then(setEndpoint); }, []);
+  useEffect(() => {
+    void currentEndpoint().then(setEndpoint);
+  }, []);
 
   const refresh = async () => {
     setEndpoint(await currentEndpoint());
@@ -54,8 +64,10 @@ export function DevicesCard() {
   const subscribe = useMutation({
     mutationFn: () => enable(),
     onSuccess: async (result) => {
-      toast(result.ok ? 'This device will be notified.' : result.detail ?? 'Not subscribed',
-        result.ok ? 'ok' : 'error');
+      toast(
+        result.ok ? 'This device will be notified.' : (result.detail ?? 'Not subscribed'),
+        result.ok ? 'ok' : 'error',
+      );
       await refresh();
     },
     onError: (error: Error) => toast(String(error.message ?? error), 'error'),
@@ -76,8 +88,8 @@ export function DevicesCard() {
       // OS look like a broken console.
       toast(
         result.ok
-          ? 'Handed to the push service. If nothing appeared, it got no further than your system '
-            + 'notification settings for this browser.'
+          ? 'Handed to the push service. If nothing appeared, it got no further than your system ' +
+              'notification settings for this browser.'
           : `Not sent — ${result.detail}`,
         result.ok ? 'ok' : 'error',
       );
@@ -86,8 +98,7 @@ export function DevicesCard() {
   });
 
   const categories = useMutation({
-    mutationFn: ({ id, next }: { id: string; next: Record<string, boolean> }) =>
-      api.pushCategories(id, next),
+    mutationFn: ({ id, next }: { id: string; next: Record<string, boolean> }) => api.pushCategories(id, next),
     onSuccess: refresh,
     onError: (error: Error) => toast(String(error.message ?? error), 'error'),
   });
@@ -106,9 +117,9 @@ export function DevicesCard() {
       <CardBody className="flex flex-col gap-3">
         {!deviceCount && !why && (
           <Banner severity="info">
-            <strong>Nothing has ever been sent from this console.</strong> No browser has
-            subscribed, so every announcement so far reached the inbox and stopped there. Turning
-            it on below takes one permission prompt and covers this device with the console closed.
+            <strong>Nothing has ever been sent from this console.</strong> No browser has subscribed, so every
+            announcement so far reached the inbox and stopped there. Turning it on below takes one permission
+            prompt and covers this device with the console closed.
           </Banner>
         )}
 
@@ -116,12 +127,17 @@ export function DevicesCard() {
           title="In this tab"
           detail="Raised by the page. Costs nothing and needs no setup, but only exists while a tab is open."
         >
-          {inTab === 'granted' ? <Chip tone="ok">on</Chip>
-            : inTab === 'denied' ? <span className="text-2xs text-ink-faint">blocked in browser settings</span>
-              : inTab === 'unsupported' ? <span className="text-2xs text-ink-faint">unsupported here</span>
-                : (
-                  <Button size="sm" onClick={async () => setInTab(await askToNotify())}>Allow</Button>
-                )}
+          {inTab === 'granted' ? (
+            <Chip tone="ok">on</Chip>
+          ) : inTab === 'denied' ? (
+            <span className="text-2xs text-ink-faint">blocked in browser settings</span>
+          ) : inTab === 'unsupported' ? (
+            <span className="text-2xs text-ink-faint">unsupported here</span>
+          ) : (
+            <Button size="sm" onClick={async () => setInTab(await askToNotify())}>
+              Allow
+            </Button>
+          )}
         </Lane>
 
         <Lane
@@ -160,8 +176,8 @@ export function DevicesCard() {
               "What to announce".
             */}
             <p className="mb-2 text-2xs text-ink-muted">
-              Only narrows what <strong>What to announce</strong> already allows — a category
-              switched off there never reaches any device, whatever is ticked here.
+              Only narrows what <strong>What to announce</strong> already allows — a category switched off
+              there never reaches any device, whatever is ticked here.
             </p>
             <div className="flex flex-col gap-2">
               {push.categories.map((category) => (
@@ -171,14 +187,20 @@ export function DevicesCard() {
                     className="mt-1 accent-[var(--action)]"
                     checked={mine.categories?.[category.id] === true}
                     disabled={busy}
-                    onChange={(event) => categories.mutate({
-                      id: mine.id,
-                      next: { ...mine.categories, [category.id]: event.target.checked },
-                    })}
+                    onChange={(event) =>
+                      categories.mutate({
+                        id: mine.id,
+                        next: { ...mine.categories, [category.id]: event.target.checked },
+                      })
+                    }
                   />
                   <span className="min-w-0">
                     <span className="text-sm text-ink">{category.label}</span>
-                    {category.urgent && <Chip tone="warn" className="ml-1.5">urgent</Chip>}
+                    {category.urgent && (
+                      <Chip tone="warn" className="ml-1.5">
+                        urgent
+                      </Chip>
+                    )}
                     <span className="mt-0.5 block text-2xs text-ink-muted">{category.detail}</span>
                   </span>
                 </label>
@@ -193,14 +215,16 @@ export function DevicesCard() {
               Other devices
             </h3>
             <div className="flex flex-col gap-1">
-              {push!.devices.filter((d) => d.id !== mine?.id).map((device) => (
-                <OtherDevice
-                  key={device.id}
-                  device={device}
-                  busy={busy}
-                  onTest={() => test.mutate(device.id)}
-                />
-              ))}
+              {push!.devices
+                .filter((d) => d.id !== mine?.id)
+                .map((device) => (
+                  <OtherDevice
+                    key={device.id}
+                    device={device}
+                    busy={busy}
+                    onTest={() => test.mutate(device.id)}
+                  />
+                ))}
             </div>
           </div>
         )}
@@ -209,40 +233,33 @@ export function DevicesCard() {
 
         {subscribed && (
           <p className="text-2xs text-ink-muted">
-            A test that says it was handed over and never appears has almost always been stopped by
-            the operating system rather than by anything here — macOS{' '}
+            A test that says it was handed over and never appears has almost always been stopped by the
+            operating system rather than by anything here — macOS{' '}
             <em>System Settings → Notifications → your browser</em>, or Windows{' '}
-            <em>Settings → System → Notifications</em>. A Focus or Do Not Disturb mode does the same
-            thing silently.
+            <em>Settings → System → Notifications</em>. A Focus or Do Not Disturb mode does the same thing
+            silently.
           </p>
         )}
 
         <p className="text-2xs text-ink-muted">
           For a machine with no browser in the picture at all,{' '}
-          <code>PHASE_CONSOLE_NOTIFY=&lt;command&gt;</code> is run with the title and body of every
-          one of these.{' '}
+          <code>PHASE_CONSOLE_NOTIFY=&lt;command&gt;</code> is run with the title and body of every one of
+          these.{' '}
           {reach && !reach.outOfBand?.configured ? (
             <>
-              It is <strong>not set</strong> for this process — and under launchd it has to be in
-              the plist, not in your shell:{' '}
-              <code>deploy/agent.sh install --notify &apos;&lt;command&gt;&apos;</code>.
+              It is <strong>not set</strong> for this process — and under launchd it has to be in the plist,
+              not in your shell: <code>deploy/agent.sh install --notify &apos;&lt;command&gt;&apos;</code>.
             </>
-          ) : reach ? 'It is set.' : null}
+          ) : reach ? (
+            'It is set.'
+          ) : null}
         </p>
       </CardBody>
     </Card>
   );
 }
 
-function Lane({
-  title,
-  detail,
-  children,
-}: {
-  title: string;
-  detail: string;
-  children?: React.ReactNode;
-}) {
+function Lane({ title, detail, children }: { title: string; detail: string; children?: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-rule bg-surface-raised px-3 py-2">
       <div className="min-w-0 flex-1">
@@ -254,15 +271,7 @@ function Lane({
   );
 }
 
-function OtherDevice({
-  device,
-  busy,
-  onTest,
-}: {
-  device: PushDevice;
-  busy: boolean;
-  onTest: () => void;
-}) {
+function OtherDevice({ device, busy, onTest }: { device: PushDevice; busy: boolean; onTest: () => void }) {
   const chosen = Object.values(device.categories ?? {}).filter(Boolean).length;
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-rule px-3 py-2">
@@ -275,7 +284,9 @@ function OtherDevice({
             : ' · never reached'}
         </span>
       </div>
-      <Button size="sm" disabled={busy} onClick={onTest}>Test</Button>
+      <Button size="sm" disabled={busy} onClick={onTest}>
+        Test
+      </Button>
     </div>
   );
 }
@@ -290,7 +301,11 @@ function OtherDevice({
  * awaited so none of that can stall a run, which is exactly why none of it was
  * ever visible. Here it is.
  */
-function DeliveryReadout({ reach }: { reach: { items: { delivery?: { label: string; outcome: string }[] }[] } }) {
+function DeliveryReadout({
+  reach,
+}: {
+  reach: { items: { delivery?: { label: string; outcome: string }[] }[] };
+}) {
   const items = reach.items ?? [];
   if (!items.length) return null;
 
@@ -303,9 +318,7 @@ function DeliveryReadout({ reach }: { reach: { items: { delivery?: { label: stri
       <strong className="text-sm text-ink">What has been reaching you</strong>
       <p className="mt-0.5 text-2xs text-ink-muted">
         Of the last {plural(items.length, 'announcement')}, {attempted.length} went to a device
-        {undelivered
-          ? ` and ${undelivered} reached no device at all — those exist only in the inbox`
-          : ''}.
+        {undelivered ? ` and ${undelivered} reached no device at all — those exist only in the inbox` : ''}.
       </p>
       {failures.length > 0 && (
         <p className="mt-1 text-2xs text-blocked">

@@ -1,6 +1,22 @@
 import {
-  Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip, CopyButton, Empty, Skeleton, StateChip,
-  Table, TableWrap, TBody, TD, TH, THead, TR,
+  Banner,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Chip,
+  CopyButton,
+  Empty,
+  Skeleton,
+  StateChip,
+  Table,
+  TableWrap,
+  TBody,
+  TD,
+  TH,
+  THead,
+  TR,
 } from '@/components/ui';
 import { Markdown } from '@/components/markdown';
 import { useHandoff } from '@/lib/queries';
@@ -61,14 +77,19 @@ export function HandoffsTab({ detail }: { detail: PlanDetail }) {
                   <StateChip state={handoffState(handoff.status)} label={handoff.status} />
                 </TD>
                 <TD className="font-mono text-xs">{handoff.completed ?? '—'}</TD>
-                <TD className="font-mono text-2xs text-ink-faint">
-                  {handoff.skillsUsed.join(', ') || '—'}
-                </TD>
+                <TD className="font-mono text-2xs text-ink-faint">{handoff.skillsUsed.join(', ') || '—'}</TD>
                 <TD className="font-mono text-xs">{Math.round(handoff.bytes / 1024)}K</TD>
                 <TD>
-                  {indexRows.has(handoff.phase)
-                    ? <span className="text-xs text-ink-faint">{indexRows.get(handoff.phase)!.status}</span>
-                    : <Chip tone="warn" title="INDEX.md has no row for this handoff. Re-running new-handoff.sh for the phase rebuilds it — or Repair with AI.">missing</Chip>}
+                  {indexRows.has(handoff.phase) ? (
+                    <span className="text-xs text-ink-faint">{indexRows.get(handoff.phase)!.status}</span>
+                  ) : (
+                    <Chip
+                      tone="warn"
+                      title="INDEX.md has no row for this handoff. Re-running new-handoff.sh for the phase rebuilds it — or Repair with AI."
+                    >
+                      missing
+                    </Chip>
+                  )}
                 </TD>
               </TR>
             ))}
@@ -108,11 +129,13 @@ export function HandoffPanel({ detail, phase }: { detail: PlanDetail; phase: str
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               <StateChip state={handoffState(handoff.status)} label={handoff.status} />
               {handoff.completed && <Chip mono>{handoff.completed}</Chip>}
-              {handoff.dependsOn.length > 0 && (
-                <Chip mono>depends on P{handoff.dependsOn.join(', P')}</Chip>
-              )}
+              {handoff.dependsOn.length > 0 && <Chip mono>depends on P{handoff.dependsOn.join(', P')}</Chip>}
               {handoff.blocks.length > 0 && <Chip mono>blocks P{handoff.blocks.join(', P')}</Chip>}
-              {handoff.skillsUsed.map((skill) => <Chip key={skill} mono>{skill}</Chip>)}
+              {handoff.skillsUsed.map((skill) => (
+                <Chip key={skill} mono>
+                  {skill}
+                </Chip>
+              ))}
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -129,10 +152,14 @@ export function HandoffPanel({ detail, phase }: { detail: PlanDetail; phase: str
 
       {handoff.keyFiles?.length > 0 && (
         <Card>
-          <CardHeader><CardTitle>Key files</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Key files</CardTitle>
+          </CardHeader>
           <CardBody className="flex flex-col gap-0.5">
             {handoff.keyFiles.map((file) => (
-              <code key={file} className="font-mono text-xs break-all text-ink-muted">{file}</code>
+              <code key={file} className="font-mono text-xs break-all text-ink-muted">
+                {file}
+              </code>
             ))}
           </CardBody>
         </Card>

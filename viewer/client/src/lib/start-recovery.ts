@@ -53,14 +53,18 @@ export async function startRecovery(
 ): Promise<string | undefined> {
   try {
     // A size for the pty to be born at — the pane refits on open.
-    const ticket = await api.agentTicket({ intent: 'recovery', ...estimateTerminalSize(isPhone()), ...request });
+    const ticket = await api.agentTicket({
+      intent: 'recovery',
+      ...estimateTerminalSize(isPhone()),
+      ...request,
+    });
     // Seed from the ticket so the sessions card and the nav badge are right on
     // the very next render, then invalidate — the same two rules every other
     // session the console opens follows.
     if (ticket.session) {
-      client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) => (prev
-        ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session!] }
-        : prev));
+      client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) =>
+        prev ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session!] } : prev,
+      );
     }
     void client.invalidateQueries({ queryKey: keys.terminal() });
     navigate(`agent/${ticket.sessionId}`);

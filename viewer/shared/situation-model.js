@@ -34,24 +34,26 @@
  */
 
 /** Every situation, in classifier precedence. Frozen: it is a vocabulary. */
-export const SITUATIONS = Object.freeze(/** @type {const} */ ([
-  'superseded',
-  'qa-failed',
-  'qa-pending',
-  'foreign-live',
-  'foreign-stale',
-  'waiting-external',
-  'gated-manual',
-  'plan-broken',
-  'mcp-unavailable',
-  'resource-wall',
-  'blocked-declared',
-  'verify-red',
-  'done-unrecorded',
-  'work-in-progress',
-  'never-started',
-  'unknown',
-]));
+export const SITUATIONS = Object.freeze(
+  /** @type {const} */ ([
+    'superseded',
+    'qa-failed',
+    'qa-pending',
+    'foreign-live',
+    'foreign-stale',
+    'waiting-external',
+    'gated-manual',
+    'plan-broken',
+    'mcp-unavailable',
+    'resource-wall',
+    'blocked-declared',
+    'verify-red',
+    'done-unrecorded',
+    'work-in-progress',
+    'never-started',
+    'unknown',
+  ]),
+);
 
 /**
  * Sub-kinds for the situations that branch. `blocked-declared` and
@@ -79,7 +81,7 @@ export const SUB_KINDS = Object.freeze({
  * @type {Readonly<Record<SituationId, 'machine'|'person'|'wait'|'none'>>}
  */
 export const SITUATION_ACTOR = Object.freeze({
-  'superseded': 'none',
+  superseded: 'none',
   'qa-failed': 'person',
   'qa-pending': 'person',
   'foreign-live': 'wait',
@@ -94,7 +96,7 @@ export const SITUATION_ACTOR = Object.freeze({
   'done-unrecorded': 'machine',
   'work-in-progress': 'machine',
   'never-started': 'machine',
-  'unknown': 'person',
+  unknown: 'person',
 });
 
 /**
@@ -103,7 +105,7 @@ export const SITUATION_ACTOR = Object.freeze({
  * @type {Readonly<Record<SituationId, string>>}
  */
 export const SITUATION_LABELS = Object.freeze({
-  'superseded': 'Superseded',
+  superseded: 'Superseded',
   'qa-failed': 'QA failed',
   'qa-pending': 'QA pending',
   'foreign-live': 'Another session is in it',
@@ -118,7 +120,7 @@ export const SITUATION_LABELS = Object.freeze({
   'done-unrecorded': 'Done, unrecorded',
   'work-in-progress': 'Work in progress',
   'never-started': 'Never started',
-  'unknown': 'Unclassified',
+  unknown: 'Unclassified',
 });
 
 /**
@@ -128,7 +130,7 @@ export const SITUATION_LABELS = Object.freeze({
  * @type {Readonly<Record<SituationId, string>>}
  */
 export const SITUATION_BLURBS = Object.freeze({
-  'superseded':
+  superseded:
     'The board already reads this phase done — the record is stale and closes itself. Nothing to run.',
   'qa-failed':
     'The handoff is complete but the recorded QA verdict is fail, so dependents are held. A person re-runs QA — the autopilot never spawns reviewers on its own.',
@@ -141,7 +143,7 @@ export const SITUATION_BLURBS = Object.freeze({
   'waiting-external':
     'The session declared it is waiting on something outside (CI, a PR, a deploy window). The park re-checks and resumes its own session.',
   'gated-manual':
-    'A manual gate only a person can clear stands before this phase. The errand is the gate\'s own numbered steps.',
+    "A manual gate only a person can clear stands before this phase. The errand is the gate's own numbered steps.",
   'plan-broken':
     'The plan, its handoffs or its §Verification fail a structural check. Deterministic repair first, a plan-repair agent second, then an errand.',
   'mcp-unavailable':
@@ -151,15 +153,14 @@ export const SITUATION_BLURBS = Object.freeze({
   'blocked-declared':
     'The session itself said it was blocked — in its handoff or its declared outcome. The sub-kind decides: queue behind a lock, poll an external ref, one bounded unblock session, or an errand.',
   'verify-red':
-    'The phase\'s own §Verification fails. Its session is resumed with the failure, then a stronger fresh agent, then an errand.',
+    "The phase's own §Verification fails. Its session is resumed with the failure, then a stronger fresh agent, then an errand.",
   'done-unrecorded':
     'Verification is green and work landed, but no complete handoff exists. The own session is asked to close out; a fresh agent if it cannot.',
   'work-in-progress':
     'Real work exists and is unfinished — an in-progress handoff, commits, a dirty tree. The own session continues the work; else a fresh session boards with a resume brief.',
   'never-started':
     'No handoff, nothing on disk, a session that ended before it began. The phase re-boards fresh — no closeout, no person.',
-  'unknown':
-    'The evidence fits no named situation. A person reads it, and the classifier gains a case.',
+  unknown: 'The evidence fits no named situation. A person reads it, and the classifier gains a case.',
 });
 
 /** @param {unknown} value */

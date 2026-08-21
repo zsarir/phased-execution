@@ -16,17 +16,11 @@ const SCOPE_SHOWN = 2;
  * Shared by the run phases table and the plan's phases tab — one component so
  * the two surfaces cannot drift on what a scope looks like.
  */
-export function ScopeChips({
-  tokens,
-  conflicts,
-}: {
-  tokens: string[];
-  conflicts?: string[] | undefined;
-}) {
+export function ScopeChips({ tokens, conflicts }: { tokens: string[]; conflicts?: string[] | undefined }) {
   const shown = tokens.slice(0, SCOPE_SHOWN);
   const hidden = tokens.length - shown.length;
-  const title = tokens.join(', ')
-    + (conflicts?.length ? `\n\nwould collide with: ${conflicts.join(', ')}` : '');
+  const title =
+    tokens.join(', ') + (conflicts?.length ? `\n\nwould collide with: ${conflicts.join(', ')}` : '');
 
   return (
     <div className="flex flex-wrap items-center gap-1" title={title}>

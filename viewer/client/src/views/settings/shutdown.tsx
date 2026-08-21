@@ -43,7 +43,10 @@ export function stopList(
   run: { slug: string; status: string } | null | undefined,
 ): string[] {
   const items: string[] = [];
-  if (run) items.push(`the ${run.slug} run (${run.status}) — checkpointed first, and it resumes when the console comes back`);
+  if (run)
+    items.push(
+      `the ${run.slug} run (${run.status}) — checkpointed first, and it resumes when the console comes back`,
+    );
   if (sessions?.agent) items.push(`${plural(sessions.agent, 'agent session')}`);
   if (sessions?.terminal) items.push(`${plural(sessions.terminal, 'terminal')}`);
   return items;
@@ -60,7 +63,9 @@ export function StopInventory({ items, hint }: { items: string[]; hint?: string 
         <>
           <span className="text-ink">This stops:</span>
           <ul className="flex list-disc flex-col gap-1 pl-5 text-ink-muted">
-            {items.map((item) => <li key={item}>{item}</li>)}
+            {items.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
           </ul>
         </>
       ) : (
@@ -106,7 +111,9 @@ export function ShutdownButton() {
             disabled={stop.isPending}
             // Read again on the way in: the inventory is only worth showing if
             // it is the inventory as of now, not as of when the page loaded.
-            onClick={() => { void refetch(); }}
+            onClick={() => {
+              void refetch();
+            }}
           >
             <Power size={14} aria-hidden /> {stop.isPending ? 'Shutting down…' : 'Shut down'}
           </Button>

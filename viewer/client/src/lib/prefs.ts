@@ -138,14 +138,23 @@ export function getPrefs(): Prefs {
 
 export function setPrefs(patch: Partial<Prefs>): void {
   state = { ...state, ...patch };
-  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* private mode */ }
+  try {
+    localStorage.setItem(KEY, JSON.stringify(state));
+  } catch {
+    /* private mode */
+  }
   if (patch.theme) applyTheme(state.theme);
   for (const notify of listeners) notify();
 }
 
 export function usePrefs(): [Prefs, (patch: Partial<Prefs>) => void] {
   const value = useSyncExternalStore(
-    (notify) => { listeners.add(notify); return () => { listeners.delete(notify); }; },
+    (notify) => {
+      listeners.add(notify);
+      return () => {
+        listeners.delete(notify);
+      };
+    },
     () => state,
     () => state,
   );

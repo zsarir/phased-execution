@@ -34,12 +34,24 @@
  */
 
 import { useCallback, useState } from 'react';
+import { Empty, Spinner, Tabs, TabsContent, TabsList, TabsTrigger, toast } from '@/components/ui';
 import {
-  Empty, Spinner, Tabs, TabsContent, TabsList, TabsTrigger, toast,
-} from '@/components/ui';
-import { api, automationPrefs, type PhaseEta, type PlanDetail, type QueueEntry, type RunState } from '@/lib/api';
+  api,
+  automationPrefs,
+  type PhaseEta,
+  type PlanDetail,
+  type QueueEntry,
+  type RunState,
+} from '@/lib/api';
 import {
-  useAccounts, useApprovals, useAuth, useConsoleState, useQueue, useRun, useRunScopes, useSessions,
+  useAccounts,
+  useApprovals,
+  useAuth,
+  useConsoleState,
+  useQueue,
+  useRun,
+  useRunScopes,
+  useSessions,
   useSkills,
 } from '@/lib/queries';
 import { keys } from '@/lib/queries';
@@ -53,7 +65,15 @@ import { LiveConsole } from './console';
 import { RunHeader, RunTiles } from './header';
 import { PhaseTable } from './phase-table';
 import { NextSteps } from './next-steps';
-import { QueuedPane, SessionPanes, laneId, lanesOf, queueEntryFor, resolveTab, type Lane } from './session-panes';
+import {
+  QueuedPane,
+  SessionPanes,
+  laneId,
+  lanesOf,
+  queueEntryFor,
+  resolveTab,
+  type Lane,
+} from './session-panes';
 import { LaneControls, laneFrozen } from './lane-controls';
 import { WaitingPane, waitingOf } from './waiting-pane';
 import { AuthCard, RunStatusStack, StaleServerNote, looksLikeAuthFailure } from './status';
@@ -122,37 +142,43 @@ export function RunView({ detail }: { detail: PlanDetail }) {
    * settles, and awaiting it here would hold `busy` set for the length of a
    * network round trip after the action has already landed.
    */
-  const act = useCallback(async (label: string, fn: () => Promise<unknown>) => {
-    setBusy(label);
-    try {
-      await fn();
-    } catch (error) {
-      toast((error as Error).message, 'error');
-    } finally {
-      setBusy('');
-      void client.invalidateQueries({ queryKey: keys.run(slug) });
-      void client.invalidateQueries({ queryKey: keys.approvals() });
-      void client.invalidateQueries({ queryKey: keys.plan(slug) });
-    }
-  }, [client, slug]);
-
-  const decide: Decide = useCallback((id, decision, reason, remember, rule) => {
-    void act('decide', async () => {
-      const result = await api.decide(id, decision, reason, remember, rule);
-      // The rule is reported back rather than assumed: a card can be answered and
-      // the remembering still refused (an unparseable rule), and saying
-      // "Approved" to both would hide the half that failed.
-      if (result?.error) toast(result.error, 'warn');
-      else if (result?.wrote) {
-        toast(
-          `${decision === 'allow' ? 'Approved' : 'Denied'} · wrote ${result.wrote} (${result.scope})`,
-          'ok',
-        );
-      } else {
-        toast(decision === 'allow' ? 'Approved' : 'Denied', decision === 'allow' ? 'ok' : 'warn');
+  const act = useCallback(
+    async (label: string, fn: () => Promise<unknown>) => {
+      setBusy(label);
+      try {
+        await fn();
+      } catch (error) {
+        toast((error as Error).message, 'error');
+      } finally {
+        setBusy('');
+        void client.invalidateQueries({ queryKey: keys.run(slug) });
+        void client.invalidateQueries({ queryKey: keys.approvals() });
+        void client.invalidateQueries({ queryKey: keys.plan(slug) });
       }
-    });
-  }, [act]);
+    },
+    [client, slug],
+  );
+
+  const decide: Decide = useCallback(
+    (id, decision, reason, remember, rule) => {
+      void act('decide', async () => {
+        const result = await api.decide(id, decision, reason, remember, rule);
+        // The rule is reported back rather than assumed: a card can be answered and
+        // the remembering still refused (an unparseable rule), and saying
+        // "Approved" to both would hide the half that failed.
+        if (result?.error) toast(result.error, 'warn');
+        else if (result?.wrote) {
+          toast(
+            `${decision === 'allow' ? 'Approved' : 'Denied'} · wrote ${result.wrote} (${result.scope})`,
+            'ok',
+          );
+        } else {
+          toast(decision === 'allow' ? 'Approved' : 'Denied', decision === 'allow' ? 'ok' : 'warn');
+        }
+      });
+    },
+    [act],
+  );
 
   if (stale) return <StaleServerNote />;
   if (isPending && !detailRun) return <Spinner label="Reading run state" />;
@@ -163,12 +189,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
   return (
     <div className="flex flex-col gap-4">
       {run && (
-        <RunHeader
-          run={run}
-          live={live}
-          eta={detailRun?.eta ?? null}
-          phaseEta={detailRun?.phaseEta ?? []}
-        />
+        <RunHeader run={run} live={live} eta={detailRun?.eta ?? null} phaseEta={detailRun?.phaseEta ?? []} />
       )}
 
       {/* First, always: a session parked with its hand up is the only thing on
@@ -184,7 +205,8 @@ export function RunView({ detail }: { detail: PlanDetail }) {
             if (run?.accountId) {
               // Re-read THAT account, not the machine login — this is the
               // "I signed in over there, look again" button.
-              void api.accountRefresh(run.accountId)
+              void api
+                .accountRefresh(run.accountId)
                 .then(() => client.invalidateQueries({ queryKey: keys.accounts() }))
                 .catch(() => client.invalidateQueries({ queryKey: keys.accounts() }));
               return;
@@ -200,14 +222,18 @@ export function RunView({ detail }: { detail: PlanDetail }) {
         live={live}
         allowRun={allowRun}
         busy={busy}
-        onClearScope={() => void act('scope', async () => {
-          await api.runSettings(slug, { onlyPhases: [] });
-          toast('Scope cleared — this run continues through the whole plan', 'ok');
-        })}
-        onGuard={() => void act('profile', async () => {
-          await api.runSettings(slug, { permissionProfile: 'guarded' });
-          toast('Back to Guarded — the next call that matters raises a card', 'ok');
-        })}
+        onClearScope={() =>
+          void act('scope', async () => {
+            await api.runSettings(slug, { onlyPhases: [] });
+            toast('Scope cleared — this run continues through the whole plan', 'ok');
+          })
+        }
+        onGuard={() =>
+          void act('profile', async () => {
+            await api.runSettings(slug, { permissionProfile: 'guarded' });
+            toast('Back to Guarded — the next call that matters raises a card', 'ok');
+          })
+        }
         recovery={{
           ...(authFailure ? { authFailure: true } : {}),
           target: {
@@ -221,8 +247,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
       {/* The plan-level recovery, one press: confirm the stop against the
           board, stand down what it settled, recover or continue what is real.
           The phase-level offers live on the halt banner and each row. */}
-      {run && !live && !run.resolved
-        && ['halted', 'interrupted', 'parked'].includes(run.status) && (
+      {run && !live && !run.resolved && ['halted', 'interrupted', 'parked'].includes(run.status) && (
         <RecoveryActions target={{ slug, runId: run.id }} ctx={{ run }} max={2} legend />
       )}
 
@@ -369,9 +394,7 @@ function SessionTabs({
         <TabsTrigger value="run">
           Run
           {lanes.length > 1 && (
-            <span className="ml-1.5 font-mono text-2xs text-ink-faint tabular-nums">
-              {lanes.length}
-            </span>
+            <span className="ml-1.5 font-mono text-2xs text-ink-faint tabular-nums">{lanes.length}</span>
           )}
         </TabsTrigger>
         {lanes.map((lane) => (
@@ -383,9 +406,7 @@ function SessionTabs({
         {waiting.length > 0 && (
           <TabsTrigger value="waiting">
             Waiting
-            <span className="ml-1.5 font-mono text-2xs text-ink-faint tabular-nums">
-              {waiting.length}
-            </span>
+            <span className="ml-1.5 font-mono text-2xs text-ink-faint tabular-nums">{waiting.length}</span>
           </TabsTrigger>
         )}
       </TabsList>
@@ -410,18 +431,13 @@ function SessionTabs({
       </TabsContent>
 
       {lanes.map((lane) => (
-        <TabsContent
-          key={laneId(lane)}
-          value={laneId(lane)}
-          forceMount
-          hidden={value !== laneId(lane)}
-        >
+        <TabsContent key={laneId(lane)} value={laneId(lane)} forceMount hidden={value !== laneId(lane)}>
           {lane.queued ? (
             <QueuedPane
               phase={lane.phase}
               entry={queueEntryFor(entries, slug, lane.phase)}
               scope={scopes?.find((s) => s.phase === lane.phase)?.scope}
-              control={(
+              control={
                 <LaneControls
                   slug={slug}
                   phase={lane.phase}
@@ -430,7 +446,7 @@ function SessionTabs({
                   frozen={null}
                   queued
                 />
-              )}
+              }
             />
           ) : (
             <SessionPanes
@@ -441,7 +457,7 @@ function SessionTabs({
               allowRun={allowRun}
               enabled={enabled}
               subtitle={laneSubtitle(lane, run, now, phaseEta)}
-              control={(
+              control={
                 <LaneControls
                   slug={slug}
                   phase={lane.phase}
@@ -449,7 +465,7 @@ function SessionTabs({
                   allowRun={allowRun}
                   frozen={laneFrozen(run, lane.phase)}
                 />
-              )}
+              }
             />
           )}
         </TabsContent>

@@ -30,8 +30,12 @@ function fakeWorker() {
       if (!listeners.has(type)) listeners.set(type, new Set());
       listeners.get(type)!.add(fn);
     },
-    removeEventListener: (type: string, fn: () => void) => { listeners.get(type)?.delete(fn); },
-    emit(type: string) { for (const fn of [...(listeners.get(type) ?? [])]) fn(); },
+    removeEventListener: (type: string, fn: () => void) => {
+      listeners.get(type)?.delete(fn);
+    },
+    emit(type: string) {
+      for (const fn of [...(listeners.get(type) ?? [])]) fn();
+    },
   };
 }
 
@@ -45,8 +49,12 @@ function fakeRegistration() {
       if (!listeners.has(type)) listeners.set(type, new Set());
       listeners.get(type)!.add(fn);
     },
-    removeEventListener: (type: string, fn: () => void) => { listeners.get(type)?.delete(fn); },
-    emit(type: string) { for (const fn of [...(listeners.get(type) ?? [])]) fn(); },
+    removeEventListener: (type: string, fn: () => void) => {
+      listeners.get(type)?.delete(fn);
+    },
+    emit(type: string) {
+      for (const fn of [...(listeners.get(type) ?? [])]) fn();
+    },
   };
 }
 
@@ -79,8 +87,12 @@ beforeEach(() => {
       if (!listeners.has(type)) listeners.set(type, new Set());
       listeners.get(type)!.add(fn);
     },
-    removeEventListener: (type: string, fn: () => void) => { listeners.get(type)?.delete(fn); },
-    emit: (type: string) => { for (const fn of [...(listeners.get(type) ?? [])]) fn(); },
+    removeEventListener: (type: string, fn: () => void) => {
+      listeners.get(type)?.delete(fn);
+    },
+    emit: (type: string) => {
+      for (const fn of [...(listeners.get(type) ?? [])]) fn();
+    },
   };
   Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: container });
 
@@ -159,9 +171,13 @@ describe('the update prompt', () => {
 
     const installing = fakeWorker();
     registration.installing = installing;
-    act(() => { registration.emit('updatefound'); });
+    act(() => {
+      registration.emit('updatefound');
+    });
     installing.state = 'installed';
-    act(() => { installing.emit('statechange'); });
+    act(() => {
+      installing.emit('statechange');
+    });
 
     await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('1'));
     expect(screen.getByTestId('messages').textContent).toMatch(/new version/i);
@@ -174,9 +190,13 @@ describe('the update prompt', () => {
 
     const installing = fakeWorker();
     registration.installing = installing;
-    act(() => { registration.emit('updatefound'); });
+    act(() => {
+      registration.emit('updatefound');
+    });
     installing.state = 'installed';
-    act(() => { installing.emit('statechange'); });
+    act(() => {
+      installing.emit('statechange');
+    });
 
     await waitFor(() => expect(registration.update).toHaveBeenCalled());
     expect(screen.getByTestId('count').textContent).toBe('0');
@@ -189,7 +209,9 @@ describe('the update prompt', () => {
     await waitFor(() => expect(waiting.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' }));
     // Taken, not offered — no toast to miss this time.
     expect(screen.getByTestId('count').textContent).toBe('0');
-    act(() => { container.emit('controllerchange'); });
+    act(() => {
+      container.emit('controllerchange');
+    });
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
@@ -222,13 +244,17 @@ describe('the update prompt', () => {
     // Present, and doing nothing, until it is chosen.
     expect(waiting.postMessage).not.toHaveBeenCalled();
     const button = await screen.findByRole('button', { name: 'Reload' });
-    act(() => { button.click(); });
+    act(() => {
+      button.click();
+    });
     expect(waiting.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' });
     // Still nothing: the new worker reloads the page by taking over, not by
     // being asked to.
     expect(reload).not.toHaveBeenCalled();
 
-    act(() => { container.emit('controllerchange'); });
+    act(() => {
+      container.emit('controllerchange');
+    });
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
@@ -238,7 +264,9 @@ describe('the update prompt', () => {
     // is on screen — repeatedly.
     render(<Harness />);
     await waitFor(() => expect(container.register).toHaveBeenCalled());
-    act(() => { container.emit('controllerchange'); });
+    act(() => {
+      container.emit('controllerchange');
+    });
     expect(reload).not.toHaveBeenCalled();
   });
 
@@ -264,11 +292,15 @@ describe('the online signal', () => {
     expect(screen.getByTestId('online').textContent).toBe('true');
 
     Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
-    act(() => { window.dispatchEvent(new Event('offline')); });
+    act(() => {
+      window.dispatchEvent(new Event('offline'));
+    });
     expect(screen.getByTestId('online').textContent).toBe('false');
 
     Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
-    act(() => { window.dispatchEvent(new Event('online')); });
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
     expect(screen.getByTestId('online').textContent).toBe('true');
   });
 });
@@ -294,7 +326,9 @@ describe('applyUpdateNow — the deterministic path the toast is not', () => {
     const reload = vi.fn();
     const done = applyUpdateNow(reload);
     await waitFor(() => expect(waiting.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' }));
-    act(() => { container.emit('controllerchange'); });
+    act(() => {
+      container.emit('controllerchange');
+    });
     await expect(done).resolves.toBe('reloading');
     expect(reload).toHaveBeenCalledTimes(1);
   });
@@ -310,11 +344,15 @@ describe('returning to the tab re-checks for an update', () => {
     // the other boundary where nothing on screen is mid-flight.
     const waiting = fakeWorker();
     registration.waiting = waiting;
-    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
 
     await waitFor(() => expect(waiting.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' }));
     expect(registration.update.mock.calls.length).toBeGreaterThan(1);
-    act(() => { container.emit('controllerchange'); });
+    act(() => {
+      container.emit('controllerchange');
+    });
     expect(reload).toHaveBeenCalledTimes(1);
   });
 });

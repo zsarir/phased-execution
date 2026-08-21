@@ -107,24 +107,25 @@ export interface PushState {
 /** The notification and push fetchers — merged into `api` by `./index`. */
 export const notificationsApi = {
   /* ---- the notification inbox ---- */
-  notifications: (query: InboxQuery = {}) => request<InboxPage>(
-    `/api/notifications?${new URLSearchParams(
-      Object.entries(query)
-        .filter(([, v]) => v != null && v !== '' && v !== false)
-        .map(([k, v]) => [k, v === true ? '1' : String(v)]),
-    )}`,
-  ),
+  notifications: (query: InboxQuery = {}) =>
+    request<InboxPage>(
+      `/api/notifications?${new URLSearchParams(
+        Object.entries(query)
+          .filter(([, v]) => v != null && v !== '' && v !== false)
+          .map(([k, v]) => [k, v === true ? '1' : String(v)]),
+      )}`,
+    ),
   markNotificationsRead: (ids?: string[]) =>
     post<ReadResult>('/api/notifications/read', ids?.length ? { ids } : {}),
   // Scoped: only the records that are *about* this thing. An empty scope
   // matches nothing on the server, so a slug that has not resolved yet cannot
   // clear the inbox by accident.
-  markNotificationsReadFor: (scope: NotificationScope) =>
-    post<ReadResult>('/api/notifications/read', scope),
-  clearNotifications: (what: string | { id: string }) => request<unknown>(
-    `/api/notifications?${typeof what === 'string' ? `scope=${what}` : `id=${q(what.id)}`}`,
-    { method: 'DELETE' },
-  ),
+  markNotificationsReadFor: (scope: NotificationScope) => post<ReadResult>('/api/notifications/read', scope),
+  clearNotifications: (what: string | { id: string }) =>
+    request<unknown>(
+      `/api/notifications?${typeof what === 'string' ? `scope=${what}` : `id=${q(what.id)}`}`,
+      { method: 'DELETE' },
+    ),
 
   /* ---- push: the register, not the browser half ----
      Subscribing is `lib/push.ts` — it needs a service worker and a permission
@@ -132,7 +133,8 @@ export const notificationsApi = {
   push: () => request<PushState>('/api/push'),
   pushSubscribe: (body: { subscription: unknown; label: string; categories?: Record<string, boolean> }) =>
     post<{ device?: PushDevice; state?: PushState; error?: string }>('/api/push/subscribe', body),
-  pushUnsubscribe: (endpoint: string) => post<{ removed?: unknown; state?: PushState }>('/api/push/unsubscribe', { endpoint }),
+  pushUnsubscribe: (endpoint: string) =>
+    post<{ removed?: unknown; state?: PushState }>('/api/push/unsubscribe', { endpoint }),
   pushCategories: (id: string, categories: Record<string, boolean>) =>
     post<{ device?: PushDevice }>('/api/push/categories', { id, categories }),
   pushTest: (id: string) => post<{ ok: boolean; detail: string }>('/api/push/test', { id }),

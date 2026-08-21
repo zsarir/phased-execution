@@ -55,11 +55,16 @@ export function Meter({
         aria-valuenow={value}
         aria-valuetext={text}
         title={`${label}: ${text}${over ? ' — over' : ''}`}
-        className={cn('relative h-2 w-full overflow-hidden rounded-full bg-track', `state-${over ? overTone : tone}`)}
+        className={cn(
+          'relative h-2 w-full overflow-hidden rounded-full bg-track',
+          `state-${over ? overTone : tone}`,
+        )}
       >
         {showTicks && (
           <span aria-hidden className="pointer-events-none absolute inset-0 flex justify-evenly">
-            {[0, 1, 2].map((i) => <span key={i} className="w-px bg-surface/70" />)}
+            {[0, 1, 2].map((i) => (
+              <span key={i} className="w-px bg-surface/70" />
+            ))}
           </span>
         )}
         <span className="block h-full rounded-full bg-state" style={{ width: `${shown * 100}%` }} />

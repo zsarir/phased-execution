@@ -45,7 +45,7 @@ function NameForm({ onSubmit }: { onSubmit: (values: { name: string }) => void }
 }
 
 describe('Form + FormField (react-hook-form)', () => {
-  it('an empty submit announces the schema\'s own words and marks the control', async () => {
+  it("an empty submit announces the schema's own words and marks the control", async () => {
     const onSubmit = vi.fn();
     render(<NameForm onSubmit={onSubmit} />);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -119,7 +119,9 @@ describe('Field alone', () => {
   it('the render-prop form receives the same ids', () => {
     render(
       <Field label="Model" hint="what boards the phase" id="model">
-        {(ids) => <Input id={ids.id} aria-describedby={ids.describedBy} aria-invalid={ids.invalid || undefined} />}
+        {(ids) => (
+          <Input id={ids.id} aria-describedby={ids.describedBy} aria-invalid={ids.invalid || undefined} />
+        )}
       </Field>,
     );
     const input = screen.getByLabelText(/Model/);
@@ -140,8 +142,12 @@ describe('Field alone', () => {
   it('has no axe violations with hint and with error', async () => {
     const { container } = render(
       <div>
-        <Field label="Port" hint="1–65535"><Input /></Field>
-        <Field label="Host" error="Required"><Input /></Field>
+        <Field label="Port" hint="1–65535">
+          <Input />
+        </Field>
+        <Field label="Host" error="Required">
+          <Input />
+        </Field>
       </div>,
     );
     await expectNoAxeViolations(container);

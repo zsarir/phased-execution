@@ -16,7 +16,12 @@ export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
 }
 
 export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('flex items-start justify-between gap-3 border-b border-rule px-4 py-3', className)} {...props} />;
+  return (
+    <div
+      className={cn('flex items-start justify-between gap-3 border-b border-rule px-4 py-3', className)}
+      {...props}
+    />
+  );
 }
 
 export function CardTitle({ className, ...props }: HTMLAttributes<HTMLHeadingElement>) {
@@ -47,14 +52,7 @@ export function Tile({
   state?: string;
 } & HTMLAttributes<HTMLDivElement>) {
   return (
-    <div
-      className={cn(
-        'rounded-lg border border-rule bg-surface px-3 py-2.5',
-        state,
-        className,
-      )}
-      {...props}
-    >
+    <div className={cn('rounded-lg border border-rule bg-surface px-3 py-2.5', state, className)} {...props}>
       <div className={cn('font-display text-2xl leading-none', state ? 'text-state' : 'text-ink')}>
         {value}
       </div>

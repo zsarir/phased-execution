@@ -43,28 +43,48 @@ import { useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Radio } from 'lucide-react';
 import { api, type QueueEntry, type RunState } from '@/lib/api';
-import {
-  keys, useApprovals, useAuth, useConsoleState, usePlans, useQueue, useRuns,
-} from '@/lib/queries';
+import { keys, useApprovals, useAuth, useConsoleState, usePlans, useQueue, useRuns } from '@/lib/queries';
 import { usePrefs } from '@/lib/prefs';
 import { relativeTime } from '@/lib/format';
 import {
-  Banner, Card, Chip, Empty, Skeleton, Tabs, TabsContent, TabsList, TabsTrigger, toast,
+  Banner,
+  Card,
+  Chip,
+  Empty,
+  Skeleton,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  toast,
 } from '@/components/ui';
 import { ApprovalQueue, type Decide } from '../run/approvals';
 import { LiveConsole } from '../run/console';
 import { isLive } from '../run/defaults';
 import { LaneControls, laneFrozen } from '../run/lane-controls';
 import {
-  QueuedPane, SessionPanes, crossLaneId, lanesAcross, queueEntryFor, type Lane,
+  QueuedPane,
+  SessionPanes,
+  crossLaneId,
+  lanesAcross,
+  queueEntryFor,
+  type Lane,
 } from '../run/session-panes';
 import { AuthCard, StaleServerNote, looksLikeAuthFailure } from '../run/status';
 import { Page } from '../_page';
 import { Controls } from './controls';
 import { Fleet, FleetTiles } from './fleet';
 import {
-  NO_FILTERS, applyFilters, isSortId, outcomeCounts, planOptions, sortRows, toRows,
-  type Filters, type RunRow, type SortId,
+  NO_FILTERS,
+  applyFilters,
+  isSortId,
+  outcomeCounts,
+  planOptions,
+  sortRows,
+  toRows,
+  type Filters,
+  type RunRow,
+  type SortId,
 } from './model';
 
 export default function RunsView() {
@@ -114,10 +134,7 @@ export default function RunsView() {
    * which the single watched console could not express at all. It showed one
    * run's lines and no way to know the others existed.
    */
-  const lanes = useMemo(
-    () => lanesAcross((runs ?? []).filter((r) => isLive(r.status))),
-    [runs],
-  );
+  const lanes = useMemo(() => lanesAcross((runs ?? []).filter((r) => isLive(r.status))), [runs]);
   const { data: admission } = useQueue(enabled && lanes.some((l) => l.queued));
 
   // A pick of a FINISHED run is a request to read that one, and there is no lane
@@ -135,36 +152,42 @@ export default function RunsView() {
    * re-reading matters most. `void` rather than `await`, because
    * `invalidateQueries` resolves only once the refetch settles.
    */
-  const decide: Decide = useCallback((id, decision, reason, remember, rule) => {
-    void (async () => {
-      try {
-        const result = await api.decide(id, decision, reason, remember, rule);
-        if (result?.error) toast(result.error, 'warn');
-        else if (result?.wrote) {
-          toast(
-            `${decision === 'allow' ? 'Approved' : 'Denied'} · wrote ${result.wrote} (${result.scope})`,
-            'ok',
-          );
-        } else {
-          toast(decision === 'allow' ? 'Approved' : 'Denied', decision === 'allow' ? 'ok' : 'warn');
+  const decide: Decide = useCallback(
+    (id, decision, reason, remember, rule) => {
+      void (async () => {
+        try {
+          const result = await api.decide(id, decision, reason, remember, rule);
+          if (result?.error) toast(result.error, 'warn');
+          else if (result?.wrote) {
+            toast(
+              `${decision === 'allow' ? 'Approved' : 'Denied'} · wrote ${result.wrote} (${result.scope})`,
+              'ok',
+            );
+          } else {
+            toast(decision === 'allow' ? 'Approved' : 'Denied', decision === 'allow' ? 'ok' : 'warn');
+          }
+        } catch (err) {
+          toast((err as Error).message, 'error');
+        } finally {
+          void client.invalidateQueries({ queryKey: keys.approvals() });
+          void client.invalidateQueries({ queryKey: keys.runs() });
         }
-      } catch (err) {
-        toast((err as Error).message, 'error');
-      } finally {
-        void client.invalidateQueries({ queryKey: keys.approvals() });
-        void client.invalidateQueries({ queryKey: keys.runs() });
-      }
-    })();
-  }, [client]);
+      })();
+    },
+    [client],
+  );
 
   // Clearing the tab is what makes Watch mean anything once there are several:
   // with a tab explicitly chosen, the pick would set `watchId` and change
   // nothing on screen. Cleared, the derivation below follows the pick.
-  const onWatch = useCallback((row: RunRow) => {
-    setWatchId(row.id);
-    setTab(undefined);
-    setPrefs({ runsConsole: true });
-  }, [setPrefs]);
+  const onWatch = useCallback(
+    (row: RunRow) => {
+      setWatchId(row.id);
+      setTab(undefined);
+      setPrefs({ runsConsole: true });
+    },
+    [setPrefs],
+  );
 
   /**
    * Dismiss a stopped run's card, or put it back.
@@ -174,54 +197,66 @@ export default function RunsView() {
    * exactly where it is — it just stops being counted as waiting on someone.
    */
   const [resolvingId, setResolvingId] = useState<string | undefined>();
-  const onResolve = useCallback((row: RunRow, resolve: boolean) => {
-    setResolvingId(row.id);
-    void (async () => {
-      try {
-        await (resolve ? api.runResolve(row.slug, row.id) : api.runUnresolve(row.slug, row.id));
-        toast(resolve ? 'Dismissed — it will stop asking' : 'Back on the dashboard', 'ok');
-      } catch (err) {
-        toast((err as Error).message, 'error');
-      } finally {
-        setResolvingId(undefined);
-        void client.invalidateQueries({ queryKey: keys.runs() });
-      }
-    })();
-  }, [client]);
+  const onResolve = useCallback(
+    (row: RunRow, resolve: boolean) => {
+      setResolvingId(row.id);
+      void (async () => {
+        try {
+          await (resolve ? api.runResolve(row.slug, row.id) : api.runUnresolve(row.slug, row.id));
+          toast(resolve ? 'Dismissed — it will stop asking' : 'Back on the dashboard', 'ok');
+        } catch (err) {
+          toast((err as Error).message, 'error');
+        } finally {
+          setResolvingId(undefined);
+          void client.invalidateQueries({ queryKey: keys.runs() });
+        }
+      })();
+    },
+    [client],
+  );
 
   /**
    * Freeze / continue / stop a run from its fleet row — whole-run verbs. The
    * per-session versions live in the run's console tabs, where a session has a
    * face; a table row only honestly refers to the run entire.
    */
-  const onLifecycle = useCallback((row: RunRow, verb: 'freeze' | 'thaw' | 'stop') => {
-    setResolvingId(row.id);
-    void (async () => {
-      try {
-        if (verb === 'freeze') {
-          const { run: after } = await api.runFreeze(row.slug);
-          const held = after?.status === 'frozen' || Boolean(after?.freeze);
-          toast(held
-            ? `${row.slug} frozen — its sessions are stopped where they stood`
-            : `Nothing to freeze on ${row.slug}.`, held ? 'ok' : 'warn');
-        } else if (verb === 'thaw') {
-          const { run: after } = await api.runThaw(row.slug);
-          const still = after?.status === 'frozen' || Boolean(after?.freeze);
-          toast(still
-            ? `${row.slug} could not be continued — open the autopilot and look at the status`
-            : `${row.slug} continued — the sessions pick up mid-token`, still ? 'warn' : 'ok');
-        } else {
-          await api.runStop(row.slug);
-          toast(`${row.slug} stopping — sessions get SIGTERM and the run winds down`, 'ok');
+  const onLifecycle = useCallback(
+    (row: RunRow, verb: 'freeze' | 'thaw' | 'stop') => {
+      setResolvingId(row.id);
+      void (async () => {
+        try {
+          if (verb === 'freeze') {
+            const { run: after } = await api.runFreeze(row.slug);
+            const held = after?.status === 'frozen' || Boolean(after?.freeze);
+            toast(
+              held
+                ? `${row.slug} frozen — its sessions are stopped where they stood`
+                : `Nothing to freeze on ${row.slug}.`,
+              held ? 'ok' : 'warn',
+            );
+          } else if (verb === 'thaw') {
+            const { run: after } = await api.runThaw(row.slug);
+            const still = after?.status === 'frozen' || Boolean(after?.freeze);
+            toast(
+              still
+                ? `${row.slug} could not be continued — open the autopilot and look at the status`
+                : `${row.slug} continued — the sessions pick up mid-token`,
+              still ? 'warn' : 'ok',
+            );
+          } else {
+            await api.runStop(row.slug);
+            toast(`${row.slug} stopping — sessions get SIGTERM and the run winds down`, 'ok');
+          }
+        } catch (err) {
+          toast((err as Error).message, 'error');
+        } finally {
+          setResolvingId(undefined);
+          void client.invalidateQueries({ queryKey: keys.runs() });
         }
-      } catch (err) {
-        toast((err as Error).message, 'error');
-      } finally {
-        setResolvingId(undefined);
-        void client.invalidateQueries({ queryKey: keys.runs() });
-      }
-    })();
-  }, [client]);
+      })();
+    },
+    [client],
+  );
 
   /* ---------------- the fleet ---------------- */
 
@@ -231,10 +266,7 @@ export default function RunsView() {
     [local, prefs.runsOutcome],
   );
   const sortId: SortId = isSortId(prefs.runsSort) ? prefs.runsSort : 'updated';
-  const visible = useMemo(
-    () => sortRows(applyFilters(all, filters), sortId),
-    [all, filters, sortId],
-  );
+  const visible = useMemo(() => sortRows(applyFilters(all, filters), sortId), [all, filters, sortId]);
   const counts = useMemo(() => outcomeCounts(all), [all]);
   const plans = useMemo(() => planOptions(all), [all]);
   // The repos each plan touches — what decides what may run beside it. From
@@ -244,9 +276,7 @@ export default function RunsView() {
     const map: Record<string, string[]> = {};
     for (const s of summaries ?? []) {
       // PlanSummary is deliberately loose on the wire; narrow at the point of use.
-      const repos = Array.isArray(s.repos)
-        ? s.repos.filter((r): r is string => typeof r === 'string')
-        : [];
+      const repos = Array.isArray(s.repos) ? s.repos.filter((r): r is string => typeof r === 'string') : [];
       if (repos.length) map[s.slug] = repos;
     }
     return map;
@@ -261,7 +291,11 @@ export default function RunsView() {
   /* ---------------- the branches ---------------- */
 
   if (stale) {
-    return <Page title="Runs"><StaleServerNote /></Page>;
+    return (
+      <Page title="Runs">
+        <StaleServerNote />
+      </Page>
+    );
   }
 
   if (error) {
@@ -287,9 +321,11 @@ export default function RunsView() {
   return (
     <Page
       title="Runs"
-      subtitle={active
-        ? `${active.slug} is running — phase ${active.activePhase ?? '?'}`
-        : 'Nothing running right now'}
+      subtitle={
+        active
+          ? `${active.slug} is running — phase ${active.activePhase ?? '?'}`
+          : 'Nothing running right now'
+      }
       actions={approvals.length ? <Chip tone="warn">{approvals.length} waiting on you</Chip> : undefined}
     >
       <div className="flex flex-col gap-4">
@@ -308,50 +344,52 @@ export default function RunsView() {
           />
         )}
 
-        {consoleOpen
-          ? (
-            <div className="flex flex-col gap-3">
-              {replaying
-                ? (
-                  <SessionPanes
-                    slug={replaying.slug}
-                    runId={replaying.id}
-                    live={isLive(replaying.status)}
-                    allowRun={allowRun}
-                    enabled={enabled}
-                    title="Session console"
-                    subtitle={consoleSubtitle(active, replaying)}
-                    askPhase={isLive(replaying.status) ? replaying.activePhase : null}
-                  />
-                )
-                : lanes.length ? (
-                  <LaneTabs
-                    lanes={lanes}
-                    runs={runs}
-                    picked={tab}
-                    onPick={setTab}
-                    preferredRunId={picked && isLive(picked.status) ? picked.id : undefined}
-                    allowRun={allowRun}
-                    enabled={enabled}
-                    entries={admission?.entries}
-                  />
-                )
-                // Opened on a source that has never run anything: an empty tab
-                // strip is a thinner nothing than the console saying what it
-                // would show, and that copy is the whole point of opening it.
-                : <LiveConsole lines={[]} title="Session console" subtitle="idle" />}
-              {!active && (
-                <button
-                  type="button"
-                  onClick={() => { setPrefs({ runsConsole: false }); setWatchId(undefined); }}
-                  className="self-start text-2xs text-ink-faint hover:text-action"
-                >
-                  Hide the console while nothing is running
-                </button>
-              )}
-            </div>
-          )
-          : <IdleConsole run={watching} onOpen={() => setPrefs({ runsConsole: true })} />}
+        {consoleOpen ? (
+          <div className="flex flex-col gap-3">
+            {replaying ? (
+              <SessionPanes
+                slug={replaying.slug}
+                runId={replaying.id}
+                live={isLive(replaying.status)}
+                allowRun={allowRun}
+                enabled={enabled}
+                title="Session console"
+                subtitle={consoleSubtitle(active, replaying)}
+                askPhase={isLive(replaying.status) ? replaying.activePhase : null}
+              />
+            ) : lanes.length ? (
+              <LaneTabs
+                lanes={lanes}
+                runs={runs}
+                picked={tab}
+                onPick={setTab}
+                preferredRunId={picked && isLive(picked.status) ? picked.id : undefined}
+                allowRun={allowRun}
+                enabled={enabled}
+                entries={admission?.entries}
+              />
+            ) : (
+              // Opened on a source that has never run anything: an empty tab
+              // strip is a thinner nothing than the console saying what it
+              // would show, and that copy is the whole point of opening it.
+              <LiveConsole lines={[]} title="Session console" subtitle="idle" />
+            )}
+            {!active && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPrefs({ runsConsole: false });
+                  setWatchId(undefined);
+                }}
+                className="self-start text-2xs text-ink-faint hover:text-action"
+              >
+                Hide the console while nothing is running
+              </button>
+            )}
+          </div>
+        ) : (
+          <IdleConsole run={watching} onOpen={() => setPrefs({ runsConsole: true })} />
+        )}
 
         {all.length ? (
           <section className="flex flex-col gap-3" aria-label="The fleet">
@@ -369,38 +407,39 @@ export default function RunsView() {
                 hidden={all.length - visible.length}
               />
             </Card>
-            {visible.length
-              ? (
-                <Fleet
-                  rows={visible}
-                  grouped={Boolean(prefs.runsGroup)}
-                  reposBySlug={reposBySlug}
-                  onWatch={onWatch}
-                  // Only while the console is actually showing it. A row
-                  // reading "In the console" above a console that is folded
-                  // away is a claim about something you cannot see.
-                  watchingId={consoleOpen ? watching?.id : undefined}
-                  onResolve={onResolve}
-                  onLifecycle={onLifecycle}
-                  allowRun={allowRun}
-                  busyId={resolvingId}
-                />
-              )
-              : (
-                <Empty
-                  title="No run matches"
-                  body={`The fleet holds ${all.length} run${all.length === 1 ? '' : 's'}. Widen the filters to see them.`}
-                  action={(
-                    <button
-                      type="button"
-                      className="text-sm text-action hover:underline"
-                      onClick={() => { setLocal({ query: '', plan: '' }); setPrefs({ runsOutcome: NO_FILTERS.outcome }); }}
-                    >
-                      Clear the filters
-                    </button>
-                  )}
-                />
-              )}
+            {visible.length ? (
+              <Fleet
+                rows={visible}
+                grouped={Boolean(prefs.runsGroup)}
+                reposBySlug={reposBySlug}
+                onWatch={onWatch}
+                // Only while the console is actually showing it. A row
+                // reading "In the console" above a console that is folded
+                // away is a claim about something you cannot see.
+                watchingId={consoleOpen ? watching?.id : undefined}
+                onResolve={onResolve}
+                onLifecycle={onLifecycle}
+                allowRun={allowRun}
+                busyId={resolvingId}
+              />
+            ) : (
+              <Empty
+                title="No run matches"
+                body={`The fleet holds ${all.length} run${all.length === 1 ? '' : 's'}. Widen the filters to see them.`}
+                action={
+                  <button
+                    type="button"
+                    className="text-sm text-action hover:underline"
+                    onClick={() => {
+                      setLocal({ query: '', plan: '' });
+                      setPrefs({ runsOutcome: NO_FILTERS.outcome });
+                    }}
+                  >
+                    Clear the filters
+                  </button>
+                }
+              />
+            )}
           </section>
         ) : (
           <Empty
@@ -450,7 +489,7 @@ function LaneTabs({
   const preferred = preferredRunId
     ? ids[lanes.findIndex((lane) => lane.runId === preferredRunId)]
     : undefined;
-  const value = picked && ids.includes(picked) ? picked : preferred ?? ids[0] ?? '';
+  const value = picked && ids.includes(picked) ? picked : (preferred ?? ids[0] ?? '');
 
   return (
     <Tabs value={value} onValueChange={onPick}>
@@ -475,7 +514,7 @@ function LaneTabs({
             <QueuedPane
               phase={lane.phase}
               entry={queueEntryFor(entries, lane.slug, lane.phase)}
-              control={(
+              control={
                 <LaneControls
                   slug={lane.slug}
                   phase={lane.phase}
@@ -484,7 +523,7 @@ function LaneTabs({
                   frozen={null}
                   queued
                 />
-              )}
+              }
             />
           ) : (
             <SessionPanes
@@ -496,7 +535,7 @@ function LaneTabs({
               enabled={enabled}
               title={`${lane.slug} · phase ${lane.phase}`}
               subtitle={lane.status}
-              control={(
+              control={
                 <LaneControls
                   slug={lane.slug}
                   phase={lane.phase}
@@ -504,7 +543,7 @@ function LaneTabs({
                   allowRun={allowRun}
                   frozen={laneFrozen(runOf(lane), lane.phase)}
                 />
-              )}
+              }
             />
           )}
         </TabsContent>

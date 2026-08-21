@@ -15,15 +15,31 @@
 import { describe, expect, it } from 'vitest';
 import reference from '@/content/guide/reference.md?raw';
 import {
-  BOARD_STATE_HELP, LOCK_HELP, PHASE_STATUS_HELP, RUN_STATUS_HELP, STATE_META, UI_STATES, UI_STATE_HELP,
-  boardStateTitle, lockTitle, phaseStatusTitle, runStatusTitle, uiStateTitle, wordTitle, wordUiState,
+  BOARD_STATE_HELP,
+  LOCK_HELP,
+  PHASE_STATUS_HELP,
+  RUN_STATUS_HELP,
+  STATE_META,
+  UI_STATES,
+  UI_STATE_HELP,
+  boardStateTitle,
+  lockTitle,
+  phaseStatusTitle,
+  runStatusTitle,
+  uiStateTitle,
+  wordTitle,
+  wordUiState,
 } from './status-vocab';
 import { CLOSED_HELP, closedTitle } from './closure';
 
 describe('every status word is explained, nowhere emptily', () => {
   it('has a real meaning AND a real next move for every entry', () => {
     for (const [table, entries] of Object.entries({
-      UI_STATE_HELP, RUN_STATUS_HELP, PHASE_STATUS_HELP, BOARD_STATE_HELP, LOCK_HELP,
+      UI_STATE_HELP,
+      RUN_STATUS_HELP,
+      PHASE_STATUS_HELP,
+      BOARD_STATE_HELP,
+      LOCK_HELP,
     })) {
       for (const [word, help] of Object.entries(entries)) {
         expect(help.means.length, `${table}.${word}.means`).toBeGreaterThan(20);
@@ -59,7 +75,11 @@ describe('every status word is explained, nowhere emptily', () => {
   });
 
   it('every explained word maps to a UI state, and the eight UI states explain themselves', () => {
-    for (const word of [...Object.keys(RUN_STATUS_HELP), ...Object.keys(PHASE_STATUS_HELP), ...Object.keys(BOARD_STATE_HELP)]) {
+    for (const word of [
+      ...Object.keys(RUN_STATUS_HELP),
+      ...Object.keys(PHASE_STATUS_HELP),
+      ...Object.keys(BOARD_STATE_HELP),
+    ]) {
       expect(wordUiState(word), `${word} maps to a UI state`).toBeTruthy();
     }
     for (const state of UI_STATES) {
@@ -95,7 +115,12 @@ describe('every status word is explained, nowhere emptily', () => {
   });
 
   it('the closed badge explains how a plan ended, why, and that it can come back', () => {
-    const title = closedTitle({ status: 'superseded', closed: true, closedOn: '2026-03-14', closedReason: 'folded into the payments rework' });
+    const title = closedTitle({
+      status: 'superseded',
+      closed: true,
+      closedOn: '2026-03-14',
+      closedReason: 'folded into the payments rework',
+    });
     expect(title).toContain('Another plan took this one over.');
     expect(title).toContain('folded into the payments rework');
     expect(title).toContain('2026-03-14');
@@ -109,9 +134,14 @@ describe('every status word is explained, nowhere emptily', () => {
 
   it('the title helpers answer for the words people asked about, meaning then move', () => {
     for (const [fn, word] of [
-      [runStatusTitle, 'halted'], [runStatusTitle, 'interrupted'], [runStatusTitle, 'parked'],
-      [phaseStatusTitle, 'parked'], [boardStateTitle, 'waiting'], [boardStateTitle, 'stuck'],
-      [uiStateTitle, 'needs-you'], [wordTitle, 'verifying'],
+      [runStatusTitle, 'halted'],
+      [runStatusTitle, 'interrupted'],
+      [runStatusTitle, 'parked'],
+      [phaseStatusTitle, 'parked'],
+      [boardStateTitle, 'waiting'],
+      [boardStateTitle, 'stuck'],
+      [uiStateTitle, 'needs-you'],
+      [wordTitle, 'verifying'],
     ] as const) {
       const title = fn(word);
       expect(title, word).toBeTruthy();

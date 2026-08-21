@@ -18,7 +18,16 @@ import { ChevronUp, Folder, Home } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useConsoleState, useDirListing, useRootCheck } from '@/lib/queries';
 import {
-  Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip, Empty, Skeleton, toast,
+  Banner,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Chip,
+  Empty,
+  Skeleton,
+  toast,
 } from '@/components/ui';
 import { navigate } from '@/router';
 
@@ -54,7 +63,10 @@ export default function SourceView() {
     onError: (error: Error) => toast(String(error.message ?? error), 'error'),
   });
 
-  const walkTo = (target: string) => { setBrowsePath(target); setPath(target); };
+  const walkTo = (target: string) => {
+    setBrowsePath(target);
+    setPath(target);
+  };
   // A pinned console serves one project and will answer 409 to any other. The
   // picker still renders — hiding it would leave someone who navigated here
   // staring at nothing — but Open is off, and the banner says which console
@@ -68,13 +80,12 @@ export default function SourceView() {
       <header className="mb-5">
         <h1 className="font-display text-3xl leading-none">Choose a source directory</h1>
         <p className="mt-2 text-sm text-ink-muted">
-          Point the console at a repository that holds <code className="text-ink">docs/plans</code>.
-          A <code className="text-ink">docs/handoffs</code> folder beside it is read too, when there
-          is one.
+          Point the console at a repository that holds <code className="text-ink">docs/plans</code>. A{' '}
+          <code className="text-ink">docs/handoffs</code> folder beside it is read too, when there is one.
         </p>
         <p className="mt-1.5 text-sm text-ink-muted">
-          Everything on screen comes from those files and from the phased-execution scripts. The
-          plans stay where they are — nothing is written unless the server was started with{' '}
+          Everything on screen comes from those files and from the phased-execution scripts. The plans stay
+          where they are — nothing is written unless the server was started with{' '}
           <code className="text-ink">--allow-writes</code>.
         </p>
       </header>
@@ -82,15 +93,22 @@ export default function SourceView() {
       {pinned && (
         <Banner severity="warn" className="mb-4">
           This console is pinned to <strong>{state?.instance?.name}</strong>
-          {state?.root?.path ? <> (<code>{state.root.path}</code>)</> : null}. To open a different
-          project, run <code>phase-console start</code> in that project — it gets its own console,
-          port and state.
+          {state?.root?.path ? (
+            <>
+              {' '}
+              (<code>{state.root.path}</code>)
+            </>
+          ) : null}
+          . To open a different project, run <code>phase-console start</code> in that project — it gets its
+          own console, port and state.
         </Banner>
       )}
 
       {state?.recentRoots?.length ? (
         <Card className="mb-4">
-          <CardHeader><CardTitle>Recent</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Recent</CardTitle>
+          </CardHeader>
           <CardBody>
             <div className="grid gap-2 sm:grid-cols-2">
               {state.recentRoots.map((recent) => (
@@ -133,7 +151,10 @@ export default function SourceView() {
               value={path}
               onChange={(event) => setPath(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && canOpen) { event.preventDefault(); open.mutate(path); }
+                if (event.key === 'Enter' && canOpen) {
+                  event.preventDefault();
+                  open.mutate(path);
+                }
               }}
               placeholder="/path/to/your-repo"
               spellCheck={false}
@@ -148,7 +169,9 @@ export default function SourceView() {
         <div className="max-h-72 overflow-y-auto border-y border-rule">
           {listingPending && !listing && (
             <div className="flex flex-col gap-1 p-3">
-              {[0, 1, 2].map((i) => <Skeleton key={i} className="h-8" />)}
+              {[0, 1, 2].map((i) => (
+                <Skeleton key={i} className="h-8" />
+              ))}
             </div>
           )}
           {listing?.entries.map((entry) => (

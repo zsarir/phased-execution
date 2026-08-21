@@ -22,12 +22,24 @@ export function Kbd({ className, children, ...props }: HTMLAttributes<HTMLElemen
 }
 
 /** A chord — keys with the platform's own separators, for "⌘ K" or "g then r". */
-export function KbdChord({ keys, className, conjunction = ' ' }: { keys: string[]; className?: string; conjunction?: string }) {
+export function KbdChord({
+  keys,
+  className,
+  conjunction = ' ',
+}: {
+  keys: string[];
+  className?: string;
+  conjunction?: string;
+}) {
   return (
     <span className={cn('inline-flex items-center gap-1 whitespace-nowrap', className)}>
       {keys.map((key, i) => (
         <span key={`${key}-${i}`} className="inline-flex items-center gap-1">
-          {i > 0 && <span className="text-2xs text-ink-faint" aria-hidden>{conjunction.trim() || '+'}</span>}
+          {i > 0 && (
+            <span className="text-2xs text-ink-faint" aria-hidden>
+              {conjunction.trim() || '+'}
+            </span>
+          )}
           <Kbd>{key}</Kbd>
         </span>
       ))}

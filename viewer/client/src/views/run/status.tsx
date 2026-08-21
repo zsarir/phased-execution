@@ -52,8 +52,17 @@
 
 import type { ReactNode } from 'react';
 import { Bot } from 'lucide-react';
-import { Banner, Button, Card, CardBody, CardHeader, CardTitle, StatusStack, toast, type StatusNote }
-  from '@/components/ui';
+import {
+  Banner,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  StatusStack,
+  toast,
+  type StatusNote,
+} from '@/components/ui';
 import { api, type AccountView, type AuthStatus, type ConsoleState, type RunState } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import { RECOVERY_BLURBS, RECOVERY_LABELS, type RecoveryClass } from '@/lib/recovery';
@@ -86,8 +95,7 @@ interface RunNote extends StatusNote {
   id: NoteId;
 }
 
-const at = (iso: string | number | undefined): string =>
-  iso == null ? '' : new Date(iso).toLocaleString();
+const at = (iso: string | number | undefined): string => (iso == null ? '' : new Date(iso).toLocaleString());
 
 /** The resource ladder's one budget raise, in a sentence — or nothing. */
 function budgetRaiseText(run: RunState | null): string | undefined {
@@ -174,13 +182,15 @@ export function runNotes({
             target={recovery?.target ?? { slug: run.slug, ...(phase != null ? { phase } : {}) }}
             ctx={{
               run,
-              ...(record ? {
-                record: {
-                  status: record.status,
-                  resumable: Boolean(record.sessionId ?? record.resumeSessionId),
-                  ...(record.situation ? { situation: { key: record.situation.key } } : {}),
-                },
-              } : {}),
+              ...(record
+                ? {
+                    record: {
+                      status: record.status,
+                      resumable: Boolean(record.sessionId ?? record.resumeSessionId),
+                      ...(record.situation ? { situation: { key: record.situation.key } } : {}),
+                    },
+                  }
+                : {}),
               ...(recovery?.authFailure ? { authFailure: true } : {}),
             }}
             max={2}
@@ -210,30 +220,35 @@ export function runNotes({
     notes.push({
       id: 'ended',
       severity: run.status === 'finished' ? 'ok' : resolved ? 'info' : parked ? 'warn' : 'info',
-      title: run.status === 'finished' ? 'Run finished.'
-        : resolved ? 'Stopped — resolved on its own.'
-          : parked ? 'Parked — needs you.' : 'Run stopped.',
-      body: resolved
-        ? (run.resolved?.reason ?? run.finishedReason)
-        : errands.length || raised
-          ? (
-            <>
-              {run.finishedReason}
-              {raised && <span className="mt-1 block text-ink-muted">{raised}</span>}
-              {errands.length > 0 && (
-                <span className="mt-2 flex flex-col gap-1.5" data-testid="ended-errands">
-                  {errands.map((errand) => (
-                    <ErrandCard
-                      key={`${errand.phase}-${errand.situation}-${errand.at}`}
-                      errand={errand}
-                      situationLabel={situationLabelFor(errand.situation)}
-                    />
-                  ))}
-                </span>
-              )}
-            </>
-          )
-          : run.finishedReason,
+      title:
+        run.status === 'finished'
+          ? 'Run finished.'
+          : resolved
+            ? 'Stopped — resolved on its own.'
+            : parked
+              ? 'Parked — needs you.'
+              : 'Run stopped.',
+      body: resolved ? (
+        (run.resolved?.reason ?? run.finishedReason)
+      ) : errands.length || raised ? (
+        <>
+          {run.finishedReason}
+          {raised && <span className="mt-1 block text-ink-muted">{raised}</span>}
+          {errands.length > 0 && (
+            <span className="mt-2 flex flex-col gap-1.5" data-testid="ended-errands">
+              {errands.map((errand) => (
+                <ErrandCard
+                  key={`${errand.phase}-${errand.situation}-${errand.at}`}
+                  errand={errand}
+                  situationLabel={situationLabelFor(errand.situation)}
+                />
+              ))}
+            </span>
+          )}
+        </>
+      ) : (
+        run.finishedReason
+      ),
     });
   }
 
@@ -248,12 +263,15 @@ export function runNotes({
             ? `Phase ${run.pause.afterPhase} will finish and be verified, then the run stops.`
             : 'The run stops at the next phase boundary.'}
           {run.pause?.requestedAt && (
-            <span className="text-ink-faint"> (asked for {relativeTime(Date.parse(run.pause.requestedAt))})</span>
+            <span className="text-ink-faint">
+              {' '}
+              (asked for {relativeTime(Date.parse(run.pause.requestedAt))})
+            </span>
           )}
           <span className="mt-2 block text-ink-muted">
-            Nothing is cut off — a pause always waits for a phase to reach a boundary, so the work in
-            flight is finished and checked rather than abandoned. Use <strong>Stop now</strong> if you
-            need it to end sooner than that.
+            Nothing is cut off — a pause always waits for a phase to reach a boundary, so the work in flight
+            is finished and checked rather than abandoned. Use <strong>Stop now</strong> if you need it to end
+            sooner than that.
           </span>
         </>
       ),
@@ -276,15 +294,15 @@ export function runNotes({
       title: 'Frozen mid-phase.',
       body: (
         <>
-          {run.freeze?.phase != null ? `Phase ${run.freeze.phase} is` : 'The session is'} stopped where
-          it stood — the process is alive and holding its session, it is simply not being scheduled.
-          Continue picks up mid-token.
+          {run.freeze?.phase != null ? `Phase ${run.freeze.phase} is` : 'The session is'} stopped where it
+          stood — the process is alive and holding its session, it is simply not being scheduled. Continue
+          picks up mid-token.
           {run.freeze?.escalateAt && (
             <span className="mt-2 block text-ink-muted">
               Left frozen past {new Date(run.freeze.escalateAt).toLocaleTimeString()} it converts to a
-              checkpoint instead: the session is asked to stop and its id is saved, so Continue resumes
-              it rather than starting the phase over. A stopped process holds memory and a prompt cache
-              that expires anyway, so an overnight freeze is not the cheap option it looks like.
+              checkpoint instead: the session is asked to stop and its id is saved, so Continue resumes it
+              rather than starting the phase over. A stopped process holds memory and a prompt cache that
+              expires anyway, so an overnight freeze is not the cheap option it looks like.
             </span>
           )}
         </>
@@ -301,9 +319,8 @@ export function runNotes({
       title: `Stopped on a usage limit${run.accountId ? ` (${run.accountId})` : ''}.`,
       body: (
         <>
-          The window reopens at {at(run.waitUntil)}. Continue now under another account, switch this
-          run's account below, or wait — the checkpointed session resumes either way, keeping the
-          work already done.
+          The window reopens at {at(run.waitUntil)}. Continue now under another account, switch this run's
+          account below, or wait — the checkpointed session resumes either way, keeping the work already done.
         </>
       ),
     });
@@ -314,8 +331,8 @@ export function runNotes({
       body: (
         <>
           Waiting for a usage window to reopen at {at(run.waitUntil)}
-          {run.onLimit === 'switch' ? ' — no other account had headroom' : ''}. Nothing is wrong —
-          the run resumes by itself.
+          {run.onLimit === 'switch' ? ' — no other account had headroom' : ''}. Nothing is wrong — the run
+          resumes by itself.
         </>
       ),
     });
@@ -331,9 +348,9 @@ export function runNotes({
       title: `${percent}% of ${run.accountId ? `${run.accountId}'s` : 'your'} ${window} window is used.`,
       body: (
         <>
-          {run.limits.resetsAt ? `It resets ${at(run.limits.resetsAt * 1000)}. ` : ''}
-          A long run started now may stop partway — the session reports this itself, so it is
-          the account's own figure rather than an estimate.
+          {run.limits.resetsAt ? `It resets ${at(run.limits.resetsAt * 1000)}. ` : ''}A long run started now
+          may stop partway — the session reports this itself, so it is the account's own figure rather than an
+          estimate.
           {run.onLimit === 'switch'
             ? ' This run switches to the account with the most headroom when it hits the wall.'
             : ''}
@@ -357,11 +374,12 @@ export function runNotes({
           <em>Run only this</em> on a phase row.
         </>
       ),
-      action: allowRun && onClearScope ? (
-        <Button size="sm" variant="default" disabled={Boolean(busy)} onClick={onClearScope}>
-          {busy === 'scope' ? 'Clearing…' : 'Run the whole plan'}
-        </Button>
-      ) : undefined,
+      action:
+        allowRun && onClearScope ? (
+          <Button size="sm" variant="default" disabled={Boolean(busy)} onClick={onClearScope}>
+            {busy === 'scope' ? 'Clearing…' : 'Run the whole plan'}
+          </Button>
+        ) : undefined,
     });
   }
 
@@ -376,11 +394,12 @@ export function runNotes({
       body: bypass
         ? 'Nothing raises an approval card and the CLI is not asking either — this run is held only by the deny list.'
         : 'Nothing raises an approval card. The deny list still refuses pushes, destructive git, deploys and publishes, and does so even if this console dies.',
-      action: live && allowRun && onGuard ? (
-        <Button size="sm" variant="default" disabled={Boolean(busy)} onClick={onGuard}>
-          {busy === 'profile' ? 'Switching…' : 'Go back to Guarded'}
-        </Button>
-      ) : undefined,
+      action:
+        live && allowRun && onGuard ? (
+          <Button size="sm" variant="default" disabled={Boolean(busy)} onClick={onGuard}>
+            {busy === 'profile' ? 'Switching…' : 'Go back to Guarded'}
+          </Button>
+        ) : undefined,
     });
   }
 
@@ -444,7 +463,11 @@ export function RecoveryButton({
         size="sm"
         variant={variant}
         disabled={!allowAgent}
-        title={allowAgent ? RECOVERY_BLURBS[kind] : 'Agent sessions are disabled. Restart the console with --allow-agent.'}
+        title={
+          allowAgent
+            ? RECOVERY_BLURBS[kind]
+            : 'Agent sessions are disabled. Restart the console with --allow-agent.'
+        }
         onClick={() => setOpen(true)}
       >
         <Bot size={13} aria-hidden /> {RECOVERY_LABELS[kind]}
@@ -489,13 +512,13 @@ export function StaleServerNote() {
   return (
     <Banner severity="warn">
       <div>
-        <strong>This console is running an older build.</strong> The page you are looking at was
-        loaded from disk, but the server behind it started before the autopilot existed, so its run
-        endpoints are not there — that is what the 404s in the browser console are.
+        <strong>This console is running an older build.</strong> The page you are looking at was loaded from
+        disk, but the server behind it started before the autopilot existed, so its run endpoints are not
+        there — that is what the 404s in the browser console are.
         <p className="mt-2">
           Stop it and start it again to pick up the new server. Adding{' '}
-          <code className="font-mono">--allow-run</code> is what actually turns the autopilot on;
-          without it this page works but stays read-only.
+          <code className="font-mono">--allow-run</code> is what actually turns the autopilot on; without it
+          this page works but stays read-only.
         </p>
       </div>
     </Banner>
@@ -533,9 +556,7 @@ export function AuthCard({
   const [opened, setOpened] = useState(false);
   const [busy, setBusy] = useState(false);
   const [command, setCommand] = useState<string | null>(null);
-  const label = account
-    ? account.name ?? account.email ?? account.id
-    : null;
+  const label = account ? (account.name ?? account.email ?? account.id) : null;
 
   const signIn = async () => {
     setBusy(true);
@@ -546,7 +567,7 @@ export function AuthCard({
         setCommand(result.command);
         toast(
           result.mode === 'command'
-            ? result.detail ?? 'Run the command below in a terminal.'
+            ? (result.detail ?? 'Run the command below in a terminal.')
             : 'A sign-in is open — finish there, then choose Check again.',
           result.mode === 'command' ? 'warn' : 'ok',
         );
@@ -556,7 +577,7 @@ export function AuthCard({
         toast(
           result.opened
             ? 'A terminal is open on the sign-in — finish there, then choose Check again.'
-            : result.detail ?? 'Run the command below in a terminal.',
+            : (result.detail ?? 'Run the command below in a terminal.'),
           result.opened ? 'ok' : 'warn',
         );
       }
@@ -578,11 +599,9 @@ export function AuthCard({
       </CardHeader>
       <CardBody>
         <p className="max-w-prose text-sm text-ink-muted">
-          {label
-            ? `This run pays as ${label}, and that login is expired or signed out. `
-            : ''}
-          Sessions still start, spend a turn and report success — they simply cannot do anything. That
-          is why a run can look like it worked and changed nothing.
+          {label ? `This run pays as ${label}, and that login is expired or signed out. ` : ''}
+          Sessions still start, spend a turn and report success — they simply cannot do anything. That is why
+          a run can look like it worked and changed nothing.
           {auth?.detail && <span className="text-2xs"> ({auth.detail})</span>}
         </p>
 
@@ -617,8 +636,13 @@ export function AuthCard({
         {!allowRun && !tokenAccount && (
           <p className="mt-2 text-2xs text-ink-faint">
             Opening a sign-in needs <code className="font-mono">--allow-run</code>
-            {account ? <> (and account changes <code className="font-mono">--allow-accounts</code>)</> : null};
-            the command {account && !command ? 'is available from Settings' : 'above works regardless'}.
+            {account ? (
+              <>
+                {' '}
+                (and account changes <code className="font-mono">--allow-accounts</code>)
+              </>
+            ) : null}
+            ; the command {account && !command ? 'is available from Settings' : 'above works regardless'}.
           </p>
         )}
       </CardBody>

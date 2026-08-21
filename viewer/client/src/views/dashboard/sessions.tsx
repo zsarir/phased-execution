@@ -26,8 +26,16 @@ import { relativeTime } from '@/lib/format';
 import { phaseHref, planHref } from '@shared/routes.js';
 import { navigate } from '@/router';
 import {
-  AlertDialog, AlertDialogContent, AlertDialogTrigger, Button, Card, CardBody, CardHeader,
-  CardTitle, Chip, toast,
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogTrigger,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Chip,
+  toast,
 } from '@/components/ui';
 
 export function SessionsCard({ state }: { state: ConsoleState | undefined }) {
@@ -47,7 +55,10 @@ export function SessionsCard({ state }: { state: ConsoleState | undefined }) {
     setBusy(id);
     try {
       const result = what === 'close' ? await api.terminalClose(id) : await api.sessionDismiss(id);
-      if ('ok' in result && result.ok === false) { toast(String(result.reason ?? 'refused'), 'error'); return; }
+      if ('ok' in result && result.ok === false) {
+        toast(String(result.reason ?? 'refused'), 'error');
+        return;
+      }
       // The DELETE answers with the list as it now is — authoritative, so there
       // is nothing to race against the `sessions` event that follows it.
       if (result.state) client.setQueryData(keys.terminal(), result.state);
@@ -63,24 +74,17 @@ export function SessionsCard({ state }: { state: ConsoleState | undefined }) {
       <CardHeader className="flex-wrap items-baseline gap-x-3 gap-y-1">
         <CardTitle>Sessions</CardTitle>
         <span className="text-2xs text-ink-faint">
-          {live.length
-            ? `${live.length} running of ${data?.limit ?? 8}`
-            : 'none running'}
+          {live.length ? `${live.length} running of ${data?.limit ?? 8}` : 'none running'}
           {ended.length ? ` · ${ended.length} ended` : ''}
         </span>
       </CardHeader>
       <CardBody className="flex flex-col gap-1.5">
         {[...live, ...ended].map((session) => (
-          <SessionRow
-            key={session.id}
-            session={session}
-            busy={busy === session.id}
-            onAct={act}
-          />
+          <SessionRow key={session.id} session={session} busy={busy === session.id} onAct={act} />
         ))}
         <p className="mt-1 text-2xs text-ink-faint">
-          A session keeps running when you close the tab — it stops only here, on its own page, or
-          when the console shuts down.
+          A session keeps running when you close the tab — it stops only here, on its own page, or when the
+          console shuts down.
         </p>
       </CardBody>
     </Card>
@@ -103,9 +107,11 @@ function SessionRow({
 
   return (
     <div className="flex items-center gap-2 rounded border border-rule bg-surface px-2 py-1.5">
-      {agent
-        ? <Bot size={14} className="shrink-0 text-ink-faint" aria-hidden />
-        : <TerminalSquare size={14} className="shrink-0 text-ink-faint" aria-hidden />}
+      {agent ? (
+        <Bot size={14} className="shrink-0 text-ink-faint" aria-hidden />
+      ) : (
+        <TerminalSquare size={14} className="shrink-0 text-ink-faint" aria-hidden />
+      )}
 
       <button
         type="button"
@@ -135,9 +141,11 @@ function SessionRow({
           are which phase it is repairing and where that phase is. */}
       {session.meta?.recovery?.slug && (
         <a
-          href={session.meta.recovery.phase != null
-            ? phaseHref(session.meta.recovery.slug, session.meta.recovery.phase)
-            : planHref(session.meta.recovery.slug)}
+          href={
+            session.meta.recovery.phase != null
+              ? phaseHref(session.meta.recovery.slug, session.meta.recovery.phase)
+              : planHref(session.meta.recovery.slug)
+          }
           title={`Recovering: ${session.meta.recovery.kind}`}
           className="shrink-0 hover:opacity-80"
         >
@@ -149,12 +157,7 @@ function SessionRow({
       )}
 
       {dead ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => onAct(session.id, 'dismiss')}
-        >
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => onAct(session.id, 'dismiss')}>
           Dismiss
         </Button>
       ) : (
@@ -166,9 +169,11 @@ function SessionRow({
           </AlertDialogTrigger>
           <AlertDialogContent
             title={`Close ${session.label}?`}
-            description={agent
-              ? 'The Claude CLI is killed. Its conversation stays resumable — the ended row keeps the resume command until you dismiss it.'
-              : 'The shell is killed. Anything running in it goes with it.'}
+            description={
+              agent
+                ? 'The Claude CLI is killed. Its conversation stays resumable — the ended row keeps the resume command until you dismiss it.'
+                : 'The shell is killed. Anything running in it goes with it.'
+            }
             confirmLabel="Close"
             destructive
             onConfirm={() => onAct(session.id, 'close')}

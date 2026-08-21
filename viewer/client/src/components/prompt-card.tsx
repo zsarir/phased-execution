@@ -36,7 +36,13 @@ export interface PromptCardProps {
 }
 
 export function PromptCard({
-  title, queryKey, load, note, banner, collapsed = false, className,
+  title,
+  queryKey,
+  load,
+  note,
+  banner,
+  collapsed = false,
+  className,
 }: PromptCardProps) {
   const [open, setOpen] = useState(!collapsed);
 
@@ -54,9 +60,13 @@ export function PromptCard({
         <span className="min-w-0 truncate font-display text-sm">{title}</span>
         <div className="flex shrink-0 items-center gap-2">
           {note && <span className="hidden text-2xs text-ink-faint md:inline">{note}</span>}
-          {open
-            ? <CopyButton text={() => data ?? ''} label="Copy prompt" />
-            : <Button size="sm" onClick={() => setOpen(true)}>Show</Button>}
+          {open ? (
+            <CopyButton text={() => data ?? ''} label="Copy prompt" />
+          ) : (
+            <Button size="sm" onClick={() => setOpen(true)}>
+              Show
+            </Button>
+          )}
         </div>
       </CardHeader>
 
@@ -77,7 +87,9 @@ export function PromptCard({
             </div>
           )}
           {!error && isPending && (
-            <div className="p-3"><Spinner label="Reading the engine" /></div>
+            <div className="p-3">
+              <Spinner label="Reading the engine" />
+            </div>
           )}
           {!error && data != null && (
             <pre className="m-0 max-h-96 overflow-auto overscroll-contain bg-ground-deep p-3 font-mono text-xs leading-relaxed whitespace-pre">

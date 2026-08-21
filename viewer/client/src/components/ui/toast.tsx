@@ -39,15 +39,12 @@ let toasts: ToastRecord[] = [];
 let nextId = 0;
 const listeners = new Set<() => void>();
 
-const publish = () => { for (const notify of listeners) notify(); };
+const publish = () => {
+  for (const notify of listeners) notify();
+};
 
 /** `ms: 0` means it stays until it is dismissed or acted on. */
-export function toast(
-  message: string,
-  kind: ToastKind = 'ok',
-  ms = 2600,
-  action?: ToastAction,
-): number {
+export function toast(message: string, kind: ToastKind = 'ok', ms = 2600, action?: ToastAction): number {
   const id = ++nextId;
   toasts = [...toasts, { id, message, kind, ms, action }];
   publish();
@@ -61,7 +58,12 @@ export function dismissToast(id: number): void {
 
 export function useToasts(): ToastRecord[] {
   return useSyncExternalStore(
-    (notify) => { listeners.add(notify); return () => { listeners.delete(notify); }; },
+    (notify) => {
+      listeners.add(notify);
+      return () => {
+        listeners.delete(notify);
+      };
+    },
     () => toasts,
     () => toasts,
   );
@@ -113,13 +115,13 @@ export function Toaster() {
           // never expiring, and a prompt that times out is a prompt that gets
           // missed.
           duration={item.ms === 0 ? Infinity : item.ms}
-          onOpenChange={(open) => { if (!open) dismissToast(item.id); }}
+          onOpenChange={(open) => {
+            if (!open) dismissToast(item.id);
+          }}
           className={cn(toastVariants({ kind: item.kind }))}
         >
           <span className={cn('mt-1.5 size-[7px] shrink-0 rounded-full', DOT[item.kind])} aria-hidden />
-          <ToastPrimitive.Description className="min-w-0 flex-1">
-            {item.message}
-          </ToastPrimitive.Description>
+          <ToastPrimitive.Description className="min-w-0 flex-1">{item.message}</ToastPrimitive.Description>
           {item.action && (
             <ToastPrimitive.Action
               altText={item.action.label}

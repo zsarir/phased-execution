@@ -34,7 +34,13 @@
 
 import { useState } from 'react';
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ClipboardPaste, Ellipsis, type LucideIcon,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ClipboardPaste,
+  Ellipsis,
+  type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
@@ -55,9 +61,13 @@ export type BarKey =
   | { kind: 'paste' }
   | { kind: 'font'; delta: -1 | 1; label: string; title: string };
 
-const send = (label: string, data: string, title: string, icon?: LucideIcon): BarKey => (
-  { kind: 'send', label, data, title, ...(icon ? { icon } : {}) }
-);
+const send = (label: string, data: string, title: string, icon?: LucideIcon): BarKey => ({
+  kind: 'send',
+  label,
+  data,
+  title,
+  ...(icon ? { icon } : {}),
+});
 
 /**
  * Two pages of ten. Page one is the bar most of the time; page two is what a
@@ -95,7 +105,8 @@ export const KEY_PAGES: readonly (readonly BarKey[])[] = [
   ],
 ];
 
-const KEY_CLASS = 'flex min-h-(--tap-min) min-w-0 items-center justify-center rounded border px-1 font-mono text-sm';
+const KEY_CLASS =
+  'flex min-h-(--tap-min) min-w-0 items-center justify-center rounded border px-1 font-mono text-sm';
 const IDLE = 'border-rule bg-surface text-ink-muted hover:text-ink';
 const ARMED = 'border-action bg-action text-ground';
 
@@ -107,7 +118,9 @@ export function KeyBar({ onSend, ctrl, onCtrl, onPaste, onFont }: KeyBarProps) {
    * action of `pointerdown` (and of the compatibility `mousedown` it produces);
    * cancelling it leaves the `click` intact, which is the half that types.
    */
-  const hold = (event: React.SyntheticEvent) => { event.preventDefault(); };
+  const hold = (event: React.SyntheticEvent) => {
+    event.preventDefault();
+  };
 
   const renderKey = (key: BarKey, index: number) => {
     if (key.kind === 'ctrl') {
@@ -204,7 +217,8 @@ export function KeyBar({ onSend, ctrl, onCtrl, onPaste, onFont }: KeyBarProps) {
         className={cn(
           // Placed explicitly so the ten keys auto-flow into columns 1–5 (1–10
           // from `sm`) and never into this column.
-          KEY_CLASS, 'col-start-6 row-start-1 row-span-2 min-w-(--tap-min) flex-col gap-1',
+          KEY_CLASS,
+          'col-start-6 row-start-1 row-span-2 min-w-(--tap-min) flex-col gap-1',
           'sm:col-start-11 sm:row-span-1',
           page === 1 ? 'border-rule-strong bg-surface-raised text-ink' : IDLE,
         )}

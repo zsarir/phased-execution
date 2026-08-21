@@ -14,7 +14,15 @@ const SRC = join(here, '..');
 const theme = readFileSync(join(here, 'theme.css'), 'utf8');
 const indexHtml = readFileSync(join(SRC, '..', 'index.html'), 'utf8');
 /** Every primitive that floats over the page and must size by the VISIBLE viewport. */
-const OVERLAYS = ['dialog.tsx', 'alert-dialog.tsx', 'sheet.tsx', 'popover.tsx', 'dropdown-menu.tsx', 'select.tsx', 'command.tsx'];
+const OVERLAYS = [
+  'dialog.tsx',
+  'alert-dialog.tsx',
+  'sheet.tsx',
+  'popover.tsx',
+  'dropdown-menu.tsx',
+  'select.tsx',
+  'command.tsx',
+];
 
 function* walk(dir: string): Generator<string> {
   for (const name of readdirSync(dir)) {
@@ -29,7 +37,9 @@ describe('the input floor wins on touch', () => {
   it('theme.css carries the UNLAYERED coarse-pointer floor, after the last @layer block', () => {
     const floor = theme.indexOf('@media (pointer: coarse)');
     expect(floor).toBeGreaterThan(-1);
-    expect(theme.slice(floor)).toMatch(/input,\s*textarea,\s*select\s*\{\s*font-size:\s*max\(var\(--text-input\),\s*1em\)/);
+    expect(theme.slice(floor)).toMatch(
+      /input,\s*textarea,\s*select\s*\{\s*font-size:\s*max\(var\(--text-input\),\s*1em\)/,
+    );
     // Everything layered loses to unlayered CSS — but only if this rule IS
     // unlayered: it must sit after the last @layer/@import block.
     expect(floor).toBeGreaterThan(theme.lastIndexOf('@layer'));
@@ -98,7 +108,8 @@ describe('per-page mobile fixes stay fixed', () => {
   it('the terminal key bar is a grid, never a scroller, and never a touch listener', () => {
     // Code, not prose: the file's own comment names the old scroller to explain the ban.
     const keybar = readFileSync(join(SRC, 'views', 'terminal', 'keybar.tsx'), 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
     expect(keybar).not.toMatch(/overflow-x-auto/);
     expect(keybar).not.toMatch(/addEventListener\(['"]touch/);
     expect(keybar).not.toMatch(/onTouch(Start|End)=/);

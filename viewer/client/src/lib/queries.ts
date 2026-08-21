@@ -25,9 +25,17 @@ import {
 } from '@tanstack/react-query';
 import {
   api,
-  type AccountsState, type ConsoleState, type InboxQuery, type NotificationScope, type PlanDetail,
-  type PlanSummary, type TerminalState, type McpState, type SessionRegistryView,
-  type ConvergeView, type ConvergeStatusView,
+  type AccountsState,
+  type ConsoleState,
+  type InboxQuery,
+  type NotificationScope,
+  type PlanDetail,
+  type PlanSummary,
+  type TerminalState,
+  type McpState,
+  type SessionRegistryView,
+  type ConvergeView,
+  type ConvergeStatusView,
 } from './api';
 import { isClosed } from './closure';
 import { SSE_EVENTS, onSse, type SseEvent } from './sse';
@@ -142,7 +150,8 @@ type Effect = {
 const patchUnread: Effect['patch'] = (client, data) => {
   if (typeof data.unread !== 'number') return;
   client.setQueryData(keys.state(), (prev: ConsoleState | undefined) =>
-    prev ? { ...prev, unread: data.unread as number } : prev);
+    prev ? { ...prev, unread: data.unread as number } : prev,
+  );
 };
 
 /** The account list travels on the event; writing it beats asking for it back. */
@@ -166,13 +175,15 @@ const patchMcp: Effect['patch'] = (client, data) => {
 /** The session list travels on the event; writing it beats asking for it back. */
 const patchSessions: Effect['patch'] = (client, data) => {
   if (Array.isArray(data.sessions)) {
-    client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) => (prev
-      ? {
-        ...prev,
-        sessions: data.sessions as TerminalState['sessions'],
-        ...(typeof data.live === 'number' ? { live: data.live as number } : {}),
-      }
-      : prev));
+    client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) =>
+      prev
+        ? {
+            ...prev,
+            sessions: data.sessions as TerminalState['sessions'],
+            ...(typeof data.live === 'number' ? { live: data.live as number } : {}),
+          }
+        : prev,
+    );
   }
   // A recovery verdict moves the run record server-side (the write-back), and
   // a NOT-fixed verdict moves nothing that would emit `run:state` — so the run
@@ -189,11 +200,12 @@ const patchSessions: Effect['patch'] = (client, data) => {
   }
 };
 
-
 /** The `foreign` list the server appends to every `sessions` event — the registry, written straight into the cache. */
 const patchPresence: Effect['patch'] = (client, data) => {
   if (Array.isArray(data.foreign)) {
-    client.setQueryData<SessionRegistryView>(keys.sessionRegistry(), { sessions: data.foreign as SessionRegistryView['sessions'] });
+    client.setQueryData<SessionRegistryView>(keys.sessionRegistry(), {
+      sessions: data.foreign as SessionRegistryView['sessions'],
+    });
   }
 };
 /** A finished convergence pass: merge its view into the cache by slug — the full report rides the event. */
@@ -246,7 +258,13 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
      braces — `/api/terminal` also answers `available` and the flags. */
   // The registry rides the same event: the server appends `foreign` — every
   // hook-reported session with its presence — to each `sessions` emission.
-  sessions: { invalidate: [keys.terminal(), keys.sessionRegistry()], patch: (client, data) => { patchSessions(client, data); patchPresence(client, data); } },
+  sessions: {
+    invalidate: [keys.terminal(), keys.sessionRegistry()],
+    patch: (client, data) => {
+      patchSessions(client, data);
+      patchPresence(client, data);
+    },
+  },
 
   /* ---- autopilot ----
      A run starting, finishing, or having a phase land changes the board too:
@@ -305,7 +323,10 @@ function applyEffect(client: QueryClient, name: SseEvent, data: unknown): void {
   const effect = EVENT_EFFECTS[name];
   if (!effect || effect.streamOnly) return;
 
-  if (effect.all) { void client.invalidateQueries(); return; }
+  if (effect.all) {
+    void client.invalidateQueries();
+    return;
+  }
 
   for (const key of effect.invalidate ?? []) {
     void client.invalidateQueries({ queryKey: key });
@@ -330,7 +351,9 @@ export function useLiveData(): void {
   const client = useQueryClient();
   useEffect(() => {
     const offs = SSE_EVENTS.map((name) => onSse(name, (data) => applyEffect(client, name, data)));
-    return () => { for (const off of offs) off(); };
+    return () => {
+      for (const off of offs) off();
+    };
   }, [client]);
 }
 
@@ -872,12 +895,15 @@ export function shellCounts(
     // to say exactly what that board will show.
     plans: list.filter((p) => p.kind === 'plan').length,
     phases: list.reduce((n, p) => n + (p.phases ?? 0), 0),
-    ready: list.reduce((n, p) => n + (isClosed(p) ? 0 : p.ready?.length ?? 0), 0),
+    ready: list.reduce((n, p) => n + (isClosed(p) ? 0 : (p.ready?.length ?? 0)), 0),
     approvals: (approvals ?? []).filter((a) => a.status === 'pending').length,
     unread,
     agentSessions: live.filter((session) => session.kind === 'claude').length,
     terminalSessions: live.filter((session) => (session.kind ?? 'shell') === 'shell').length,
-    mcpAttention: (mcp ?? []).filter((server) => server.enabled
-      && (server.status === 'needs-auth' || server.status === 'failed' || server.toolsChanged)).length,
+    mcpAttention: (mcp ?? []).filter(
+      (server) =>
+        server.enabled &&
+        (server.status === 'needs-auth' || server.status === 'failed' || server.toolsChanged),
+    ).length,
   };
 }

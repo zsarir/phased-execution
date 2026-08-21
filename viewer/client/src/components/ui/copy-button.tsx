@@ -45,9 +45,7 @@ export function CopyButton({
       }}
       {...props}
     >
-      {done
-        ? <Check size={13} aria-hidden className="text-done" />
-        : <Copy size={13} aria-hidden />}
+      {done ? <Check size={13} aria-hidden className="text-done" /> : <Copy size={13} aria-hidden />}
       {done ? copiedLabel : label}
     </Button>
   );

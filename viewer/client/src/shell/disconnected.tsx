@@ -46,10 +46,9 @@ export function Disconnected({
         <p className="text-sm text-ink-muted">
           {online
             ? 'The app loaded from this device, but the server behind it did not respond.'
-            : 'The app loaded from this device. Reaching the console needs a network.'}
-          {' '}
-          The board is not shown because it would be out of date, and an out-of-date
-          board looks exactly like a current one.
+            : 'The app loaded from this device. Reaching the console needs a network.'}{' '}
+          The board is not shown because it would be out of date, and an out-of-date board looks exactly like
+          a current one.
         </p>
 
         <Button variant="action" onClick={onRetry} disabled={retrying}>

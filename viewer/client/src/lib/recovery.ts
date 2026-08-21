@@ -53,13 +53,16 @@ export type RunLike = {
  * wrappers narrow the answers to the class union the components expect. */
 
 export function classifyRun(
-  run: RunLike | null | undefined, opts: { authFailure?: boolean } = {},
+  run: RunLike | null | undefined,
+  opts: { authFailure?: boolean } = {},
 ): RecoveryClass | undefined {
   return classifyRunShared(run, opts) as RecoveryClass | undefined;
 }
 
 export function classifyPhase(
-  status: string, run?: RunLike | null, opts: { authFailure?: boolean } = {},
+  status: string,
+  run?: RunLike | null,
+  opts: { authFailure?: boolean } = {},
 ): RecoveryClass | undefined {
   return classifyPhaseShared(status, run, opts) as RecoveryClass | undefined;
 }
@@ -104,6 +107,7 @@ export function liveRecovery<T extends SessionLike>(
 ): T | undefined {
   if (!sessions?.length) return undefined;
   const key = keyOf(target);
-  return sessions.find((session) =>
-    !session.exited && session.meta?.recovery && keyOf(session.meta.recovery) === key);
+  return sessions.find(
+    (session) => !session.exited && session.meta?.recovery && keyOf(session.meta.recovery) === key,
+  );
 }

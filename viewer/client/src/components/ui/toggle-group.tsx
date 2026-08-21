@@ -20,10 +20,7 @@ export function ToggleGroup({
   return (
     <ToggleGroupPrimitive.Root
       data-accent={accent ? '' : undefined}
-      className={cn(
-        'group/toggle inline-flex overflow-hidden rounded border border-rule',
-        className,
-      )}
+      className={cn('group/toggle inline-flex overflow-hidden rounded border border-rule', className)}
       {...props}
     />
   );

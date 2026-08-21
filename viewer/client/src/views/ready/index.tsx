@@ -45,8 +45,15 @@ import { Page } from '../_page';
 import { Controls } from './controls';
 import { DepartureRow, NextDeparture } from './departure';
 import {
-  NO_FILTERS, applyFilters, queueTotals, rank, repoOptions, toDepartures,
-  type Departure, type Filters, type RankId,
+  NO_FILTERS,
+  applyFilters,
+  queueTotals,
+  rank,
+  repoOptions,
+  toDepartures,
+  type Departure,
+  type Filters,
+  type RankId,
 } from './model';
 
 export default function ReadyView() {
@@ -93,7 +100,9 @@ export default function ReadyView() {
       <Page title="Ready now" subtitle="Reading the board">
         <Skeleton className="h-44" />
         <div className="mt-3 flex flex-col gap-2">
-          {[0, 1, 2].map((i) => <Skeleton key={i} className="h-14" />)}
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-14" />
+          ))}
         </div>
       </Page>
     );
@@ -103,19 +112,23 @@ export default function ReadyView() {
     // How many phases closure took off the board. Without this the empty state
     // claims every phase is "done, running or waiting" while an abandoned plan
     // sits there with five ready ones — true only if you already knew the rule.
-    const withheld = summaries
-      .filter((p) => isClosed(p))
-      .reduce((n, p) => n + (p.ready?.length ?? 0), 0);
+    const withheld = summaries.filter((p) => isClosed(p)).reduce((n, p) => n + (p.ready?.length ?? 0), 0);
     return (
       <Page title="Ready now">
         <Empty
           icon={<CircleCheck size={22} />}
           title="Nothing is ready"
-          body={'Every phase is done, already running, or waiting on a dependency that has not landed. Finish something in flight and the board refills itself.'
-            + (withheld
+          body={
+            'Every phase is done, already running, or waiting on a dependency that has not landed. Finish something in flight and the board refills itself.' +
+            (withheld
               ? ` ${plural(withheld, 'phase')} in closed plans are not counted — reopen a plan to put its work back on the board.`
-              : '')}
-          action={<Button asChild><a href="#/plans">Open the plans</a></Button>}
+              : '')
+          }
+          action={
+            <Button asChild>
+              <a href="#/plans">Open the plans</a>
+            </Button>
+          }
         />
       </Page>
     );
@@ -155,29 +168,33 @@ export default function ReadyView() {
   return (
     <Page
       title="Ready now"
-      subtitle={`${plural(totals.phases, 'phase')} can start now, across ${plural(totals.plans, 'plan')}`
-        + (totals.claimed ? ` · ${totals.claimed} already claimed` : '')
-        + (totals.gated ? ` · ${totals.gated} behind a gate` : '')}
+      subtitle={
+        `${plural(totals.phases, 'phase')} can start now, across ${plural(totals.plans, 'plan')}` +
+        (totals.claimed ? ` · ${totals.claimed} already claimed` : '') +
+        (totals.gated ? ` · ${totals.gated} behind a gate` : '')
+      }
     >
       <Card className="mb-3 p-3">{controls}</Card>
 
-      {grouped
-        ? <Grouped departures={visible} summaries={summaries} details={bySlug} />
-        : (
-          <>
-            <NextDeparture d={top} allowRun={Boolean(state?.allowRun)} />
-            {rest.length > 0 && (
-              <>
-                <h2 className="mt-5 mb-2 text-2xs font-medium uppercase tracking-[0.14em] text-ink-faint">
-                  Also boarding · {rest.length}
-                </h2>
-                <ul className="flex flex-col gap-1.5">
-                  {rest.map((d, i) => <DepartureRow key={d.key} d={d} index={i} />)}
-                </ul>
-              </>
-            )}
-          </>
-        )}
+      {grouped ? (
+        <Grouped departures={visible} summaries={summaries} details={bySlug} />
+      ) : (
+        <>
+          <NextDeparture d={top} allowRun={Boolean(state?.allowRun)} />
+          {rest.length > 0 && (
+            <>
+              <h2 className="mt-5 mb-2 text-2xs font-medium uppercase tracking-[0.14em] text-ink-faint">
+                Also boarding · {rest.length}
+              </h2>
+              <ul className="flex flex-col gap-1.5">
+                {rest.map((d, i) => (
+                  <DepartureRow key={d.key} d={d} index={i} />
+                ))}
+              </ul>
+            </>
+          )}
+        </>
+      )}
     </Page>
   );
 }
@@ -248,7 +265,9 @@ function Grouped({
               </a>
             )}
             <ul className="flex flex-col gap-1.5">
-              {list.map((d, i) => <DepartureRow key={d.key} d={d} index={i} />)}
+              {list.map((d, i) => (
+                <DepartureRow key={d.key} d={d} index={i} />
+              ))}
             </ul>
           </section>
         );

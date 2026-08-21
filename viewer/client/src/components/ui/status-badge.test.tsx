@@ -15,7 +15,12 @@ import { describe, expect, it } from 'vitest';
 import { STATE_META, UI_STATES, UNKNOWN_STATE } from '@/lib/status-vocab';
 import { expectNoAxeViolations } from '@/test/axe';
 import {
-  STATE_ICONS, StatusBadge, StatusDot, asUiState, decorateStatusWord, statusBadgeClass,
+  STATE_ICONS,
+  StatusBadge,
+  StatusDot,
+  asUiState,
+  decorateStatusWord,
+  statusBadgeClass,
 } from './status-badge';
 
 const first = (container: HTMLElement) => container.firstElementChild as HTMLElement;
@@ -78,7 +83,11 @@ describe('StatusBadge', () => {
 
   it('has no axe violations across the whole vocabulary', async () => {
     const { container } = render(
-      <p>{UI_STATES.map((state) => <StatusBadge key={state} state={state} />)}</p>,
+      <p>
+        {UI_STATES.map((state) => (
+          <StatusBadge key={state} state={state} />
+        ))}
+      </p>,
     );
     await expectNoAxeViolations(container);
   });
@@ -114,7 +123,7 @@ describe('STATE_ICONS', () => {
 });
 
 describe('decorateStatusWord', () => {
-  it('dresses a run status word in its UI state\'s badge class, mono, with a title', () => {
+  it("dresses a run status word in its UI state's badge class, mono, with a title", () => {
     const word = decorateStatusWord('halted');
     expect(word).not.toBeNull();
     expect(word?.className).toContain('state-needs-you');

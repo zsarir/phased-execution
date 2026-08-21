@@ -111,7 +111,9 @@ describe('Sheet', () => {
   it('has no axe violations on both sides (portalled: check the document)', async () => {
     const { unmount } = render(
       <Sheet defaultOpen>
-        <SheetContent title="More" description="Tabs." side="bottom"><p>tray</p></SheetContent>
+        <SheetContent title="More" description="Tabs." side="bottom">
+          <p>tray</p>
+        </SheetContent>
       </Sheet>,
     );
     await screen.findByRole('dialog');
@@ -119,7 +121,9 @@ describe('Sheet', () => {
     unmount();
     render(
       <Sheet defaultOpen>
-        <SheetContent title="Notifications" description="Arrived." side="right"><p>drawer</p></SheetContent>
+        <SheetContent title="Notifications" description="Arrived." side="right">
+          <p>drawer</p>
+        </SheetContent>
       </Sheet>,
     );
     await screen.findByRole('dialog');
@@ -167,7 +171,11 @@ describe('AlertDialog', () => {
         <AlertDialogTrigger asChild>
           <Button variant="danger">Force release</Button>
         </AlertDialogTrigger>
-        <AlertDialogContent title="Force release?" description="The holder may still be alive." onConfirm={() => {}} />
+        <AlertDialogContent
+          title="Force release?"
+          description="The holder may still be alive."
+          onConfirm={() => {}}
+        />
       </AlertDialog>,
     );
     expect(screen.queryByRole('alertdialog')).toBeNull();

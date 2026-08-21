@@ -305,8 +305,9 @@ export type LadderPrefs = {
 export function ladderPrefs(state: ConsoleState | undefined): LadderPrefs {
   const prefs = state?.prefs ?? {};
   const num = (value: unknown, fallback: number): number =>
-    (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback);
-  const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback);
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
+  const bool = (value: unknown, fallback: boolean): boolean =>
+    typeof value === 'boolean' ? value : fallback;
   const d = LADDER_PREF_DEFAULTS;
   return {
     ladderPerPhaseRungs: num(prefs.ladderPerPhaseRungs, d.ladderPerPhaseRungs),

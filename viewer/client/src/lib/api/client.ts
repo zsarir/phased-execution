@@ -44,9 +44,10 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   const type = res.headers.get('content-type') ?? '';
   const body: unknown = type.includes('application/json') ? await res.json() : await res.text();
   if (!res.ok) {
-    const message = typeof body === 'string' && body
-      ? body
-      : (body as { error?: string } | null)?.error ?? `Request failed (${res.status})`;
+    const message =
+      typeof body === 'string' && body
+        ? body
+        : ((body as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
     throw new ApiError(message, res.status, path, body);
   }
   return body as T;

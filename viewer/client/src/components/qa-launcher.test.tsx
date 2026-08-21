@@ -90,8 +90,13 @@ describe('turning QA on for the plan', () => {
   });
 
   it('warns that a recorded verdict is being re-judged, not overwritten', () => {
-    mount(<QaDialog target={{ ...target, qaMode: 'on', qa: { result: 'fail', report: 'reports/phase-02-qa.md' } }}
-      allowWrites onClose={() => {}} />);
+    mount(
+      <QaDialog
+        target={{ ...target, qaMode: 'on', qa: { result: 'fail', report: 'reports/phase-02-qa.md' } }}
+        allowWrites
+        onClose={() => {}}
+      />,
+    );
     expect(screen.getByText(/read that report first/i)).toBeTruthy();
   });
 });

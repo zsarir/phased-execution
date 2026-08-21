@@ -35,7 +35,10 @@ const NO_RUNG_WORDS: Record<LadderSituation['actor'], string> = {
 };
 
 const SITUATION_TONE: Record<LadderSituation['actor'], 'warn' | 'busy' | 'ok' | 'neutral'> = {
-  person: 'warn', machine: 'busy', none: 'ok', wait: 'neutral',
+  person: 'warn',
+  machine: 'busy',
+  none: 'ok',
+  wait: 'neutral',
 };
 
 function when(iso: string | undefined): string | undefined {
@@ -44,17 +47,23 @@ function when(iso: string | undefined): string | undefined {
 }
 
 function TriedChip({ rung }: { rung: TriedRung }) {
-  const tone = rung.outcome === 'fixed' ? 'ok'
-    : rung.outcome === 'running' ? 'busy'
-      : rung.outcome === 'failed' ? 'bad'
-        : 'neutral';
+  const tone =
+    rung.outcome === 'fixed'
+      ? 'ok'
+      : rung.outcome === 'running'
+        ? 'busy'
+        : rung.outcome === 'failed'
+          ? 'bad'
+          : 'neutral';
   const title = [
     rung.label,
     rung.outcomeLabel ? `— ${rung.outcomeLabel}` : undefined,
     when(rung.at) ? `(${when(rung.at)})` : undefined,
     typeof rung.costUsd === 'number' ? `· $${rung.costUsd.toFixed(2)}` : undefined,
     rung.note ? `· ${rung.note}` : undefined,
-  ].filter(Boolean).join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
   return (
     <Chip tone={tone} title={title} data-testid="ladder-tried">
       {rung.label}
@@ -79,7 +88,10 @@ export function LadderStrip({ view, className }: { view: LadderView; className?:
       {situation && (
         <span className="inline-flex items-center gap-1">
           <span className="text-ink-faint">Situation</span>
-          <Chip tone={SITUATION_TONE[situation.actor]} title={`${situation.key} — ${situation.actor === 'machine' ? 'the autopilot climbs its ladder' : situation.actor === 'person' ? 'a person is needed' : situation.actor === 'wait' ? 'nothing to do but wait' : 'nothing is wrong'}`}>
+          <Chip
+            tone={SITUATION_TONE[situation.actor]}
+            title={`${situation.key} — ${situation.actor === 'machine' ? 'the autopilot climbs its ladder' : situation.actor === 'person' ? 'a person is needed' : situation.actor === 'wait' ? 'nothing to do but wait' : 'nothing is wrong'}`}
+          >
             {situation.label}
           </Chip>
         </span>
@@ -88,7 +100,9 @@ export function LadderStrip({ view, className }: { view: LadderView; className?:
         <span className="inline-flex flex-wrap items-center gap-1">
           <Footprints size={11} className="text-ink-faint" aria-hidden />
           <span className="text-ink-faint">tried</span>
-          {view.tried.map((rung, index) => <TriedChip key={`${rung.rung}-${rung.at}-${index}`} rung={rung} />)}
+          {view.tried.map((rung, index) => (
+            <TriedChip key={`${rung.rung}-${rung.at}-${index}`} rung={rung} />
+          ))}
         </span>
       )}
       {view.running && (
@@ -102,7 +116,9 @@ export function LadderStrip({ view, className }: { view: LadderView; className?:
         <span className="inline-flex items-center gap-1" data-testid="ladder-next">
           <ArrowRight size={11} className="text-ink-faint" aria-hidden />
           <span className="text-ink-faint">next</span>
-          <Chip tone="busy" title={`${view.next.blurb}${view.next.spends ? '' : ' Free.'}`}>{view.next.label}</Chip>
+          <Chip tone="busy" title={`${view.next.blurb}${view.next.spends ? '' : ' Free.'}`}>
+            {view.next.label}
+          </Chip>
         </span>
       )}
       {!view.next && !view.running && !settled && situation && (
@@ -143,7 +159,9 @@ export function ErrandCard({
         <strong className="font-medium text-ink">
           Needs you{errand.phase ? ` — phase ${errand.phase}` : ''}
         </strong>
-        <Chip tone="warn" title={errand.situation}>{situationLabel ?? errand.situation}</Chip>
+        <Chip tone="warn" title={errand.situation}>
+          {situationLabel ?? errand.situation}
+        </Chip>
         {age && <span className="ml-auto text-2xs text-ink-faint">{age}</span>}
       </div>
       <p className="mt-1 max-w-prose text-sm text-ink">{errand.need}</p>

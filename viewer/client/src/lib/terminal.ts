@@ -98,9 +98,13 @@ function socketUrl(path: string, token: string): string {
 
 /** A refusal the console meant: do not retry it. 408/429 are transport-shaped. */
 function permanent(error: unknown): boolean {
-  return error instanceof ApiError
-    && error.status >= 400 && error.status < 500
-    && error.status !== 408 && error.status !== 429;
+  return (
+    error instanceof ApiError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429
+  );
 }
 
 export class TerminalLink {
@@ -128,7 +132,10 @@ export class TerminalLink {
   private listening = false;
   private disposed = false;
 
-  constructor(private readonly handlers: LinkHandlers, options: LinkOptions = {}) {
+  constructor(
+    private readonly handlers: LinkHandlers,
+    options: LinkOptions = {},
+  ) {
     this.options = {
       autoReconnect: options.autoReconnect ?? true,
       resizeDebounceMs: options.resizeDebounceMs ?? 150,
@@ -213,8 +220,18 @@ export class TerminalLink {
         this.handlers.onData(new Uint8Array(event.data));
         return;
       }
-      let parsed: { t?: string; session?: TerminalSession; code?: number; signal?: number; closedByOperator?: boolean };
-      try { parsed = JSON.parse(event.data); } catch { return; }
+      let parsed: {
+        t?: string;
+        session?: TerminalSession;
+        code?: number;
+        signal?: number;
+        closedByOperator?: boolean;
+      };
+      try {
+        parsed = JSON.parse(event.data);
+      } catch {
+        return;
+      }
       if (parsed.t === 'hello' && parsed.session) {
         const reattach = this.attaches > 0;
         this.attaches += 1;
@@ -288,14 +305,21 @@ export class TerminalLink {
     this.socket = null;
     // 1000 = normal closure. Anything else shows up in a browser console as an
     // error for something that is just a page navigating away.
-    try { socket?.close(1000, 'bye'); } catch { /* already gone */ }
+    try {
+      socket?.close(1000, 'bye');
+    } catch {
+      /* already gone */
+    }
   }
 
   /** Close, and stop listening to the page — the pane's unmount. */
   dispose(): void {
     this.disposed = true;
     this.close();
-    if (this.sizeTimer) { clearTimeout(this.sizeTimer); this.sizeTimer = null; }
+    if (this.sizeTimer) {
+      clearTimeout(this.sizeTimer);
+      this.sizeTimer = null;
+    }
     this.unlisten();
   }
 
@@ -310,18 +334,24 @@ export class TerminalLink {
       this.retryTimer = null;
       // A hidden tab waits for its turn in the foreground rather than burning
       // attempts nobody will see; `visibilitychange` picks it up.
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') { this.attempt -= 1; return; }
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        this.attempt -= 1;
+        return;
+      }
       void this.open(this.sessionId, 'reconnecting');
     }, delay);
   }
 
   private clearRetry(): void {
-    if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
   }
 
   /** Reconnect now, from the top of the backoff — the tab came back, the network returned. */
   private retryNow(): void {
-    if (this.disposed || this.ended || this.closedByUs && !this.options.autoReconnect) return;
+    if (this.disposed || this.ended || (this.closedByUs && !this.options.autoReconnect)) return;
     if (!this.sessionId) return;
     this.clearRetry();
     this.attempt = 0;
@@ -394,7 +424,11 @@ export class TerminalLink {
       const socket = this.socket;
       this.socket = null;
       this.stopPings();
-      try { socket?.close(4000, 'no heartbeat'); } catch { /* gone */ }
+      try {
+        socket?.close(4000, 'no heartbeat');
+      } catch {
+        /* gone */
+      }
       this.handlers.onStatus('closed', 'no heartbeat');
       if (this.options.autoReconnect && !this.ended) this.scheduleRetry();
     }, this.options.pongTimeoutMs);
@@ -404,18 +438,30 @@ export class TerminalLink {
     // Only the cadence restarts: a pong check armed a moment ago (the resume
     // probe) must keep running, or restarting the interval would forgive the
     // very silence it was sent to detect.
-    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
     if (!this.options.pingEveryMs) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     this.pingTimer = setInterval(() => {
-      if (!this.live) { this.stopPings(); return; }
+      if (!this.live) {
+        this.stopPings();
+        return;
+      }
       this.ping();
     }, this.options.pingEveryMs);
   }
 
   private stopPings(): void {
-    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
-    if (this.pongTimer) { clearTimeout(this.pongTimer); this.pongTimer = null; }
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+    if (this.pongTimer) {
+      clearTimeout(this.pongTimer);
+      this.pongTimer = null;
+    }
     this.pingSentAt = 0;
   }
 }
@@ -427,10 +473,13 @@ export class TerminalLink {
  * being BORN at 80×24 and laying its first screen out for a window it is not
  * in. Same floors the pane applies: 80 columns on a phone, 2 either way.
  */
-export function estimateTerminalSize(phone: boolean, viewport: { width: number; height: number } = {
-  width: typeof window === 'undefined' ? 1280 : window.innerWidth,
-  height: typeof window === 'undefined' ? 800 : window.innerHeight,
-}): { cols: number; rows: number } {
+export function estimateTerminalSize(
+  phone: boolean,
+  viewport: { width: number; height: number } = {
+    width: typeof window === 'undefined' ? 1280 : window.innerWidth,
+    height: typeof window === 'undefined' ? 800 : window.innerHeight,
+  },
+): { cols: number; rows: number } {
   const fontSize = phone ? 16 : 14;
   // Measured: JetBrains Mono's cell at 16px is ~21px tall before the 1.15
   // line height — ~24px a row on a phone, ~21px on a desktop.

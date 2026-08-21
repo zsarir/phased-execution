@@ -37,45 +37,49 @@ const selectClass =
   'hover:border-rule-strong [@media(hover:none)]:min-h-(--tap-min)';
 
 export function activeFilterCount(filters: Filters): number {
-  return Number(filters.unclaimed) + Number(filters.open)
-    + Number(Boolean(filters.repo)) + Number(Boolean(filters.plan));
+  return (
+    Number(filters.unclaimed) +
+    Number(filters.open) +
+    Number(Boolean(filters.repo)) +
+    Number(Boolean(filters.plan))
+  );
 }
 
 function RankRow({ rankId, onRank, wrap }: { rankId: RankId; onRank: (id: RankId) => void; wrap: boolean }) {
   const buttons = RANKS.map((r) => (
-    <Button
-      key={r.id}
-      size="sm"
-      aria-pressed={rankId === r.id}
-      onClick={() => onRank(r.id)}
-      title={r.blurb}
-    >
+    <Button key={r.id} size="sm" aria-pressed={rankId === r.id} onClick={() => onRank(r.id)} title={r.blurb}>
       {r.label}
     </Button>
   ));
   // A joined segmented control cannot wrap without its borders coming apart, so
   // the phone sheet uses separate pressable chips of the same vocabulary.
-  return wrap
-    ? (
-      <div className="flex flex-wrap gap-1.5">
-        {RANKS.map((r) => (
-          <Button
-            key={r.id}
-            size="sm"
-            variant={rankId === r.id ? 'action' : 'default'}
-            aria-pressed={rankId === r.id}
-            onClick={() => onRank(r.id)}
-          >
-            {r.label}
-          </Button>
-        ))}
-      </div>
-    )
-    : <ButtonGroup>{buttons}</ButtonGroup>;
+  return wrap ? (
+    <div className="flex flex-wrap gap-1.5">
+      {RANKS.map((r) => (
+        <Button
+          key={r.id}
+          size="sm"
+          variant={rankId === r.id ? 'action' : 'default'}
+          aria-pressed={rankId === r.id}
+          onClick={() => onRank(r.id)}
+        >
+          {r.label}
+        </Button>
+      ))}
+    </div>
+  ) : (
+    <ButtonGroup>{buttons}</ButtonGroup>
+  );
 }
 
 function FilterFields({
-  filters, onFilters, grouped, onGrouped, repos, plans, stacked,
+  filters,
+  onFilters,
+  grouped,
+  onGrouped,
+  repos,
+  plans,
+  stacked,
 }: Omit<ControlsProps, 'rankId' | 'onRank' | 'hidden'> & { stacked: boolean }) {
   return (
     <div className={cn('flex gap-2', stacked ? 'flex-col' : 'flex-wrap items-center')}>
@@ -116,7 +120,11 @@ function FilterFields({
               onChange={(e) => onFilters({ repo: e.target.value })}
             >
               <option value="">every repo</option>
-              {repos.map((repo) => <option key={repo} value={repo}>{repo}</option>)}
+              {repos.map((repo) => (
+                <option key={repo} value={repo}>
+                  {repo}
+                </option>
+              ))}
             </select>
           </label>
         )}
@@ -129,7 +137,11 @@ function FilterFields({
               onChange={(e) => onFilters({ plan: e.target.value })}
             >
               <option value="">every plan</option>
-              {plans.map((p) => <option key={p.slug} value={p.slug}>{p.title}</option>)}
+              {plans.map((p) => (
+                <option key={p.slug} value={p.slug}>
+                  {p.title}
+                </option>
+              ))}
             </select>
           </label>
         )}

@@ -54,7 +54,10 @@ describe('the key bar is a grid, never a scroller', () => {
     const listeners: { on: HTMLElement; type: string }[] = [];
     const original = HTMLElement.prototype.addEventListener;
     HTMLElement.prototype.addEventListener = function patched(
-      this: HTMLElement, type: string, fn: never, options: never,
+      this: HTMLElement,
+      type: string,
+      fn: never,
+      options: never,
     ) {
       listeners.push({ on: this, type });
       return original.call(this, type, fn, options);
@@ -157,10 +160,22 @@ describe('the second page', () => {
       KEY_PAGES.flat().flatMap((key) => (key.kind === 'send' ? [[key.label, key.data]] : [])),
     );
     expect(bytes).toMatchObject({
-      Esc: '\x1b', Tab: '\t', '⇧Tab': '\x1b[Z', '^C': '\x03',
-      '↑': '\x1b[A', '↓': '\x1b[B', '←': '\x1b[D', '→': '\x1b[C',
-      Home: '\x1b[H', End: '\x1b[F', PgUp: '\x1b[5~', PgDn: '\x1b[6~', Del: '\x1b[3~',
-      '^L': '\x0c', '^D': '\x04', '^R': '\x12',
+      Esc: '\x1b',
+      Tab: '\t',
+      '⇧Tab': '\x1b[Z',
+      '^C': '\x03',
+      '↑': '\x1b[A',
+      '↓': '\x1b[B',
+      '←': '\x1b[D',
+      '→': '\x1b[C',
+      Home: '\x1b[H',
+      End: '\x1b[F',
+      PgUp: '\x1b[5~',
+      PgDn: '\x1b[6~',
+      Del: '\x1b[3~',
+      '^L': '\x0c',
+      '^D': '\x04',
+      '^R': '\x12',
     });
   });
 });

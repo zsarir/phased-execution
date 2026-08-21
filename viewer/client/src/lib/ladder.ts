@@ -34,14 +34,36 @@ import {
 } from '../../../shared/ladder-model.js';
 // `.ts` spelled out: the node test suite imports this file directly and node's
 // resolver adds no extensions (the client's bundler and tsc both accept it).
-import { SITUATION_ACTOR, SITUATION_LABELS, parseSituationKey, situationKey, situationLabel } from './situation.ts';
+import {
+  SITUATION_ACTOR,
+  SITUATION_LABELS,
+  parseSituationKey,
+  situationKey,
+  situationLabel,
+} from './situation.ts';
 import type { Errand, RecoverySlot, RungRecord } from './api';
 
 export type RungVehicle =
-  | 'reboard-fresh' | 'resume-own-session' | 'reboard-resume-brief' | 'unblock-session'
-  | 'closeout-own-session' | 'closeout-agent' | 'fix-agent' | 'plan-repair-script' | 'plan-repair-agent'
-  | 'switch-account' | 'switch-model' | 'wait-window' | 'raise-budget' | 'stale-claim-takeover'
-  | 'queue' | 'poll-park' | 'timed-park' | 'recheck-watch' | 'wait-heal' | 'mcp-continue';
+  | 'reboard-fresh'
+  | 'resume-own-session'
+  | 'reboard-resume-brief'
+  | 'unblock-session'
+  | 'closeout-own-session'
+  | 'closeout-agent'
+  | 'fix-agent'
+  | 'plan-repair-script'
+  | 'plan-repair-agent'
+  | 'switch-account'
+  | 'switch-model'
+  | 'wait-window'
+  | 'raise-budget'
+  | 'stale-claim-takeover'
+  | 'queue'
+  | 'poll-park'
+  | 'timed-park'
+  | 'recheck-watch'
+  | 'wait-heal'
+  | 'mcp-continue';
 
 /** One row of the shared rung table. */
 export interface Rung {
@@ -96,7 +118,10 @@ export interface LadderView {
 }
 
 /** This phase's recovery slot on the run, when it has one. */
-export function ladderSlot(run: LadderRunLike | null | undefined, phase: number | undefined): RecoverySlot | undefined {
+export function ladderSlot(
+  run: LadderRunLike | null | undefined,
+  phase: number | undefined,
+): RecoverySlot | undefined {
   if (!run || phase == null) return undefined;
   return run.recoveries?.[String(phase)];
 }
@@ -128,7 +153,12 @@ function triedOf(slot: RecoverySlot | undefined): TriedRung[] {
     label: labelOf(r.rung, r.params, r.situation),
     situation: r.situation,
     at: r.at,
-    ...(r.outcome ? { outcome: r.outcome, outcomeLabel: (OUTCOME_WORDS as Record<string, string>)[r.outcome] ?? r.outcome } : {}),
+    ...(r.outcome
+      ? {
+          outcome: r.outcome,
+          outcomeLabel: (OUTCOME_WORDS as Record<string, string>)[r.outcome] ?? r.outcome,
+        }
+      : {}),
     ...(typeof r.costUsd === 'number' ? { costUsd: r.costUsd } : {}),
     ...(r.note ? { note: r.note } : {}),
   }));
@@ -151,21 +181,26 @@ export function ladderView(input: {
   if (run?.resolved) return { tried: [], empty: true };
   const slot = ladderSlot(run, phase);
   const tried = triedOf(slot);
-  const errand = phase != null
-    ? (slot?.errand ?? (run?.errand && run.errand.phase === phase ? run.errand : undefined))
-    : (run?.errand ?? undefined);
+  const errand =
+    phase != null
+      ? (slot?.errand ?? (run?.errand && run.errand.phase === phase ? run.errand : undefined))
+      : (run?.errand ?? undefined);
   const given = input.situation
-    ? ('key' in input.situation ? input.situation.key : situationKey(input.situation.id, input.situation.sub))
+    ? 'key' in input.situation
+      ? input.situation.key
+      : situationKey(input.situation.id, input.situation.sub)
     : undefined;
-  const key = given
-    ?? input.record?.situation?.key
-    ?? errand?.situation
-    ?? (tried.length ? tried[tried.length - 1].situation : undefined);
+  const key =
+    given ??
+    input.record?.situation?.key ??
+    errand?.situation ??
+    (tried.length ? tried[tried.length - 1].situation : undefined);
   const situation = situationOf(key);
   const running = [...tried].reverse().find((t) => t.outcome === 'running');
-  const next = !errand && !running && situation
-    ? (untried(situation.key, slot?.rungs ?? [])[0] as Rung | undefined)
-    : undefined;
+  const next =
+    !errand && !running && situation
+      ? (untried(situation.key, slot?.rungs ?? [])[0] as Rung | undefined)
+      : undefined;
   return {
     ...(situation ? { situation } : {}),
     tried,

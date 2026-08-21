@@ -16,20 +16,17 @@ import { cn } from '@/lib/cn';
  * the ordering rule.
  */
 
-export const noteVariants = cva(
-  'flex items-start gap-2 rounded border px-3 py-2 text-sm',
-  {
-    variants: {
-      severity: {
-        error: 'border-blocked/55 bg-blocked/8 text-blocked',
-        warn: 'border-action/55 bg-action/8 text-ink',
-        info: 'border-progress/45 bg-progress/8 text-ink',
-        ok: 'border-done/45 bg-done/8 text-ink',
-      },
+export const noteVariants = cva('flex items-start gap-2 rounded border px-3 py-2 text-sm', {
+  variants: {
+    severity: {
+      error: 'border-blocked/55 bg-blocked/8 text-blocked',
+      warn: 'border-action/55 bg-action/8 text-ink',
+      info: 'border-progress/45 bg-progress/8 text-ink',
+      ok: 'border-done/45 bg-done/8 text-ink',
     },
-    defaultVariants: { severity: 'info' },
   },
-);
+  defaultVariants: { severity: 'info' },
+});
 
 export type Severity = NonNullable<VariantProps<typeof noteVariants>['severity']>;
 
@@ -84,9 +81,7 @@ export function StatusStack({
   className?: string;
 }) {
   if (!notes.length) return null;
-  const sorted = order === 'given'
-    ? notes
-    : [...notes].sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
+  const sorted = order === 'given' ? notes : [...notes].sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
   const shown = sorted.slice(0, max);
   const hidden = sorted.length - shown.length;
 

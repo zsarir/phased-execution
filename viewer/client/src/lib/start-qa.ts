@@ -44,10 +44,7 @@ export type StartQaRequest = {
  * is already either a navigation or a toast. Returns the session id the browser
  * ended up on, or `undefined` when nothing opened.
  */
-export async function startQa(
-  client: QueryClient,
-  request: StartQaRequest,
-): Promise<string | undefined> {
+export async function startQa(client: QueryClient, request: StartQaRequest): Promise<string | undefined> {
   const { model, effort, ...rest } = request;
   try {
     const ticket = await api.agentTicket({
@@ -61,9 +58,9 @@ export async function startQa(
       ...(effort ? { effort } : {}),
     });
     if (ticket.session) {
-      client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) => (prev
-        ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session!] }
-        : prev));
+      client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) =>
+        prev ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session!] } : prev,
+      );
     }
     void client.invalidateQueries({ queryKey: keys.terminal() });
     // Activation writes test-status.md, so the board and this plan's detail are

@@ -23,7 +23,11 @@ export function Label({
       {...props}
     >
       {children}
-      {required && <span aria-hidden className="text-accent">*</span>}
+      {required && (
+        <span aria-hidden className="text-accent">
+          *
+        </span>
+      )}
       {hint && <span className="text-2xs font-normal text-ink-faint">{hint}</span>}
     </LabelPrimitive.Root>
   );

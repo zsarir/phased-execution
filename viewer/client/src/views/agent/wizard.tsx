@@ -24,7 +24,13 @@ import { keys, useConsoleState, useSkills } from '@/lib/queries';
 import { estimateTerminalSize } from '@/lib/terminal';
 import { navigate } from '@/router';
 import {
-  Button, Dialog, DialogClose, DialogContent, DialogFooter, toast, type ButtonProps,
+  Button,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  toast,
+  type ButtonProps,
 } from '@/components/ui';
 import { SkillPicker } from '../run/skill-picker';
 import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS } from '../run/defaults';
@@ -35,7 +41,10 @@ import { field } from '@/components/ui/field';
  * console itself writes nothing here — the claude session does, with the
  * operator watching. The scaffold-only button keeps its own gate beside this.
  */
-export function NewPlanWizardButton({ allowAgent, variant = 'action' }: {
+export function NewPlanWizardButton({
+  allowAgent,
+  variant = 'action',
+}: {
   allowAgent: boolean;
   /**
    * Primary where authoring IS the page's action (the Plans toolbar, a quiet
@@ -71,8 +80,8 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
   // it. The ticket has no attach flag; ticked means the names ride in `skills`.
   const defaultSkills = state?.defaultSkills ?? [];
   const [attachChoice, setAttachChoice] = useState<boolean | null>(null);
-  const attach = attachChoice
-    ?? ((state?.prefs?.attachDefaultSkills ?? false) === true && defaultSkills.length > 0);
+  const attach =
+    attachChoice ?? ((state?.prefs?.attachDefaultSkills ?? false) === true && defaultSkills.length > 0);
   const [busy, setBusy] = useState(false);
 
   async function start() {
@@ -93,17 +102,17 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
         // session that could write a plan nobody had approved. A session for
         // ANY other purpose belongs in the launcher, which still offers every
         // mode.
-        ...((() => {
+        ...(() => {
           const merged = [...new Set([...(attach ? defaultSkills : []), ...chosen])];
           return merged.length ? { skills: merged } : {};
-        })()),
+        })(),
       });
       // Same two rules as every session the console opens: seed the list from
       // the ticket so the next render is right, and `void` the invalidation.
       if (ticket.session) {
-        client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) => (prev
-          ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session] }
-          : prev));
+        client.setQueryData(keys.terminal(), (prev: TerminalState | undefined) =>
+          prev ? { ...prev, available: 'yes' as const, sessions: [...prev.sessions, ticket.session] } : prev,
+        );
       }
       void client.invalidateQueries({ queryKey: keys.terminal() });
       onClose();
@@ -115,13 +124,20 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
       <DialogContent
         title="New plan with AI"
-        description={'A Claude session opens in the Agent terminal and invokes the phased-execution '
-          + 'skill’s plan mode. It presents the phase graph for your approval first, then scaffolds '
-          + 'docs/plans/<slug>.md, validates it and commits — you answer its questions, and approve, '
-          + 'in the terminal.'}
+        description={
+          'A Claude session opens in the Agent terminal and invokes the phased-execution ' +
+          'skill’s plan mode. It presents the phase graph for your approval first, then scaffolds ' +
+          'docs/plans/<slug>.md, validates it and commits — you answer its questions, and approve, ' +
+          'in the terminal.'
+        }
       >
         <div className="flex flex-col gap-3">
           <label className="flex flex-col gap-1 text-sm">
@@ -141,14 +157,20 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
               <span className="text-2xs uppercase tracking-wide text-ink-faint">Model</span>
               <select className={field} value={model} onChange={(event) => setModel(event.target.value)}>
                 <option value="">default — this machine’s</option>
-                {MODELS.map((name) => <option key={name} value={name}>{name}</option>)}
+                {MODELS.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm">
               <span className="text-2xs uppercase tracking-wide text-ink-faint">Effort</span>
               <select className={field} value={effort} onChange={(event) => setEffort(event.target.value)}>
                 {EFFORTS.map((level) => (
-                  <option key={level} value={level}>{EFFORT_NOTE[level] ?? level}</option>
+                  <option key={level} value={level}>
+                    {EFFORT_NOTE[level] ?? level}
+                  </option>
                 ))}
               </select>
             </label>
@@ -168,9 +190,9 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
           </div>
 
           <p className="text-2xs text-ink-faint">
-            The session explores and presents the plan first — it writes docs/plans/&lt;slug&gt;.md
-            only after you approve it in the terminal (⇧Tab inside the session cycles modes for
-            the steps AFTER approval).
+            The session explores and presents the plan first — it writes docs/plans/&lt;slug&gt;.md only after
+            you approve it in the terminal (⇧Tab inside the session cycles modes for the steps AFTER
+            approval).
           </p>
 
           {rootOpen && defaultSkills.length > 0 && (
@@ -178,7 +200,12 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
               <span className="min-w-0">
                 <span className="text-ink">Attach default skills</span>
                 <span className="mt-0.5 block text-2xs text-ink-faint">
-                  This machine's list: {defaultSkills.map((s) => <code key={s} className="mr-1">{s}</code>)}
+                  This machine's list:{' '}
+                  {defaultSkills.map((s) => (
+                    <code key={s} className="mr-1">
+                      {s}
+                    </code>
+                  ))}
                 </span>
               </span>
               <Button size="sm" aria-pressed={attach} onClick={() => setAttachChoice(!attach)}>
@@ -203,12 +230,10 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
         </div>
 
         <DialogFooter className="items-center justify-between">
-          <DialogClose asChild><Button variant="ghost">Cancel</Button></DialogClose>
-          <Button
-            variant="action"
-            disabled={busy || !brief.trim() || !rootOpen}
-            onClick={() => void start()}
-          >
+          <DialogClose asChild>
+            <Button variant="ghost">Cancel</Button>
+          </DialogClose>
+          <Button variant="action" disabled={busy || !brief.trim() || !rootOpen} onClick={() => void start()}>
             <Sparkles size={14} aria-hidden /> Start authoring
           </Button>
         </DialogFooter>

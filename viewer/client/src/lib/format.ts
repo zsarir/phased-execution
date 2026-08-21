@@ -142,11 +142,14 @@ export function etaPoint(ms: number): string {
 
 /** Where the number came from, in a sentence, for the `title` of any of them. */
 export function etaTitle(eta: EtaEstimate): string {
-  const evidence = eta.basis === 'plan'
-    ? `${plural(eta.samples, 'finished phase')} of this plan`
-    : eta.basis === 'portfolio'
-      ? `${plural(eta.samples, 'finished phase')} across other plans — this one has none yet`
-      : 'no finished phase anywhere yet, so this is the size tags alone';
-  return `From ${evidence}, against ${weight(eta.remainingWeight)} of remaining weight. `
-    + 'Weight-normalised, recency-weighted, and deliberately coarse.';
+  const evidence =
+    eta.basis === 'plan'
+      ? `${plural(eta.samples, 'finished phase')} of this plan`
+      : eta.basis === 'portfolio'
+        ? `${plural(eta.samples, 'finished phase')} across other plans — this one has none yet`
+        : 'no finished phase anywhere yet, so this is the size tags alone';
+  return (
+    `From ${evidence}, against ${weight(eta.remainingWeight)} of remaining weight. ` +
+    'Weight-normalised, recency-weighted, and deliberately coarse.'
+  );
 }

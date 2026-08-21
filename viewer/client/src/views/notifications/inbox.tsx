@@ -26,8 +26,15 @@ import { api, type NotificationRecord } from '@/lib/api';
 import { keys, useInbox } from '@/lib/queries';
 import { plural, relativeTime } from '@/lib/format';
 import {
-  AlertDialog, AlertDialogContent, AlertDialogTrigger,
-  Banner, Button, Chip, Empty, Skeleton, toast,
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogTrigger,
+  Banner,
+  Button,
+  Chip,
+  Empty,
+  Skeleton,
+  toast,
 } from '@/components/ui';
 import { toHash } from '@shared/routes.js';
 
@@ -41,9 +48,12 @@ export function groupByDay(items: NotificationRecord[]): [string, NotificationRe
   const out = new Map<string, NotificationRecord[]>();
   for (const item of items) {
     const at = new Date(item.at);
-    const key = Number.isNaN(at.getTime()) ? 'Undated'
-      : at.toDateString() === today ? 'Today'
-        : at.toDateString() === yesterday ? 'Yesterday'
+    const key = Number.isNaN(at.getTime())
+      ? 'Undated'
+      : at.toDateString() === today
+        ? 'Today'
+        : at.toDateString() === yesterday
+          ? 'Yesterday'
           : at.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
     const bucket = out.get(key);
     if (bucket) bucket.push(item);
@@ -79,11 +89,15 @@ export function Inbox({ onUnread }: { onUnread?: (n: number) => void }) {
   // render: setting a parent's state while rendering a child is a React
   // warning at best and a loop at worst.
   const unread = data?.unread;
-  useEffect(() => { if (unread != null) onUnread?.(unread); }, [unread, onUnread]);
+  useEffect(() => {
+    if (unread != null) onUnread?.(unread);
+  }, [unread, onUnread]);
 
   const act = useMutation({
     mutationFn: (fn: () => Promise<unknown>) => fn(),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: keys.notifications() }); },
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.notifications() });
+    },
     onError: (error: Error) => toast(String(error.message ?? error), 'error'),
   });
 
@@ -103,7 +117,9 @@ export function Inbox({ onUnread }: { onUnread?: (n: number) => void }) {
   if (isPending && !data) {
     return (
       <div className="mt-3 flex flex-col gap-2">
-        {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-16" />)}
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-16" />
+        ))}
       </div>
     );
   }
@@ -120,13 +136,18 @@ export function Inbox({ onUnread }: { onUnread?: (n: number) => void }) {
         <Banner severity="info">
           <strong>Nothing can reach you out of band yet.</strong> No device is subscribed and no{' '}
           <code>PHASE_CONSOLE_NOTIFY</code> command is set, so these arrive here and nowhere else.{' '}
-          <a href="#/notifications/settings" className="text-action underline">Set a device up</a>.
+          <a href="#/notifications/settings" className="text-action underline">
+            Set a device up
+          </a>
+          .
         </Banner>
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by category">
-          <Button size="sm" aria-pressed={category === ''} onClick={() => setCategory('')}>All</Button>
+          <Button size="sm" aria-pressed={category === ''} onClick={() => setCategory('')}>
+            All
+          </Button>
           {(data.categories ?? []).map((c) => (
             <Button
               key={c.id}
@@ -160,7 +181,9 @@ export function Inbox({ onUnread }: { onUnread?: (n: number) => void }) {
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button size="sm" variant="danger" disabled={busy || !data.total}>Clear all</Button>
+              <Button size="sm" variant="danger" disabled={busy || !data.total}>
+                Clear all
+              </Button>
             </AlertDialogTrigger>
             {/* The only irreversible thing on this page. It gets a question,
                 and the question says how many. */}
@@ -178,25 +201,29 @@ export function Inbox({ onUnread }: { onUnread?: (n: number) => void }) {
       {!data.items.length ? (
         <Empty
           title={unreadOnly || category ? 'Nothing matches that' : 'Nothing yet'}
-          body={unreadOnly || category
-            ? 'Clear the filters to see the rest.'
-            : 'Approvals, halts, phases landing and plans finishing all arrive here.'}
+          body={
+            unreadOnly || category
+              ? 'Clear the filters to see the rest.'
+              : 'Approvals, halts, phases landing and plans finishing all arrive here.'
+          }
         />
-      ) : groups.map(([day, items]) => (
-        <section key={day}>
-          <h2 className="mb-1.5 font-display text-2xs tracking-[0.14em] text-ink-faint uppercase">{day}</h2>
-          <div className="flex flex-col gap-1">
-            {items.map((item) => (
-              <InboxRow
-                key={item.id}
-                item={item}
-                onOpen={() => open.mutate(item)}
-                onClear={() => act.mutate(() => api.clearNotifications({ id: item.id }))}
-              />
-            ))}
-          </div>
-        </section>
-      ))}
+      ) : (
+        groups.map(([day, items]) => (
+          <section key={day}>
+            <h2 className="mb-1.5 font-display text-2xs tracking-[0.14em] text-ink-faint uppercase">{day}</h2>
+            <div className="flex flex-col gap-1">
+              {items.map((item) => (
+                <InboxRow
+                  key={item.id}
+                  item={item}
+                  onOpen={() => open.mutate(item)}
+                  onClear={() => act.mutate(() => api.clearNotifications({ id: item.id }))}
+                />
+              ))}
+            </div>
+          </section>
+        ))
+      )}
 
       {data.more && (
         <div>
@@ -248,12 +275,18 @@ function InboxRow({
             <Chip title={`Resolved on its own ${item.resolved.reason ? `— ${item.resolved.reason}` : ''}`}>
               resolved itself
             </Chip>
-          ) : item.urgent && <Chip tone="warn">urgent</Chip>}
+          ) : (
+            item.urgent && <Chip tone="warn">urgent</Chip>
+          )}
           <Chip
             tone={summary.failed ? 'bad' : delivered.length ? 'ok' : 'neutral'}
-            title={delivered.length
-              ? delivered.map((d) => `${d.label}: ${d.outcome}${d.detail ? ` (${d.detail})` : ''}`).join('\n')
-              : 'No device was subscribed when this was announced'}
+            title={
+              delivered.length
+                ? delivered
+                    .map((d) => `${d.label}: ${d.outcome}${d.detail ? ` (${d.detail})` : ''}`)
+                    .join('\n')
+                : 'No device was subscribed when this was announced'
+            }
           >
             {summary.text}
           </Chip>

@@ -61,20 +61,28 @@ function PlanSkeleton() {
 function TabBody({ tab, arg, detail }: { tab: string; arg?: string; detail: PlanDetail }) {
   const slug = detail.summary.slug;
   switch (tab) {
-    case 'phase': return <PhasePanel detail={detail} phase={arg} />;
-    case 'handoff': return <HandoffPanel detail={detail} phase={arg} />;
-    case 'phases': return <PhasesTab detail={detail} />;
-    case 'handoffs': return <HandoffsTab detail={detail} />;
-    case 'analysis': return <AnalysisTab detail={detail} />;
-    case 'overview': return <OverviewTab detail={detail} />;
-    case 'raw': return <RawTab slug={slug} />;
+    case 'phase':
+      return <PhasePanel detail={detail} phase={arg} />;
+    case 'handoff':
+      return <HandoffPanel detail={detail} phase={arg} />;
+    case 'phases':
+      return <PhasesTab detail={detail} />;
+    case 'handoffs':
+      return <HandoffsTab detail={detail} />;
+    case 'analysis':
+      return <AnalysisTab detail={detail} />;
+    case 'overview':
+      return <OverviewTab detail={detail} />;
+    case 'raw':
+      return <RawTab slug={slug} />;
     case 'run':
       return (
         <Suspense fallback={<Spinner label="Reading run state" />}>
           <RunView detail={detail} />
         </Suspense>
       );
-    default: return <RouteTab detail={detail} />;
+    default:
+      return <RouteTab detail={detail} />;
   }
 }
 

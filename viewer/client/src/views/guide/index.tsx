@@ -50,7 +50,9 @@ export default function GuideView({ route }: ViewProps) {
       <Tabs value={section.id} onValueChange={(id) => navigate(`guide/${id}`)}>
         <TabsList aria-label="Guide sections" ref={list}>
           {SECTIONS.map((s) => (
-            <TabsTrigger key={s.id} value={s.id}>{s.label}</TabsTrigger>
+            <TabsTrigger key={s.id} value={s.id}>
+              {s.label}
+            </TabsTrigger>
           ))}
         </TabsList>
 
@@ -72,18 +74,16 @@ export default function GuideView({ route }: ViewProps) {
 function ConsolePosture({ state }: { state: { autopilot?: boolean; allowRun?: boolean } | undefined }) {
   if (!state) return null;
   const on = state.autopilot === true && state.allowRun === true;
-  const text = state.autopilot === false
-    ? 'This console predates the autopilot. Restart it to pick up the run endpoints.'
-    : state.allowRun
-      ? 'Runs are enabled on this console.'
-      : 'This console can show runs but not start them — it was started without --allow-run.';
+  const text =
+    state.autopilot === false
+      ? 'This console predates the autopilot. Restart it to pick up the run endpoints.'
+      : state.allowRun
+        ? 'Runs are enabled on this console.'
+        : 'This console can show runs but not start them — it was started without --allow-run.';
 
   return (
     <p className="mb-4 flex items-center gap-2 text-sm text-ink-muted">
-      <span
-        aria-hidden
-        className={`size-2 shrink-0 rounded-full ${on ? 'bg-done' : 'bg-ink-faint/50'}`}
-      />
+      <span aria-hidden className={`size-2 shrink-0 rounded-full ${on ? 'bg-done' : 'bg-ink-faint/50'}`} />
       {text}
     </p>
   );

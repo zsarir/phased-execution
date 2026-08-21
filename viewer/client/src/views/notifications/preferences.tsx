@@ -53,7 +53,9 @@ export function PreferencesCard() {
     // A delta, not the whole map: the server merges it over what is stored, so
     // two tabs toggling different categories do not overwrite each other.
     mutationFn: (next: Record<string, boolean>) => api.savePrefs({ notify: next }),
-    onSuccess: async () => { await client.invalidateQueries({ queryKey: keys.state() }); },
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: keys.state() });
+    },
     onError: (error: Error) => toast(String(error.message ?? error), 'error'),
   });
 
@@ -78,19 +80,19 @@ export function PreferencesCard() {
       </CardHeader>
       <CardBody className="flex flex-col gap-3">
         <p className="text-2xs text-ink-muted">
-          Applies to the whole console: a category switched off here is not written to the inbox,
-          not sent to an open tab, not passed to <code>PHASE_CONSOLE_NOTIFY</code> and not pushed to
-          any device. Nothing below needs a device subscribed.
+          Applies to the whole console: a category switched off here is not written to the inbox, not sent to
+          an open tab, not passed to <code>PHASE_CONSOLE_NOTIFY</code> and not pushed to any device. Nothing
+          below needs a device subscribed.
         </p>
 
         {mutedImportant.length > 0 && (
           <Banner severity="warn">
             <strong>
-              {mutedImportant.map((c) => c.label).join(', ')} {mutedImportant.length === 1 ? 'is' : 'are'} off.
+              {mutedImportant.map((c) => c.label).join(', ')} {mutedImportant.length === 1 ? 'is' : 'are'}{' '}
+              off.
             </strong>{' '}
-            {mutedImportant.length === 1 ? 'That category' : 'Those categories'} covers work that
-            stops dead until you act — a halted run or an unanswered permission card will now wait
-            without telling you.
+            {mutedImportant.length === 1 ? 'That category' : 'Those categories'} covers work that stops dead
+            until you act — a halted run or an unanswered permission card will now wait without telling you.
           </Banner>
         )}
 
@@ -112,7 +114,11 @@ export function PreferencesCard() {
                 />
                 <span className="min-w-0">
                   <span className="text-sm text-ink">{category.label}</span>
-                  {category.urgent && <Chip tone="warn" className="ml-1.5">urgent</Chip>}
+                  {category.urgent && (
+                    <Chip tone="warn" className="ml-1.5">
+                      urgent
+                    </Chip>
+                  )}
                   {!on && <Chip className="ml-1.5">off</Chip>}
                   <span className="mt-0.5 block text-2xs text-ink-muted">{category.detail}</span>
                 </span>
@@ -122,8 +128,8 @@ export function PreferencesCard() {
         </div>
 
         <p className="text-2xs text-ink-muted">
-          Stored with the console, in <code>~/.config/phase-console/config.json</code> — so it
-          survives a restart and applies however you are reading the console.
+          Stored with the console, in <code>~/.config/phase-console/config.json</code> — so it survives a
+          restart and applies however you are reading the console.
         </p>
       </CardBody>
     </Card>

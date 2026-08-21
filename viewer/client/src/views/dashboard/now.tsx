@@ -18,8 +18,11 @@ import { cn } from '@/lib/cn';
 import { looksLikeAuthFailure } from '@/lib/failures';
 import { errandsOf, situationLabelFor } from '@/lib/ladder';
 import {
-  RECOVERY_LABELS, classifyRun, liveRecovery,
-  type RecoveryClass, type RecoveryTarget,
+  RECOVERY_LABELS,
+  classifyRun,
+  liveRecovery,
+  type RecoveryClass,
+  type RecoveryTarget,
 } from '@/lib/recovery';
 import { phaseHref, planHref } from '@shared/routes.js';
 import type { Errand, HealthIssue, RunState, TerminalSession } from '@/lib/api';
@@ -63,17 +66,18 @@ export function LiveStrip({ runs }: { runs: RunState[] }) {
         return (
           <Card
             key={run.id}
-            className={cn(
-              'state-in-progress overflow-hidden border-progress/45',
-              running && 'shadow-card',
-            )}
+            className={cn('state-in-progress overflow-hidden border-progress/45', running && 'shadow-card')}
           >
             <a
               href={planHref(run.slug, 'run')}
               className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5 hover:bg-surface-raised md:px-4"
             >
               <span className="flex min-w-0 flex-1 items-center gap-2.5">
-                <CircleDot size={15} className={cn('shrink-0 text-state', running && 'animate-pulse-soft')} aria-hidden />
+                <CircleDot
+                  size={15}
+                  className={cn('shrink-0 text-state', running && 'animate-pulse-soft')}
+                  aria-hidden
+                />
                 <span className="min-w-0">
                   <span className="block truncate font-display text-lg leading-tight">{run.slug}</span>
                   <span className="block truncate text-2xs text-ink-muted">
@@ -85,7 +89,9 @@ export function LiveStrip({ runs }: { runs: RunState[] }) {
               </span>
               <span className="flex shrink-0 items-center gap-2">
                 {Number.isFinite(started) && (
-                  <Chip mono tone="busy">{elapsed(now - started)}</Chip>
+                  <Chip mono tone="busy">
+                    {elapsed(now - started)}
+                  </Chip>
                 )}
                 <Chip mono>{money(run.spentUsd)}</Chip>
                 <span className="text-2xs text-ink-faint">Watch</span>
@@ -116,8 +122,10 @@ export function LiveStrip({ runs }: { runs: RunState[] }) {
  * cards were.
  */
 export type DemandActionId =
-  | 'continue' | 'dismiss'
-  | 'login' | 'recheck'
+  | 'continue'
+  | 'dismiss'
+  | 'login'
+  | 'recheck'
   /** The one-press plan recovery: confirm → stand down stale → recover → continue. */
   | 'auto-recover'
   /** The MCP park's one-button remedy: policy → continue, retry the parked phases. */
@@ -207,16 +215,18 @@ function recoveryAction(
 ): DemandAction[] {
   if (!kind) return [];
   const running = liveRecovery(sessions, target);
-  return [{
-    id: 'start-recovery',
-    label: running ? 'Recovery running' : RECOVERY_LABELS[kind],
-    recoveryClass: kind,
-    target,
-    ...(running ? { runningSessionId: running.id } : {}),
-    // A live recovery is never "disabled" — the button becomes a way to go
-    // watch it. The gate only applies to starting a new one.
-    ...(running || allowAgent ? {} : { disabled: NEEDS_AGENT }),
-  }];
+  return [
+    {
+      id: 'start-recovery',
+      label: running ? 'Recovery running' : RECOVERY_LABELS[kind],
+      recoveryClass: kind,
+      target,
+      ...(running ? { runningSessionId: running.id } : {}),
+      // A live recovery is never "disabled" — the button becomes a way to go
+      // watch it. The gate only applies to starting a new one.
+      ...(running || allowAgent ? {} : { disabled: NEEDS_AGENT }),
+    },
+  ];
 }
 
 /**
@@ -280,7 +290,8 @@ export function demands({
       id: 'sign-in',
       icon: <KeyRound size={15} aria-hidden />,
       label: 'Claude is signed out on this machine',
-      detail: 'Nothing can start or resume under the machine login until you sign in — claude auth login, or a console profile under Settings ▸ Accounts.',
+      detail:
+        'Nothing can start or resume under the machine login until you sign in — claude auth login, or a console profile under Settings ▸ Accounts.',
       href: '#/settings',
       tone: 'bad',
       actions: [
@@ -300,17 +311,22 @@ export function demands({
     const errands = errandsOf(run);
     if (!errands.length) continue;
     const lead = errands[0];
-    const auth = looksLikeAuthFailure(run, signedOut ? { loggedIn: false } as never : undefined)
-      || errands.some((e) => e.situation === 'resource-wall:auth');
+    const auth =
+      looksLikeAuthFailure(run, signedOut ? ({ loggedIn: false } as never) : undefined) ||
+      errands.some((e) => e.situation === 'resource-wall:auth');
     const mcp = run.halt?.kind === 'mcp-preflight' || errands.some((e) => e.situation === 'mcp-unavailable');
     const target = { slug: run.slug, runId: run.id };
     const phase = lead.phase || haltPhase(run);
     out.push({
       id: `errand-${run.id}`,
       icon: <Hand size={15} aria-hidden />,
-      label: `${run.slug} — ${errands.length === 1
-        ? (lead.phase ? `phase ${lead.phase} needs you` : 'needs you')
-        : `${errands.length} phases need you`}`,
+      label: `${run.slug} — ${
+        errands.length === 1
+          ? lead.phase
+            ? `phase ${lead.phase} needs you`
+            : 'needs you'
+          : `${errands.length} phases need you`
+      }`,
       detail: `${situationLabelFor(lead.situation)}: ${errandLine(lead)}${errands.length > 1 ? ` · +${errands.length - 1} more` : ''}`,
       href: planHref(run.slug, 'run'),
       tone: 'bad',
@@ -320,23 +336,48 @@ export function demands({
         // reports success, spends a turn and changes nothing.
         ...(auth
           ? [
-            { id: 'login', label: 'Open a sign-in terminal', kind: 'action', disabled: needRun, target } as DemandAction,
-            { id: 'recheck', label: 'Check again', target } as DemandAction,
-          ]
+              {
+                id: 'login',
+                label: 'Open a sign-in terminal',
+                kind: 'action',
+                disabled: needRun,
+                target,
+              } as DemandAction,
+              { id: 'recheck', label: 'Check again', target } as DemandAction,
+            ]
           : []),
         // An MCP errand's one-button remedy: carry on without the servers.
         ...(mcp
-          ? [{ id: 'mcp-continue', label: 'Continue without these servers', kind: 'action', disabled: needRun, target } as DemandAction]
+          ? [
+              {
+                id: 'mcp-continue',
+                label: 'Continue without these servers',
+                kind: 'action',
+                disabled: needRun,
+                target,
+              } as DemandAction,
+            ]
           : []),
         // "I did what it asked — look again": the honest press after an
         // errand. It re-reads the board, stands down what the errand settled,
         // and continues or climbs what is left.
-        ...(auth || mcp ? [] : [{ id: 'auto-recover', label: 'Recover & continue', kind: 'action', disabled: needRun, target } as DemandAction]),
+        ...(auth || mcp
+          ? []
+          : [
+              {
+                id: 'auto-recover',
+                label: 'Recover & continue',
+                kind: 'action',
+                disabled: needRun,
+                target,
+              } as DemandAction,
+            ]),
         { id: 'continue', label: 'Continue', kind: 'default', disabled: needRun, target },
-        ...recovery(
-          classifyRun(run, { authFailure: auth }),
-          { slug: run.slug, runId: run.id, ...(phase != null ? { phase } : {}) },
-        ),
+        ...recovery(classifyRun(run, { authFailure: auth }), {
+          slug: run.slug,
+          runId: run.id,
+          ...(phase != null ? { phase } : {}),
+        }),
         // Never gated: dismissing a card is a judgement about what deserves
         // attention, and a console that cannot even do that is the dead end.
         { id: 'dismiss', label: 'Dismiss', target },
@@ -353,7 +394,7 @@ export function demands({
     if (!(run.status === 'halted' || run.status === 'interrupted' || run.status === 'parked')) continue;
     if (run.stoppedBy === 'operator') continue;
     if (allowRun && run.autoRecover) continue; // the loop owns it: it climbs, or it writes the errand
-    const auth = looksLikeAuthFailure(run, signedOut ? { loggedIn: false } as never : undefined);
+    const auth = looksLikeAuthFailure(run, signedOut ? ({ loggedIn: false } as never) : undefined);
     const target = { slug: run.slug, runId: run.id };
     const phase = haltPhase(run);
     const errand: Errand = {
@@ -372,22 +413,38 @@ export function demands({
       id: `halt-${run.id}`,
       icon: <AlertTriangle size={15} aria-hidden />,
       label: `${run.slug} ${run.status}`,
-      detail: run.halt?.reason ?? errandText(run) ?? run.finishedReason ?? 'The run stopped before it finished.',
+      detail:
+        run.halt?.reason ?? errandText(run) ?? run.finishedReason ?? 'The run stopped before it finished.',
       href: planHref(run.slug, 'run'),
       tone: 'bad',
       errands: [errand],
       actions: [
         ...(auth
           ? [
-            { id: 'login', label: 'Open a sign-in terminal', kind: 'action', disabled: needRun, target } as DemandAction,
-            { id: 'recheck', label: 'Check again', target } as DemandAction,
-          ]
-          : [{ id: 'auto-recover', label: 'Recover & continue', kind: 'action', disabled: needRun, target } as DemandAction]),
+              {
+                id: 'login',
+                label: 'Open a sign-in terminal',
+                kind: 'action',
+                disabled: needRun,
+                target,
+              } as DemandAction,
+              { id: 'recheck', label: 'Check again', target } as DemandAction,
+            ]
+          : [
+              {
+                id: 'auto-recover',
+                label: 'Recover & continue',
+                kind: 'action',
+                disabled: needRun,
+                target,
+              } as DemandAction,
+            ]),
         { id: 'continue', label: 'Continue', kind: 'default', disabled: needRun, target },
-        ...recovery(
-          classifyRun(run, { authFailure: auth }),
-          { slug: run.slug, runId: run.id, ...(phase != null ? { phase } : {}) },
-        ),
+        ...recovery(classifyRun(run, { authFailure: auth }), {
+          slug: run.slug,
+          runId: run.id,
+          ...(phase != null ? { phase } : {}),
+        }),
         { id: 'dismiss', label: 'Dismiss', target },
       ],
     });
@@ -434,9 +491,7 @@ export function AttentionRow({
           key={item.id}
           className={cn(
             'flex h-full flex-col gap-2 rounded-lg border px-3 py-2.5',
-            item.tone === 'action'
-              ? 'border-action/50 bg-action/8'
-              : 'border-blocked/45 bg-blocked/8',
+            item.tone === 'action' ? 'border-action/50 bg-action/8' : 'border-blocked/45 bg-blocked/8',
           )}
         >
           {/* The heading is the link; the buttons are siblings of it. It used
@@ -563,15 +618,17 @@ export function AllQuiet({
     <Card className="state-ready flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5 md:px-4">
       <span className="min-w-0 flex-1 basis-full sm:basis-0">
         <span className="block text-md">Nothing is running.</span>
-        {next
-          ? (
-            <span className="line-clamp-2 block text-2xs text-ink-muted">
-              The board&rsquo;s next move is{' '}
-              <span className="text-ink">{next.slug} phase {next.phase}</span>
-              {next.title ? ` — ${next.title}` : ''}.
+        {next ? (
+          <span className="line-clamp-2 block text-2xs text-ink-muted">
+            The board&rsquo;s next move is{' '}
+            <span className="text-ink">
+              {next.slug} phase {next.phase}
             </span>
-          )
-          : <span className="block text-2xs text-ink-muted">Nothing is ready to start either.</span>}
+            {next.title ? ` — ${next.title}` : ''}.
+          </span>
+        ) : (
+          <span className="block text-2xs text-ink-muted">Nothing is ready to start either.</span>
+        )}
       </span>
       {/* Outside the `next` gate: with nothing ready, authoring the next plan is
           the ONLY move left, and that is exactly when this card used to offer

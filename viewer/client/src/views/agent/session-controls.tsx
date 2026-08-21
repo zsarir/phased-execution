@@ -16,7 +16,12 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  AlertDialog, AlertDialogContent, AlertDialogTrigger, Button, ButtonGroup, toast,
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogTrigger,
+  Button,
+  ButtonGroup,
+  toast,
 } from '@/components/ui';
 import { api, type TerminalSession, type TerminalState } from '@/lib/api';
 import { elapsed } from '@/lib/format';
@@ -40,7 +45,10 @@ export function SessionControls({ session }: { session: TerminalSession }) {
     fn()
       .then((result) => {
         if (result.state) client.setQueryData(keys.terminal(), result.state);
-        if (!result.ok) { toast(String(result.reason ?? 'refused'), 'error'); return; }
+        if (!result.ok) {
+          toast(String(result.reason ?? 'refused'), 'error');
+          return;
+        }
         toast(said, 'ok');
       })
       .catch((error: Error) => toast(String(error?.message ?? error), 'error'))
@@ -63,8 +71,13 @@ export function SessionControls({ session }: { session: TerminalSession }) {
           className={touch}
           disabled={disabled}
           title={`Frozen by ${frozen.by}, ${elapsed(Date.now() - frozen.at)} ago — continues mid-token, in the same process`}
-          onClick={() => act('thaw', () => api.sessionThaw(session.id),
-            `${session.label} continued — it picks up mid-token`)}
+          onClick={() =>
+            act(
+              'thaw',
+              () => api.sessionThaw(session.id),
+              `${session.label} continued — it picks up mid-token`,
+            )
+          }
         >
           {busy === 'thaw' ? 'Continuing…' : 'Continue'}
         </Button>
@@ -74,11 +87,14 @@ export function SessionControls({ session }: { session: TerminalSession }) {
           variant="ghost"
           className={touch}
           disabled={disabled || Boolean(session.stopping)}
-          title={session.stopping
-            ? 'A stop is already in flight'
-            : 'Stops this session’s processes where they stand (SIGSTOP), losing nothing'}
-          onClick={() => act('freeze', () => api.sessionFreeze(session.id),
-            `${session.label} frozen where it stood`)}
+          title={
+            session.stopping
+              ? 'A stop is already in flight'
+              : 'Stops this session’s processes where they stand (SIGSTOP), losing nothing'
+          }
+          onClick={() =>
+            act('freeze', () => api.sessionFreeze(session.id), `${session.label} frozen where it stood`)
+          }
         >
           {busy === 'freeze' ? 'Freezing…' : 'Freeze'}
         </Button>
@@ -86,7 +102,12 @@ export function SessionControls({ session }: { session: TerminalSession }) {
 
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogTrigger asChild>
-          <Button size="sm" variant="danger" className={touch} disabled={disabled || Boolean(session.stopping)}>
+          <Button
+            size="sm"
+            variant="danger"
+            className={touch}
+            disabled={disabled || Boolean(session.stopping)}
+          >
             {busy === 'stop' || session.stopping ? 'Stopping…' : 'Stop'}
           </Button>
         </AlertDialogTrigger>
@@ -97,14 +118,17 @@ export function SessionControls({ session }: { session: TerminalSession }) {
           destructive
           onConfirm={() => {
             setConfirming(false);
-            act('stop', () => api.sessionStop(session.id),
-              `${session.label} asked to stop — force-ended only if it ignores the grace`);
+            act(
+              'stop',
+              () => api.sessionStop(session.id),
+              `${session.label} asked to stop — force-ended only if it ignores the grace`,
+            );
           }}
         >
           <p className="mt-2 text-sm text-ink-muted">
-            The session gets SIGTERM first, so the CLI shuts down properly; a force-end follows
-            only after a 15-second grace it ignored. Unlike Close, the record stays in the list —
-            a recovery or QA session stopped here still gets its outcome checked, and the{' '}
+            The session gets SIGTERM first, so the CLI shuts down properly; a force-end follows only after a
+            15-second grace it ignored. Unlike Close, the record stays in the list — a recovery or QA session
+            stopped here still gets its outcome checked, and the{' '}
             <code className="rounded bg-surface-raised px-1 font-mono">--resume</code> id survives.
           </p>
         </AlertDialogContent>

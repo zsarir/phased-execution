@@ -95,7 +95,10 @@ export function notificationOptions(data) {
     // thing that gets buttons. (Android and desktop honour these; iOS ignores
     // the array and shows the notification, which is the correct degradation.)
     actions: data.approvalId
-      ? [{ action: 'allow', title: 'Allow' }, { action: 'deny', title: 'Deny' }]
+      ? [
+          { action: 'allow', title: 'Allow' },
+          { action: 'deny', title: 'Deny' },
+        ]
       : undefined,
     icon: NOTIFICATION_ICON,
     badge: NOTIFICATION_BADGE,
@@ -189,15 +192,16 @@ export function decisionRequest(approvalId, decision) {
  * @returns {[string, NotificationOptions]} arguments for `showNotification`
  */
 export function answeredNotification(decision, info) {
-  return ['Phase Console', {
-    body: decision === 'allow'
-      ? 'Allowed. The session is carrying on.'
-      : 'Denied. The session was told.',
-    tag: `answered-${info.approvalId}`,
-    data: { url: info.url },
-    icon: NOTIFICATION_ICON,
-    badge: NOTIFICATION_BADGE,
-  }];
+  return [
+    'Phase Console',
+    {
+      body: decision === 'allow' ? 'Allowed. The session is carrying on.' : 'Denied. The session was told.',
+      tag: `answered-${info.approvalId}`,
+      data: { url: info.url },
+      icon: NOTIFICATION_ICON,
+      badge: NOTIFICATION_BADGE,
+    },
+  ];
 }
 
 /**

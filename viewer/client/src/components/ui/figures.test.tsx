@@ -42,9 +42,11 @@ describe('Meter', () => {
   });
 
   it('has no axe violations', async () => {
-    const { container } = render(<Meter value={0.4} label="Usage window">
-      <p className="text-xs">resets at 14:00</p>
-    </Meter>);
+    const { container } = render(
+      <Meter value={0.4} label="Usage window">
+        <p className="text-xs">resets at 14:00</p>
+      </Meter>,
+    );
     await expectNoAxeViolations(container);
   });
 });
@@ -74,7 +76,9 @@ describe('SegmentBar', () => {
   });
 
   it('has no axe violations', async () => {
-    const { container } = render(<SegmentBar counts={{ done: 4, waiting: 2, 'needs-you': 1 }} label="phases" />);
+    const { container } = render(
+      <SegmentBar counts={{ done: 4, waiting: 2, 'needs-you': 1 }} label="phases" />,
+    );
     await expectNoAxeViolations(container);
   });
 });
@@ -118,7 +122,11 @@ describe('MoneyAmount', () => {
   });
 
   it('has no axe violations', async () => {
-    const { container } = render(<p>Spent <MoneyAmount usd={1.2} against={5} /> so far.</p>);
+    const { container } = render(
+      <p>
+        Spent <MoneyAmount usd={1.2} against={5} /> so far.
+      </p>,
+    );
     await expectNoAxeViolations(container);
   });
 });

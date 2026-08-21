@@ -39,8 +39,8 @@ describe('composeStartCommand', () => {
   it('renders every home path as "$HOME/…" and carries all five switches', () => {
     const command = composeStartCommand(STATE);
     expect(command).toBe(
-      '"$HOME/.claude/skills/phased-execution/start" "$HOME/code/my-repo" --port 4123 '
-      + '--allow-writes --allow-run --allow-terminal --allow-agent --allow-accounts',
+      '"$HOME/.claude/skills/phased-execution/start" "$HOME/code/my-repo" --port 4123 ' +
+        '--allow-writes --allow-run --allow-terminal --allow-agent --allow-accounts',
     );
     expect(command).not.toContain('/home/testperson');
   });
