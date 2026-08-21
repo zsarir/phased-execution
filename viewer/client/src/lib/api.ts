@@ -584,6 +584,10 @@ export interface ConsoleState {
     resumeAtBoot?: boolean;
     autoAccountSwitch?: boolean;
     convergeEveryMs?: number;
+    /** A spent run budget is raised ONCE by this percentage (0 = never) — the resource ladder's `raise-budget` rung. */
+    budgetAutoRaisePct?: number;
+    /** How long a `require` MCP park waits for the server before continuing without it (0 = forever). */
+    mcpRequireTimeoutMs?: number;
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -618,6 +622,70 @@ export function automationPrefs(state: ConsoleState | undefined): {
     // A console running an older server has never written the key, and reads
     // as the shipped default rather than as the behaviour it used to have.
     mcpPolicy: prefs.mcpPolicy === 'require' ? 'require' : 'continue',
+  };
+}
+
+/**
+ * The ladder's preferences (`server/config.ts` `DEFAULT_PREFS`), the shipped
+ * values. Settings ▸ Automation's ladder card shows them as "shipped: …" and
+ * `ladderPrefs()` falls back to them against a server that never wrote a key.
+ */
+export const LADDER_PREF_DEFAULTS = {
+  ladderPerPhaseRungs: 3,
+  ladderPerPhaseUsd: 100,
+  ladderPerRunRungs: 10,
+  ladderPerRunUsd: 400,
+  ladderPerDayUsd: 600,
+  unblockAttempts: true,
+  staleClaimTakeover: true,
+  resumeAtBoot: true,
+  autoAccountSwitch: true,
+  convergeEveryMs: 300_000,
+  budgetAutoRaisePct: 25,
+  mcpRequireTimeoutMs: 1_800_000,
+} as const;
+
+export type LadderPrefs = {
+  ladderPerPhaseRungs: number;
+  ladderPerPhaseUsd: number;
+  ladderPerRunRungs: number;
+  ladderPerRunUsd: number;
+  ladderPerDayUsd: number;
+  unblockAttempts: boolean;
+  staleClaimTakeover: boolean;
+  resumeAtBoot: boolean;
+  autoAccountSwitch: boolean;
+  convergeEveryMs: number;
+  budgetAutoRaisePct: number;
+  mcpRequireTimeoutMs: number;
+};
+
+/**
+ * The ladder's preferences with the server's own defaults applied — the same
+ * one-place `?? default` rule as `automationPrefs`, for the twelve knobs the
+ * ladder card renders. The server sanitises on load and save (a finite number
+ * ≥ 0, a real boolean), so these fallbacks only matter against an older server
+ * that has never written the keys.
+ */
+export function ladderPrefs(state: ConsoleState | undefined): LadderPrefs {
+  const prefs = state?.prefs ?? {};
+  const num = (value: unknown, fallback: number): number =>
+    (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback);
+  const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback);
+  const d = LADDER_PREF_DEFAULTS;
+  return {
+    ladderPerPhaseRungs: num(prefs.ladderPerPhaseRungs, d.ladderPerPhaseRungs),
+    ladderPerPhaseUsd: num(prefs.ladderPerPhaseUsd, d.ladderPerPhaseUsd),
+    ladderPerRunRungs: num(prefs.ladderPerRunRungs, d.ladderPerRunRungs),
+    ladderPerRunUsd: num(prefs.ladderPerRunUsd, d.ladderPerRunUsd),
+    ladderPerDayUsd: num(prefs.ladderPerDayUsd, d.ladderPerDayUsd),
+    unblockAttempts: bool(prefs.unblockAttempts, d.unblockAttempts),
+    staleClaimTakeover: bool(prefs.staleClaimTakeover, d.staleClaimTakeover),
+    resumeAtBoot: bool(prefs.resumeAtBoot, d.resumeAtBoot),
+    autoAccountSwitch: bool(prefs.autoAccountSwitch, d.autoAccountSwitch),
+    convergeEveryMs: num(prefs.convergeEveryMs, d.convergeEveryMs),
+    budgetAutoRaisePct: num(prefs.budgetAutoRaisePct, d.budgetAutoRaisePct),
+    mcpRequireTimeoutMs: num(prefs.mcpRequireTimeoutMs, d.mcpRequireTimeoutMs),
   };
 }
 
@@ -1053,6 +1121,34 @@ export interface PhaseRecord {
   lint?: { ok: boolean; summary: string };
   closeout?: { at: string; ok: boolean; sessionId?: string; note?: string };
   said?: string;
+  /**
+   * The classifier's last word on this phase (`server/runner/situation.ts`),
+   * cached on the record for the table and the Ways-forward strip — `key` is
+   * `id:sub`, `why` the evidence lines. Never an input to anything.
+   */
+  situation?: { key: string; at: string; why?: string[] };
+  /**
+   * A rung's instruction for the NEXT boarding — the brief the runner appends
+   * (`fresh` | `resume` | `unblock` | `continue` | `closeout`) and the session
+   * it resumes, when one exists. Consumed the moment the session spawns.
+   */
+  boardingHint?: BoardingHint;
+  /** A `require` MCP park on its clock: when it parked and what was unreachable. */
+  mcpPark?: { at: string; degraded: McpDegradation[] };
+  /** The gate evaluation at boarding. */
+  gate?: { clear: boolean; kind: string; detail: string };
+}
+
+/** What a rung told the runner to do at the phase's next boarding. */
+export interface BoardingHint {
+  situation: string;
+  rung: string;
+  brief: 'fresh' | 'resume' | 'unblock' | 'continue' | 'closeout' | (string & {});
+  sessionId?: string;
+  instruction?: string;
+  escalate?: 'model';
+  at: string;
+  by?: string;
 }
 
 /**
@@ -1187,24 +1283,13 @@ export interface RunState {
   stoppedBy?: 'operator' | 'system';
   /** The run-level ask for a person, when a stop has no phase to hang it on. */
   errand?: Errand | null;
-  /** Recovery bookkeeping, keyed by phase (`plan` for a plan-wide repair).
-   * `lastOutcome` is the verdict the server has always written and this type
-   * never carried — `no-defect` ("looked, found nothing wrong") was invisible
-   * and toasted as a failure. */
-  recoveries?: Record<string, {
-    attempts: number; lastAt: string; lastReason?: string; fixed?: boolean;
-    lastOutcome?: 'fixed' | 'no-defect' | 'superseded' | 'failed';
-    /** The ladder's own history for this phase — every rung climbed, in order. */
-    rungs?: {
-      situation: string; rung: string; at: string;
-      params?: Record<string, string | number | boolean>; costUsd?: number;
-      outcome?: 'running' | 'fixed' | 'no-defect' | 'superseded' | 'failed'; note?: string;
-    }[];
-    /** The one open ask for a person, when the ladder is exhausted. */
-    errand?: Errand;
-    /** Resumes after console restarts killed this phase's lane (bounded). */
-    bootResumes?: number;
-  }>;
+  /**
+   * The resource ladder raised the run budget once (`budgetAutoRaisePct`); its
+   * presence is what makes the raise happen once per run.
+   */
+  budgetRaise?: { from: number; to: number; pct: number; at: string } | null;
+  /** Recovery bookkeeping, keyed by phase (`plan` for a plan-wide repair) — see `RecoverySlot`. */
+  recoveries?: Record<string, RecoverySlot>;
   /** Present when the run heals its own auto-recoverable halts. */
   autoRecover?: { attempts: number };
   phases: Record<string, PhaseRecord>;
@@ -1230,6 +1315,77 @@ export interface Errand {
   need: string;
   how: string;
   at: string;
+}
+
+/** One rung the ladder climbed on a phase (`server/runner/state.ts` `RungRecord`). */
+export interface RungRecord {
+  situation: string;
+  rung: string;
+  at: string;
+  params?: Record<string, string | number | boolean>;
+  costUsd?: number;
+  outcome?: 'running' | 'fixed' | 'no-defect' | 'superseded' | 'failed';
+  note?: string;
+}
+
+/**
+ * A run's recovery bookkeeping for one phase (`server/runner/state.ts`
+ * `RunState.recoveries[phase]`). `lastOutcome` is the verdict the server has
+ * always written and this type once never carried — `no-defect` ("looked,
+ * found nothing wrong") was invisible and toasted as a failure.
+ */
+export interface RecoverySlot {
+  attempts: number;
+  lastAt: string;
+  lastReason?: string;
+  fixed?: boolean;
+  lastOutcome?: 'fixed' | 'no-defect' | 'superseded' | 'failed';
+  /** The ladder's own history for this phase — every rung climbed, in order. */
+  rungs?: RungRecord[];
+  /** The one open ask for a person, when the ladder is exhausted. */
+  errand?: Errand;
+  /** Resumes after console restarts killed this phase's lane (bounded). */
+  bootResumes?: number;
+}
+
+/**
+ * One action of a convergence pass, flattened (`server/converge.ts`
+ * `ConvergeActionView`): what the loop did, to which phase, and why.
+ */
+export interface ConvergeActionView {
+  kind: 'release-debris' | 'relaunch' | 'errand' | 'heal' | 'skip' | (string & {});
+  phase?: number | null;
+  situation?: string;
+  rung?: string;
+  vehicle?: string;
+  owner?: string;
+  session?: string;
+  reboard?: { phase: number; situation: string; rung: string; brief?: string }[];
+  rearm?: number[];
+  need?: string;
+  launched?: boolean;
+  ok: boolean;
+  why: string;
+}
+
+/** The convergence loop's last pass on a plan — the Pulse's convergence line. */
+export interface ConvergeView {
+  slug: string;
+  trigger: 'boot' | 'change' | 'timer' | 'halt' | 'button' | (string & {});
+  at: string;
+  launched: boolean;
+  noop: boolean;
+  actions: ConvergeActionView[];
+  errands: number;
+}
+
+/** `GET /api/converge`: whether the loop runs by itself here, its cadence, its queue and its last reports. */
+export interface ConvergeStatusView {
+  automatic: boolean;
+  everyMs: number;
+  pending: { slug: string; trigger: string; dueAt: number }[];
+  running: string[];
+  reports: ConvergeView[];
 }
 
 /**
@@ -1926,6 +2082,7 @@ export const api = {
 
   /* ---- session presence: the registry the hook feeds, and the hook installer ---- */
   sessionRegistry: () => request<SessionRegistryView>('/api/sessions/registry'),
+  converge: () => request<ConvergeStatusView>('/api/converge'),
   hooksStatus: () => request<HooksStatusView>('/api/hooks-install'),
   hooksInstall: (action: 'install' | 'uninstall') => post<HooksWriteView>('/api/hooks-install', { action }),
 

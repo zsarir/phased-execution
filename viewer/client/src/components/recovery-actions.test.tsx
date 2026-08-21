@@ -144,3 +144,89 @@ describe('the plan-level Recover & continue', () => {
     expect(container.querySelector('button')).toBeNull();
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * The ladder on Ways forward
+ * ------------------------------------------------------------------ */
+
+describe('the ladder on Ways forward', () => {
+  const ERRAND = {
+    phase: 2, situation: 'verify-red',
+    tried: ['resume-own-session (fix-verification) → failed', 'fix-agent → failed'],
+    need: 'The phase\'s §Verification to pass — the ladder\'s sessions could not make it green.',
+    how: 'Read What failed on the phase page, fix it, then Re-check or Retry.',
+    at: '2026-08-20T10:00:00.000Z',
+  };
+
+  it('shows the situation, what was tried and what the machine tries next — in the table\'s words', () => {
+    mount(<RecoveryActions
+      target={{ slug: 'demo', phase: 2 }}
+      ctx={{
+        run: {
+          ...HALTED,
+          recoveries: {
+            '2': {
+              attempts: 1, lastAt: '',
+              rungs: [{ situation: 'verify-red', rung: 'resume-own-session', params: { mode: 'fix-verification' }, at: '2026-08-20T09:00:00Z', outcome: 'failed' }],
+            },
+          },
+        },
+        record: { status: 'failed', resumable: true, situation: { key: 'verify-red' } },
+      }}
+    />);
+    const strip = screen.getByTestId('ladder');
+    expect(strip).toHaveTextContent('Verification red');
+    expect(screen.getByTestId('ladder-tried')).toHaveTextContent('Resume with the failure → did not hold');
+    expect(screen.getByTestId('ladder-next')).toHaveTextContent('Fix with a stronger new agent');
+    // No errand yet — the ladder is still climbing.
+    expect(screen.queryByTestId('errand')).toBeNull();
+    // And the buttons are still there: the strip explains, it does not replace.
+    expect(screen.getAllByRole('button').length).toBeGreaterThan(0);
+  });
+
+  it('shows exactly ONE errand, need and how, once the ladder is exhausted', () => {
+    mount(<RecoveryActions
+      target={{ slug: 'demo', phase: 2 }}
+      ctx={{
+        run: { ...HALTED, recoveries: { '2': { attempts: 2, lastAt: '', errand: ERRAND, rungs: [] } } },
+        record: { status: 'failed', resumable: false },
+      }}
+    />);
+    const errands = screen.getAllByTestId('errand');
+    expect(errands).toHaveLength(1);
+    expect(errands[0]).toHaveTextContent('Needs you — phase 2');
+    expect(errands[0]).toHaveTextContent(ERRAND.need);
+    expect(errands[0]).toHaveTextContent(ERRAND.how);
+    expect(screen.getByTestId('errand-tried')).toHaveTextContent('resume-own-session (fix-verification) → failed');
+    // Exhausted: nothing is proposed as next.
+    expect(screen.queryByTestId('ladder-next')).toBeNull();
+  });
+
+  it('reads the run-level errand for a phase-less target (a wall with no phase)', () => {
+    mount(<RecoveryActions
+      target={{ slug: 'demo', runId: 'r1' }}
+      ctx={{ run: {
+        status: 'halted', halt: { reason: 'the run budget of $40 is spent', kind: 'budget' },
+        errand: { ...ERRAND, phase: 0, situation: 'resource-wall:budget', tried: ['raise-budget → failed'], need: 'More budget.', how: 'Raise it on the run page and press Continue.' },
+      } }}
+    />);
+    const errand = screen.getByTestId('errand');
+    expect(errand).toHaveTextContent('More budget.');
+    expect(errand).toHaveTextContent('Resource wall · budget');
+  });
+
+  it('still offers NOTHING for a resolved stop, errand or not — the pin holds', () => {
+    const { container } = mount(<RecoveryActions
+      target={{ slug: 'demo', runId: 'r1' }}
+      ctx={{ run: {
+        status: 'halted', halt: null,
+        resolved: { at: 'x', reason: 'superseded — the board shows phase 7 done' },
+        recoveries: { '2': { attempts: 2, lastAt: '', errand: ERRAND } },
+        errand: { ...ERRAND, phase: 0 },
+      } }}
+    />);
+    expect(container.querySelector('button')).toBeNull();
+    expect(screen.queryByTestId('errand')).toBeNull();
+    expect(screen.queryByTestId('ladder')).toBeNull();
+  });
+});

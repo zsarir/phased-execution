@@ -114,8 +114,16 @@ export const HALT_KINDS = [
  *   - `humanClass`: which agent briefing the "new agent" button offers a
  *     PERSON — null means an agent session is the wrong tool (a budget halt
  *     wants Continue; a needs-human park wants the person it asked for).
- *   - `autoClass`: what the UNATTENDED healer may launch by itself — strictly
- *     narrower, null for anything ambiguous, human-shaped or resource-shaped.
+ *   - `autoClass`: what the UNATTENDED machinery does with the kind by itself.
+ *     An agent class (`RECOVERY_CLASSES`) names the briefing the legacy healer
+ *     launched; a LADDER class (`LADDER_CLASSES`) says the kind is no longer
+ *     healed by halt kind at all — the situation classifier reads the phase
+ *     and the remediation ladder climbs (`server/runner/{situation,ladder}.ts`):
+ *     `ladder:unblock` for a declared blocker (one bounded unblock session,
+ *     then an errand), `ladder:resource` for the resource walls (switch
+ *     account/model, wait for the window, raise the budget once, then an
+ *     errand), `ladder` for everything the situation ladder sorts out. Null
+ *     means a person's, at once (a needs-human park, a live orphan).
  *   - `park`: the kind describes a parked run, not a halted one.
  *
  * @type {Record<string, { sessionShaped: boolean, humanClass: string|null, autoClass: string|null, park?: boolean }>}
@@ -123,21 +131,46 @@ export const HALT_KINDS = [
 export const KIND_PROFILE = {
   'verify-failed':            { sessionShaped: true,  humanClass: 'halted-verification',    autoClass: 'halted-verification' },
   'no-handoff':               { sessionShaped: true,  humanClass: 'halted-missing-handoff', autoClass: 'halted-missing-handoff' },
-  'phase-blocked':            { sessionShaped: false, humanClass: null,                     autoClass: null },
+  'phase-blocked':            { sessionShaped: false, humanClass: null,                     autoClass: 'ladder:unblock' },
   'waiting-external-timeout': { sessionShaped: true,  humanClass: 'halted-missing-handoff', autoClass: 'halted-missing-handoff' },
   'needs-human':              { sessionShaped: false, humanClass: null,                     autoClass: null },
   'plan-lint':                { sessionShaped: false, humanClass: 'plan-repair',            autoClass: 'halted-verification' },
   'phase-crashed':            { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: 'interrupted-resume' },
-  'budget':                   { sessionShaped: false, humanClass: null,                     autoClass: null },
+  'budget':                   { sessionShaped: false, humanClass: null,                     autoClass: 'ladder:resource' },
   'plan-unreadable':          { sessionShaped: false, humanClass: 'plan-repair',            autoClass: null },
-  'failure-streak':           { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: null },
-  'models-exhausted':         { sessionShaped: false, humanClass: null,                     autoClass: null },
+  'failure-streak':           { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: 'ladder' },
+  'models-exhausted':         { sessionShaped: false, humanClass: null,                     autoClass: 'ladder:resource' },
   'verification-preflight':   { sessionShaped: false, humanClass: 'plan-repair',            autoClass: 'plan-repair', park: true },
   'mcp-preflight':            { sessionShaped: false, humanClass: null,                     autoClass: null, park: true },
-  'run-preflight':            { sessionShaped: false, humanClass: null,                     autoClass: null, park: true },
-  'recovery-failed':          { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: null },
+  'run-preflight':            { sessionShaped: false, humanClass: null,                     autoClass: 'ladder:resource', park: true },
+  'recovery-failed':          { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: 'ladder' },
   'orphaned-session':         { sessionShaped: false, humanClass: null,                     autoClass: null, park: true },
-  'runner-crashed':           { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: null },
+  'runner-crashed':           { sessionShaped: false, humanClass: 'interrupted-resume',     autoClass: 'ladder' },
+};
+
+/**
+ * The `autoClass` values that mean "the ladder, not an agent class": the
+ * situation classifier reads the phase and the remediation ladder climbs —
+ * `server/runner/situation.ts` + `ladder.ts`, the table in
+ * `shared/ladder-model.js`. A surface reading a halt's profile says which
+ * ladder in the words below; nothing launches from these by name.
+ */
+export const LADDER_CLASSES = Object.freeze(['ladder', 'ladder:unblock', 'ladder:resource']);
+
+/** @param {unknown} value */
+export function isLadderClass(value) {
+  return typeof value === 'string' && LADDER_CLASSES.includes(value);
+}
+
+/**
+ * What each ladder class promises — the one-line contract a halt banner shows
+ * where it used to show the agent class an unattended healer would launch.
+ * @type {Record<string, string>}
+ */
+export const LADDER_CLASS_BLURBS = {
+  'ladder': 'The autopilot classifies the phase (never-started, work in progress, done but unrecorded, verification red…) and climbs that situation\'s ladder — its own session first, a fresh briefed session next — within the caps in Settings ▸ Automation; exhausted, it leaves one errand.',
+  'ladder:unblock': 'The autopilot reads the blocker the session declared: a lock queues, an external wait parks, a credential or gate goes straight to you, and anything else gets ONE bounded unblock session allowed to do the work — then an errand.',
+  'ladder:resource': 'The autopilot climbs the resource ladder by itself: an account with headroom or a signed-in one, the next model, the window\'s reset, a single budget raise within the policy cap — and leaves an errand only when none of those holds.',
 };
 
 /**

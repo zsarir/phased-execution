@@ -479,6 +479,13 @@ export async function handleApi(
       json(res, 200, { sessions: service.sessionViews() });
       return true;
     }
+    // `GET /api/converge`: the convergence loop's standing — on or off for this
+    // console, the sweep interval, what is queued, and its last pass per plan
+    // (the Pulse's convergence line). Display only: no flag.
+    if (head === 'converge' && req.method === 'GET') {
+      json(res, 200, service.convergeStatus());
+      return true;
+    }
     // `GET /api/hooks-install`: is the session-presence hook in ~/.claude/settings.json?
     // `POST /api/hooks-install {action: install|uninstall}`: write it (or take it out) —
     // a write OUTSIDE the console's own state, so `--allow-writes` gates it.

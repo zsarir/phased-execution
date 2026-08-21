@@ -16,7 +16,10 @@ import { useMemo, useState } from 'react';
 import { Bot, ChevronDown } from 'lucide-react';
 import { Button, InfoTip, Tooltip, TooltipProvider } from '@/components/ui';
 import { LaunchDialog } from '@/components/launch-dialog';
+import { ErrandCard, LadderStrip } from '@/components/errand';
 import { useConsoleState, useSessions } from '@/lib/queries';
+import { ladderView } from '@/lib/ladder';
+import type { Errand, RecoverySlot } from '@/lib/api';
 import { useTouch } from '@/lib/media';
 import {
   MECHANISMS, MECHANISM_LEGEND, RECOVERY_TITLES,
@@ -28,16 +31,31 @@ import { cn } from '@/lib/cn';
 /** What a surface knows; everything optional — the model tolerates absence. */
 export type RecoveryCtx = {
   boardState?: string;
-  record?: { status: string; resumable?: boolean } | null;
+  record?: {
+    status: string;
+    resumable?: boolean;
+    /** The classifier's cached word on the phase (`PhaseRecord.situation`) — the strip reads it. */
+    situation?: { key: string } | undefined;
+  } | null;
   run?: {
     status: string;
     halt?: { reason?: string; kind?: string; phase?: number } | null;
     resolved?: unknown;
+    /** The ladder's bookkeeping per phase — rungs climbed, the errand left. */
+    recoveries?: Record<string, RecoverySlot> | undefined;
+    /** The run-level errand (a wall with no phase to hang it on). */
+    errand?: Errand | null | undefined;
   } | null;
   lock?: { holder?: string | null; expired?: boolean };
   authFailure?: boolean;
   /** The plan itself fails lint/health — plan-repair's own case. */
   planIssues?: boolean;
+  /**
+   * The classifier's situation for the phase (the diagnosis endpoint's), when
+   * the surface holds it. Leads the ordering (`leadActionFor`) and names the
+   * strip; absent, the record's cached situation or the rung history speaks.
+   */
+  situation?: { id: string; sub?: string } | null;
 };
 
 type ActionView = {
@@ -84,6 +102,11 @@ export function RecoveryActions({
   const [instruction, setInstruction] = useState('');
 
   const running = liveRecovery(sessions?.sessions, target);
+  // The ladder's own story for this target: what it tried, what it does now,
+  // what it tries next — or the one errand it left. Empty for a resolved run.
+  const ladder = useMemo(() => ladderView({
+    run: ctx.run, phase: target.phase, situation: ctx.situation, record: ctx.record,
+  }), [ctx.run, ctx.situation, ctx.record, target.phase]);
   const actions = useMemo(() => (recoveryActionsFor({
     ...ctx,
     flags: {
@@ -96,7 +119,7 @@ export function RecoveryActions({
     RUN_VERBS.has(action.id) || action.id === 'fix-agent' || perform?.[action.id]),
   [ctx, state, running?.id, perform]);
 
-  if (!actions.length && !running) return null;
+  if (!actions.length && !running && ladder.empty) return null;
 
   const inline = actions.filter((action) => action.group !== 'overflow').slice(0, max);
   const rest = actions.filter((action) => !inline.includes(action));
@@ -153,6 +176,11 @@ export function RecoveryActions({
     // without the app shell. Nesting under the app's provider is fine.
     <TooltipProvider delayDuration={300}>
     <div className={cn('flex flex-col gap-2', className)}>
+      {/* The machine's account of itself comes first: a person reading Ways
+          forward should know what was already tried before pressing anything
+          — and when the ladder is spent, the ONE errand is the headline. */}
+      {ladder.errand && <ErrandCard errand={ladder.errand} situationLabel={ladder.situation?.label} />}
+      <LadderStrip view={ladder} />
       <div className="flex flex-wrap items-center gap-2">
         {running && (
           <Button size="sm" variant="default" asChild>

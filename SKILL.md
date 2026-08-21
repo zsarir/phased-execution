@@ -13,7 +13,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 metadata:
-  version: 4.5.0
+  version: 4.6.0
 ---
 
 # Phased Execution

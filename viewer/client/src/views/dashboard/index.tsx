@@ -107,11 +107,7 @@ export default function DashboardView() {
   const attention = demands({
     approvals: pending,
     runs: runs ?? [],
-    unread: state?.unread ?? 0,
-    expiredLocks,
-    issues: stats?.issues ?? [],
     allowRun: Boolean(state?.allowRun),
-    allowWrites: Boolean(state?.allowWrites),
     allowAgent: Boolean(state?.allowAgent),
     signedOut: auth?.loggedIn === false,
     // So a card whose recovery is already running says so instead of offering

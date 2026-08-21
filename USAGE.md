@@ -54,6 +54,18 @@ for that — and reading the registry and its statuses needs no flag), or
 `cd viewer && npm ci && npm run build` — skipped entirely on an npm or Homebrew install, which ships
 the client prebuilt — see `viewer/README.md`.
 
+**It heals its own runs, and asks once.** A phase that stopped short is classified (never started,
+work in progress, done but unrecorded, verification red, declared blocked, a resource wall, a stale
+or live foreign claim, a manual gate…) and its situation's ladder is climbed by the autopilot itself —
+at boot, on a docs change, every few minutes, a minute after any stop, and on Recover & continue —
+within caps in rungs **and** dollars you set in Settings ▸ Automation; when the ladder is spent it
+leaves **one errand** (what is needed, how to give it, what it tried) and drives everything else.
+Every Ways forward shows the situation, the rungs tried and the next one; the dashboard's *Waiting on
+you* lists only errands, permission cards and sign-ins; the Pulse shows each plan's last convergence
+pass. Install the session-presence hook (Settings ▸ Session presence or `phase-console
+install-hooks`) and a hand-run `claude` in the repository is seen too — queued behind while it lives,
+its lock released the moment it ends. `docs/loop.md` is the specification.
+
 **One install serves every project.** Each repository gets its own console — its own port, state and
 supervisor — from the single install you already have; `phase-console list` shows them, and every
 verb (`open`, `stop`, `restart`, `status`, `logs`) takes the name of one. The first console on a

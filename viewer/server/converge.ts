@@ -785,3 +785,97 @@ export class ConvergeScheduler {
     if (!this.closed) this.armSweep();
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * The view a reader gets (`GET /api/converge`, SSE `run:converge`)
+ * ------------------------------------------------------------------ */
+
+/** One action of a pass, flattened for a card: what it did, to which phase, why. */
+export type ConvergeActionView = {
+  kind: ConvergeAction['kind'];
+  /** The phase the action is about; null for a run-level errand; absent when it has none. */
+  phase?: number | null;
+  situation?: string;
+  rung?: string;
+  vehicle?: string;
+  owner?: string;
+  session?: string;
+  /** A relaunch's re-boards: each phase with the situation and rung it boards for. */
+  reboard?: { phase: number; situation: string; rung: string; brief?: string }[];
+  /** A relaunch's re-armed lock-cap parks. */
+  rearm?: number[];
+  /** An errand's ask. */
+  need?: string;
+  /** A heal's answer: did it launch anything? */
+  launched?: boolean;
+  ok: boolean;
+  why: string;
+};
+
+export type ConvergeView = {
+  slug: string;
+  trigger: ConvergeTrigger;
+  at: string;
+  launched: boolean;
+  /** The pass found nothing to do (the healer's fingerprint was remembered). */
+  noop: boolean;
+  actions: ConvergeActionView[];
+  /** How many errands the pass wrote or found standing. */
+  errands: number;
+};
+
+/**
+ * A report, flattened for the Pulse's convergence line and the event stream:
+ * every action with its outcome (by identity — the executor appends one
+ * outcome per action), the relaunch's re-boards named phase by phase, the
+ * healer's own answer on a heal. Pure; `test/converge.test.ts` pins it.
+ */
+export function convergeView(report: ConvergeReport): ConvergeView {
+  const actions = report.actions.map((action): ConvergeActionView => {
+    const outcome = report.outcomes.find((o) => o.action === action);
+    const ok = outcome ? outcome.ok : true;
+    switch (action.kind) {
+      case 'release-debris':
+        return {
+          kind: action.kind, phase: action.phase, owner: action.owner, ok, why: action.why,
+          ...(action.session ? { session: action.session } : {}),
+        };
+      case 'relaunch':
+        return {
+          kind: action.kind, ok, why: action.why.join('; '),
+          reboard: action.reboard.map((r) => ({
+            phase: r.phase, situation: r.situation, rung: r.rung, ...(r.brief ? { brief: r.brief } : {}),
+          })),
+          rearm: [...action.rearm],
+        };
+      case 'errand':
+        return {
+          kind: action.kind, phase: action.phase, situation: action.errand.situation,
+          need: action.errand.need, ok, why: action.why,
+        };
+      case 'heal': {
+        const heal = outcome?.heal;
+        return {
+          kind: action.kind, ok, why: heal?.reason ?? outcome?.detail ?? action.why,
+          ...(heal?.phase != null ? { phase: heal.phase } : {}),
+          ...(heal?.situation ? { situation: heal.situation } : {}),
+          ...(heal?.rung ? { rung: heal.rung } : {}),
+          ...(heal?.vehicle ? { vehicle: heal.vehicle } : {}),
+          launched: Boolean(heal?.launched),
+        };
+      }
+      case 'skip':
+      default:
+        return { kind: action.kind, ok, why: action.why };
+    }
+  });
+  return {
+    slug: report.slug,
+    trigger: report.trigger,
+    at: report.at,
+    launched: report.launched,
+    noop: report.noop != null && !report.launched && actions.every((a) => a.kind === 'skip' || (a.kind === 'heal' && !a.launched)),
+    actions,
+    errands: report.errands.length,
+  };
+}

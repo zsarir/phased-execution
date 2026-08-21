@@ -58,7 +58,9 @@ import { api, type AccountView, type AuthStatus, type ConsoleState, type RunStat
 import { relativeTime } from '@/lib/format';
 import { RECOVERY_BLURBS, RECOVERY_LABELS, type RecoveryClass } from '@/lib/recovery';
 import { RecoveryActions } from '@/components/recovery-actions';
+import { ErrandCard } from '@/components/errand';
 import { LaunchDialog } from '@/components/launch-dialog';
+import { errandsOf, situationLabelFor } from '@/lib/ladder';
 import { useState } from 'react';
 
 /** The declared order. Index in this array IS the priority. */
@@ -86,6 +88,13 @@ interface RunNote extends StatusNote {
 
 const at = (iso: string | number | undefined): string =>
   iso == null ? '' : new Date(iso).toLocaleString();
+
+/** The resource ladder's one budget raise, in a sentence — or nothing. */
+function budgetRaiseText(run: RunState | null): string | undefined {
+  const raise = run?.budgetRaise;
+  if (!raise) return undefined;
+  return `The autopilot already raised the run budget once, from $${raise.from.toFixed(2)} to $${raise.to.toFixed(2)} (+${raise.pct}%).`;
+}
 
 /**
  * Every notice this run is currently raising, worst-first.
@@ -145,6 +154,9 @@ export function runNotes({
               {streak} consecutive failures — the counter resets on a success, a Retry, or Continue.
             </span>
           )}
+          {budgetRaiseText(run) && (
+            <span className="mt-1 block text-2xs text-ink-faint">{budgetRaiseText(run)}</span>
+          )}
         </>
       ),
       // The halt is the one note whose remedy may be a whole session. Rendered
@@ -166,6 +178,7 @@ export function runNotes({
                 record: {
                   status: record.status,
                   resumable: Boolean(record.sessionId ?? record.resumeSessionId),
+                  ...(record.situation ? { situation: { key: record.situation.key } } : {}),
                 },
               } : {}),
               ...(recovery?.authFailure ? { authFailure: true } : {}),
@@ -190,6 +203,10 @@ export function runNotes({
     // has. The observed shape: status 'halted' as history, halt dissolved,
     // every phase done, and a banner still crying wolf.
     const resolved = Boolean(run.resolved) && run.status !== 'finished';
+    // The ladder's errands — the one ask per phase (and the run's own), in
+    // full: a parked run's "needs you" is these, not the status word.
+    const errands = resolved || run.status === 'finished' ? [] : errandsOf(run);
+    const raised = budgetRaiseText(run);
     notes.push({
       id: 'ended',
       severity: run.status === 'finished' ? 'ok' : resolved ? 'info' : parked ? 'warn' : 'info',
@@ -198,7 +215,25 @@ export function runNotes({
           : parked ? 'Parked — needs you.' : 'Run stopped.',
       body: resolved
         ? (run.resolved?.reason ?? run.finishedReason)
-        : run.finishedReason,
+        : errands.length || raised
+          ? (
+            <>
+              {run.finishedReason}
+              {raised && <span className="mt-1 block text-ink-muted">{raised}</span>}
+              {errands.length > 0 && (
+                <span className="mt-2 flex flex-col gap-1.5" data-testid="ended-errands">
+                  {errands.map((errand) => (
+                    <ErrandCard
+                      key={`${errand.phase}-${errand.situation}-${errand.at}`}
+                      errand={errand}
+                      situationLabel={situationLabelFor(errand.situation)}
+                    />
+                  ))}
+                </span>
+              )}
+            </>
+          )
+          : run.finishedReason,
     });
   }
 

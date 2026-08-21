@@ -25,8 +25,7 @@ import {
 import { hooksStatus, installHooks, uninstallHooks, type HooksStatus, type HooksWrite } from './hooks-install.ts';
 import { Store, handoffFor, lockFor, qaFor, readLock, type PlanRecord } from './store.ts';
 import {
-  ConvergeScheduler, convergePlan, HALT_DELAY_MS, type ConvergeDeps, type ConvergeReport, type ConvergeTrigger,
-} from './converge.ts';
+  ConvergeScheduler, convergePlan, HALT_DELAY_MS, type ConvergeDeps, type ConvergeReport, type ConvergeTrigger, convergeView, type ConvergeView } from './converge.ts';
 import { planWrite, runWrite } from './writes.ts';
 import {
   run, invalidate, readMemoryBlock, readQaMode, readSessionPlan, readLint, readGateStatus,
@@ -75,7 +74,7 @@ import {
 import type { PhaseRecord as RunPhaseRecord } from './runner/state.ts';
 import { formatScope, scopeOfRow, scopesIntersect } from '../shared/scope.js';
 import {
-  KIND_PROFILE, NO_HANDOFF_AUTO_RE, VERIFICATION_AUTO_RE, recoveryActionsFor,
+  KIND_PROFILE, NO_HANDOFF_AUTO_RE, VERIFICATION_AUTO_RE, isRecoveryClass, recoveryActionsFor,
 } from '../shared/recovery-model.js';
 import { environmentReport, type EnvIssue } from './env-doctor.ts';
 import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
@@ -605,7 +604,10 @@ export function autoRecoveryClass(
     if (halt.kind === 'no-handoff' && record?.verification && !record.verification.ok) {
       return 'halted-verification';
     }
-    return profile.autoClass as RecoveryClass | null;
+    // A LADDER class is not a briefing: the situation classifier and the
+    // remediation ladder own that kind now (`runner/situation.ts`, `ladder.ts`).
+    // This legacy reader answers only with an agent class it could launch.
+    return isRecoveryClass(profile.autoClass) ? profile.autoClass as RecoveryClass : null;
   }
 
   // Records written before kinds existed: only the runner's own unmistakable
@@ -911,10 +913,9 @@ export class Service {
       run: (slug, trigger, lastNoop) => this.convergeNow(slug, trigger, lastNoop),
       slugs: () => this.convergeSlugs(),
       everyMs: () => this.prefs.convergeEveryMs,
-      onReport: (report) => this.emit('run:converge', {
-        slug: report.slug, trigger: report.trigger, at: report.at, launched: report.launched,
-        actions: report.actions.map((action) => action.kind),
-      }),
+      // The full flattened view rides the event (`convergeView`) — the Pulse
+      // writes it straight into its cache, phase by phase, no refetch.
+      onReport: (report) => this.emit('run:converge', convergeView(report)),
     });
     this.accounts = new Accounts({
       onChange: () => this.emitAccounts(),
@@ -4214,6 +4215,31 @@ export class Service {
 
   /** The last pass per plan, for the Pulse. */
   convergeReports(): ConvergeReport[] { return [...this.converger.reports.values()]; }
+
+  /** The last pass per plan, flattened for a reader (`GET /api/converge`, the Pulse). */
+  convergeViews(): ConvergeView[] { return this.convergeReports().map(convergeView); }
+
+  /**
+   * What the convergence loop is doing: whether its automatic passes are on
+   * for this console (`--no-converge` / `--allow-run`), the sweep interval,
+   * what is queued and running, and the last report per plan.
+   */
+  convergeStatus(): {
+    automatic: boolean;
+    everyMs: number;
+    pending: { slug: string; trigger: string; dueAt: number }[];
+    running: string[];
+    reports: ConvergeView[];
+  } {
+    const snapshot = this.converger.snapshot();
+    return {
+      automatic: this.convergeAutomatic(),
+      everyMs: this.prefs.convergeEveryMs ?? 0,
+      pending: snapshot.pending,
+      running: snapshot.running,
+      reports: this.convergeViews(),
+    };
+  }
 
   private convergeDeps(): ConvergeDeps {
     const journals = new Map<string, Journal>();

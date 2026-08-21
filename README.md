@@ -34,7 +34,9 @@ verifies itself, and writes a handoff the next session boots from cold.
 
 _That board is the product. Nothing here stores "what phase am I on" — it is computed, every time,
 from your plan's dependency table and the handoff files on disk, so out-of-order and resumed work
-stay correct._
+stay correct. And since 2.3.0 the console converges on that board by itself: a phase that stopped
+short is classified and its situation's ladder climbed, within caps in rungs and dollars; exhausted,
+it leaves you **one errand** and drives everything else — [the loop](docs/loop.md) is the spec._
 
 ---
 
@@ -186,11 +188,9 @@ The long version, including push notifications and exactly what is enforced →
 
 **[📖 Full documentation →](docs/README.md)**
 
-[Overview](docs/overview.md) · [Your first plan](docs/first-plan.md) · [The loop](docs/loop.md) ·
-[The artifacts](docs/artifacts.md) · [What you control](docs/controls.md) ·
-[Session budget](docs/session-budget.md) · [Model handling](docs/model-handling.md) ·
-[QA gating](docs/qa-gating.md) · [Safety rails](docs/safety-rails.md) ·
-[Phase Console](docs/console.md) · [Install by hand](docs/install.md) ·
+[Overview](docs/overview.md) · [Your first plan](docs/first-plan.md) · [The loop](docs/loop.md) · [The artifacts](docs/artifacts.md) ·
+[What you control](docs/controls.md) · [Session budget](docs/session-budget.md) · [Model handling](docs/model-handling.md) ·
+[QA gating](docs/qa-gating.md) · [Safety rails](docs/safety-rails.md) · [Phase Console](docs/console.md) · [Install by hand](docs/install.md) ·
 [Versioning & releases](docs/releasing.md) · [Reference](docs/reference.md)
 
 Needs Claude Code, plus `bash` and `git`. The console adds Node 22.18+ (or 23.6+) and has **no

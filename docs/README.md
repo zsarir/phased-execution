@@ -15,9 +15,9 @@ below is the long version, in the order it is worth reading.
 
 | | |
 |---|---|
-| [The loop](loop.md) | Plan → phase → verify → handoff → next session, and where each step is decided. |
+| [The loop](loop.md) | The autopilot's specification: the three modes, how a stopped phase is read (situations), what the machine tries before it asks (the ladder), convergence, session presence, and what is still a person's. |
 | [The artifacts](artifacts.md) | Plan, handoff, memory, and the optional QA record — one job each, never duplicated. |
-| [What you control](controls.md) | Every knob, plus the full command reference for the engine and its helpers. |
+| [What you control](controls.md) | Every knob — the launch defaults and the ladder's caps and toggles — plus the full command reference for the engine and its helpers. |
 | [Session budget](session-budget.md) | The nine decisions a plan records: model, budget, phase size, batching, QA, branch, skills, gates, docs root. |
 | [Model handling](model-handling.md) | How a phase's model is chosen, and what changes when you run a different one. |
 

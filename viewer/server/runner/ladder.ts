@@ -17,64 +17,33 @@
  * phase, 5 per run) and a $40 session followed by two $6 closeouts and a
  * $20 console closeout was "within budget". The caps here default to 3 rungs
  * and $100 per phase, 10 and $400 per run, $600 per day per console — all
- * prefs, all in Settings ▸ Automation (Phase 6 renders them).
+ * prefs, all in Settings ▸ Automation. The table itself lives in
+ * `shared/ladder-model.js` so the client renders the same rungs by identity.
  */
 
 import type { Errand, RungRecord } from './state.ts';
 import {
   SITUATIONS, SITUATION_ACTOR, situationKey, situationLabel, parseSituationKey,
 } from '../../shared/situation-model.js';
+import {
+  RUNG_VEHICLES as SHARED_RUNG_VEHICLES,
+  RUNGS_BY_SITUATION as SHARED_RUNGS_BY_SITUATION,
+  DEFAULT_LADDER_CAPS as SHARED_DEFAULT_LADDER_CAPS,
+  rungsFor as sharedRungsFor,
+  rungKey as sharedRungKey,
+} from '../../shared/ladder-model.js';
 
 export type SituationId = (typeof SITUATIONS)[number];
 
 /**
- * Every vehicle a rung may name. The vocabulary is the design's, not the
- * console's current ability: a vehicle the console cannot drive yet is simply
- * never `available`, and the ladder skips it — so the tables below can state
- * the full ladder while Phase 2–4 land the vehicles one by one.
+ * Every vehicle a rung may name, and the rung table per situation — the
+ * SHARED vocabulary (`shared/ladder-model.js`), re-exported here by identity
+ * so the server climbs exactly the table the client renders and the journal
+ * names. The vocabulary is the design's, not the console's current ability:
+ * a vehicle the console cannot drive yet is simply never `available`, and the
+ * ladder skips it. Per-vehicle notes live beside the list in the shared file.
  */
-export const RUNG_VEHICLES = [
-  /** Reset the record and board the phase fresh from the engine's boot prompt (`retryPhase`). */
-  'reboard-fresh',
-  /** `claude -p --resume` the phase's own session through the runner, with an instruction. */
-  'resume-own-session',
-  /** Board fresh with a runner-appended resume brief (SKILL.md Mode 2 "RESUMING" + evidence). */
-  'reboard-resume-brief',
-  /** One bounded session explicitly allowed to do the work that unblocks a declared blocker. */
-  'unblock-session',
-  /** The phase's own session, asked only to verify, commit and write the handoff. */
-  'closeout-own-session',
-  /** A fresh briefed agent writing the handoff the phase never wrote. */
-  'closeout-agent',
-  /** A fresh briefed agent at a stronger model/effort fixing the failing verification. */
-  'fix-agent',
-  /** `scripts/repair-artefacts.sh` — deterministic plan/handoff/INDEX/lock-debris repair. */
-  'plan-repair-script',
-  /** The plan-repair agent (exists). */
-  'plan-repair-agent',
-  /** Continue under another registered account with headroom (`trySwitchAccount`). */
-  'switch-account',
-  /** Continue on the next model in the fallback chain. */
-  'switch-model',
-  /** Sleep until the usage window (or the first model's window) reopens. */
-  'wait-window',
-  /** Raise the phase/run budget once, within the policy cap. */
-  'raise-budget',
-  /** Take over an expired foreign claim (`stale-claim-takeover` agent class). */
-  'stale-claim-takeover',
-  /** Re-board and let the scheduler queue behind the lock holder. */
-  'queue',
-  /** Park and poll machine-checkable watch refs (`gh run`, PR state). */
-  'poll-park',
-  /** Park for a bounded time, then re-evaluate. */
-  'timed-park',
-  /** Re-check the declared watch refs after a wait elapsed. */
-  'recheck-watch',
-  /** Wait a bounded time for an MCP server to heal. */
-  'wait-heal',
-  /** Set the run's MCP policy to continue and re-board the parked phases (exists). */
-  'mcp-continue',
-] as const;
+export const RUNG_VEHICLES = SHARED_RUNG_VEHICLES;
 export type RungVehicle = (typeof RUNG_VEHICLES)[number];
 
 export type Rung = {
@@ -89,108 +58,17 @@ export type Rung = {
   spends: boolean;
 };
 
-const R = (vehicle: RungVehicle, label: string, blurb: string, spends: boolean, params?: Rung['params']): Rung =>
-  ({ vehicle, label, blurb, spends, ...(params ? { params } : {}) });
-
 /**
  * The ladder, per situation (or `situation:sub`). Order is the climb order.
  * An empty list means the situation has no automatic rung: the errand is
  * written at once (a person's), or nothing is done (a wait's).
  */
-export const RUNGS_BY_SITUATION: Readonly<Record<string, readonly Rung[]>> = Object.freeze({
-  'superseded': [],
-  'qa-failed': [],
-  'qa-pending': [],
-  'foreign-live': [],
-  'foreign-stale': [
-    R('stale-claim-takeover', 'Take over the stale claim',
-      'Takes the expired claim and continues the unfinished work — then the work-in-progress ladder applies. Costs a session.', true),
-  ],
-  'waiting-external': [
-    R('recheck-watch', 'Re-check what it waits on',
-      'Reads the declared watch refs again after the wait elapsed; resumes the own session when they have landed. Free.', false),
-  ],
-  'gated-manual': [],
-  'plan-broken': [
-    R('plan-repair-script', 'Deterministic repair',
-      'Runs scripts/repair-artefacts.sh: depends_on from the graph, missing INDEX rows, dead-run lock debris. No session. Free.', false),
-    R('plan-repair-agent', 'Repair the plan with a new agent',
-      'Briefs a fresh agent with the lint/health findings and lets it edit the plan, handoffs or INDEX until validate.sh passes. Costs a session.', true),
-  ],
-  'mcp-unavailable': [
-    R('wait-heal', 'Wait for the server',
-      'Holds the phase a bounded time for the unreachable MCP server to come back. Free.', false),
-    R('mcp-continue', 'Continue without it',
-      'Sets this run\'s MCP policy to continue and re-boards the parked phases without the server; the session is told and records an errand. Costs the phase\'s own session.', true),
-  ],
-  'resource-wall:usage': [
-    R('switch-account', 'Switch to an account with headroom',
-      'Continues at once under the registered account whose usage window has the most room — same session when its transcript came along. Free to switch; the phase still costs.', false),
-    R('switch-model', 'Switch model',
-      'Continues on the next model in the fallback chain. Free to switch; the phase still costs.', false),
-    R('wait-window', 'Wait for the window',
-      'Sleeps until the usage window reopens, then continues. Free.', false),
-  ],
-  'resource-wall:auth': [
-    R('switch-account', 'Switch to a signed-in account',
-      'Continues under a registered account that is signed in. Free to switch; the phase still costs.', false),
-  ],
-  'resource-wall:budget': [
-    R('raise-budget', 'Raise the budget once',
-      'Raises the spent budget once, within the policy cap, and continues. The raise is the cost.', true),
-  ],
-  'resource-wall:model': [
-    R('wait-window', 'Wait for the first model\'s window',
-      'Sleeps until the first model\'s own limit resets, then continues on it. Free.', false),
-  ],
-  'blocked-declared:lock': [
-    R('queue', 'Queue behind the lock',
-      'Re-boards the phase and lets the scheduler wait for the holder — woken by the docs watcher, the lease expiry and the idle poll. Free until it boards.', false),
-  ],
-  'blocked-declared:credential': [],
-  'blocked-declared:gate': [],
-  'blocked-declared:external': [
-    R('poll-park', 'Park and poll the refs',
-      'Parks the phase and polls its machine-checkable watch refs (a gh run, a PR); resumes the own session when they land. Free until then.', false),
-    R('timed-park', 'Park for a while',
-      'Parks the phase for a bounded time and re-evaluates. Free.', false),
-  ],
-  'blocked-declared:unknown': [
-    R('unblock-session', 'One bounded unblock session',
-      'Resumes the phase\'s own session (or boards fresh with an unblock brief) carrying the Outstanding text, explicitly allowed to do the work that unblocks it. One try; costs a session.', true),
-  ],
-  'verify-red': [
-    R('resume-own-session', 'Resume with the failure',
-      'Resumes the phase\'s own session with the failing commands and their output, asking it to fix the cause and finish. Costs a session.', true, { mode: 'fix-verification' }),
-    R('fix-agent', 'Fix with a stronger new agent',
-      'Briefs a fresh agent at a stronger model/effort with the evidence and lets it fix and finish the phase. Costs a full session.', true, { escalate: 'model' }),
-  ],
-  'done-unrecorded': [
-    R('closeout-own-session', 'Finish in its own session',
-      'Resumes the phase\'s own session and asks it to verify, commit and write the handoff — nothing else. Costs little; its context is intact.', true),
-    R('closeout-agent', 'Close out with a new agent',
-      'Briefs a fresh agent to check the phase against the repository and write the handoff it never wrote. Costs a full session.', true),
-  ],
-  'work-in-progress': [
-    R('resume-own-session', 'Continue in its own session',
-      'Resumes the phase\'s own session: "you are RESUMING — read git status and git diff first, then carry the phase to its exit criteria". Costs a session.', true, { mode: 'continue' }),
-    R('reboard-resume-brief', 'Board fresh with a resume brief',
-      'Boards a fresh session from the engine\'s boot prompt plus a runner-appended resume brief (the evidence, SKILL.md Mode 2 RESUMING). Costs a full session.', true),
-    R('reboard-resume-brief', 'Board fresh, stronger',
-      'The same resume brief at the next model/effort step. Costs a full session.', true, { escalate: 'model' }),
-  ],
-  'never-started': [
-    R('reboard-fresh', 'Re-board fresh',
-      'Resets the record to pending and boards the phase from its boot prompt under normal admission — no closeout, no agent, no person. Costs the phase itself.', true),
-  ],
-  'unknown': [],
-});
+export const RUNGS_BY_SITUATION: Readonly<Record<string, readonly Rung[]>> =
+  SHARED_RUNGS_BY_SITUATION as Readonly<Record<string, readonly Rung[]>>;
 
 /** The rung list for a situation, by `id:sub` first and then by `id`. */
 export function rungsFor(situationKeyOrId: string): readonly Rung[] {
-  if (situationKeyOrId in RUNGS_BY_SITUATION) return RUNGS_BY_SITUATION[situationKeyOrId];
-  const { id } = parseSituationKey(situationKeyOrId);
-  return RUNGS_BY_SITUATION[id] ?? [];
+  return sharedRungsFor(situationKeyOrId) as readonly Rung[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -205,9 +83,8 @@ export type LadderCaps = {
   perDayUsd: number;
 };
 
-export const DEFAULT_LADDER_CAPS: Readonly<LadderCaps> = Object.freeze({
-  perPhaseRungs: 3, perPhaseUsd: 100, perRunRungs: 10, perRunUsd: 400, perDayUsd: 600,
-});
+/** The shipped caps — the shared table's numbers, so docs, Settings and the server agree. */
+export const DEFAULT_LADDER_CAPS: Readonly<LadderCaps> = SHARED_DEFAULT_LADDER_CAPS;
 
 /** The caps from prefs — the five `ladder*` keys, defaults for anything missing or unusable. */
 export function ladderCaps(prefs: {
@@ -250,10 +127,9 @@ export type NextRung =
 const usd = (records: readonly RungRecord[]): number =>
   records.reduce((sum, r) => sum + (typeof r.costUsd === 'number' && Number.isFinite(r.costUsd) ? r.costUsd : 0), 0);
 
-/** The identity a "same rung" is judged by: situation key + vehicle + params. */
+/** The identity a "same rung" is judged by: situation key + vehicle + params (the shared helper). */
 export function rungKey(situation: string, rung: Pick<Rung, 'vehicle' | 'params'>): string {
-  const params = rung.params ? Object.entries(rung.params).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(',') : '';
-  return `${situation}|${rung.vehicle}${params ? `|${params}` : ''}`;
+  return sharedRungKey(situation, rung);
 }
 
 /**

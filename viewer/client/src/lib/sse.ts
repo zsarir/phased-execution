@@ -52,6 +52,11 @@ export const SSE_EVENTS = [
   // which no other event describes — a phase can sit queued for minutes while
   // nothing about any run's own state changes at all.
   'run:queue',
+  // The convergence loop finished a pass on a plan: the flattened report rides
+  // the event (`server/converge.ts` `convergeView`) — what it re-boarded,
+  // released, healed or left as an errand — so the Pulse's convergence line
+  // is a cache write, never a refetch.
+  'run:converge',
   // The Claude account registry or its usage meters moved — an account was
   // added or signed in, a poll landed, a window was learned exhausted. The
   // full redacted list rides on the event.

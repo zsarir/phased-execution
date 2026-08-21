@@ -853,3 +853,42 @@ test('executor: a session\'s debris (runId null) is released as its owner and jo
   assert.equal(line!.runId, state.id, 'on the latest run, since the claim has no run of its own');
   assert.equal(line!.data.session, 'gone');
 });
+
+/* ------------------------------------------------------------------ *
+ * The view a reader gets
+ * ------------------------------------------------------------------ */
+
+const { convergeView: convergeViewFn } = await import('../server/converge.ts');
+
+test('convergeView flattens a report: every action with its outcome, the relaunch phase by phase, the heal by its answer', () => {
+  const relaunch = { kind: 'relaunch', runId: 'r1', reboard: [{ phase: 12, situation: 'never-started', rung: 'reboard-fresh', brief: 'fresh' }], rearm: [5], why: ['phase 12 never started', 'phase 5 lock gone'] } as const;
+  const debris = { kind: 'release-debris', runId: null, phase: 3, owner: 'mobin@host', why: 'its session ended', session: 'abc' } as const;
+  const heal = { kind: 'heal', runId: 'r1', fingerprint: 'f', why: 'open records' } as const;
+  const errand = { kind: 'errand', runId: 'r1', phase: 7, errand: { phase: 7, situation: 'gated-manual', tried: [], need: 'A person.', how: 'Approve.', at: 'x' }, why: 'exhausted' } as const;
+  const report = {
+    slug: 'demo', trigger: 'boot', at: '2026-08-21T10:00:00.000Z',
+    actions: [debris, relaunch, heal, errand],
+    outcomes: [
+      { action: debris, ok: true },
+      { action: relaunch, ok: true },
+      { action: heal, ok: true, heal: { launched: true, phase: 2, situation: 'verify-red', rung: 'fix-agent', vehicle: 'agent' } },
+      { action: errand, ok: true },
+    ],
+    launched: true, errands: [errand.errand], noop: null,
+  };
+  const view = convergeViewFn(report as never);
+  assert.deepEqual(view.actions.map((a) => a.kind), ['release-debris', 'relaunch', 'heal', 'errand']);
+  assert.deepEqual(view.actions[0], { kind: 'release-debris', phase: 3, owner: 'mobin@host', ok: true, why: 'its session ended', session: 'abc' });
+  assert.deepEqual(view.actions[1].reboard, [{ phase: 12, situation: 'never-started', rung: 'reboard-fresh', brief: 'fresh' }]);
+  assert.deepEqual(view.actions[1].rearm, [5]);
+  assert.equal(view.actions[1].why, 'phase 12 never started; phase 5 lock gone');
+  assert.deepEqual(view.actions[2], { kind: 'heal', ok: true, why: 'open records', phase: 2, situation: 'verify-red', rung: 'fix-agent', vehicle: 'agent', launched: true });
+  assert.equal(view.actions[3].need, 'A person.');
+  assert.equal(view.errands, 1);
+  assert.equal(view.launched, true);
+  assert.equal(view.noop, false);
+  // A pass that only looked and remembered its fingerprint reads as a noop.
+  const quiet = convergeViewFn({ ...report, actions: [heal], outcomes: [{ action: heal, ok: true, heal: { launched: false, reason: 'nothing to climb' } }], launched: false, errands: [], noop: 'fp' } as never);
+  assert.equal(quiet.noop, true);
+  assert.equal(quiet.actions[0].why, 'nothing to climb');
+});

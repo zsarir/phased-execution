@@ -309,8 +309,9 @@ went nowhere is otherwise indistinguishable from one that worked.
 *In this tab* is the Notification API: free, instant, and gone with the tab. *On this device* is a
 push subscription — a service worker and a VAPID keypair, so the notification arrives with the
 console closed and the phone locked. Both are in **Notifications → Settings**, per device, across
-nine categories: permission needed, a phase needs you, halted, parked, phase finished, plan
-finished, work became ready, plans changed, console problems. Only the first three are sent urgent.
+twelve categories: permission needed, a phase needs you, run halted, run parked or waiting, phase
+finished or failed, plan finished, work became ready, plans changed on disk, a session ended,
+console problems, usage limits, usage climbing. Only the first three are sent urgent.
 A **Send a test** button goes out through the real push service and back, so it proves the chain
 rather than the last hop. An approval notification carries **Allow** and **Deny** as notification
 actions, so answering from a lock screen is one tap.
@@ -440,8 +441,18 @@ phase / run / day by attempts **and dollars** (Settings ▸ Automation: `ladderP
 `ladderPerPhaseUsd` 100, `ladderPerRunRungs` 10, `ladderPerRunUsd` 400, `ladderPerDayUsd` 600) —
 and when the ladder is exhausted the phase carries an **Errand**: what is needed, how to give it,
 what was already tried. The journal records `phase.situation`, `phase.rung` and `phase.errand`.
-The full rung tables live in `server/runner/ladder.ts` (`RUNGS_BY_SITUATION`); the rollout's
-remaining vehicles and the convergence loop are documented in `docs/loop.md` as they land.
+The rung table itself is `viewer/shared/ladder-model.js` — imported by the server's ladder, the
+client and the tests by identity — so what the autopilot climbs is what every **Ways forward** group
+shows: the situation chip, the rungs tried with how each ended, the rung it tries next, and, once
+the ladder is spent, the one errand card (what is needed, how to give it, what was tried). The
+dashboard's **Waiting on you** lists only errands, permission cards and sign-ins — a halted run
+with no errand is the loop's to climb, not yours to stare at; the run page's banner lists a parked
+run's errands in full; the Pulse carries a **Converge** line per plan with the loop's last pass
+("re-boarded P12 (Never started → Re-board fresh) · released a stale claim on P3") from
+`GET /api/converge` and the `run:converge` event; and Settings ▸ Automation's ladder card edits the
+caps, the sweep, the four toggles, the one budget raise and the MCP park clock. The whole
+specification — situations, rungs, convergence triggers, presence, what is still a person's — is
+`docs/loop.md`.
 
 ## Sessions, and the two the console starts for you
 

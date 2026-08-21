@@ -24,8 +24,8 @@ describe('SSE → Query bridge', () => {
     expect(extra, `phantom events: ${extra.join(', ')}`).toEqual([]);
   });
 
-  it('carries the 19 wire names, run events included', () => {
-    expect(SSE_EVENTS).toHaveLength(19);
+  it('carries the 20 wire names, run events included', () => {
+    expect(SSE_EVENTS).toHaveLength(20);
     // Sessions are on the stream deliberately: the socket is a session's own
     // live channel, but the dashboard card and the nav badges do not hold it.
     expect(SSE_EVENTS).toContain('sessions');
@@ -43,6 +43,9 @@ describe('SSE → Query bridge', () => {
       // START, which none of the others describe — a phase can sit queued for
       // minutes while nothing about any run's own state changes at all.
       'run:queue',
+      // A convergence pass: the report rides the event so the Pulse's
+      // convergence line is a cache write, not a refetch.
+      'run:converge',
     ]) {
       expect(SSE_EVENTS).toContain(name);
     }

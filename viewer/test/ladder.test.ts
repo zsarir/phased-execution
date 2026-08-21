@@ -207,3 +207,44 @@ test('errandFor yields {situation, tried, need, how} with non-empty need/how for
   // An unknown key reads as unknown — never throws.
   assert.equal(errandFor('whatever').situation, 'unknown');
 });
+
+/* ------------------------------------------------------------------ *
+ * One table, three readers
+ * ------------------------------------------------------------------ */
+
+import * as SHARED_LADDER from '../shared/ladder-model.js';
+import * as CLIENT_LADDER from '../client/src/lib/ladder.ts';
+
+test('server, client and the shared module hold the SAME rung table and vehicle list — by identity', () => {
+  assert.equal(RUNGS_BY_SITUATION, SHARED_LADDER.RUNGS_BY_SITUATION, 'server table is the shared object');
+  assert.equal(CLIENT_LADDER.RUNGS_BY_SITUATION, SHARED_LADDER.RUNGS_BY_SITUATION, 'client table is the shared object');
+  assert.equal(RUNG_VEHICLES, SHARED_LADDER.RUNG_VEHICLES);
+  assert.equal(CLIENT_LADDER.RUNG_VEHICLES, SHARED_LADDER.RUNG_VEHICLES);
+  assert.equal(DEFAULT_LADDER_CAPS, SHARED_LADDER.DEFAULT_LADDER_CAPS);
+  // Every rung names a vehicle the vocabulary lists; every situation has a row.
+  for (const [key, rungs] of Object.entries(SHARED_LADDER.RUNGS_BY_SITUATION)) {
+    for (const rung of rungs) assert.ok(SHARED_LADDER.RUNG_VEHICLES.includes(rung.vehicle), `${key}: ${rung.vehicle}`);
+  }
+  // Every situation has a table — by its id, or by every one of its sub-kinds
+  // (`resource-wall` and `blocked-declared` branch per sub-kind and have no bare row).
+  for (const id of SITUATIONS) {
+    const keys = Object.keys(SHARED_LADDER.RUNGS_BY_SITUATION);
+    assert.ok(keys.includes(id) || keys.some((k) => k.startsWith(`${id}:`)), `${id} has a rung table (possibly empty)`);
+  }
+});
+
+test('the shared helpers say what a climbed rung is called and what comes next', () => {
+  assert.equal(SHARED_LADDER.rungLabel('resume-own-session', { mode: 'continue' }), 'Continue in its own session');
+  assert.equal(SHARED_LADDER.rungLabel('reboard-resume-brief', { escalate: 'model' }), 'Board fresh, stronger');
+  assert.equal(SHARED_LADDER.rungLabel('no-such-vehicle'), 'no such vehicle');
+  const next = SHARED_LADDER.untriedRungs('work-in-progress', [
+    { situation: 'work-in-progress', rung: 'resume-own-session', params: { mode: 'continue' } },
+  ]);
+  assert.equal(next[0].label, 'Board fresh with a resume brief');
+  assert.deepEqual(SHARED_LADDER.untriedRungs('qa-pending', []), []);
+  // And `nextRung` (caps and all) agrees with the shared walk on what is next.
+  const chosen = nextRung({ situation: 'work-in-progress', history: [
+    { situation: 'work-in-progress', rung: 'resume-own-session', params: { mode: 'continue' }, at: 'x', outcome: 'failed' },
+  ] });
+  assert.ok(chosen.ok && chosen.rung.label === 'Board fresh with a resume brief');
+});

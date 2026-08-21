@@ -14,16 +14,17 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Bot, CircleDashed, Clock3, Eye, Hourglass, Lock, Snowflake, Terminal } from 'lucide-react';
+import { Bot, CircleDashed, Clock3, Eye, Hourglass, Lock, RefreshCw, Snowflake, Terminal } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { money } from '@/lib/format';
+import { rungLabel, situationLabelFor } from '@/lib/ladder';
 import { runStatusTitle } from '@/lib/status-vocab';
 import { RUN_TONE } from '@/views/run/header';
 import { RunStrip } from '@/components/charts';
 import { Chip } from '@/components/ui';
 import { navigate } from '@/router';
 import { planHref } from '@shared/routes.js';
-import type { ForeignSession, PhaseRecord, RunState } from '@/lib/api';
+import type { ConvergeView, ForeignSession, PhaseRecord, RunState } from '@/lib/api';
 
 /* ---------------- derivation (exported for tests) ---------------- */
 
@@ -75,6 +76,50 @@ export function foreignLanesFor(
     .filter((s) => s.presence === 'live' && s.plan?.slug === slug && !own.has(s.sessionId))
     .sort((a, b) => (a.plan!.phase - b.plan!.phase) || a.startedAt.localeCompare(b.startedAt));
 }
+
+/**
+ * The convergence loop's last pass, in lines a person can scan: "re-boarded
+ * P12 (Never started → Re-board fresh)", "released a stale claim on P3",
+ * "left an errand on P5 — …", "looked at P2 — nothing to climb". Every word
+ * for a situation or a rung is the shared table's (`lib/ladder.ts`), so the
+ * line and the journal agree.
+ */
+export function convergenceLines(view: ConvergeView): string[] {
+  const lines: string[] = [];
+  const at = (n: number | null | undefined) => (n == null ? 'the run' : `P${n}`);
+  for (const action of view.actions) {
+    const prefix = action.ok ? '' : 'failed: ';
+    switch (action.kind) {
+      case 'relaunch': {
+        for (const r of action.reboard ?? []) {
+          lines.push(`${prefix}re-boarded P${r.phase} (${situationLabelFor(r.situation)} → ${rungLabel(r.rung, undefined, r.situation)})`);
+        }
+        for (const n of action.rearm ?? []) lines.push(`${prefix}re-armed P${n}'s lock wait`);
+        if (!action.reboard?.length && !action.rearm?.length) lines.push(`${prefix}continued the run — ${action.why}`);
+        break;
+      }
+      case 'heal':
+        if (action.launched) {
+          lines.push(`${prefix}${at(action.phase)}: ${action.situation ? situationLabelFor(action.situation) : 'healing'}${action.rung ? ` → ${rungLabel(action.rung, undefined, action.situation)}` : ''}`);
+        } else {
+          lines.push(`${prefix}looked at ${at(action.phase)} — ${action.why}`);
+        }
+        break;
+      case 'release-debris':
+        lines.push(`${prefix}released a stale claim on P${action.phase}${action.owner ? ` (${action.owner})` : ''}`);
+        break;
+      case 'errand':
+        lines.push(`${prefix}left an errand on ${at(action.phase)}${action.need ? ` — ${action.need}` : ''}`);
+        break;
+      default:
+        lines.push(`${prefix}left it alone — ${action.why}`);
+    }
+  }
+  if (!lines.length) lines.push(view.noop ? 'nothing to do' : 'nothing to report');
+  return lines;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function isLiveRun(run: RunState | null | undefined): boolean {
   return Boolean(run && LIVE_RUN.has(run.status));
@@ -186,15 +231,21 @@ export interface PlanPulseProps {
   className?: string;
   /** Hook-reported sessions working this plan by hand (or in another console) — drawn as lanes of their own kind. */
   foreign?: readonly ForeignSession[];
+  /** The convergence loop's last pass on this plan (`GET /api/converge`, SSE `run:converge`) — the convergence line. */
+  converge?: ConvergeView | null;
 }
 
-export function PlanPulse({ slug, run, board, linkHeader, className, foreign }: PlanPulseProps) {
+export function PlanPulse({ slug, run, board, linkHeader, className, foreign, converge }: PlanPulseProps) {
   const titles = board ? new Map(board.map((p) => [p.phase, p.title])) : undefined;
   const lanes = pulseLanes(run, titles);
   const waits = pulseWaits(run, titles);
   const others = foreignLanesFor(foreign, slug, run);
   const live = isLiveRun(run);
   const now = useNow((live && lanes.length > 0) || others.length > 0);
+  // A pass older than a day is history, not a heartbeat; a plan nothing
+  // touched in that long reads idle here, whatever the loop once did to it.
+  const recentConverge = converge && converge.slug === slug && now - Date.parse(converge.at) < DAY_MS ? converge : null;
+  const convergeLines = recentConverge ? convergenceLines(recentConverge) : [];
 
   // Up next, from the board: open phases whose dependencies are not done yet —
   // the queue the SCHEDULER sees, not just the records the run has touched.
@@ -203,7 +254,7 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign }: 
     .filter((p) => !lanes.some((l) => l.phase === p.phase) && !waits.some((w) => w.phase === p.phase))
     .slice(0, 8);
 
-  if (!lanes.length && !waits.length && !live && !others.length) return null;
+  if (!lanes.length && !waits.length && !live && !others.length && !recentConverge) return null;
 
   const strip = board
     ? board.map((p) => {
@@ -355,6 +406,21 @@ export function PlanPulse({ slug, run, board, linkHeader, className, foreign }: 
             </span>
           </div>
         ))}
+
+        {recentConverge && (
+          <div
+            data-testid="converge-line"
+            className="flex flex-wrap items-start gap-x-2 gap-y-0.5 px-3 py-2 text-2xs text-ink-muted"
+            title="The convergence loop's last pass on this plan: at boot, on a docs change, every sweep, a minute after a stop, or on Recover & continue."
+          >
+            <RefreshCw size={12} className="mt-0.5 shrink-0 text-ink-faint" aria-hidden />
+            <span className="text-ink-faint">Converge</span>
+            <span className="font-mono text-ink-faint">{recentConverge.trigger} · {fmtElapsed(Math.max(0, now - Date.parse(recentConverge.at)))} ago</span>
+            <span className="flex min-w-0 flex-1 flex-wrap gap-x-2">
+              {convergeLines.map((line, index) => <span key={index}>{line}</span>)}
+            </span>
+          </div>
+        )}
 
         {upNext.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 text-2xs text-ink-muted">

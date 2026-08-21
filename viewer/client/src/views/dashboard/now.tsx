@@ -8,19 +8,21 @@
  * attention row is the only place on the page that may be amber.
  */
 
-import { AlertTriangle, Bell, Bot, ChevronRight, CircleDot, Hand, Lock, Play } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronRight, CircleDot, Hand, KeyRound, Play } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Button, Card, Chip } from '@/components/ui';
+import { ErrandCard } from '@/components/errand';
 import { useNow } from '@/lib/clock';
 import { elapsed, money, plural } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { looksLikeAuthFailure } from '@/lib/failures';
+import { errandsOf, situationLabelFor } from '@/lib/ladder';
 import {
-  RECOVERY_LABELS, classifyIssue, classifyRun, liveRecovery,
+  RECOVERY_LABELS, classifyRun, liveRecovery,
   type RecoveryClass, type RecoveryTarget,
 } from '@/lib/recovery';
 import { phaseHref, planHref } from '@shared/routes.js';
-import type { HealthIssue, RunState, TerminalSession } from '@/lib/api';
+import type { Errand, HealthIssue, RunState, TerminalSession } from '@/lib/api';
 import { isLive } from '../run/defaults';
 import { runStatusTitle } from '@/lib/status-vocab';
 // Data + dialog only — the wizard never imports the pane, so this does not drag
@@ -116,8 +118,6 @@ export function LiveStrip({ runs }: { runs: RunState[] }) {
 export type DemandActionId =
   | 'continue' | 'dismiss'
   | 'login' | 'recheck'
-  | 'release' | 'release-all'
-  | 'mark-read'
   /** The one-press plan recovery: confirm → stand down stale → recover → continue. */
   | 'auto-recover'
   /** The MCP park's one-button remedy: policy → continue, retry the parked phases. */
@@ -155,13 +155,12 @@ export interface Demand {
   tone: 'action' | 'bad';
   /** The remedies. Empty is allowed — a link is still better than nothing. */
   actions: DemandAction[];
-  /** The real issues behind a "plan error" card, expandable in place. */
-  issues?: HealthIssue[];
+  /** The errands behind the card — what is needed and how, per phase — rendered in place. */
+  errands?: Errand[];
 }
 
 /** Why an action is unavailable, in the words that say how to get it. */
 const NEEDS_RUN = 'Runs are disabled. Restart the console with --allow-run.';
-const NEEDS_WRITES = 'Writes are disabled. Restart the console with --allow-writes.';
 const NEEDS_AGENT = 'Agent sessions are disabled. Restart the console with --allow-agent.';
 
 /**
@@ -179,13 +178,14 @@ const NEEDS_AGENT = 'Agent sessions are disabled. Restart the console with --all
  * what to DO. Minimal here; the full surface is the phase's Ways-forward panel.
  */
 export function errandText(run: RunState): string | undefined {
-  const phased = Object.entries(run.recoveries ?? {})
-    .filter(([key, slot]) => slot.errand && /^\d+$/.test(key))
-    .map(([, slot]) => slot.errand!)
-    .sort((a, b) => a.phase - b.phase);
-  const all = [...phased, ...(run.errand ? [run.errand] : [])];
+  const all = errandsOf(run);
   if (!all.length) return undefined;
-  return all.map((e) => `${e.phase ? `phase ${e.phase} needs you — ` : ''}${e.need} (${e.how})`).join(' · ');
+  return all.map(errandLine).join(' · ');
+}
+
+/** One errand as one sentence: "phase 4 needs you — <need> (<how>)". */
+function errandLine(e: Errand): string {
+  return `${e.phase ? `phase ${e.phase} needs you — ` : ''}${e.need} (${e.how})`;
 }
 
 function haltPhase(run: RunState): number | undefined {
@@ -220,41 +220,38 @@ function recoveryAction(
 }
 
 /**
- * Everything that is blocked on a person, in the order it costs to ignore.
+ * Everything that is blocked on a person — and ONLY that — in the order it
+ * costs to ignore.
  *
- * A permission card stops a session dead, so it leads. A halted run has already
- * stopped and will stay stopped. An expired lock is a phase nobody is working
- * that still looks taken. Health errors are last: they are wrong, but nothing
- * is waiting on them.
+ * Since the convergence loop, "waiting on you" has a narrow meaning: a
+ * permission card (a session stopped dead until you answer), a sign-in (no
+ * session can give it), and the ERRANDS the ladder leaves — the one ask per
+ * phase when every automatic rung is spent or the situation was a person's
+ * from the start (a manual gate, a credential, a blocker no machine category
+ * fits). A halted run with no errand is not waiting on you: the loop
+ * classifies it and climbs, or writes the errand that brings it here. The only
+ * stop that still raises a card without one is a stop nothing automatic will
+ * touch — a run that opted out of auto-recovery, or a console that cannot run
+ * — and that card says so in the errand's own shape.
  *
- * Every card now carries its own remedy. That is the whole point of this pass:
- * five warnings, five plain links, and the fix for each one somewhere else in
- * the console — a dashboard that can only *report* is a dashboard you learn to
+ * Every card carries its own remedy, disabled with the reason when it cannot
+ * be taken — a dashboard that can only *report* is a dashboard you learn to
  * scroll past.
  */
 export function demands({
   approvals,
   runs,
-  unread,
-  expiredLocks,
-  issues = [],
   allowRun = false,
-  allowWrites = false,
   allowAgent = false,
   signedOut = false,
   sessions,
 }: {
   approvals: number;
   runs: RunState[];
-  unread: number;
-  expiredLocks: { slug: string; phase: number }[];
-  /** Every health issue; the error-severity ones become the plan-errors card. */
-  issues?: HealthIssue[];
   allowRun?: boolean;
-  allowWrites?: boolean;
   /** `--allow-agent` — whether a recovery session can be minted at all. */
   allowAgent?: boolean;
-  /** `claude auth status` says signed out — every run is auth-blocked. */
+  /** `claude auth status` says signed out — every run under the machine login is auth-blocked. */
   signedOut?: boolean;
   /** Live sessions, so a card that already has a recovery running says so. */
   sessions?: readonly TerminalSession[];
@@ -262,6 +259,7 @@ export function demands({
   const out: Demand[] = [];
   const recovery = (kind: RecoveryClass | undefined, target: RecoveryTarget & { runId?: string }) =>
     recoveryAction(kind, target, { allowAgent, sessions });
+  const needRun = allowRun ? undefined : NEEDS_RUN;
 
   if (approvals > 0) {
     out.push({
@@ -275,55 +273,69 @@ export function demands({
     });
   }
 
-  // A run the board has moved past — or that someone dismissed — is not waiting
-  // on anyone. It keeps its record and its place on the Runs page; it just
-  // stops being asked about here. See `server/runner/state.ts`.
-  const halted = runs.filter(
-    (r) => (r.status === 'halted' || r.status === 'interrupted') && !r.resolved,
-  );
-  for (const run of halted) {
-    const auth = looksLikeAuthFailure(run, signedOut ? { loggedIn: false } as never : undefined);
-    const target = { slug: run.slug, runId: run.id };
+  // A sign-in is intrinsically human: no session can do it, and nothing under
+  // the machine login starts or resumes until someone does.
+  if (signedOut) {
     out.push({
-      id: `halt-${run.id}`,
-      icon: <AlertTriangle size={15} aria-hidden />,
-      label: `${run.slug} ${run.status}`,
-      detail: run.halt?.reason ?? 'The run stopped before it finished.',
+      id: 'sign-in',
+      icon: <KeyRound size={15} aria-hidden />,
+      label: 'Claude is signed out on this machine',
+      detail: 'Nothing can start or resume under the machine login until you sign in — claude auth login, or a console profile under Settings ▸ Accounts.',
+      href: '#/settings',
+      tone: 'bad',
+      actions: [
+        { id: 'login', label: 'Open a sign-in terminal', kind: 'action', disabled: needRun },
+        { id: 'recheck', label: 'Check again' },
+      ],
+    });
+  }
+
+  // A run the board has moved past — or that someone dismissed — is not
+  // waiting on anyone. It keeps its record and its place on the Runs page; it
+  // just stops being asked about here. See `server/runner/state.ts`.
+  const stopped = runs.filter((r) => !r.resolved && !isLive(r.status) && r.status !== 'finished');
+
+  // The ladder's errands: one card per run, leading with the first ask.
+  for (const run of stopped) {
+    const errands = errandsOf(run);
+    if (!errands.length) continue;
+    const lead = errands[0];
+    const auth = looksLikeAuthFailure(run, signedOut ? { loggedIn: false } as never : undefined)
+      || errands.some((e) => e.situation === 'resource-wall:auth');
+    const mcp = run.halt?.kind === 'mcp-preflight' || errands.some((e) => e.situation === 'mcp-unavailable');
+    const target = { slug: run.slug, runId: run.id };
+    const phase = lead.phase || haltPhase(run);
+    out.push({
+      id: `errand-${run.id}`,
+      icon: <Hand size={15} aria-hidden />,
+      label: `${run.slug} — ${errands.length === 1
+        ? (lead.phase ? `phase ${lead.phase} needs you` : 'needs you')
+        : `${errands.length} phases need you`}`,
+      detail: `${situationLabelFor(lead.situation)}: ${errandLine(lead)}${errands.length > 1 ? ` · +${errands.length - 1} more` : ''}`,
       href: planHref(run.slug, 'run'),
       tone: 'bad',
+      errands,
       actions: [
         // Signing in first, because continuing before it is a session that
         // reports success, spends a turn and changes nothing.
         ...(auth
           ? [
-            { id: 'login', label: 'Open a sign-in terminal', kind: 'action',
-              disabled: allowRun ? undefined : NEEDS_RUN, target } as DemandAction,
+            { id: 'login', label: 'Open a sign-in terminal', kind: 'action', disabled: needRun, target } as DemandAction,
             { id: 'recheck', label: 'Check again', target } as DemandAction,
           ]
           : []),
-        // The honest first press: confirm the stop against the board, stand
-        // down what it settled, recover or continue what is real.
-        ...(auth ? [] : [{
-          id: 'auto-recover',
-          label: 'Recover & continue',
-          kind: 'action',
-          disabled: allowRun ? undefined : NEEDS_RUN,
-          target,
-        } as DemandAction]),
-        {
-          id: 'continue',
-          label: 'Continue',
-          kind: 'default',
-          disabled: allowRun ? undefined : NEEDS_RUN,
-          target,
-        },
-        // The remedy for everything Continue cannot fix. Continue re-runs the
-        // phase exactly as it was, which is the right move when the halt was
-        // circumstance and the wrong one when the phase itself is broken —
-        // that second case is what this is.
+        // An MCP errand's one-button remedy: carry on without the servers.
+        ...(mcp
+          ? [{ id: 'mcp-continue', label: 'Continue without these servers', kind: 'action', disabled: needRun, target } as DemandAction]
+          : []),
+        // "I did what it asked — look again": the honest press after an
+        // errand. It re-reads the board, stands down what the errand settled,
+        // and continues or climbs what is left.
+        ...(auth || mcp ? [] : [{ id: 'auto-recover', label: 'Recover & continue', kind: 'action', disabled: needRun, target } as DemandAction]),
+        { id: 'continue', label: 'Continue', kind: 'default', disabled: needRun, target },
         ...recovery(
           classifyRun(run, { authFailure: auth }),
-          { slug: run.slug, runId: run.id, ...(haltPhase(run) != null ? { phase: haltPhase(run)! } : {}) },
+          { slug: run.slug, runId: run.id, ...(phase != null ? { phase } : {}) },
         ),
         // Never gated: dismissing a card is a judgement about what deserves
         // attention, and a console that cannot even do that is the dead end.
@@ -332,123 +344,52 @@ export function demands({
     });
   }
 
-  // A PARKED run raised no card at all — which is how an MCP-parked plan sat
-  // 85 minutes with its one-button remedy unreachable from here. Kind-aware:
-  // the MCP park leads with continue-without-servers, a verification park
-  // with the plan repair, anything else with Continue.
-  const parked = runs.filter((r) => r.status === 'parked' && !r.resolved);
-  for (const run of parked) {
+  // Stops nothing automatic will touch. The loop climbs only runs that opted
+  // into auto-recovery, and only from a console that may run — a stop outside
+  // that is the operator's, and it is said in the errand's own shape so the
+  // card reads like every other ask. An operator's own stop is not an ask.
+  for (const run of stopped) {
+    if (errandsOf(run).length) continue;
+    if (!(run.status === 'halted' || run.status === 'interrupted' || run.status === 'parked')) continue;
+    if (run.stoppedBy === 'operator') continue;
+    if (allowRun && run.autoRecover) continue; // the loop owns it: it climbs, or it writes the errand
+    const auth = looksLikeAuthFailure(run, signedOut ? { loggedIn: false } as never : undefined);
     const target = { slug: run.slug, runId: run.id };
-    const mcp = run.halt?.kind === 'mcp-preflight';
+    const phase = haltPhase(run);
+    const errand: Errand = {
+      phase: phase ?? 0,
+      situation: 'unknown',
+      tried: [],
+      need: !allowRun
+        ? 'A console that may run — this one is read-only for runs, so nothing climbs this stop by itself.'
+        : 'Your decision — auto-recovery is off for this run, so nothing climbs this stop by itself.',
+      how: !allowRun
+        ? 'Restart the console with --allow-run, then press Recover & continue (or Continue).'
+        : 'Press Recover & continue to let the ladder climb once, Continue to resume as it was, or Dismiss.',
+      at: run.halt?.at ?? run.updatedAt ?? '',
+    };
     out.push({
-      id: `parked-${run.id}`,
+      id: `halt-${run.id}`,
       icon: <AlertTriangle size={15} aria-hidden />,
-      label: `${run.slug} parked`,
-      detail: errandText(run) ?? run.halt?.reason ?? run.finishedReason ?? 'Every remaining phase needs a person.',
+      label: `${run.slug} ${run.status}`,
+      detail: run.halt?.reason ?? errandText(run) ?? run.finishedReason ?? 'The run stopped before it finished.',
       href: planHref(run.slug, 'run'),
       tone: 'bad',
+      errands: [errand],
       actions: [
-        ...(mcp
-          ? [{
-            id: 'mcp-continue',
-            label: 'Continue without these servers',
-            kind: 'action',
-            disabled: allowRun ? undefined : NEEDS_RUN,
-            target,
-          } as DemandAction]
-          : [{
-            id: 'continue',
-            label: 'Continue',
-            kind: 'action',
-            disabled: allowRun ? undefined : NEEDS_RUN,
-            target,
-          } as DemandAction]),
+        ...(auth
+          ? [
+            { id: 'login', label: 'Open a sign-in terminal', kind: 'action', disabled: needRun, target } as DemandAction,
+            { id: 'recheck', label: 'Check again', target } as DemandAction,
+          ]
+          : [{ id: 'auto-recover', label: 'Recover & continue', kind: 'action', disabled: needRun, target } as DemandAction]),
+        { id: 'continue', label: 'Continue', kind: 'default', disabled: needRun, target },
         ...recovery(
-          classifyRun(run),
-          { slug: run.slug, runId: run.id, ...(haltPhase(run) != null ? { phase: haltPhase(run)! } : {}) },
+          classifyRun(run, { authFailure: auth }),
+          { slug: run.slug, runId: run.id, ...(phase != null ? { phase } : {}) },
         ),
         { id: 'dismiss', label: 'Dismiss', target },
       ],
-    });
-  }
-
-  if (expiredLocks.length) {
-    out.push({
-      id: 'locks',
-      icon: <Lock size={15} aria-hidden />,
-      label: `${plural(expiredLocks.length, 'stale claim')}`,
-      detail: `${expiredLocks.map((l) => `${l.slug} P${l.phase}`).join(', ')} — the lease ran out, so the phase reads as taken but nobody is in it.`,
-      href: '#/stats',
-      tone: 'bad',
-      actions: expiredLocks.length === 1
-        ? [{
-          id: 'release',
-          label: `Release ${expiredLocks[0].slug} P${expiredLocks[0].phase}`,
-          kind: 'action',
-          disabled: allowWrites ? undefined : NEEDS_WRITES,
-          target: expiredLocks[0],
-        },
-        // Releasing frees the phase; taking it over also *does* it. Offered
-        // only for a single unambiguous claim — a bulk takeover would mint one
-        // session per lock, which is never what one press meant.
-        ...recovery('stale-claim-takeover', expiredLocks[0])]
-        : [
-          { id: 'release-all', label: `Release all ${expiredLocks.length}`, kind: 'action',
-            disabled: allowWrites ? undefined : NEEDS_WRITES },
-          // Per-lock as well as bulk: one of several stale claims may be one
-          // you want to leave alone, and "all or nothing" is not triage.
-          ...expiredLocks.map((lock): DemandAction => ({
-            id: 'release',
-            label: `${lock.slug} P${lock.phase}`,
-            disabled: allowWrites ? undefined : NEEDS_WRITES,
-            target: lock,
-          })),
-        ],
-    });
-  }
-
-  if (unread > 0) {
-    out.push({
-      id: 'unread',
-      icon: <Bell size={15} aria-hidden />,
-      label: plural(unread, 'unread notification'),
-      detail: 'Runs, gates and failures you have not looked at.',
-      href: '#/notifications',
-      tone: 'action',
-      actions: [{ id: 'mark-read', label: 'Mark all read', kind: 'action' }],
-    });
-  }
-
-  // Closed plans are already out of this: `healthIssues()` drops the progress
-  // kinds and demotes the structural ones to `info`, so a terminal plan cannot
-  // produce an `error` here at all. Do not add a second closure check — the
-  // severity IS the gate, and a client-side one would silently diverge from the
-  // server's the next time the issue kinds change. (`expiredLocks` is the one
-  // that does need gating, and gets it in `dashboard/index.tsx` where the plans
-  // are — this function only renders what it is handed.)
-  const errors = issues.filter((issue) => issue.severity === 'error');
-  if (errors.length) {
-    // One card can list errors from several plans, and a repair session works
-    // on ONE plan. Offer it only when they all belong to the same one —
-    // otherwise the card links to Statistics, where each plan has its own row.
-    const slugs = [...new Set(errors.map((issue) => issue.slug))];
-    const repairable = slugs.length === 1 ? slugs[0] : undefined;
-    out.push({
-      id: 'errors',
-      icon: <AlertTriangle size={15} aria-hidden />,
-      label: plural(errors.length, 'plan error'),
-      // The old copy was a hard-coded sentence — "A plan, handoff or index
-      // disagrees with the board" — which was not even true of the issue on
-      // this board (a recorded QA failure). The card names the real ones now.
-      detail: errors.length === 1
-        ? `${errors[0].slug}: ${errors[0].message}`
-        : `${[...new Set(errors.map((e) => e.slug))].join(', ')} — expand for what each one says.`,
-      href: '#/stats',
-      tone: 'bad',
-      actions: repairable
-        ? recovery(classifyIssue(errors[0]), { slug: repairable })
-        : [],
-      issues: errors,
     });
   }
 
@@ -516,7 +457,7 @@ export function AttentionRow({
             </span>
           </a>
 
-          {item.issues?.length ? <IssueList issues={item.issues} /> : null}
+          {item.errands?.length ? <ErrandList errands={item.errands} /> : null}
 
           {item.actions.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
@@ -562,49 +503,35 @@ export function AttentionRow({
 }
 
 /**
- * The real issues behind a "plan error" card.
- *
- * The card used to render one hard-coded sentence for any number of unrelated
- * problems — an undefined dependency, a blocked handoff and a recorded QA
- * failure all read as "a plan, handoff or index disagrees with the board", and
- * only one of those is even about the board. Each one names itself and links
- * where it actually lives.
+ * The errands behind a card — the ask itself, in place. One renders whole;
+ * several fold behind the first, because five asks unfolded is the whole
+ * first screen of a phone spent on what the card already named.
  */
-function IssueList({ issues }: { issues: HealthIssue[] }) {
+function ErrandList({ errands }: { errands: Errand[] }) {
   const [open, setOpen] = useState(false);
-  if (issues.length === 1) return <IssueLine issue={issues[0]} />;
+  const shown = open ? errands : errands.slice(0, 1);
   return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        className="flex items-center gap-1 text-2xs text-ink-muted hover:text-ink [@media(hover:none)]:min-h-(--tap-min)"
-      >
-        <ChevronRight size={12} aria-hidden className={cn('transition-transform', open && 'rotate-90')} />
-        {open ? 'Hide' : `Show all ${issues.length}`}
-      </button>
-      {open && (
-        <ul className="mt-1 flex flex-col gap-1">
-          {issues.map((issue, at) => (
-            <li key={`${issue.slug}-${issue.kind}-${issue.phase ?? at}`}>
-              <IssueLine issue={issue} />
-            </li>
-          ))}
-        </ul>
+    <div className="flex flex-col gap-1.5" data-testid="demand-errands">
+      {shown.map((errand) => (
+        <ErrandCard
+          key={`${errand.phase}-${errand.situation}-${errand.at}`}
+          errand={errand}
+          situationLabel={situationLabelFor(errand.situation)}
+          compact
+        />
+      ))}
+      {errands.length > 1 && (
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          className="flex items-center gap-1 text-2xs text-ink-muted hover:text-ink [@media(hover:none)]:min-h-(--tap-min)"
+        >
+          <ChevronRight size={12} aria-hidden className={cn('transition-transform', open && 'rotate-90')} />
+          {open ? 'Hide' : `Show all ${errands.length}`}
+        </button>
       )}
     </div>
-  );
-}
-
-function IssueLine({ issue }: { issue: HealthIssue }) {
-  return (
-    <a href={issueHref(issue)} className="block min-w-0 text-2xs text-ink-muted hover:text-action">
-      <span className="font-mono text-ink-faint">
-        {issue.slug}{issue.phase != null ? ` P${issue.phase}` : ''} · {issue.kind}
-      </span>{' '}
-      {issue.message}
-    </a>
   );
 }
 

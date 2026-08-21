@@ -179,6 +179,24 @@ rather than refusing.
   untouched. Recovery is resolve-first (board re-read before any launch), the session API is the
   first vehicle (`--allow-run`), the pty agent is for plan repairs (`--allow-agent`) and people, and
   "found nothing wrong" is a recorded outcome (`no-defect`), not a failure.
+- **The ladder climbs; a person is asked once, with an errand (since 2.3.0).** A stopped phase is
+  never healed by its halt kind: `runner/situation.ts` classifies it from evidence (board, handoff,
+  record, lock + the session registry, the tree, the transcript, the declared outcome, gate, MCP,
+  health) into one of the sixteen situations in `shared/situation-model.js`, and `runner/ladder.ts`
+  climbs the rung table in `shared/ladder-model.js` — never the same rung twice per situation per
+  phase, bounded by attempts AND dollars (the `ladder*` prefs), every rung journalled
+  (`phase.situation` → `phase.rung` → `phase.errand`). Exhaustion parks the phase with ONE
+  `Errand {need, how, tried}` and the run keeps driving; only the errand is pushed (`needs-you`).
+  `Service.converge` (`converge.ts`) is the one unattended orchestration — at boot, on change, every
+  `convergeEveryMs`, a minute after a halt, on Recover & continue — and it acts THROUGH the runner
+  (`startRun({resumeRunId, reboard})`), never beside it; it touches only runs the operator did not
+  stop, never a resolved one, and a console without `--allow-run` or with `--no-converge` never
+  converges by itself. Presence is three-valued (`live` · `ended` · `unknown`,
+  `sessions/registry.ts`): only a lock whose own `session=` the registry shows ENDED is debris
+  before its lease; an owner/time match is display only and releases nothing. The three
+  vocabularies (situation, ladder, recovery) are imported by identity by server, client and tests
+  — add a situation, rung or class in the shared file and nowhere else. QA is never dispatched by
+  itself; `autoClass: 'ladder*'` in `KIND_PROFILE` is a word for a surface, never a launch.
 - **A foreign unexpired lock queues, never terminally parks.** The scheduler owns the wait (holder
   named, lease end shown; woken by the docs watcher, a lease-expiry timer, and the idle poll;
   bounded by the 2-hour lock-wait cap); the boarding belt-check owns only the grant→spawn race

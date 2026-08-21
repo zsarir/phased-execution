@@ -374,3 +374,49 @@ describe('a resolved stop', () => {
     expect(String(ended.body)).toContain('superseded');
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * The ladder's errands and its one budget raise
+ * ------------------------------------------------------------------ */
+
+describe('the ladder on the banner', () => {
+  const ERRAND = {
+    phase: 4, situation: 'gated-manual', tried: [],
+    need: 'A person to clear the manual gate — its numbered steps are on the Gate card.',
+    how: 'Do the steps, then press Approve on the phase\'s Gate card; the run retries the phase.', at: '',
+  };
+
+  it('a parked run lists its errands in full under "Parked — needs you."', () => {
+    const parked: RunState = {
+      ...RUN, status: 'parked', halt: null, finishedReason: 'nothing left to run on its own — phase 4 is parked',
+      recoveries: { '4': { attempts: 0, lastAt: '', errand: ERRAND } },
+    };
+    mount(<RunStatusStack run={parked} live={false} allowRun />);
+    expect(screen.getByText('Parked — needs you.')).toBeInTheDocument();
+    const errand = screen.getByTestId('errand');
+    expect(errand).toHaveTextContent('Needs you — phase 4');
+    expect(errand).toHaveTextContent(ERRAND.need);
+    expect(errand).toHaveTextContent('Gate needs a person');
+  });
+
+  it('a resolved stop lists no errand — settled', () => {
+    const resolved: RunState = {
+      ...RUN, status: 'parked', halt: null, finishedReason: 'parked',
+      resolved: { at: 'x', auto: true, reason: 'superseded — the board shows phase 4 done' },
+      recoveries: { '4': { attempts: 0, lastAt: '', errand: ERRAND } },
+    };
+    mount(<RunStatusStack run={resolved} live={false} allowRun />);
+    expect(screen.getByText('Stopped — resolved on its own.')).toBeInTheDocument();
+    expect(screen.queryByTestId('errand')).toBeNull();
+  });
+
+  it('a budget halt says the autopilot already raised the budget once', () => {
+    const halted: RunState = {
+      ...RUN, status: 'halted',
+      halt: { at: '', reason: 'the run budget of $50.00 is spent (raised once from $40.00)', kind: 'budget' },
+      budgetRaise: { from: 40, to: 50, pct: 25, at: '' },
+    };
+    mount(<RunStatusStack run={halted} live={false} allowRun />);
+    expect(screen.getByText(/already raised the run budget once, from \$40\.00 to \$50\.00 \(\+25%\)/)).toBeInTheDocument();
+  });
+});

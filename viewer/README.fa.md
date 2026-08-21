@@ -317,9 +317,18 @@ btw "why did you skip the cache?"     # or the box under the session console
 (Settings ▸ Automation: `ladderPerPhaseRungs` ۳، `ladderPerPhaseUsd` ۱۰۰، `ladderPerRunRungs` ۱۰،
 `ladderPerRunUsd` ۴۰۰، `ladderPerDayUsd` ۶۰۰) — و وقتی نردبان تمام شد، فاز یک **Errand** با خود
 دارد: چه چیزی لازم است، چطور بدهید، چه چیزهایی قبلاً امتحان شده. ژورنال `phase.situation`،
-`phase.rung` و `phase.errand` را ثبت می‌کند. جدول کامل پله‌ها در `server/runner/ladder.ts`
-(`RUNGS_BY_SITUATION`) است؛ وسیله‌های باقی‌ماندهٔ رول‌اوت و حلقهٔ هم‌گرایی هم‌زمان با رسیدن در
-`docs/loop.md` مستند می‌شوند.
+`phase.rung` و `phase.errand` را ثبت می‌کند. خودِ جدول پله‌ها
+`viewer/shared/ladder-model.js` است — که نردبان سرور، کلاینت و تست‌ها آن را با همان هویت import
+می‌کنند — پس آنچه اتوپایلوت بالا می‌رود همان چیزی است که هر گروه **Ways forward** نشان می‌دهد: چیپ
+وضعیت، پله‌هایی که امتحان شده با نتیجهٔ هرکدام، پلهٔ بعدی، و وقتی نردبان تمام شد، همان یک کارت errand
+(چه لازم است، چطور بدهید، چه امتحان شده). بخش **Waiting on you** داشبورد فقط errandها، کارت‌های مجوز و
+ورودها را فهرست می‌کند — اجرای متوقفی که errand ندارد مالِ حلقه است که بالا برود، نه مالِ شما که به
+آن زل بزنید؛ بنرِ صفحهٔ اجرا errandهای یک اجرای پارک‌شده را کامل فهرست می‌کند؛ Pulse برای هر طرح یک خط
+**Converge** با آخرین گذرِ حلقه دارد («re-boarded P12 (Never started → Re-board fresh) · released a
+stale claim on P3») از `GET /api/converge` و رویداد `run:converge`؛ و کارتِ نردبان در Settings ▸
+Automation سقف‌ها، فاصلهٔ جاروب، چهار کلید، تک‌افزایشِ بودجه و ساعتِ پارکِ MCP را ویرایش می‌کند.
+مشخصات کامل — وضعیت‌ها، پله‌ها، محرک‌های هم‌گرایی، حضور، و آنچه هنوز کار آدم است — در
+`docs/loop.md` است.
 
 ## نشست‌ها، و آن دو نشستی که کنسول برایتان می‌سازد
 

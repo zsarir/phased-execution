@@ -625,6 +625,7 @@ function PhaseRows({
                 {' — '}the session was told to record what it could not do.
               </p>
             ) : null}
+            {r?.mcpPark && r.status === 'parked' ? <McpParkNote park={r.mcpPark} /> : null}
             {can.diagnose && (
               <PhaseDiagnosis slug={slug} phase={p.phase} run={run} />
             )}
@@ -640,6 +641,27 @@ function PhaseRows({
         </TD>
       </TR>
     </>
+  );
+}
+
+/**
+ * A `require` MCP park on its clock: when it parked, on which servers, and
+ * when the phase continues without them (`mcpRequireTimeoutMs`, a console
+ * preference; 0 means it waits for the server to heal, however long).
+ */
+function McpParkNote({ park }: { park: NonNullable<PhaseRecord['mcpPark']> }) {
+  const { data: state } = useConsoleState();
+  const timeoutMs = typeof state?.prefs?.mcpRequireTimeoutMs === 'number' ? state.prefs.mcpRequireTimeoutMs : 1_800_000;
+  const since = Date.parse(park.at);
+  const servers = park.degraded.map((d) => d.id).join(', ') || 'an MCP server';
+  const due = timeoutMs > 0 && Number.isFinite(since) ? new Date(since + timeoutMs) : null;
+  return (
+    <p className="mt-1 text-2xs text-gated" data-testid="mcp-park">
+      Parked on {servers} since {Number.isFinite(since) ? new Date(since).toLocaleTimeString() : park.at}
+      {due
+        ? ` — continues without ${park.degraded.length === 1 ? 'it' : 'them'} at ${due.toLocaleTimeString()} unless the server heals first (an errand is recorded then).`
+        : ' — waits for the server to heal; no timeout is set (Settings ▸ Automation).'}
+    </p>
   );
 }
 

@@ -7,6 +7,7 @@ All five capability switches are off unless named. Flags are read once, at start
 | `--root <dir>` / `-r` | Open this repository immediately, skipping the picker. |
 | `--allow-writes` | Scaffold plans and handoffs, record QA, take locks, close and reopen plans. Never commits, never pushes. |
 | `--allow-run` | Enable the autopilot. Separate from writes on purpose. |
+| `--no-converge` | Keep the convergence loop's automatic passes off — boot, a docs change, the sweep, the minute after a stop. *Recover & continue* still runs one pass when you press it. |
 | `--allow-terminal` | Open a shell in the browser. No deny list, no approval hook: whoever is at the keyboard is the policy. |
 | `--allow-agent` | Interactive `claude` sessions — including recovery and QA reviews — and the *New plan with AI* wizard. |
 | `--allow-accounts` | Register Claude accounts and choose one per run. The usage meters need no flag. |

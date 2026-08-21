@@ -6,6 +6,78 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [2.3.0] - 2026-08-21
+
+Measured on the live state dir (19 runs, 14 plans, Aug 5–19), the autopilot stopped for a person far
+more often than it needed to: `verify-failed` ×10, `no-handoff` ×7, `phase-blocked` ×1 halts; ten
+`interrupted` and eleven `failed` records nobody would ever re-run; a resumed run parking at once on
+an `interrupted` phase whose session had died in bootstrap, answering *Recover & continue* with "no
+phase to anchor a recovery on", then spending $3.32 on a closeout that discovered the phase was never
+implemented and was forbidden from implementing it; a $40 session that handed off `in-progress` with
+one criterion left, followed by two $6 closeouts that each said closeouts had looped. The remedy was
+chosen by the halt kind assigned at the halt site, not by evidence about the phase; `interrupted` and
+`failed` were settled; recovery ran only on live ticks or a click; and an interactive `claude` and an
+autopilot lane could not see each other except through files. This release is the redesign —
+"converge, classify, climb": everything a machine can decide, it decides; a person is asked **once,
+with a named errand**, only when every automatic rung is spent or the act is intrinsically human.
+
+- **The situation classifier.** A stopped phase is read, not guessed at: the board line, the
+  handoff's status and Outstanding text, the record, the lock (and who holds it), the working tree,
+  the transcript, the declared outcome, the gate, MCP and health — into one of sixteen situations
+  (`shared/situation-model.js`: `never-started`, `work-in-progress`, `done-unrecorded`, `verify-red`,
+  `blocked-declared:<lock|credential|gate|external|unknown>`, `resource-wall:<usage|auth|budget|model>`,
+  `waiting-external`, `gated-manual`, `plan-broken`, `mcp-unavailable`, `foreign-live`,
+  `foreign-stale`, `qa-pending`, `qa-failed`, `superseded`, `unknown`), journalled as
+  `phase.situation` and shown on the phase's *Why is this not done?* panel with the evidence it read.
+- **The remediation ladder.** Per situation an ordered list of rungs — its own session resumed,
+  a fresh session with a resume or unblock brief, a stronger model, an account switch, a stale-claim
+  takeover, a budget raise — never the same rung twice on one phase, bounded by attempts **and
+  dollars** (3 rungs & $100 per phase · 10 & $400 per run · $600 per day, all preferences), every
+  rung journalled (`phase.rung`) and accounted before the spend. Exhaustion parks the phase with
+  **one errand** (`phase.errand`: what is needed, how to give it, what was tried) and the run keeps
+  driving everything else. The table is `shared/ladder-model.js`, imported by the server, the
+  client and the tests by identity.
+- **The loop climbs by itself.** `interrupted` and `failed` records re-board by rung with a brief
+  (`fresh` · `resume` · `unblock` · `continue` · `closeout`) without a press; a `blocked` handoff
+  gets one bounded unblock session explicitly allowed to do the work, then an errand; a board that
+  reads `stuck` goes through the situation instead of straight to a halt; `phase-outcome.sh partial`
+  means "work remains, resume me". The livelock on an expired wait + stuck board, the freeze
+  escalation that erased another lane's halt, the belt-check spin and the `said` overwrite are fixed.
+- **The convergence loop.** `Service.converge` runs at boot, on a docs change, every
+  `convergeEveryMs` (5 min) per open plan, a minute after any halt and on *Recover & continue*:
+  reconcile-close → classify → climb through the runner (never a second orchestration) → release
+  the lock debris of dead runs → re-arm lock-cap parks → resume the lanes a restart killed (their own
+  session, at most three restarts in a row) → surface records-ahead-of-board as health. It touches
+  only runs the operator did not stop and never a resolved one; `--no-converge` keeps its automatic
+  passes off. `recoverPlan` answers with the errand instead of a bare `needs-you`.
+- **The resource ladder.** A signed-out run account switches to one that signs in; a usage window
+  too far out switches to an account with headroom (or waits on the window itself, restart-safe);
+  an exhausted model chain waits for the first model's reset once; a spent run budget is raised
+  **once** within the ladder's cap; the last finishing leaf of a work-branch run opens the PR itself;
+  a `require` MCP park times out (30 min) into continue-with-errand.
+- **Session presence.** A user-scope Claude Code hook (`scripts/session-hook.sh`, installed from
+  Settings ▸ Session presence or `phase-console install-hooks`, fail-open) tells the console which
+  sessions are in its repository; a registry answers presence in three values (live · ended ·
+  unknown); a phase lock names its session (`session=`), so a lock whose session ENDED is debris the
+  moment it ends while a live session's lock is a queue to wait in; a hand-run session's
+  `phase-outcome.sh` lands in the console's inbox and drives the same machinery as a lane's.
+- **The UI shows the ladder, and asks once.** Every *Ways forward* group carries the situation
+  chip, the rungs tried with how each ended and the rung it tries next — or, once the ladder is
+  spent, exactly one errand card (need, how, tried). The dashboard's *Waiting on you* lists only
+  errands, permission cards and sign-ins (a halted run with no errand is the loop's to climb — the
+  stale-claim, unread and plan-error cards are gone; a stop nothing automatic will touch is raised
+  in the errand's shape). The run banner lists a parked run's errands in full and says when the
+  budget was raised; a `require` MCP park shows its clock. The Pulse grew a **Converge** line per
+  plan ("re-boarded P12 (Never started → Re-board fresh) · released a stale claim on P3") from
+  `GET /api/converge` and the `run:converge` event, and the `#/pulse` page says whether the loop
+  runs by itself here. Settings ▸ Automation grew the ladder card: the caps in rungs and dollars,
+  the sweep, the MCP park clock, the one budget raise, and the four toggles (unblock attempts,
+  stale-claim takeover, resume at boot, account switch) — all default on, all `POST /api/prefs`.
+- **Docs.** `docs/loop.md` is the autopilot's specification (modes, situations, the ladder,
+  convergence, resource walls, presence, what is still a person's, the journal by name, the knobs);
+  `docs/controls.md` lists every preference; the guide's Autopilot page and both READMEs explain it
+  in a paragraph; Persian siblings updated.
+
 ## [2.2.1] - 2026-08-15
 
 2.2.0's release run died at the gates on a machine-dependent test (an F17 assertion that only held

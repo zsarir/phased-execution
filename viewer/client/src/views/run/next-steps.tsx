@@ -23,7 +23,7 @@
 import { Button, Card, CardBody, CardHeader, CardTitle, Chip, StateChip } from '@/components/ui';
 import { phaseHref } from '@shared/routes.js';
 import { RecoveryActions } from '@/components/recovery-actions';
-import type { PhaseView, RunState } from '@/lib/api';
+import type { Errand, PhaseView, RunState } from '@/lib/api';
 
 /** One stopped phase, with its cause and its way forward. */
 type Row = {
@@ -31,8 +31,11 @@ type Row = {
   title: string;
   state: string;
   why: string;
-  /** This run's record of the phase — the shared model computes the offers. */
-  record?: { status: string; resumable: boolean } | undefined;
+  /** This run's record of the phase — the shared model computes the offers;
+   * its cached situation names the Ways-forward strip. */
+  record?: { status: string; resumable: boolean; situation?: { key: string } | undefined } | undefined;
+  /** The one ask the ladder left for this phase, when it ran out. */
+  errand?: Errand | undefined;
   /** The BOARD calls it stuck (blocked handoff, often no record) — plan-repair's job. */
   stuck?: boolean | undefined;
   /** Offer Retry — with gate rows it re-checks; with records it restarts. */
@@ -108,14 +111,25 @@ export function nextStepRows(
       continue;
     }
 
-    if (record && ['failed', 'interrupted', 'parked', 'gated'].includes(record.status)) {
+    // The ladder's errand for the phase — present on a parked record, and on a
+    // pending one the ladder reset and could not board (a flipped MCP park, a
+    // re-board the run halted before). Either way the row leads with its ask.
+    const errand = run?.recoveries?.[String(p.phase)]?.errand;
+    if (record && (['failed', 'interrupted', 'parked', 'gated'].includes(record.status) || errand)) {
       const haltHere = run?.halt?.phase === p.phase ? run.halt.reason : undefined;
       rows.push({
         phase: p.phase,
         title: p.title,
         state: record.status,
-        why: excerpt(record.note ?? haltHere) ?? `this run recorded it ${record.status}, without a note.`,
-        record: { status: record.status, resumable: Boolean(record.sessionId ?? record.resumeSessionId) },
+        why: errand
+          ? errand.need
+          : excerpt(record.note ?? haltHere) ?? `this run recorded it ${record.status}, without a note.`,
+        record: {
+          status: record.status,
+          resumable: Boolean(record.sessionId ?? record.resumeSessionId),
+          ...(record.situation ? { situation: { key: record.situation.key } } : {}),
+        },
+        ...(errand ? { errand } : {}),
         retry: 'restarts',
       });
     }

@@ -20,7 +20,7 @@ import { Bot } from 'lucide-react';
 import {
   Banner, Button, Card, CardBody, CardHeader, CardTitle, Chip,
 } from '@/components/ui';
-import { useAuth, useConsoleState, useRun } from '@/lib/queries';
+import { useAuth, useConsoleState, useConverge, useRun } from '@/lib/queries';
 import { money } from '@/lib/format';
 import { isClosed } from '@/lib/closure';
 import { looksLikeAuthFailure } from '@/lib/failures';
@@ -41,6 +41,7 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
   const slug = detail.summary.slug;
   const { data: state } = useConsoleState();
   const { data: detailRun } = useRun(slug, state?.autopilot !== false);
+  const { data: converge } = useConverge(state?.autopilot !== false);
   const { data: auth } = useAuth(Boolean(state?.autopilot));
   const run = (detailRun?.run ?? null) as RunState | null;
 
@@ -106,6 +107,7 @@ export function RouteCards({ detail }: { detail: PlanDetail }) {
           className="sm:col-span-2 lg:col-span-3"
           slug={slug}
           run={run}
+          converge={converge?.reports.find((report) => report.slug === slug) ?? null}
           board={detail.phases.map((p) => ({
             phase: p.phase,
             title: p.title,

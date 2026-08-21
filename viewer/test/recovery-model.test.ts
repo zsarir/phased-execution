@@ -20,6 +20,7 @@ import {
   ACTION_VOCAB, FLAG_OFF, HALT_KINDS, KIND_PROFILE, MECHANISMS, RECOVERY_BLURBS,
   RECOVERY_BUSY, RECOVERY_CLASSES, RECOVERY_LABELS, RECOVERY_TITLES,
   classifyPhase, classifyRun, recoveryActionsFor,
+  isLadderClass,
 } from '../shared/recovery-model.js';
 import { RECOVERY_CLASSES as SERVER_CLASSES, RECOVERY_TITLES as SERVER_TITLES } from '../server/recovery.ts';
 import { autoRecoveryClass } from '../server/service.ts';
@@ -57,7 +58,10 @@ test('every halt kind has a profile, and no profile is for an unknown kind', () 
     const profile = KIND_PROFILE[kind];
     assert.equal(typeof profile.sessionShaped, 'boolean', kind);
     if (profile.humanClass) assert.ok(RECOVERY_CLASSES.includes(profile.humanClass), kind);
-    if (profile.autoClass) assert.ok(RECOVERY_CLASSES.includes(profile.autoClass), kind);
+    // An auto class is an agent briefing OR a ladder — never a word nothing can act on.
+    if (profile.autoClass) {
+      assert.ok(RECOVERY_CLASSES.includes(profile.autoClass) || isLadderClass(profile.autoClass), kind);
+    }
   }
 });
 

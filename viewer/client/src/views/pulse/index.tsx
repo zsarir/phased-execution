@@ -15,7 +15,7 @@ import { Activity, Terminal } from 'lucide-react';
 import { Chip, Empty } from '@/components/ui';
 import { PlanPulse, fmtElapsed, foreignVehicle, isLiveRun, pulseLanes, pulseWaits, useNow } from '@/components/pulse';
 import { Page } from '../_page';
-import { useConsoleState, useRuns, useSessionRegistry } from '@/lib/queries';
+import { useConsoleState, useRuns, useSessionRegistry, useConverge } from '@/lib/queries';
 import { isResolved } from '@/views/runs/model';
 import type { ForeignSession, RunState } from '@/lib/api';
 import type { ViewProps } from '@/router';
@@ -65,7 +65,9 @@ export default function PulseView(_props: ViewProps) {
   const { data: state } = useConsoleState();
   const { data: runs } = useRuns(state?.autopilot !== false);
   const { data: registry } = useSessionRegistry();
+  const { data: converge } = useConverge(state?.autopilot !== false);
   const rows = pulseRuns(runs ?? []);
+  const convergeFor = (slug: string) => converge?.reports.find((report) => report.slug === slug) ?? null;
   const foreign = registry?.sessions;
   const others = otherSessions(foreign, rows);
   const foreignLive = (foreign ?? []).filter((s) => s.presence === 'live').length;
@@ -94,7 +96,19 @@ export default function PulseView(_props: ViewProps) {
               body="No plan has a live, queued or recently finished run, and no session has reported itself. Start one from a plan's Autopilot tab and its lanes appear here."
             />
           )
-          : rows.map((run) => <PlanPulse key={run.slug} slug={run.slug} run={run} linkHeader foreign={foreign} />)}
+          : rows.map((run) => (
+            <PlanPulse key={run.slug} slug={run.slug} run={run} linkHeader foreign={foreign} converge={convergeFor(run.slug)} />
+          ))}
+
+        {converge && (
+          <p className="text-2xs text-ink-faint" data-testid="converge-status">
+            Convergence {converge.automatic
+              ? `runs by itself here — at boot, on a docs change, a minute after a stop${converge.everyMs > 0 ? ` and every ${Math.round(converge.everyMs / 60_000)} min` : ''}`
+              : 'is manual on this console (runs disabled or --no-converge) — Recover & continue still runs a pass'}
+            {converge.pending.length ? ` · ${converge.pending.length} ${converge.pending.length === 1 ? 'pass' : 'passes'} queued` : ''}
+            {converge.running.length ? ` · converging ${converge.running.join(', ')}` : ''}.
+          </p>
+        )}
 
         {others.length > 0 && (
           <section aria-label="Other sessions" className="rounded-lg border border-rule bg-surface shadow-card">

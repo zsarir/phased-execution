@@ -190,3 +190,22 @@ describe('failed here, finished elsewhere', () => {
     expect(rows).toHaveLength(0);
   });
 });
+
+describe('nextStepRows — the ladder\'s errand', () => {
+  it('leads a row with the errand\'s ask, and carries the record\'s situation for the strip', () => {
+    const errand = {
+      phase: 4, situation: 'blocked-declared:unknown', tried: ['unblock-session → failed'],
+      need: 'A reading of the session\'s Outstanding section.', how: 'Clear what it names, then Resume or Retry.', at: '',
+    };
+    const rows = nextStepRows('demo', [phase({ phase: 4, state: 'in-progress', title: 'Rollout' })], run({
+      phases: { '4': { phase: 4, status: 'pending', attempts: 2, costUsd: 0, situation: { key: 'blocked-declared:unknown', at: '' } } },
+      recoveries: { '4': { attempts: 1, lastAt: '', errand } },
+    } as unknown as Partial<RunState>));
+    expect(rows).toHaveLength(1);
+    // A pending record with an errand is still a stopped phase to explain.
+    expect(rows[0].why).toBe(errand.need);
+    expect(rows[0].errand).toEqual(errand);
+    expect(rows[0].record).toEqual({ status: 'pending', resumable: false, situation: { key: 'blocked-declared:unknown' } });
+    expect(rows[0].retry).toBe('restarts');
+  });
+});

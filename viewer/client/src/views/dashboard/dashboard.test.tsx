@@ -19,7 +19,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClientConfig } from '@/lib/queries';
-import type { HealthIssue, RunState } from '@/lib/api';
+import type { RunState } from '@/lib/api';
 import { demands } from './now';
 
 /* ------------------------------------------------------------------ *
@@ -30,32 +30,22 @@ const RUN = {
   id: 'r1', slug: 'alpha', status: 'halted', halt: { at: '', reason: 'verification failed' },
 } as unknown as RunState;
 
-/** `errors: number` became `issues: HealthIssue[]` — the card names the real ones. */
-const ISSUES: HealthIssue[] = [
-  { slug: 'gamma', severity: 'error', kind: 'qa-fail', message: 'Phase 10 QA recorded fail', phase: 10 },
-  { slug: 'gamma', severity: 'warning', kind: 'orphan', message: 'no plan file' },
-];
-
 describe('what is waiting on a person', () => {
   it('puts a parked session above everything else', () => {
-    const items = demands({
-      approvals: 1,
-      runs: [RUN],
-      unread: 12,
-      expiredLocks: [{ slug: 'beta', phase: 3 }],
-      issues: ISSUES,
-    });
+    const items = demands({ approvals: 1, runs: [RUN] });
     expect(items[0].id).toBe('approvals');
     // A halted run has already stopped; a card is still stopping something.
-    expect(items.map((i) => i.id)).toEqual(['approvals', 'halt-r1', 'locks', 'unread', 'errors']);
+    // The stop itself is raised only because nothing automatic will touch it
+    // here (this console cannot run) — the loop's own stops come back as errands.
+    expect(items.map((i) => i.id)).toEqual(['approvals', 'halt-r1']);
   });
 
   it('is empty when nothing needs anyone', () => {
-    expect(demands({ approvals: 0, runs: [], unread: 0, expiredLocks: [] })).toEqual([]);
+    expect(demands({ approvals: 0, runs: [] })).toEqual([]);
   });
 
   it('names the run and its reason rather than saying something went wrong', () => {
-    const [item] = demands({ approvals: 0, runs: [RUN], unread: 0, expiredLocks: [] });
+    const [item] = demands({ approvals: 0, runs: [RUN] });
     expect(item.label).toBe('alpha halted');
     expect(item.detail).toBe('verification failed');
     expect(item.href).toBe('#/plan/alpha/run');

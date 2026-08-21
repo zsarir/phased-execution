@@ -8,8 +8,8 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { PlanPulse, fmtElapsed, foreignLanesFor, foreignVehicle, isLiveRun, pulseLanes, pulseWaits } from './pulse';
-import type { ForeignSession } from '@/lib/api';
+import { PlanPulse, convergenceLines, fmtElapsed, foreignLanesFor, foreignVehicle, isLiveRun, pulseLanes, pulseWaits } from './pulse';
+import type { ConvergeView, ForeignSession } from '@/lib/api';
 import { otherSessions, pulseRuns } from '@/views/pulse';
 import type { RunState } from '@/lib/api';
 
@@ -209,5 +209,69 @@ describe('otherSessions', () => {
     expect(ids).not.toContain('long-gone');
     expect(ids).not.toContain('unknown');
     expect(otherSessions(undefined, rows, now)).toEqual([]);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The convergence line
+ * ------------------------------------------------------------------ */
+
+const report = (over: Partial<ConvergeView> = {}): ConvergeView => ({
+  slug: 'demo', trigger: 'boot', at: new Date(Date.now() - 90_000).toISOString(), launched: true, noop: false,
+  errands: 0,
+  actions: [
+    { kind: 'release-debris', phase: 3, owner: 'autopilot/r0', ok: true, why: 'the run that held it is dead' },
+    { kind: 'relaunch', ok: true, why: 'phase 12 never started', reboard: [{ phase: 12, situation: 'never-started', rung: 'reboard-fresh', brief: 'fresh' }], rearm: [5] },
+  ],
+  ...over,
+});
+
+describe('convergenceLines', () => {
+  it('says what the pass did, phase by phase, in the shared table\'s words', () => {
+    expect(convergenceLines(report())).toEqual([
+      'released a stale claim on P3 (autopilot/r0)',
+      're-boarded P12 (Never started → Re-board fresh)',
+      're-armed P5\'s lock wait',
+    ]);
+  });
+
+  it('names a heal\'s rung when it launched, and its reason when it did not', () => {
+    expect(convergenceLines(report({ actions: [
+      { kind: 'heal', phase: 2, situation: 'verify-red', rung: 'fix-agent', vehicle: 'agent', launched: true, ok: true, why: '' },
+    ] }))).toEqual(['P2: Verification red → Fix with a stronger new agent']);
+    expect(convergenceLines(report({ actions: [
+      { kind: 'heal', phase: 2, launched: false, ok: true, why: 'phase 2 reads Declared blocked · credential — a person\'s to settle' },
+    ] }))).toEqual(['looked at P2 — phase 2 reads Declared blocked · credential — a person\'s to settle']);
+  });
+
+  it('names an errand, a skip, and a failure by what they are', () => {
+    expect(convergenceLines(report({ actions: [
+      { kind: 'errand', phase: 5, situation: 'gated-manual', need: 'A person to clear the manual gate.', ok: true, why: 'exhausted' },
+      { kind: 'skip', ok: true, why: 'the operator stopped it' },
+      { kind: 'release-debris', phase: 1, owner: 'x', ok: false, why: 'dead run' },
+    ] }))).toEqual([
+      'left an errand on P5 — A person to clear the manual gate.',
+      'left it alone — the operator stopped it',
+      'failed: released a stale claim on P1 (x)',
+    ]);
+    expect(convergenceLines(report({ actions: [], noop: true, launched: false }))).toEqual(['nothing to do']);
+  });
+});
+
+describe('<PlanPulse> — the convergence line', () => {
+  it('draws the last pass under the lanes, even on a plan that is otherwise idle', () => {
+    render(<PlanPulse slug="demo" run={run({ status: 'parked' })} converge={report()} />);
+    const line = screen.getByTestId('converge-line');
+    expect(line).toHaveTextContent('Converge');
+    expect(line).toHaveTextContent('boot');
+    expect(line).toHaveTextContent('re-boarded P12 (Never started → Re-board fresh)');
+    expect(line).toHaveTextContent('released a stale claim on P3');
+  });
+
+  it('ignores a pass about another plan, and one older than a day', () => {
+    const { container } = render(<PlanPulse slug="demo" run={run({ status: 'parked' })} converge={report({ slug: 'other' })} />);
+    expect(container.firstChild).toBeNull();
+    const stale = report({ at: new Date(Date.now() - 36 * 3600 * 1000).toISOString() });
+    expect(render(<PlanPulse slug="demo" run={run({ status: 'parked' })} converge={stale} />).container.firstChild).toBeNull();
   });
 });

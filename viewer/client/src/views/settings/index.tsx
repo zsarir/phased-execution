@@ -20,6 +20,7 @@ import { useState } from 'react';
 import { applyUpdateNow } from '@/lib/pwa';
 import { Page } from '../_page';
 import { AutomationCard } from './automation';
+import { LadderCard } from './ladder';
 import { SessionHookCard } from './hooks';
 import { AccountsCard } from './accounts';
 import { McpCard } from './mcp';
@@ -185,6 +186,10 @@ export default function SettingsView() {
         </Card>
 
         <AutomationCard />
+
+        {/* What the autopilot may do by itself, and how much of it: the
+            ladder's caps, clocks and toggles. */}
+        <LadderCard />
 
         {/* Beside Automation: the hook is what lets the autopilot see the
             sessions it shares the repository with. */}

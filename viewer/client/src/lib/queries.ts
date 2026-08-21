@@ -27,6 +27,7 @@ import {
   api,
   type AccountsState, type ConsoleState, type InboxQuery, type NotificationScope, type PlanDetail,
   type PlanSummary, type TerminalState, type McpState, type SessionRegistryView,
+  type ConvergeView, type ConvergeStatusView,
 } from './api';
 import { isClosed } from './closure';
 import { SSE_EVENTS, onSse, type SseEvent } from './sse';
@@ -56,6 +57,7 @@ export const keys = {
   terminal: () => ['terminal'] as const,
   /** The session-presence registry — every Claude session the hook reported for this instance. */
   sessionRegistry: () => ['sessions', 'registry'] as const,
+  converge: () => ['converge'] as const,
   /** Is the session-presence hook in `~/.claude/settings.json`? */
   hooksStatus: () => ['hooks-status'] as const,
   approvals: () => ['approvals'] as const,
@@ -194,6 +196,22 @@ const patchPresence: Effect['patch'] = (client, data) => {
     client.setQueryData<SessionRegistryView>(keys.sessionRegistry(), { sessions: data.foreign as SessionRegistryView['sessions'] });
   }
 };
+/** A finished convergence pass: merge its view into the cache by slug — the full report rides the event. */
+const patchConverge: Effect['patch'] = (client, data) => {
+  if (!data || typeof data.slug !== 'string' || !Array.isArray(data.actions)) return;
+  const view = data as unknown as ConvergeView;
+  client.setQueryData<ConvergeStatusView>(keys.converge(), (current) => {
+    const rest = (current?.reports ?? []).filter((report) => report.slug !== view.slug);
+    return {
+      automatic: current?.automatic ?? true,
+      everyMs: current?.everyMs ?? 0,
+      pending: (current?.pending ?? []).filter((p) => p.slug !== view.slug),
+      running: (current?.running ?? []).filter((slug) => slug !== view.slug),
+      reports: [...rest, view],
+    };
+  });
+};
+
 export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
   /* ---- the repo moved under us ---- */
   // Queue and runs ride along: lock files live under docs/handoffs, so a
@@ -246,6 +264,11 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
      which is also why `['scopes']` is invalidated as a bare prefix rather
      than for the slug the event happens to name. */
   'run:queue': { invalidate: [keys.runs(), keys.state(), keys.queue(), ['scopes']] },
+  /* A convergence pass landed: the view rides the event, so this is a cache
+     write by slug; `runs` is invalidated too because a relaunch or a heal has
+     just changed a run, and `/api/converge` is re-read as the belt to those
+     braces (the pending/running lists move independently of any one pass). */
+  'run:converge': { invalidate: [keys.converge(), keys.runs()], patch: patchConverge },
 
   /* ---- accounts ----
      The redacted list rides on the event (see `patchAccounts`), so this is a
@@ -354,6 +377,16 @@ export function useSessionRegistry(enabled = true) {
 }
 
 /** The session-presence hook's presence in `~/.claude/settings.json`. */
+
+/** The convergence loop's standing and its last pass per plan (`GET /api/converge`). */
+export function useConverge(enabled = true) {
+  return useQuery({
+    queryKey: keys.converge(),
+    queryFn: api.converge,
+    enabled,
+    staleTime: 15_000,
+  });
+}
 export function useHooksStatus(enabled = true) {
   return useQuery({ queryKey: keys.hooksStatus(), queryFn: api.hooksStatus, enabled });
 }

@@ -21,7 +21,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api, type RunState } from '@/lib/api';
 import { keys } from '@/lib/queries';
 import { toast } from '@/components/ui';
-import { useReleaseLock } from '@/components/release-lock';
 import type { LaunchRequest } from '@/components/launch-dialog';
 import type { Demand, DemandAction } from './now';
 
@@ -35,7 +34,6 @@ export function useDemandActions(runs: readonly RunState[]): {
   const client = useQueryClient();
   const [busy, setBusy] = useState<string | undefined>();
   const [launch, setLaunch] = useState<LaunchRequest | null>(null);
-  const { release, releaseAllExpired } = useReleaseLock();
 
   const onAction = useCallback((demand: Demand, action: DemandAction) => {
     const key = `${demand.id}:${action.id}`;
@@ -93,19 +91,6 @@ export function useDemandActions(runs: readonly RunState[]): {
               fresh.loggedIn ? 'ok' : 'warn');
             break;
           }
-          case 'release': {
-            if (!slug || action.target?.phase == null) throw new Error('That claim is gone — reload.');
-            await release(slug, action.target.phase);
-            break;
-          }
-          case 'release-all':
-            await releaseAllExpired();
-            break;
-          case 'mark-read': {
-            const { changed } = await api.markNotificationsRead();
-            toast(changed ? `Marked ${changed} read` : 'Nothing was unread', 'ok');
-            break;
-          }
           case 'start-recovery': {
             // A live one is a link, not a button — `AttentionRow` renders it as
             // an anchor and never calls this. Reaching here opens the launch
@@ -131,7 +116,7 @@ export function useDemandActions(runs: readonly RunState[]): {
         void client.invalidateQueries({ queryKey: keys.state() });
       }
     })();
-  }, [client, release, releaseAllExpired, runs]);
+  }, [client, runs]);
 
   return { onAction, busy, launch, clearLaunch: useCallback(() => setLaunch(null), []) };
 }

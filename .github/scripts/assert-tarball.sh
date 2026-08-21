@@ -43,6 +43,7 @@ for p in \
   "viewer/shared/instances.mjs" \
   "viewer/shared/recovery-model.js" \
   "viewer/shared/situation-model.js" \
+  "viewer/shared/ladder-model.js" \
   "viewer/scripts/check-stamp.mjs" \
   "viewer/run" \
   "viewer/package.json" \

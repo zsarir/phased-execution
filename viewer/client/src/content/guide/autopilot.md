@@ -85,3 +85,49 @@ Turning the guard off admits overlapping runs at once; a work-branch run that ov
 then instructed to do its work inside a linked `git worktree` rather than switching the shared
 checkout. The guard never changes the rule *within* one run: two lanes of the same run still never
 share a repository.
+
+## The ladder — what it tries before it asks you
+
+A phase that stopped short is never healed by the name of its halt. The console **classifies** it
+from evidence that already exists — the board line, the handoff's status and Outstanding text, the
+run's record, the lock and who holds it, the working tree, the last verification, what the session
+declared — into one **situation**: never started · work in progress · done but unrecorded ·
+verification red · declared blocked (a lock, a credential, a gate, something external, or unknown) ·
+a resource wall (usage, auth, budget, model) · an unreachable MCP server · a broken plan · a stale or
+a live foreign claim · a manual gate · a QA verdict.
+
+Each situation has a **ladder** of rungs, climbed in order and never the same rung twice on one
+phase: its own session resumed first (cheap — the context is intact), a fresh briefed session next,
+an account or model switch at a wall, one bounded unblock session on a declared blocker, a takeover
+of a stale claim. The ladder is bounded in **rungs and dollars** — per phase, per run, per day —
+and every cap is a knob on Settings ▸ Automation's ladder card. Every **Ways forward** shows the
+situation, the rungs tried with how each ended, and the rung it tries next, so what you press is
+never something the machine already tried.
+
+When every rung is spent, or the situation was yours from the start, the phase is parked with
+**one errand**: what is needed, how to give it, what was already tried. That card is the only thing
+the dashboard's *Waiting on you* shows besides permission cards and sign-ins — a halted run with no
+errand is the loop's to climb, not yours to stare at. Do the errand, then press **Recover &
+continue**: the board is re-read, what the errand settled stands down, and the run carries on.
+
+## It keeps looking — convergence
+
+Nobody has to be watching. The **convergence loop** re-reads every open plan at boot, on a docs
+change, every few minutes (the sweep), a minute after any stop, and on *Recover & continue* — closes
+the records the board has overtaken, classifies what is still open, climbs the ladder for runs the
+system stopped (never one you paused or stopped, never a resolved one), releases lock debris left
+by dead runs and ended sessions, and resumes the lanes a console restart killed. Each pass is one
+journal line on the run and one line on the Pulse's **Converge** row — "re-boarded P12 (Never
+started → Re-board fresh) · released a stale claim on P3" — so what it did is readable after the
+fact. `--no-converge` keeps the automatic passes off; a console without `--allow-run` never
+converges by itself. QA is still a press: the loop never dispatches reviewers.
+
+## Who is in the repository
+
+Install the **session-presence hook** (Settings ▸ Session presence, or `phase-console
+install-hooks`) and every Claude session on this machine whose directory a console owns reports
+itself: a hand-run `claude` appears on the Pulse as a lane of its own kind, its phase lock names its
+session, and the lock is a queue to wait in while the session lives and **debris the moment it
+ends** — released without waiting for the lease. Presence is three-valued: live, ended, unknown;
+nothing is ever released on a guess. A hand session's `phase-outcome.sh` declarations reach the
+console too, so a person's *waiting-external* or *partial* drives the same machinery as a lane's.
