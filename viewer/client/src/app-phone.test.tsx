@@ -6,7 +6,7 @@
  * Kept separate from app.test.tsx, whose suites all describe the desktop.
  */
 
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -149,8 +149,12 @@ describe('the phone shell', () => {
 });
 
 describe('full-height routes', () => {
-  it('terminal gets a non-scrolling flex main; plans keeps the one page scroller', async () => {
-    window.location.hash = '#/terminal';
+  it('sessions gets a non-scrolling flex main; plans keeps the one page scroller', async () => {
+    // The pane owns its own height — a page scroller here gives a phone two
+    // scrollbars and no way to reach the prompt. `#/terminal` reaches the same
+    // frame THROUGH the redirect, which is asserted below rather than relied on
+    // here, or this test would pass for a reason it does not name.
+    window.location.hash = '#/sessions';
     mount();
     const main = await screen.findByRole('main');
     expect(main.className).toContain('overflow-hidden');
@@ -161,5 +165,12 @@ describe('full-height routes', () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'));
     });
     expect((await screen.findByRole('main')).className).toContain('overflow-y-auto');
+  });
+
+  it('a legacy #/terminal deep link lands in that same frame', async () => {
+    window.location.hash = '#/terminal/abc123';
+    mount();
+    await waitFor(() => expect(window.location.hash).toBe('#/sessions/abc123'));
+    expect((await screen.findByRole('main')).className).toContain('overflow-hidden');
   });
 });

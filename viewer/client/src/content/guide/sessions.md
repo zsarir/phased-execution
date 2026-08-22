@@ -1,8 +1,25 @@
+## One list, four kinds
+
+**Sessions** shows every process this console owns or can see, in one place:
+
+- **Autopilot lanes** — the phases a run is driving. The row links to the run page, where that lane's
+  console, approvals, ask box and replay live.
+- **Agent sessions** — interactive Claude sessions you opened here.
+- **Shells** — a plain shell on this machine, from a laptop or a phone.
+- **Other sessions on this machine** — Claude sessions the presence hook reported: your own CLI,
+  another console's lane. Read-only here; the row exists because *that* is what a scope conflict is.
+
+Only the middle two are processes this console holds a terminal for, so only those open a pane at
+`#/sessions/<id>` and only those offer Close.
+
+`#/agent/<id>` and `#/terminal/<id>` still work — they were two pages until 3.0 and both are in
+bookmarks. Each keeps its session id through the redirect; with no id, `#/agent` opens the launcher
+and `#/terminal` the new-shell state, because that is what each address meant.
+
 ## A session is a process, not a tab
 
-An agent session on the **Agent** page and a shell on the **Terminal** page are both processes on the
-machine running this console. Closing the tab detaches the socket; the process keeps working.
-Reopening reattaches to it, scrollback and all.
+An agent session and a shell are both processes on the machine running this console. Closing the tab
+detaches the socket; the process keeps working. Reopening reattaches to it, scrollback and all.
 
 - **Nothing is reaped for being idle.** A session you started an hour ago and have not looked at
   since is still there. Idleness is not evidence of anything — the point of an agent session is that
@@ -14,9 +31,11 @@ session.
 
 ## On a phone
 
-The Agent and Terminal pages work under a thumb: a fixed key bar with the keys a phone keyboard lacks,
-a composer for agent sessions, a pty born at the size of your screen, and reconnects that happen by
-themselves. **Mobile setup ▸ Driving a session from the phone** walks through it.
+Sessions works under a thumb: the list collapses to the open session and a chevron (the sheet behind
+it holds every session, the controls, and the lanes this page cannot open a pane for), then a fixed
+key bar with the keys a phone keyboard lacks, a composer for agent sessions, a pty born at the size
+of your screen, an `A−`/`A+` font stepper, and reconnects that happen by themselves. **Mobile setup ▸
+Driving a session from the phone** walks through it.
 
 ## Ended is not gone
 
@@ -25,13 +44,13 @@ session that record carries the `claude --resume <id>` that picks the work up ag
 why the record outlives the process: discarding it discards the only way back into the conversation.
 Records are dropped 24 hours after death, or when you dismiss them.
 
-Opening `#/agent/<id>` for a session that has already exited shows that panel — what it was, how it
-ended, how to resume it — rather than an empty terminal pretending to connect.
+Opening `#/sessions/<id>` for a session that has already exited shows that panel — what it was, how
+it ended, how to resume it — rather than an empty terminal pretending to connect.
 
 ## Where they all are
 
-The dashboard's **Sessions** card lists everything live across every plan, and the nav badge counts
-it, so a session started from one plan's page is not lost to another.
+**Sessions** is the list; **Now ▸ Running now** is the same lanes ranked by what needs you, and the
+nav badge counts what is live — so a session started from one plan's page is not lost to another.
 
 The **A session ended** notification category covers the case you cannot see: a session that
 finished, detached, while you were elsewhere. Closing one yourself is never announced.

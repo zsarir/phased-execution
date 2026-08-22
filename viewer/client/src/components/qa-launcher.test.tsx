@@ -54,7 +54,7 @@ describe('the review button', () => {
   it('becomes a link to the review already running, never a dead button', () => {
     render(<QaButton target={target} allowAgent runningSessionId="sess-9" />);
     const link = screen.getByRole('link', { name: /QA running/i });
-    expect(link.getAttribute('href')).toBe('#/agent/sess-9');
+    expect(link.getAttribute('href')).toBe('#/sessions/sess-9');
     // Not a disabled control: what the operator wants next is that session.
     expect(screen.queryByRole('button', { name: /QA this phase/i })).toBeNull();
   });

@@ -101,8 +101,10 @@ export const ROUTE_TABLE: Record<string, RouteEntry> = {
   now: page(lazy(() => import('@/features/now'))),
   plans: page(lazy(() => import('@/features/plans'))),
   runs: page(lazy(() => import('@/features/runs'))),
-  // A placeholder until Phase 10 rebuilds the terminal into it — it links to
-  // the two pages that do the work today rather than pretending to be them.
+  // One list and one pane for lanes, agent sessions, shells and the Claude
+  // sessions the presence hook reports. xterm is ~250 KB and is NOT in this
+  // chunk: `session-page.tsx` reaches the pane through a `lazy()` of its own,
+  // because Sessions is a destination and destination chunks are precached.
   sessions: page(lazy(() => import('@/features/sessions'))),
   insights: page(lazy(() => import('@/views/stats'))),
   settings: page(lazy(() => import('@/views/settings'))),
@@ -114,11 +116,6 @@ export const ROUTE_TABLE: Record<string, RouteEntry> = {
   notifications: page(lazy(() => import('@/views/notifications'))),
   mcp: page(lazy(() => import('@/views/mcp'))),
   source: page(lazy(() => import('@/views/source'))),
-  // xterm and its addons are ~250 KB of JavaScript that only these two heads
-  // need. Lazy is not an optimisation here — it is why a phone opening Now does
-  // not download a terminal emulator. `check-dist.mjs` pins the chunk names.
-  terminal: page(lazy(() => import('@/views/terminal'))),
-  agent: page(lazy(() => import('@/views/agent'))),
 
   /* ---- aliases: a head whose new home already exists ---- */
   dashboard: redirect(REDIRECTS.dashboard),
@@ -129,6 +126,11 @@ export const ROUTE_TABLE: Record<string, RouteEntry> = {
   // it with the `?focus=` that keeps what each address MEANT.
   ready: redirect(REDIRECTS.ready),
   pulse: redirect(REDIRECTS.pulse),
+  // Phase 10: the two terminal pages became `#/sessions/:id`. Both keep their
+  // session id through the redirect; with no id each carries `?new=` so the
+  // address still says which KIND it meant.
+  terminal: redirect(REDIRECTS.terminal),
+  agent: redirect(REDIRECTS.agent),
 };
 
 /** `''` and anything unregistered land on Now rather than nowhere. */

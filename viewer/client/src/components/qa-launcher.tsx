@@ -16,6 +16,7 @@
 import { useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { Button, StatusBadge } from '@/components/ui';
+import { sessionsHref } from '@/app/routes';
 import { qaResultTitle, qaUiState } from '@/lib/status-vocab';
 import { isVerdict } from '@/lib/qa';
 import { LaunchDialog, type QaTarget } from '@/features/run-setup/launch-dialog';
@@ -51,7 +52,7 @@ export function QaButton({
   if (runningSessionId) {
     return (
       <Button size={size} asChild>
-        <a href={`#/agent/${runningSessionId}`}>
+        <a href={sessionsHref(runningSessionId)}>
           <ShieldCheck size={13} aria-hidden /> QA running
         </a>
       </Button>

@@ -102,15 +102,15 @@ describe('RunSetup is the only launch form', () => {
 
   it('nothing outside the one session helper mints an agent ticket', () => {
     // Three callers, and what they have in common is that each owns a PTY,
-    // not a form: the shared session helper (QA + recovery), the launcher's
-    // own terminal, and the plan wizard — whose ticket carries an `intent` and
-    // a `brief` no run door has. All three take their FIELDS from RunSetup;
-    // none of them declares one. A fourth is a fourth form.
+    // not a form: the shared session helper (QA + recovery), the sessions
+    // page's own terminal, and the plan wizard — whose ticket carries an
+    // `intent` and a `brief` no run door has. All three take their FIELDS from
+    // RunSetup; none of them declares one. A fourth is a fourth form.
     expect(
       offenders(/\bapi\.agentTicket\b/, [
         'lib/start-session.ts',
-        'views/agent/index.tsx',
-        'views/agent/wizard.tsx',
+        'features/sessions/session-page.tsx',
+        'features/sessions/wizard.tsx',
       ]),
     ).toEqual([]);
   });
@@ -136,9 +136,10 @@ describe('RunSetup is the only launch form', () => {
   });
 
   it('the permission vocabulary is declared once', () => {
-    // `PERMISSION_CHOICES` in `modes.ts` is the vocabulary; `views/agent/
-    // modes.ts` keeps `MODE_NAME`/`modeName` for the tab CHIP, which reads a
-    // mode back rather than offering one. Offering is what must be single.
+    // `PERMISSION_CHOICES` in `modes.ts` is the vocabulary;
+    // `features/sessions/modes.ts` keeps `MODE_NAME`/`modeName` for the tab
+    // CHIP, which reads a mode back rather than offering one. Offering is what
+    // must be single.
     expect(
       offenders(/\bPERMISSION_CHOICES\b/, [
         'features/run-setup/modes.ts',

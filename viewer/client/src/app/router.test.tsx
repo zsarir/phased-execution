@@ -24,6 +24,7 @@ import {
   ROUTE_TABLE,
   destinationFor,
   redirectTarget,
+  resolveEntry,
   resolveHead,
   resolveView,
   useNavigate,
@@ -183,13 +184,25 @@ describe('what the navigation lights up', () => {
     expect(destinationFor('agent')).not.toBe('now');
   });
 
-  it('resolves the terminal to its OWN page, gated or not', () => {
-    // Sessions is where these are rebuilt (Phase 10), not where they go today.
-    // Redirecting now would make a deep link from a phone look like a broken
-    // app for two phases.
-    expect(resolveHead('terminal')).toBe('terminal');
-    expect(resolveHead('agent')).toBe('agent');
-    expect(resolveView('terminal')).toBeTruthy();
+  it('retires both terminal heads into Sessions, keeping the session id', () => {
+    // Phase 10 rebuilt them into one page, so both are redirects — which is
+    // exactly why they must still RESOLVE: `#/agent/<id>` is in bookmarks, in
+    // handoff prose and in push payloads minted by older servers, and the id
+    // is the whole address. `resolveView` returns null for an alias by design
+    // (see the note on it), so the entry kind is what is asserted here.
+    expect(resolveEntry('terminal').kind).toBe('redirect');
+    expect(resolveEntry('agent').kind).toBe('redirect');
+    // `resolveView` returns null for an alias by design — a caller that gets
+    // null should have followed `redirectTarget` first, and a blank frame with
+    // a stack trace beats a silently wrong page.
+    expect(resolveView('agent')).toBeNull();
+    expect(resolveView('sessions')).toBeTruthy();
+    expect(redirectTarget(route('#/agent/abc'))).toBe('sessions/abc');
+    expect(redirectTarget(route('#/terminal/abc'))).toBe('sessions/abc');
+    // With no id each meant "start one of MY kind" — `?new=` is what keeps
+    // that half of the address, the same rule as `#/ready` → `?focus=next`.
+    expect(redirectTarget(route('#/terminal'))).toBe('sessions?new=shell');
+    expect(redirectTarget(route('#/agent'))).toBe('sessions?new=agent');
   });
 
   it('names a destination for every head, and one of the six', () => {

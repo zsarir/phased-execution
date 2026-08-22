@@ -72,10 +72,10 @@ const DESTINATION_OF: Record<string, string> = {
   guide: 'now',
   stats: 'insights',
   mcp: 'settings',
-  // The two live session pages. Sessions is where they are REBUILT (Phase 10);
-  // until then they are their own pages and this is the only thing that says
-  // so — which is also what the router test pins, because the alternative was
-  // a terminal deep link lighting up nothing at all.
+  // Both retired INTO Sessions in Phase 10. They stay mapped rather than
+  // dropped: `destinationFor` answers for a head, and a head that ever appeared
+  // in a bookmark or a push payload never stops resolving — the redirect below
+  // is what moves the address, this is what keeps the nav lit while it does.
   terminal: 'sessions',
   agent: 'sessions',
 };
@@ -119,7 +119,21 @@ export const REDIRECTS: Record<string, (route: Route) => string> = {
   // Running now. Both kept their whole meaning by keeping their `?focus=`.
   ready: () => nowHref(FOCUS_KEYS.next),
   pulse: () => nowHref(FOCUS_KEYS.lanes),
+  // Phase 10: two pages became one, and a session's KIND is read off the
+  // record rather than out of the URL — so both deep links keep their id and
+  // land on the same page. With no id each meant "start one of my kind", which
+  // `?new=` preserves: dropping it would send someone who asked for a shell to
+  // a list, and dropping the launcher would lose the four choices that have to
+  // exist before an agent pty does. Same rule as `#/ready` → `?focus=next`.
+  terminal: (route) => sessionsOrNew(route, 'shell'),
+  agent: (route) => sessionsOrNew(route, 'agent'),
 };
+
+/** `#/terminal/abc` → `#/sessions/abc`; bare `#/terminal` → `#/sessions?new=shell`. */
+function sessionsOrNew(route: Route, kind: 'agent' | 'shell'): string {
+  const id = route.segments[1];
+  return id ? `sessions/${enc(id)}` : `sessions?new=${kind}`;
+}
 
 /**
  * A retired plan tab's address today, or `null` if this is not one.
@@ -187,7 +201,7 @@ export const CHROMELESS_HEADS: ReadonlySet<string> = new Set(['source']);
  * the fold on every SSE reconnect. Any view rendered under these heads must be
  * flex-aware (`h-full min-h-0`).
  */
-export const FULL_HEIGHT_HEADS: ReadonlySet<string> = new Set(['terminal', 'agent']);
+export const FULL_HEIGHT_HEADS: ReadonlySet<string> = new Set(['sessions']);
 
 /* ---------------- href builders ---------------- */
 

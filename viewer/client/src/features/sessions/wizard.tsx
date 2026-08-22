@@ -88,7 +88,7 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
       }
       void client.invalidateQueries({ queryKey: keys.terminal() });
       onClose();
-      navigate(`agent/${ticket.sessionId}`);
+      navigate(`sessions/${ticket.sessionId}`);
     } catch (error) {
       toast((error as Error).message, 'error');
     }

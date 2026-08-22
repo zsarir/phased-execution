@@ -75,9 +75,11 @@ because what they actually run cannot be seen from the outside, so they get a ca
 Settings lists any rule you have written that **parses and does nothing**, rather than leaving you to
 discover it at 3am.
 
-## The shell and the agent page
+## Shells and agent sessions
 
-`--allow-terminal` and `--allow-agent` sit outside everything above, on purpose. A shell is a person
+`--allow-terminal` and `--allow-agent` sit outside everything above, on purpose. They are two flags
+over one page (**Sessions**): with neither, the page still lists the lanes and the sessions the
+presence hook sees, and starts nothing of its own. A shell is a person
 typing — no deny list, no approval hook, no profile; the only policy is whoever is at the keyboard.
 
 An agent session sits in between: the console builds the `claude` command itself from allowlisted

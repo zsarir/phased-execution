@@ -37,6 +37,7 @@ import { Chip, StatusBadge } from '@/components/ui';
 import { navigate } from '@/app/router';
 import { planHref } from '@shared/routes.js';
 import type { ConvergeView, ForeignSession, PhaseRecord, RunState } from '@/lib/api';
+import { foreignVehicle } from '@/features/now/model';
 
 /* ---------------- derivation (exported for tests) ---------------- */
 
@@ -68,14 +69,12 @@ export interface PulseWait {
 
 const LIVE_RUN = new Set(['running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting']);
 
-/** The vehicle a hook-reported session is, in words — the Pulse's other lane kind. */
-export function foreignVehicle(session: Pick<ForeignSession, 'kind'>): string {
-  return session.kind === 'agent'
-    ? 'Console agent'
-    : session.kind === 'autopilot'
-      ? 'Autopilot session'
-      : 'Terminal session';
-}
+// The vehicle a hook-reported session is, in words. It lives in
+// `features/now/model.ts` beside `otherSessions` (Phase 10) — the Sessions list
+// names the same kinds, and a chart component is the wrong place for a
+// vocabulary two surfaces read. Re-exported so this module's consumers and its
+// test are unchanged by the move.
+export { foreignVehicle };
 
 /**
  * The hook-reported sessions that belong on a plan's pulse: live, and

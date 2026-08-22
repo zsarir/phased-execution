@@ -38,7 +38,7 @@ import { NewPlanButton } from '@/components/write-menu';
 // The AI wizard, NOT gated on allowWrites: the claude session writes the plan,
 // not the console — `allowAgent` is its capability. It never imports the pane,
 // so mounting it here costs the plans chunk no xterm.
-import { NewPlanWizardButton } from '@/views/agent/wizard';
+import { NewPlanWizardButton } from '@/features/sessions/wizard';
 import { planHref } from '@shared/routes.js';
 import type { PlanSummaryFull } from '@/lib/api';
 import { Page } from '@/components/page';

@@ -95,30 +95,30 @@ export default defineConfig({
         // Fonts and icons are part of the shell — the defaults cover only
         // js/css/html, which would leave an offline app in Times New Roman.
         globPatterns: ['**/*.{js,css,html}', 'assets/*.woff2', 'icons/*.png', 'manifest.webmanifest'],
-        // The terminal is 89 KB gz of xterm that is useless without a socket,
+        // The emulator is 89 KB gz of xterm that is useless without a socket,
         // and precaching is exactly the wrong place to spend that: it is
         // downloaded on install, by everyone, before anyone asks for a shell.
         // It stays a lazy chunk fetched from the network on demand.
         //
-        // `pane-*` is where xterm actually lives now that TWO routes (terminal
-        // and agent) share the pane: the bundler hoists pane+keybar+palette+
-        // xterm into one lazy chunk named after the facade module. The name is
-        // gated by scripts/check-dist.mjs, so a bundler that renames it fails
-        // the build loudly instead of silently precaching 89 KB.
+        // `pane-*` is where xterm lives. Until Phase 10 that name was an
+        // ACCIDENT — the bundler hoisted the modules two terminal routes shared
+        // into a chunk it named after whichever one was the boundary, and
+        // adding a second shared module renamed it (`pane-*` → `ended-*`),
+        // matched nothing here, and precached 346 KB. There is now one
+        // deliberate boundary instead: `features/sessions/session-page.tsx`
+        // reaches the pane through `lazy(() => import('./pane'))` and nothing
+        // else imports it, so the chunk is named after that module by
+        // construction. `sessions-*` — the destination chunk — IS precached
+        // like the other five, which is exactly why the emulator must not be
+        // in it. scripts/check-dist.mjs asserts both halves, by name and by
+        // asking which chunk actually contains xterm.
         //
         // ⚠️ Do NOT reach for rollupOptions manualChunks/advancedChunks to pin
         // a prettier name: measured on this tree (Vite 8 / Rolldown), both
         // forms pulled the captured modules' dependency subtree — React
         // itself — into the named chunk, which made index.html modulepreload
         // xterm for every visitor.
-        globIgnores: [
-          '**/terminal-*.js',
-          '**/terminal-*.css',
-          '**/pane-*.js',
-          '**/pane-*.css',
-          '**/agent-*.js',
-          '**/agent-*.css',
-        ],
+        globIgnores: ['**/pane-*.js', '**/pane-*.css'],
       },
       // No worker in dev. See the `/sw.js` proxy note above.
       devOptions: { enabled: false },

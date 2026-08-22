@@ -29,11 +29,25 @@ pe_hook()     {                                                "$SYS_BASH" "$PE_
 pe_close()    { DOCS_ROOT="${DOCS_ROOT:?set DOCS_ROOT first}" PE_TODAY="${PE_TODAY:-2026-01-02}" \
                 "$SYS_BASH" "$PE_SCRIPTS/close-plan.sh" "$@"; }
 
+# --- the ambient session, scrubbed -------------------------------------------
+# The scripts under test read PE_* from the environment BY DESIGN: a supervised
+# session has PE_SCOPE/PE_OWNER/PE_SESSION_ID exported into it so phase-lock.sh
+# records them without being told. That is also how this suite gets three false
+# failures the moment it is run from inside such a session — a lock claimed with
+# no --scope picks up the ambient one, and `lock-scope.bats` asserts a lock
+# written WITHOUT a scope. The suite must describe the scripts, not the shell it
+# happens to run in, so the ambient values are dropped here; a test that wants
+# one sets it itself.
+scrub_pe_env() {
+  unset PE_SCOPE PE_OWNER PE_SESSION_ID PE_OUTCOME_FILE PE_RULINGS_FILE PE_MCP_SERVERS
+}
+
 # --- fixtures / scaffolding ---------------------------------------------------
 # Create an isolated DOCS_ROOT in the bats temp dir and install a fixture plan.
 # usage: setup_docs <fixture-name> <slug>
 setup_docs() {
   local fixture="$1" slug="$2"
+  scrub_pe_env
   export DOCS_ROOT="$BATS_TEST_TMPDIR/work"
   mkdir -p "$DOCS_ROOT/docs/plans" "$DOCS_ROOT/docs/handoffs/$slug"
   cp "$PE_DIR/tests/fixtures/plans/$fixture.md" "$DOCS_ROOT/docs/plans/$slug.md"

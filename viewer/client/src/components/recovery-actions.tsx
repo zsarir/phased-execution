@@ -15,6 +15,7 @@
 import { useMemo, useState } from 'react';
 import { Bot, ChevronDown } from 'lucide-react';
 import { Button, InfoTip, Tooltip, TooltipProvider } from '@/components/ui';
+import { sessionsHref } from '@/app/routes';
 import { LaunchDialog } from '@/features/run-setup/launch-dialog';
 import { ErrandCard, LadderStrip } from '@/components/errand';
 import { useConsoleState, useSessions } from '@/lib/queries';
@@ -214,7 +215,7 @@ export function RecoveryActions({
           {running && (
             <Button size="sm" variant="default" asChild>
               <a
-                href={`#/agent/${running.id}`}
+                href={sessionsHref(running.id)}
                 title="The recovery session already working on this — open it."
               >
                 <Bot size={13} aria-hidden />

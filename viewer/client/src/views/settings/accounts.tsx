@@ -55,7 +55,7 @@ export function AccountsCard() {
       setLoginName('');
       if (started.mode === 'embedded' && started.terminal) {
         toast('Sign in inside the terminal that just opened.', 'info');
-        navigate(`agent/${started.terminal.sessionId}`);
+        navigate(`sessions/${started.terminal.sessionId}`);
       } else if (started.mode === 'external') {
         toast('A terminal opened — finish `claude auth login` there, then Refresh.', 'info');
       } else {

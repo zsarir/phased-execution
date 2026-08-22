@@ -54,7 +54,7 @@ export async function runRecoverVerb(
     const running = liveSessionFrom(error);
     if (running) {
       toast('A recovery session already holds this phase — opening it.', 'warn');
-      navigate(`agent/${running}`);
+      navigate(`sessions/${running}`);
       return false;
     }
     toast((error as Error).message, 'error');

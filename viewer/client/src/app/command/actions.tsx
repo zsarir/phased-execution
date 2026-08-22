@@ -188,7 +188,7 @@ export function verbActions(context: CommandContext): CommandAction[] {
       hint: 'Interactive Claude, in a terminal',
       icon: Bot,
       keywords: 'claude session interactive launch',
-      run: (ctx) => ctx.go('agent'),
+      run: (ctx) => ctx.go('sessions?new=agent'),
     });
   }
   if (state?.allowTerminal) {
@@ -199,7 +199,7 @@ export function verbActions(context: CommandContext): CommandAction[] {
       hint: 'A shell on this machine',
       icon: TerminalSquare,
       keywords: 'shell console bash zsh',
-      run: (ctx) => ctx.go('terminal'),
+      run: (ctx) => ctx.go('sessions?new=shell'),
     });
   }
 

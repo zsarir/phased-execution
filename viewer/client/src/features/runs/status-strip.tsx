@@ -70,6 +70,7 @@ import { RecoveryActions } from '@/components/recovery-actions';
 import { ErrandCard } from '@/components/errand';
 import { LaunchDialog } from '@/features/run-setup/launch-dialog';
 import { errandsOf, situationLabelFor } from '@/lib/ladder';
+import { sessionsHref } from '@/app/routes';
 import { useState } from 'react';
 
 /** The declared order. Index in this array IS the priority. */
@@ -451,7 +452,7 @@ export function RecoveryButton({
   if (runningSessionId) {
     return (
       <Button size="sm" variant="default" asChild>
-        <a href={`#/agent/${runningSessionId}`}>
+        <a href={sessionsHref(runningSessionId)}>
           <Bot size={13} aria-hidden /> Recovery running
         </a>
       </Button>

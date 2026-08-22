@@ -99,7 +99,7 @@ describe('per-page mobile fixes stay fixed', () => {
   });
 
   it('the terminal scrollback is contained — a flick must not rubber-band the shell', () => {
-    const css = readFileSync(join(SRC, 'views', 'terminal', 'terminal.css'), 'utf8');
+    const css = readFileSync(join(SRC, 'features', 'sessions', 'terminal.css'), 'utf8');
     // xterm 6: fingers land on `.xterm-scrollable-element`; `.xterm-viewport`
     // is an empty ground behind the screen, and a rule on it contains nothing.
     expect(css).toMatch(/\.xterm-scrollable-element\s*\{\s*overscroll-behavior:\s*contain/);
@@ -110,7 +110,7 @@ describe('per-page mobile fixes stay fixed', () => {
 
   it('the terminal key bar is a grid, never a scroller, and never a touch listener', () => {
     // Code, not prose: the file's own comment names the old scroller to explain the ban.
-    const keybar = readFileSync(join(SRC, 'views', 'terminal', 'keybar.tsx'), 'utf8')
+    const keybar = readFileSync(join(SRC, 'features', 'sessions', 'keybar.tsx'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/^\s*\/\/.*$/gm, '');
     expect(keybar).not.toMatch(/overflow-x-auto/);
@@ -143,7 +143,24 @@ describe('per-page mobile fixes stay fixed', () => {
     expect(toast).not.toMatch(/fixed inset-x-0 bottom-0/);
     // The bars that register: the shell's tab bar and the terminal's bottom row.
     expect(readFileSync(join(SRC, 'app', 'shell', 'tab-bar.tsx'), 'utf8')).toMatch(/useBottomBar/);
-    expect(readFileSync(join(SRC, 'views', 'terminal', 'pane.tsx'), 'utf8')).toMatch(/useBottomBar/);
+    expect(readFileSync(join(SRC, 'features', 'sessions', 'pane.tsx'), 'utf8')).toMatch(/useBottomBar/);
+  });
+
+  it('the session strip WRAPS — `ml-auto` past an overflow puts the tabs off the left edge', () => {
+    // Measured on the live page at 1440 (Phase 10): the strip's facts row grew
+    // by one button and went 122 px past the viewport, and because `ml-auto`
+    // resolves before an overflow the TAB LIST landed at x = −25 — the one
+    // control the strip exists for, off screen, with no scrollbar to reach it.
+    // A `shrink-0` on the facts row is what made it push instead of wrap.
+    const strip = readFileSync(join(SRC, 'features', 'sessions', 'list.tsx'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    const desktopRow = /className="flex shrink-0 flex-wrap items-center gap-1 border-b/.exec(strip);
+    expect(desktopRow, 'the desktop strip row must be flex-wrap').not.toBeNull();
+    const facts = /\{active && details && \(\s*<div className="([^"]+)"/.exec(strip);
+    expect(facts, 'the facts row must be a div with classes').not.toBeNull();
+    expect(facts![1]).toContain('min-w-0');
+    expect(facts![1]).not.toContain('shrink-0');
   });
 
   it('the tab strip never calls scrollIntoView — it scrolls every ancestor, and live SSE renders made the run page crawl', () => {

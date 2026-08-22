@@ -99,7 +99,7 @@ export default tseslint.config(
     // of the terminal palette are an addressing scheme, not a design decision
     // (its own header says why). Everything that IS a design decision there is
     // still read from the live stylesheet.
-    files: ['client/src/views/terminal/palette.ts'],
+    files: ['client/src/features/sessions/palette.ts'],
     rules: { 'no-restricted-syntax': 'off' },
   },
   {

@@ -104,7 +104,7 @@ function VerifyInTerminalButton({ slug, phase, command }: { slug: string; phase:
         setBusy(true);
         void api
           .runVerifyCommand(slug, phase, command)
-          .then((minted) => navigate(`terminal/${minted.sessionId}`))
+          .then((minted) => navigate(`sessions/${minted.sessionId}`))
           .catch((error: unknown) => toast((error as Error).message, 'error'))
           .finally(() => setBusy(false));
       }}

@@ -259,7 +259,7 @@ describe('runNotes — the actions attached to a note', () => {
     });
     expect(screen.getByRole('link', { name: /Fix the failing verification — running/i })).toHaveAttribute(
       'href',
-      '#/agent/sess-9',
+      '#/sessions/sess-9',
     );
     expect(screen.getAllByRole('button', { name: 'Finish in its own session' }).at(-1)).toBeDisabled();
   });

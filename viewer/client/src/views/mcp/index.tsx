@@ -197,7 +197,7 @@ function ServerCard({ server, allowed }: { server: McpServerView; allowed: boole
       void invalidate();
       if (started.mode === 'embedded' && started.terminal) {
         toast('Finish the sign-in in the terminal that just opened.', 'info');
-        navigate(`agent/${started.terminal.sessionId}`);
+        navigate(`sessions/${started.terminal.sessionId}`);
       } else if (started.mode === 'external') {
         toast('A terminal opened — finish the sign-in there.', 'info');
       } else {

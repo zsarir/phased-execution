@@ -1,5 +1,6 @@
 /**
- * One session, one xterm, one socket.
+ * One session, one xterm, one socket. **Lazy-loaded, always** — see the note at
+ * the bottom of this file and `session-page.tsx`'s header.
  *
  * Everything stateful lives in refs rather than React state on purpose: a pty
  * is a stream at hundreds of frames a second, and routing it through a
@@ -523,8 +524,25 @@ export function TerminalPane({ sessionId, onSession, onSize, onEnded, composer }
  * reaching for `manualChunks` — which drags React into the chunk instead (see
  * the warning in `vite.config.ts`). `scripts/check-dist.mjs` holds both ends.
  */
-export { EndedBanner, SessionGone, exitSummary } from './ended';
-export { SessionVitals, sessionLinkage } from './vitals';
-export { SessionControls, sessionStateNote } from '../agent/session-controls';
-export { SessionStrip, SESSION_HINTS, type StripSession } from './strip';
-export { Composer } from './composer';
+/*
+ * ⚠️ This module re-exports NOTHING, on purpose.
+ *
+ * Until Phase 10 it was a facade: `ended`, `vitals`, `session-controls`,
+ * `strip` and `composer` were re-exported through it so that the two terminal
+ * routes had exactly ONE importable module in the shared chunk — a second one
+ * renamed the chunk (`pane-*` → `ended-*`), which matched no `globIgnores`
+ * entry and put 346 KB of xterm in the precache.
+ *
+ * The single-facade rule was the right fix for an ACCIDENTAL chunk: the name
+ * came from whichever module the bundler happened to make the boundary. There
+ * is now one deliberate boundary instead — `session-page.tsx` reaches this file
+ * through `lazy(() => import('./pane'))` and nothing else imports it — so the
+ * chunk is named after this module by construction and the light siblings are
+ * imported from their own files. Re-exporting one of them here would put it
+ * back INSIDE the emulator chunk, which is the opposite of what the rule was
+ * ever for. `check-dist.mjs` asserts both halves, by name and by content.
+ *
+ * The DEFAULT export is what `lazy()` resolves — the named one stays for the
+ * tests, which import this module directly and never through a chunk.
+ */
+export default TerminalPane;

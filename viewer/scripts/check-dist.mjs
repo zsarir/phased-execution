@@ -15,9 +15,10 @@
  *     the two live push subscriptions are bound to `('/sw.js', scope '/')`;
  *     moving or renaming the worker unsubscribes every device silently. Do not
  *     weaken these three.
- *   • precache sanity — `index.html` precached (the offline shell), the
- *     terminal chunk NOT (89 KB of xterm is no use to someone who cannot open
- *     a shell).
+ *   • precache sanity — `index.html` and the six destination chunks precached
+ *     (the offline shell), the EMULATOR chunk not (89 KB of xterm is no use to
+ *     someone who cannot open a shell, and Sessions is a destination: the page
+ *     belongs in the precache, the terminal inside it does not).
  *   • the entry stays under the ~300 KB gzipped budget, and the terminal stays
  *     a lazy chunk the entry document never references — in the precache OR
  *     as a `modulepreload`, which is the second way a lazy chunk stops being
@@ -82,19 +83,16 @@ check(
 );
 check('the precache includes index.html (the offline shell)', sw.includes('index.html'));
 check(
-  'the precache does NOT include the terminal chunk',
-  !sw.includes('terminal-'),
-  'xterm is no use to someone who cannot open a shell, and it is 89 KB',
-);
-check(
   'the precache does NOT include the pane chunk (where xterm lives)',
   !sw.includes('pane-'),
-  'the shared emulator chunk both terminal routes lazy-load — same reasoning, same 89 KB',
+  'the emulator chunk `features/sessions/session-page.tsx` lazy-loads — 89 KB no reader of a route map needs',
 );
 check(
-  'the precache does NOT include the agent chunk',
-  !sw.includes('agent-'),
-  'the agent route is no use to someone whose console has no --allow-agent',
+  'the precache DOES include the Sessions destination chunk',
+  /\bsessions-[^"'`\s]*\.js/.test(sw),
+  'Sessions is one of the six destinations; its chunk belongs in the offline shell like the other five. ' +
+    'If this fails while the emulator check passes, the destination chunk was excluded by name — the thing ' +
+    'to exclude is the pane, never the page.',
 );
 
 /* The entry — parsed from the document, not guessed from filenames. */
@@ -117,27 +115,18 @@ if (entryMatch) {
 
 const assets = existsSync(join(DIST, 'assets')) ? readdirSync(join(DIST, 'assets')) : [];
 check(
-  'the terminal is its own lazy chunk',
-  assets.some((name) => /^terminal-.*\.js$/.test(name)),
+  'the Sessions destination is its own lazy chunk',
+  assets.some((name) => /^sessions-.*\.js$/.test(name)),
 );
 check(
-  'the agent page is its own lazy chunk',
-  assets.some((name) => /^agent-.*\.js$/.test(name)),
-);
-check(
-  'xterm rides in one shared lazy pane-* chunk (the name the globIgnores exclude)',
+  'xterm rides in one lazy pane-* chunk (the name the globIgnores exclude)',
   assets.some((name) => /^pane-.*\.js$/.test(name)),
-  'if the bundler renamed the shared chunk, update vite.config.ts globIgnores AND this check together',
+  'if the bundler renamed the emulator chunk, update vite.config.ts globIgnores AND this check together',
 );
 check(
-  'index.html never references the terminal chunk',
-  !html.includes('terminal-'),
+  'index.html never references the pane chunk',
+  !html.includes('pane-'),
   'referenced from the document, it would load for every reader of a route map',
-);
-check(
-  'index.html never references the pane or agent chunks',
-  !html.includes('pane-') && !html.includes('agent-'),
-  'referenced from the document, they would load for every reader of a route map',
 );
 
 /*
@@ -164,7 +153,7 @@ check(
   `the precache excludes the emulator, whatever the chunk is called (${xtermChunks.join(', ') || 'none'})`,
   precachedXterm.length === 0,
   `precached: ${precachedXterm.join(', ')} — add it to globIgnores in vite.config.ts. ` +
-    'A renamed shared chunk is the usual cause; see the note in views/terminal/pane.tsx.',
+    'A renamed emulator chunk is the usual cause; see the note in features/sessions/pane.tsx.',
 );
 
 /*
@@ -182,6 +171,28 @@ check(
  * emulator-precache check asks: whichever chunk actually contains xterm, is
  * the document pulling it in?
  */
+/*
+ * The Phase-10 failure mode, named.
+ *
+ * Sessions is a DESTINATION, so unlike the two pages it replaced its chunk is
+ * precached as part of the offline shell. That makes one ordinary-looking edit
+ * expensive: turning `lazy(() => import('./pane'))` in `session-page.tsx` back
+ * into a static import would fold the emulator into `sessions-*` — and the
+ * rename-proof precache check below would catch it, but only as "some chunk
+ * you have never heard of is precached". This says which edit did it.
+ */
+const sessionChunks = assets.filter((name) => /^sessions-.*\.js$/.test(name));
+const emulatorInSessions = sessionChunks.filter((name) =>
+  readFileSync(join(DIST, 'assets', name), 'utf8').includes('xterm'),
+);
+check(
+  'the Sessions destination chunk carries no emulator',
+  emulatorInSessions.length === 0,
+  `${emulatorInSessions.join(', ')} contains xterm — the pane must stay behind ` +
+    "`lazy(() => import('./pane'))` in features/sessions/session-page.tsx; a static import puts 89 KB gz " +
+    'of emulator into a chunk every visitor precaches.',
+);
+
 const preloaded = [...html.matchAll(/<link[^>]+rel="modulepreload"[^>]+href="\/assets\/([^"]+)"/g)].map(
   (match) => match[1],
 );

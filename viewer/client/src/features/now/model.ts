@@ -325,6 +325,15 @@ export function pulseRuns(runs: readonly RunState[], now = Date.now()): RunState
  * here, plus what ended in the last hour — the "just left" an operator asks
  * about. Moved from `views/pulse/index.tsx`.
  */
+/** The vehicle a hook-reported session is, in words. */
+export function foreignVehicle(session: Pick<ForeignSession, 'kind'>): string {
+  return session.kind === 'agent'
+    ? 'Console agent'
+    : session.kind === 'autopilot'
+      ? 'Autopilot session'
+      : 'Terminal session';
+}
+
 export function otherSessions(
   sessions: readonly ForeignSession[] | undefined,
   // A `NowLane` satisfies this, and so does a bare `RunState` — `child` is

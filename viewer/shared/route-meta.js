@@ -37,12 +37,18 @@
  * the navigation sends you.
  *
  * `source` renders outside the app shell (the pre-open directory picker).
- * `terminal` takes an optional session id (`#/terminal/<id>`) so a shell survives
- * a reload; it is a route whether or not `--allow-terminal` was given, because a
- * route that explains why it is off is better than one that vanishes.
- * `agent` is the same shape for interactive claude sessions (`#/agent/<id>`,
- * gated by `--allow-agent`) — with no id it renders the launcher. Both are
- * DESTINED for `sessions`, which is the nav entry that lights up on them.
+ * `terminal` and `agent` became REDIRECTS into `sessions` in Phase 10, when the
+ * two pages became one whose kind is read off the session record rather than
+ * out of the URL. Both keep their optional session id through the redirect
+ * (`#/terminal/<id>` → `#/sessions/<id>`), which is what a reload, a phone
+ * locking its screen and an hour-old push notification all depend on; with no
+ * id each carries `?new=shell` / `?new=agent`, because that half of the address
+ * was the launch intent and dropping it would land a shell request on a list.
+ *
+ * ⚠️ `server/push/catalogue.ts` still MINTS `/#/agent/<id>` and
+ * `/#/terminal/<id>` (`routeFor`, case `session`) — deliberately: the redirect
+ * carries the id, so a payload from any server, of any age, resolves. That is
+ * the contract this array exists for, and it is why a head is never dropped.
  *
  * NOTE: the route-registry guard asserts every head here has a `ROUTE_TABLE`
  * entry AND that no entry exists without a head — adding one means adding both

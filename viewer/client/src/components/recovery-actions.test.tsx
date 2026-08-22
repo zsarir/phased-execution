@@ -108,7 +108,7 @@ describe('<RecoveryActions>', () => {
     );
     expect(screen.getByRole('link', { name: /Fix the failing verification — running/ })).toHaveAttribute(
       'href',
-      '#/agent/s-live',
+      '#/sessions/s-live',
     );
     expect(screen.getByRole('button', { name: 'Finish in its own session' })).toBeDisabled();
     // The reason is reachable through the touch ⓘ.

@@ -1,5 +1,10 @@
 /**
- * The Terminal page.
+ * Sessions — the shell half: the list, the strip, the pane, the composer.
+ *
+ * (`sessions.test.tsx` is the agent half of the same page — the launcher, the
+ * mode chip, the wizard. They were two files when this was two pages, and
+ * splitting them by SUBJECT rather than by page is what let the merge happen
+ * without rewriting either suite to agree with it.)
  *
  * xterm is mocked out wholesale. It measures a real font in a real layout
  * engine, which jsdom does not have — and none of what is worth asserting here
@@ -22,6 +27,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClientConfig } from '@/lib/queries';
+import type { Route } from '@/app/router';
 import type { ConsoleState, TerminalState } from '@/lib/api';
 import { Composer } from './composer';
 
@@ -58,25 +64,20 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 // The pane owns xterm and a live WebSocket. Both are the wrong thing to build
 // in jsdom, and neither is what this file is about.
-// Only the emulator is stubbed. The ended/gone panels are re-exported from
-// `pane` (see the note there — it keeps the shared chunk to one facade), and
-// they are under test here, so they come through for real from `./ended`, which
-// pulls in no xterm.
-vi.mock('./pane', async () => ({
-  ...(await import('./ended')),
-  // The real one — it renders from the session record alone here (no plan
-  // linkage on a shell), and its own behaviour has its own test file.
-  ...(await import('./vitals')),
-  // Also real, for the same reason — and re-exported through the pane facade
-  // in production, so the mock must carry it too.
-  ...(await import('../agent/session-controls')),
-  // The strip and its hints, likewise real: the tab list is under test here.
-  ...(await import('./strip')),
-  TerminalPane: (props: { sessionId: string }) => {
+//
+// ONLY the emulator is stubbed, and after Phase 10 that is all this mock has to
+// say: `pane.tsx` re-exports nothing, so the ended/gone panels, the vitals, the
+// controls and the strip reach the page from their own modules and are under
+// test for real. `default` is what `lazy()` resolves — the page reaches the
+// pane through a dynamic import so the emulator stays out of the precached
+// `sessions-*` chunk, and a mock without it renders an empty Suspense forever.
+vi.mock('./pane', () => {
+  const Stub = (props: { sessionId: string }) => {
     pane(props.sessionId);
     return <div data-testid="pane">{props.sessionId}</div>;
-  },
-}));
+  };
+  return { TerminalPane: Stub, default: Stub };
+});
 
 const BASE_STATE: ConsoleState = {
   autopilot: true,
@@ -107,9 +108,19 @@ function mount(node: React.ReactElement) {
   return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
 }
 
-async function openPage(route = { segments: ['terminal'], query: {}, path: 'terminal' }) {
-  const { default: TerminalView } = await import('./index');
-  return mount(<TerminalView route={route} />);
+/**
+ * `#/sessions?new=shell` — where a bare `#/terminal` now lands.
+ *
+ * Bare `#/sessions` is the LIST, not a pane, so the shell-shaped tests name the
+ * launch intent the old address carried. `?new=shell` deliberately does NOT
+ * mint on arrival: a pty opened as a page-load side effect is spawned twice
+ * under StrictMode, which is the rule the very first test here holds.
+ */
+const NEW_SHELL = { segments: ['sessions'], query: { new: 'shell' }, path: 'sessions' };
+
+async function openPage(route: Route = NEW_SHELL) {
+  const { default: SessionsView } = await import('./index');
+  return mount(<SessionsView route={route} />);
 }
 
 /**
@@ -121,9 +132,9 @@ async function openPage(route = { segments: ['terminal'], query: {}, path: 'term
  */
 async function openLive(hash: string) {
   window.location.hash = hash;
-  const { default: TerminalView } = await import('./index');
+  const { default: SessionsView } = await import('./index');
   const { useRoute } = await import('@/app/router');
-  const Harness = () => <TerminalView route={useRoute()} />;
+  const Harness = () => <SessionsView route={useRoute()} />;
   return mount(<Harness />);
 }
 
@@ -148,11 +159,11 @@ beforeEach(() => {
  * ------------------------------------------------------------------ */
 
 describe('when there is no terminal', () => {
-  it('says the flag is off, and names the flag', async () => {
+  it('says the flags are off, and names them', async () => {
     state.mockResolvedValue({ ...BASE_STATE, allowTerminal: false });
     await openPage();
 
-    expect(await screen.findByText(/terminal is off/i)).toBeInTheDocument();
+    expect(await screen.findByText(/starts no sessions of its own/i)).toBeInTheDocument();
     expect(screen.getByText('--allow-terminal')).toBeInTheDocument();
     // Nothing is asked of a server that has said no.
     expect(terminal).not.toHaveBeenCalled();
@@ -163,11 +174,14 @@ describe('when there is no terminal', () => {
     terminal.mockResolvedValue({ ...TERMINALS, available: 'no', sessions: [] });
     await openPage();
 
-    expect(await screen.findByText(/no shell available/i)).toBeInTheDocument();
+    // "terminal", not "shell": node-pty is the layer BOTH kinds need, and on
+    // one page a message that named only shells would leave someone whose
+    // agent session failed reading about a feature they were not using.
+    expect(await screen.findByText(/no terminal available/i)).toBeInTheDocument();
     expect(screen.getByText('node-pty')).toBeInTheDocument();
     // The distinction is the point: the same words for both would send someone
     // to restart with a flag they already have.
-    expect(screen.queryByText(/terminal is off/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/starts no sessions of its own/i)).not.toBeInTheDocument();
   });
 });
 
@@ -181,7 +195,17 @@ describe('sessions', () => {
     await openPage();
 
     expect(await screen.findByText(/no shell open/i)).toBeInTheDocument();
-    // Under StrictMode a mount that spawned a pty would spawn two.
+    // Under StrictMode a mount that spawned a pty would spawn two — and this
+    // route asked for a shell by name (`?new=shell`), which is the strongest
+    // form of the temptation.
+    expect(terminalTicket).not.toHaveBeenCalled();
+  });
+
+  it('bare #/sessions is the LIST, and it opens nothing either', async () => {
+    terminal.mockResolvedValue({ ...TERMINALS, sessions: [] });
+    await openPage({ segments: ['sessions'], query: {}, path: 'sessions' });
+
+    expect(await screen.findByText(/nothing is running/i)).toBeInTheDocument();
     expect(terminalTicket).not.toHaveBeenCalled();
   });
 
@@ -196,12 +220,12 @@ describe('sessions', () => {
       return { ok: true, sessionId: 'new1', token: 't', expiresAt: 0, path: '/ws/terminal', session: opened };
     });
 
-    await openLive('#/terminal');
+    await openLive('#/sessions?new=shell');
     fireEvent.click(await screen.findByRole('button', { name: /open a shell/i }));
 
     // The URL is what makes a reload — or a phone killing the tab — come back
     // to the same shell rather than a new one.
-    await waitFor(() => expect(window.location.hash).toBe('#/terminal/new1'));
+    await waitFor(() => expect(window.location.hash).toBe('#/sessions/new1'));
     await waitFor(() => expect(screen.getByTestId('pane')).toHaveTextContent('new1'));
 
     // ⚠️ The regression this guards: the click invalidates the very list the
@@ -209,18 +233,18 @@ describe('sessions', () => {
     // session did not exist and navigated straight back off it. The symptom
     // was a tab that appeared and a terminal that never did.
     await waitFor(() => expect(terminal).toHaveBeenCalledTimes(2));
-    expect(window.location.hash).toBe('#/terminal/new1');
+    expect(window.location.hash).toBe('#/sessions/new1');
     expect(screen.getByTestId('pane')).toHaveTextContent('new1');
   });
 
   it('attaches to the session the route names', async () => {
-    await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
+    await openPage({ segments: ['sessions', 'abc123'], query: {}, path: 'sessions/abc123' });
     expect(await screen.findByTestId('pane')).toHaveTextContent('abc123');
     expect(pane).toHaveBeenCalledWith('abc123');
   });
 
   it('says a session is gone instead of bouncing off its own URL', async () => {
-    await openPage({ segments: ['terminal', 'long-gone'], query: {}, path: 'terminal/long-gone' });
+    await openPage({ segments: ['sessions', 'long-gone'], query: {}, path: 'sessions/long-gone' });
     // This used to navigate away silently, which was defensible while sessions
     // timed out on their own. They do not any more: a URL naming nothing means
     // the record was dismissed or retired, and on a phone a redirect reads as a
@@ -234,7 +258,7 @@ describe('sessions', () => {
   it('keeps an ended shell open, with its scrollback and a way to clear it', async () => {
     const ended = { ...SESSION, exited: { code: 130 }, exitedAt: Date.now() - 5_000 };
     terminal.mockResolvedValue({ ...TERMINALS, sessions: [ended], live: 0 });
-    await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
+    await openPage({ segments: ['sessions', 'abc123'], query: {}, path: 'sessions/abc123' });
 
     // The record outlives the process, so the page reports the exit rather than
     // sending you somewhere else.
@@ -247,13 +271,13 @@ describe('sessions', () => {
   it('refuses to go past the session cap', async () => {
     const many = Array.from({ length: 8 }, (_, i) => ({ ...SESSION, id: `s${i}`, label: `Terminal ${i}` }));
     terminal.mockResolvedValue({ ...TERMINALS, sessions: many });
-    await openPage({ segments: ['terminal', 's0'], query: {}, path: 'terminal/s0' });
+    await openPage({ segments: ['sessions', 's0'], query: {}, path: 'sessions/s0' });
 
     const button = await screen.findByRole('button', { name: /new/i });
     expect(button).toBeDisabled();
   });
 
-  it('shows shells only — claude sessions live on the agent page', async () => {
+  it('shows both kinds in ONE strip — there is no other page for them now', async () => {
     const claude = {
       ...SESSION,
       id: 'c1',
@@ -262,16 +286,16 @@ describe('sessions', () => {
       shell: 'claude',
     };
     terminal.mockResolvedValue({ ...TERMINALS, sessions: [SESSION, claude] });
-    await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
+    await openPage({ segments: ['sessions', 'abc123'], query: {}, path: 'sessions/abc123' });
 
     expect(await screen.findByText('Terminal 1')).toBeInTheDocument();
-    expect(screen.queryByText('Claude: hello')).not.toBeInTheDocument();
+    expect(screen.getByText('Claude: hello')).toBeInTheDocument();
   });
 
-  it('counts the cap across BOTH kinds, not just the tabs it shows', async () => {
-    // Seven claude sessions and one shell: one visible tab, but the registry
-    // is full — a New button that read only its own tabs would offer a shell
-    // the server must refuse.
+  it('counts the cap across BOTH kinds, which is now what the strip shows', async () => {
+    // Seven claude sessions and one shell. The cap was always the unfiltered
+    // total; before Phase 10 a page could disable New because of seven tabs
+    // the reader could not see.
     const many = Array.from({ length: 7 }, (_, i) => ({
       ...SESSION,
       id: `c${i}`,
@@ -279,16 +303,16 @@ describe('sessions', () => {
       kind: 'claude' as const,
     }));
     terminal.mockResolvedValue({ ...TERMINALS, sessions: [SESSION, ...many] });
-    await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
+    await openPage({ segments: ['sessions', 'abc123'], query: {}, path: 'sessions/abc123' });
 
     expect(await screen.findByRole('button', { name: /new/i })).toBeDisabled();
   });
 
   it('closes a session and moves off it', async () => {
-    await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
+    await openPage({ segments: ['sessions', 'abc123'], query: {}, path: 'sessions/abc123' });
     fireEvent.click(await screen.findByRole('button', { name: /close terminal 1/i }));
     await waitFor(() => expect(terminalClose).toHaveBeenCalledWith('abc123'));
-    await waitFor(() => expect(window.location.hash).toBe('#/terminal'));
+    await waitFor(() => expect(window.location.hash).toBe('#/sessions'));
   });
 });
 
@@ -300,7 +324,7 @@ describe('the strip', () => {
   it('is a tab list — Radix owns the roving focus, ui/tabs the scroll-into-view', async () => {
     const second = { ...SESSION, id: 'def456', label: 'Terminal 2' };
     terminal.mockResolvedValue({ ...TERMINALS, sessions: [SESSION, second] });
-    await openPage({ segments: ['terminal', 'abc123'], query: {}, path: 'terminal/abc123' });
+    await openPage({ segments: ['sessions', 'abc123'], query: {}, path: 'sessions/abc123' });
 
     const list = await screen.findByRole('tablist');
     const tabs = screen.getAllByRole('tab');
@@ -315,13 +339,13 @@ describe('the strip', () => {
   it('switching tabs navigates to the session', async () => {
     const second = { ...SESSION, id: 'def456', label: 'Terminal 2' };
     terminal.mockResolvedValue({ ...TERMINALS, sessions: [SESSION, second] });
-    await openLive('#/terminal/abc123');
+    await openLive('#/sessions/abc123');
     await screen.findByRole('tablist');
     // Radix activates on mousedown (automatic activation), then click follows.
     const tab = screen.getByRole('tab', { name: 'Terminal 2' });
     fireEvent.mouseDown(tab);
     fireEvent.click(tab);
-    await waitFor(() => expect(window.location.hash).toBe('#/terminal/def456'));
+    await waitFor(() => expect(window.location.hash).toBe('#/sessions/def456'));
   });
 });
 

@@ -225,12 +225,28 @@ describe('the update prompt', () => {
   });
 
   it('never auto-applies over a live pty surface — scrollback does not survive a reload', async () => {
-    window.location.hash = '#/terminal/abc123';
+    window.location.hash = '#/sessions/abc123';
     const waiting = fakeWorker();
     registration.waiting = waiting;
     render(<Harness />);
     await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('1'));
     expect(waiting.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('…and over the two addresses that page used to have, before the redirect runs', async () => {
+    // The guard reads the hash as it stands. A tab restored at `#/agent/abc` is
+    // on a pty surface for the tick before the router moves it, and a reload in
+    // that tick loses the scrollback just as thoroughly.
+    for (const hash of ['#/terminal/abc123', '#/agent/abc123']) {
+      sessionStorage.clear();
+      window.location.hash = hash;
+      const waiting = fakeWorker();
+      registration.waiting = waiting;
+      const view = render(<Harness />);
+      await waitFor(() => expect(view.getByTestId('count').textContent).toBe('1'));
+      expect(waiting.postMessage).not.toHaveBeenCalled();
+      view.unmount();
+    }
   });
 
   it('the offered path still applies only when the button is pressed', async () => {

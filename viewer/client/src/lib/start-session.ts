@@ -66,7 +66,7 @@ export async function startSession(
       void client.invalidateQueries({ queryKey: keys.plans() });
       void client.invalidateQueries({ queryKey: keys.plan(body.slug) });
     }
-    navigate(`agent/${ticket.sessionId}`);
+    navigate(`sessions/${ticket.sessionId}`);
     return ticket.sessionId;
   } catch (error) {
     const running = liveSessionFrom(error);
@@ -74,7 +74,7 @@ export async function startSession(
       // Not a failure from where the operator is standing: what they asked for
       // is already happening, and this is where it is happening.
       toast(ALREADY_RUNNING[intent] ?? 'A session for this is already running — opening it.', 'warn');
-      navigate(`agent/${running}`);
+      navigate(`sessions/${running}`);
       return running;
     }
     toast((error as Error).message, 'error');
