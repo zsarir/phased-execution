@@ -35,11 +35,14 @@ A channel that always buzzes is a channel you turn off, and the notification it 
 it. The wall itself — and everything a run does about one — still announces under **Usage limits**,
 so muting the climb never mutes the crash.
 
-**Nothing is happening** is deliberately not urgent. Nothing is blocked on you and the run has not
-stopped — it is the money question, not the permission question, and a card that buzzes a wrist for it
-would be turned off within a week. The console names which of the three signals it saw and offers the
-three verbs that answer one (steer the session, freeze it where it stands, stop that lane); it does not
-act by itself. A phase inside its own §Verification is exempt, because a build is silent and fine.
+**Nothing is happening** — a stalled session — is deliberately not urgent. Nothing is blocked on you
+and the run has not stopped; it is the money question, not the permission question, and a card that
+buzzes a wrist for it would be turned off within a week. The console names which of the three signals
+it saw (silent, spinning, stalemate) and offers the three verbs that answer one — steer the session,
+freeze it where it stands, stop that lane — but it does not act by itself. A phase inside its own
+§Verification is exempt, because a build is silent and fine. On the Now inbox a stalled lane becomes a
+row of its own only once it has been silent for half an hour: this notification arrives sooner, and it
+is the one you can dismiss.
 
 **Urgent** is reserved for *nothing proceeds without you*. Those three may interrupt a focus mode and
 buzz a wrist.
