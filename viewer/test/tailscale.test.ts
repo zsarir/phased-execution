@@ -118,6 +118,13 @@ exit ${options.exit ?? 0}
 }
 
 /** Point the module at a binary for one probe, with the memo cleared either side. */
+// The fixtures fork a bash script per probe, and under a full parallel run that
+// has been measured at 2.2s of the product's 3s budget — so whichever tailscale
+// test ran while the machine was busiest failed on a timeout that says nothing
+// about the code. Production keeps three seconds; this suite stops depending on
+// how loaded the host is.
+process.env.PHASE_CONSOLE_TAILSCALE_TIMEOUT_MS = '30000';
+
 async function probeWith(bin: string, port = PORT) {
   process.env.PHASE_CONSOLE_TAILSCALE_BIN = bin;
   resetTailscaleCache();

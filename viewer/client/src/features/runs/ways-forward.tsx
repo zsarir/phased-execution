@@ -57,6 +57,35 @@ export function nextStepRows(slug: string, planPhases: readonly PhaseView[], run
     const record = run?.phases?.[String(p.phase)];
 
     if (p.state === 'done') {
+      // A done phase whose QA verdict is not pass or waived is settled as WORK
+      // and unsettled as a BLOCKER: the engine holds every dependent behind it.
+      // This branch used to `continue` straight past it, and the waiting phases
+      // below have no record to match either — so on a plan wedged exactly this
+      // way the only row this card produced was for a downstream GATED phase,
+      // already approved and six dependencies away. A card titled "Why this is
+      // stopped" named a cause that was not the cause, and the real one — a
+      // verdict a person had to give — appeared nowhere on the page.
+      const verdict = p.qa?.result;
+      if (verdict && verdict !== 'pass' && verdict !== 'waived') {
+        const blocks = planPhases
+          .filter((other) => other.state === 'waiting' && (other.row?.dependsOn ?? []).includes(p.phase))
+          .map((other) => other.phase);
+        rows.push({
+          phase: p.phase,
+          title: p.title,
+          state: 'done',
+          why:
+            `this phase is finished, but its QA verdict is ${verdict}` +
+            (blocks.length
+              ? ` — which holds phase${blocks.length === 1 ? '' : 's'} ${blocks.join(', ')}.`
+              : '.') +
+            ' Nothing will move until a verdict of pass or waived is recorded' +
+            (p.qa?.report ? ` (the report is at ${p.qa.report})` : '') +
+            ' — record it from this phase, or run QA again.',
+          readMore: phaseHref(slug, p.phase),
+        });
+        continue;
+      }
       // A red record on a green phase used to be a standing contradiction —
       // the reconcile pass now closes it as "closed outside this run" the
       // moment any read or drive tick sees the board. This branch remains for

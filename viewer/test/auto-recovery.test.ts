@@ -279,6 +279,12 @@ test('the per-run cap counts every phase’s launches together', async () => {
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
+    // Stated rather than assumed: the ceiling is `ladderPerRunRungs`, which an
+    // operator sets. This used to lean on a hardcoded 5 in `maybeAutoRecover`
+    // that silently overrode that preference — so the test read as though it
+    // pinned the SUMMING (which is its point) while actually pinning the
+    // constant.
+    svc.prefs.ladderPerRunRungs = 5;
     const minted = stubMint(svc);
     haltedRun(root, {
       recoveries: {
@@ -749,4 +755,303 @@ test('a work-in-progress phase with no session left re-boards through the runner
     const disk = loadRun(root, 'alpha', state.id, null)!;
     assert.equal(disk.recoveries?.['1']?.rungs?.[0]?.rung, 'reboard-resume-brief', 'the healer accounts the rung; start({reboard}) does not double-count');
   } finally { cleanup(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * The QA wedge: a stop whose blocker is a phase the board reads DONE
+ * ------------------------------------------------------------------ */
+
+/**
+ * The measured dead end. Phase 1 finished and its QA verdict is `fail`, so the
+ * engine holds 2 and 3 for ever and the board has nothing ready. Every record
+ * this run holds reads `done`, so `classifyOpenPhases` — which skips board-done
+ * and board-waiting phases — yields no candidate at all, and the healer used to
+ * answer "no open phase of this run has a record to act on" with `phase: 0,
+ * situation: 'unknown'`, writing no errand and pushing nothing. The operator
+ * pressed the button three times and got the same sentence each time.
+ */
+function qaWedgedRun(root: string): RunState {
+  mkdirSync(join(root, 'docs', 'handoffs', 'alpha'), { recursive: true });
+  writeFileSync(
+    join(root, 'docs', 'handoffs', 'alpha', 'phase-01-schema.md'),
+    '---\nplan: docs/plans/alpha.md\nphase: 1\ntitle: schema\nstatus: complete\n---\n# done\n',
+    'utf8',
+  );
+  writeFileSync(
+    join(root, 'docs', 'handoffs', 'alpha', 'test-status.md'),
+    '# QA\n\n## QA status\n\n| Phase | Result | Report |\n|--:|--|--|\n| 1 | fail | reports/phase-01-qa.md |\n',
+    'utf8',
+  );
+  const state = newRun({ slug: 'alpha', root, autoRecover: true });
+  state.status = 'parked';
+  state.stoppedBy = 'system';
+  const record = phaseRecord(state, 1);
+  record.status = 'done';
+  record.note = 'closed outside this run (the board reads done)';
+  state.halt = {
+    at: new Date().toISOString(),
+    reason: 'nothing left to run on its own — phase 1 is done but its QA verdict is fail, which holds phases 2, 3.',
+    phase: 1,
+    kind: 'plan-deadlocked',
+  };
+  saveRun(state);
+  return state;
+}
+
+test('the engine really does wedge on a recorded QA fail (the premise)', async () => {
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    qaWedgedRun(s.root);
+    const board = await svc.boardStates('alpha');
+    assert.equal(board[1], 'done');
+    assert.equal(board[2], 'waiting', 'a fail holds the dependent even though 1 is done');
+  } finally { s.cleanup(); }
+});
+
+test('a QA-wedged run is climbed, not handed to a person', async () => {
+  // Before: "no open phase of this run has a record to act on", three times,
+  // with no errand and nothing launched. Then, briefly, an errand — better, but
+  // still a person's afternoon. Now the ladder climbs it: the phase that built
+  // the work is resumed with the QA report and asked to clear the findings and
+  // re-record the verdict. Nothing is asked of anybody unless that runs out.
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    stubMint(svc);
+    const state = qaWedgedRun(s.root);
+    state.phases['1'].sessionId = 'sess-p1';
+    saveRun(state);
+
+    const result = await svc.recoverPlan('alpha');
+    assert.equal(result.outcome, 'recovering', 'the wedge is the ladder\'s to clear');
+    assert.doesNotMatch(result.detail ?? '', /no open phase/);
+
+    const after = loadRun(s.root, 'alpha', state.id)!;
+    const rungs = after.recoveries?.['1']?.rungs ?? [];
+    assert.equal(rungs[0]?.rung, 'resume-own-session', 'and it climbed the QA rung');
+    assert.equal(rungs[0]?.params?.mode, 'qa-fix');
+  } finally { s.cleanup(); }
+});
+test('a QA wedge the ladder has spent still leaves exactly one errand', async () => {
+  // Exhaustion is the only thing that makes a QA verdict a person's again — and
+  // when it happens the ask has to be there, naming the report and the two doors
+  // (fix and re-record, or waive). This is the errand `ladder.ts` has always
+  // carried and nothing could reach.
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    stubMint(svc);
+    const state = qaWedgedRun(s.root);
+    state.phases['1'].sessionId = 'sess-p1';
+    // Both rungs already climbed and failed: nothing left to try.
+    state.recoveries = {
+      1: {
+        attempts: 2, lastAt: new Date().toISOString(),
+        rungs: [
+          { situation: 'qa-failed', rung: 'resume-own-session', at: new Date().toISOString(), outcome: 'failed', params: { mode: 'qa-fix' } },
+          { situation: 'qa-failed', rung: 'fix-agent', at: new Date().toISOString(), outcome: 'failed' },
+        ],
+      },
+    };
+    saveRun(state);
+
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.equal(result.launched, false, 'every rung is spent');
+    const after = loadRun(s.root, 'alpha', state.id)!;
+    const errand = after.errand ?? after.recoveries?.['1']?.errand;
+    assert.ok(errand, 'an exhausted climb must leave the ask behind');
+    assert.match(errand!.need, /QA verdict/);
+    assert.match(errand!.how, /qa-record\.sh|QA/);
+  } finally { s.cleanup(); }
+});
+test('maybeAutoRecover leaves an errand for a stop with no anchor at all', async () => {
+  // The unattended half. `maybeAutoRecover` returned at its empty-candidate
+  // guard, BEFORE the errand/journal/push machinery, so an unattended console
+  // swept the run every five minutes for ever, refused with the same sentence
+  // each time, and never once asked the person who could fix it.
+  //
+  // The QA shapes climb now, so the shape that reaches this guard is one with
+  // no record to act on at all — here, a run whose only record the board has
+  // overtaken and whose halt names a phase the QA table does not hold.
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    stubMint(svc);
+    const state = qaWedgedRun(s.root);
+    // Every rung spent, so the climb cannot start; the ask is all that is left.
+    state.recoveries = {
+      1: {
+        attempts: 9, lastAt: new Date().toISOString(),
+        rungs: [
+          { situation: 'qa-failed', rung: 'resume-own-session', at: new Date().toISOString(), outcome: 'failed', params: { mode: 'qa-fix' } },
+          { situation: 'qa-failed', rung: 'fix-agent', at: new Date().toISOString(), outcome: 'failed' },
+        ],
+      },
+    };
+    saveRun(state);
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.equal(result.launched, false);
+    const after = loadRun(s.root, 'alpha', state.id)!;
+    assert.ok(after.errand ?? after.recoveries?.['1']?.errand, 'the ask must be written, not just returned');
+  } finally { s.cleanup(); }
+});
+test('a spent recovery budget still leaves the errand behind', async () => {
+  // Two ceilings sit ahead of the ladder in `maybeAutoRecover`: the run's
+  // per-phase launch cap and a hardcoded run-wide 5. Both `refuse` and move on
+  // WITHOUT writing an errand — so a phase whose budget ran out went quiet
+  // rather than asking. Exhaustion is exactly when a person has to be told:
+  // "the ladder climbed everything it had and none of it worked" is the most
+  // actionable thing this system ever knows, and it was the one case that said
+  // nothing. (`ladder.ts`'s own exhaustion path has always written one.)
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    stubMint(svc);
+    const state = haltedRun(s.root);
+    // Spend the per-phase budget the way the healer itself would have.
+    state.recoveries = { 2: { attempts: 5, lastAt: new Date().toISOString() } };
+    saveRun(state);
+
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.equal(result.launched, false);
+    assert.match(result.reason ?? '', /budget/);
+    const after = loadRun(s.root, 'alpha', state.id)!;
+    assert.ok(after.recoveries?.['2']?.errand, 'a spent budget is an ask, not a silence');
+    assert.ok((after.recoveries!['2'].errand!.need ?? '').length > 0);
+  } finally { s.cleanup(); }
+});
+
+test('the run-wide recovery ceiling comes from the ladder prefs, not a hardcoded 5', async () => {
+  // `if (totalAttempts >= 5)` was a second, silent ceiling that contradicted
+  // `ladderPerRunRungs` in Settings — an operator who raised the ladder budget
+  // to 20 still got five.
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    svc.prefs.ladderPerRunRungs = 12;
+    stubMint(svc);
+    const state = haltedRun(s.root);
+    state.recoveries = { 2: { attempts: 0, lastAt: new Date().toISOString() } };
+    // Six launches across other phases: over the old hardcoded 5, under 12.
+    state.recoveries['9'] = { attempts: 6, lastAt: new Date().toISOString() };
+    saveRun(state);
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.doesNotMatch(result.reason ?? '', /5 launches/,
+      'the prefs are the ceiling; a second hardcoded one is a setting that lies');
+  } finally { s.cleanup(); }
+});
+
+test('a rung this console may not drive still leaves an errand naming the flag', async () => {
+  // `vehicleForRung` deliberately does NOT consult capability flags: a vehicle
+  // the console has but may not use is still the right vehicle, and refusing it
+  // BY NAME ("needs --allow-agent") beats skipping it silently, which would read
+  // as "nothing to climb" and hide the flag that was actually in the way. That
+  // reasoning is sound and stays.
+  //
+  // What was missing is the other half. The refusal returned without writing an
+  // errand, so the reason reached a journal line and a HealResult — and the
+  // operator, who is the only one who can restart the console with the flag,
+  // was never told. The ladder's own exhaustion path has always written one.
+  const s = scratch();
+  try {
+    const svc = service(s.root, { allowAgent: false });
+    const state = haltedRun(s.root);
+    // No resumable session, so the ladder reaches for an agent rung.
+    delete state.phases['2'].sessionId;
+    delete state.phases['2'].resumeSessionId;
+    saveRun(state);
+
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.equal(result.launched, false);
+    assert.match(result.reason ?? '', /--allow-agent/, 'the refusal still names the flag');
+    const after = loadRun(s.root, 'alpha', state.id)!;
+    const errand = after.recoveries?.['2']?.errand;
+    assert.ok(errand, 'and the person who can supply the flag is asked for it');
+    assert.match(`${errand!.need} ${errand!.how}`, /allow-agent/);
+  } finally { s.cleanup(); }
+});
+
+test('a QA-blocked done phase is a candidate the ladder can actually climb', async () => {
+  // When the QA situations had no rungs, admitting a board-`done` phase to the
+  // candidate list bought nothing — it produced a better-worded refusal and a
+  // push duplicating the inbox's, at the cost of contradicting the documented
+  // candidate contract ("their records are closed by the reconcile pass, not
+  // diagnosed"). That was the right call then.
+  //
+  // It is not the right call now: `qa-failed` and `qa-pending` climb, so the
+  // phase holding the plan is a phase the ladder can genuinely act on. The guard
+  // stays for every OTHER done phase — a settled phase is still settled.
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    stubMint(svc);
+    const state = qaWedgedRun(s.root);
+    state.phases['1'].sessionId = 'sess-p1';   // the session that built it survives
+    saveRun(state);
+
+    const board = await svc.boardStates('alpha');
+    const candidates = await svc.classifyOpenPhases('alpha', state, board);
+    assert.equal(candidates.length, 1, 'the phase holding the plan is now reachable');
+    assert.equal(candidates[0].phase, 1);
+    assert.equal(candidates[0].situation.key, 'qa-failed');
+  } finally { s.cleanup(); }
+});
+
+test('a genuinely settled done phase is still not a candidate', async () => {
+  // The guard's whole purpose: a phase the board reads done, with a clean
+  // verdict, is finished work. Diagnosing it would spend a board read and a
+  // classify per pass, for ever, on every plan.
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    stubMint(svc);
+    // Phase 1 done and QA-passed; the run holds a record for it.
+    mkdirSync(join(s.root, 'docs', 'handoffs', 'alpha'), { recursive: true });
+    writeFileSync(
+      join(s.root, 'docs', 'handoffs', 'alpha', 'phase-01-schema.md'),
+      '---\nplan: docs/plans/alpha.md\nphase: 1\ntitle: schema\nstatus: complete\n---\n# done\n', 'utf8',
+    );
+    writeFileSync(
+      join(s.root, 'docs', 'handoffs', 'alpha', 'test-status.md'),
+      '# QA\n\n## QA status\n\n| Phase | Result | Report |\n|--:|--|--|\n| 1 | pass | reports/phase-01-qa.md |\n', 'utf8',
+    );
+    const state = newRun({ slug: 'alpha', root: s.root, autoRecover: true });
+    state.status = 'parked';
+    phaseRecord(state, 1).status = 'done';
+    saveRun(state);
+
+    const board = await svc.boardStates('alpha');
+    const candidates = await svc.classifyOpenPhases('alpha', state, board);
+    assert.deepEqual(candidates.map((c) => c.phase), [], 'settled work is not diagnosed');
+  } finally { s.cleanup(); }
+});
+
+test('a QA rung hands the session real commands, never placeholders', async () => {
+  // A resumed session is mid-conversation and will run what it is given. A brief
+  // that says `qa-record.sh <slug> <N>` is handing it a guess — and the one thing
+  // this rung exists to produce is a verdict recorded in the right place under
+  // the right name.
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    const build = (svc as unknown as {
+      vehicleForRung: (
+        rung: unknown, situation: unknown, record: unknown, evidence: unknown, slug: string,
+      ) => { instruction?: string } | null;
+    }).vehicleForRung.bind(svc);
+
+    const record = { phase: 7, status: 'done', sessionId: 'sess-p7' };
+    const evidence = { phase: 7, handoff: { exists: false }, qa: { mode: 'on', result: 'fail' } };
+
+    for (const mode of ['qa-fix', 'qa-verdict']) {
+      const vehicle = build(
+        { vehicle: 'resume-own-session', params: { mode } }, { key: 'qa-failed' }, record, evidence, 'alpha',
+      );
+      const instruction = vehicle?.instruction ?? '';
+      assert.match(instruction, /qa-record\.sh alpha 7/, `${mode}: the real slug and phase`);
+      assert.match(instruction, /reports\/phase-07-qa\.md/, `${mode}: the real, zero-padded report path`);
+      assert.doesNotMatch(instruction, /<slug>|<N>|<NN>/, `${mode}: no placeholder may survive into a brief`);
+    }
+  } finally { s.cleanup(); }
 });

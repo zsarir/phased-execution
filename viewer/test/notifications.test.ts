@@ -712,3 +712,47 @@ test('resolveWhere annotates the scoped records, marks them read, and survives a
     reloaded.list({}).items.find((row) => row.id === halted.id)?.resolved?.reason,
     'the board moved past the halt');
 });
+
+test('a run-level errand reaches the push channel, like a phase one', async () => {
+  // Converge writes an errand for a stop that belongs to no single phase, and
+  // `ConvergeDeps.announceErrand` types the parameter `number | null` precisely
+  // so it can. The service's implementation then dropped every one of them:
+  // `if (typeof phase !== 'number') return`. The ask was stored on the run and
+  // rendered on the run page — and never pushed, which is the one thing an
+  // errand exists to do: reach somebody who is not already looking.
+  const { Service } = await import('../server/service.ts');
+  const { SKILL_DIR } = await import('../server/config.ts');
+  const service = new Service({
+    port: 0, host: '127.0.0.1', open: false, allowWrites: false,
+    scriptsDir: join(SKILL_DIR, 'scripts'), logFile: null,
+  } as never);
+
+  const sent: Array<{ title: string; body: string }> = [];
+  service.push.announce = ((_c: unknown, message: { title: string; body: string }) => {
+    sent.push(message);
+  }) as typeof service.push.announce;
+
+  const announceErrand = (service as unknown as {
+    announceErrand: (data: unknown) => void;
+  }).announceErrand.bind(service);
+
+  const runLevel = {
+    slug: 'demo', runId: 'r1', phase: null,
+    errand: { at: '2026-08-22T09:00:00.000Z', need: 'Someone to continue this run.', how: 'Press Continue.' },
+  };
+  announceErrand(runLevel);
+  assert.equal(sent.length, 1, 'a run-level errand must be announced');
+  assert.match(sent[0].title, /^demo needs you$/, 'and must not claim a phase it does not have');
+  assert.match(sent[0].body, /Someone to continue this run/);
+
+  // A phase errand is unchanged, and the dedupe still tells the two apart.
+  announceErrand({
+    slug: 'demo', runId: 'r1', phase: 2,
+    errand: { at: '2026-08-22T09:00:00.000Z', need: 'A verdict.', how: 'Record it.' },
+  });
+  assert.equal(sent.length, 2);
+  assert.match(sent[1].title, /phase 2 needs you/);
+
+  announceErrand(runLevel);
+  assert.equal(sent.length, 2, 'the same ask twice is still one ask');
+});

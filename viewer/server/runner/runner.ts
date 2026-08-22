@@ -290,6 +290,13 @@ export type RunnerDeps = {
    */
   unblockAttempts?: () => boolean;
   /**
+   * May a `human` gate be briefed to the phase's own session to verify and
+   * clear, instead of stopping the run for a person? Absent = no, and that is
+   * the right default: the plan author wrote `human`. See
+   * `Prefs.delegateHumanGates`.
+   */
+  delegateHumanGates?: () => boolean;
+  /**
    * The resource ladder's knobs (Settings ▸ Automation), read live so a change
    * applies to the next wall rather than the next run. Absent = the shipped
    * defaults: an auth or usage wall switches to an account that can pay, a
@@ -1516,7 +1523,10 @@ export class Runner {
       // A recovery has no drive loop to finalize a drain: its halt above was
       // written while its own lane was still in the table, so with that lane
       // gone the run lands on the final word here.
-      if (state.status === 'halting') state.status = 'halted';
+      if (state.status === 'halting') {
+        state.status = this.parkPending ? 'parked' : 'halted';
+        this.parkPending = false;
+      }
       this.syncMirror();
       this.childPid = null;
       this.handle = null;
@@ -2648,12 +2658,25 @@ export class Runner {
    * true thing instead — the question is still open, nothing is wrong with the
    * work, and the phase can be retried the moment someone answers.
    */
+  /** A park that is draining: the finalizer lands on `parked`, not `halted`. */
+  private parkPending = false;
+
   park(reason: string, phase: number | null = null): boolean {
     if (!this.state) return false;
     if (this.state.halt) return false;
     const at = phase ?? this.state.activePhase;
     this.state.halt = { at: new Date().toISOString(), reason, ...(at !== null ? { phase: at } : {}) };
-    this.state.status = 'parked';
+    // With lanes still live the run is DRAINING, not stopped — the same reason
+    // `halt()` uses `halting`, and for the same cost when it is got wrong:
+    // `parked` is not IN_FLIGHT, so a console that died mid-drain would never
+    // pid-check those children. `park` is also what the approval-timeout hook
+    // calls, from OUTSIDE the loop, while a lane is live: measured on a real
+    // run, 17 minutes of sessions editing trees under a `parked` status.
+    // `parkPending` carries the intended terminal word through the drain, so
+    // the finalizer lands on `parked` rather than `halted` — a park and a halt
+    // are different facts and the operator is shown different things for them.
+    this.parkPending = this.lanes.size > 0;
+    this.state.status = this.lanes.size ? 'halting' : 'parked';
     this.state.stoppedBy = 'system';
     // Not counted against the failure budget: nobody being awake is not the
     // phase going wrong twice.
@@ -2961,7 +2984,20 @@ export class Runner {
           // compound (halted is not IN_FLIGHT, so a dead console mid-drain
           // would never pid-check those children).
           if (await draining()) continue;
-          state.status = 'halted';
+          state.status = this.parkPending ? 'parked' : 'halted';
+          this.parkPending = false;
+          break;
+        }
+        // An out-of-band park — the approval-timeout hook is the one that
+        // matters — sets `state.halt` and `parked` from OUTSIDE this loop, and
+        // the loop had no branch for it. So it fell through, re-read the board
+        // and admitted candidates: `runPhase` then read the gate, took a lock
+        // and boarded a phase on a run the console had already stopped, two
+        // bash subprocesses and a journal line per turn, indefinitely. Fires at
+        // the default single lane too, as soon as the parked phase's own
+        // session finishes.
+        if (state.status === 'parked' && state.halt) {
+          if (await draining()) continue;
           break;
         }
         if (stopping) {
@@ -3155,12 +3191,30 @@ export class Runner {
                 && state.phases[key]?.status === 'parked' && (!asked || asked.has(Number(key))))
               .map(([key, slot]) => ({ p: Number(key), errand: slot.errand! }));
             const errandPhases = new Set(errands.map((e) => e.p));
+            // The phases whose QA verdict is holding the DAG, read from the
+            // board rather than from this run's records — the blocker is a
+            // phase the board reads DONE, so it has no open record to find it
+            // by. Everything below used to derive from `readyRecords`, which is
+            // empty in exactly the case that most needs explaining: a plan
+            // wedged with nothing ready at all.
+            const qaHolders = Object.entries(board.qa ?? {})
+              .filter(([, verdict]) => verdict !== 'pass' && verdict !== 'waived')
+              .map(([phase, verdict]) => ({ p: Number(phase), verdict }))
+              .filter(({ p }) => Number.isFinite(p))
+              .sort((x, y) => x.p - y.p);
+            const heldByQa = (p: number): number[] => Object.entries(board.blockedBy ?? {})
+              .filter(([, deps]) => deps.includes(p)).map(([blocked]) => Number(blocked)).sort((x, y) => x - y);
             const held = [
               ...errands.map(({ p, errand }) => `phase ${p} needs you — ${errand.need} (${errand.how})`),
               ...readyRecords.filter(({ p }) => !errandPhases.has(p)).map(({ p, record }) =>
                 `phase ${p} is ${record.status}${record.note ? ` (${record.note})` : ''}`),
               ...board.stuck.filter((p) => !errandPhases.has(p)).map((p) =>
                 `phase ${p}'s handoff is marked blocked — its Outstanding section says why`),
+              ...qaHolders.filter(({ p }) => !errandPhases.has(p)).map(({ p, verdict }) => {
+                const blocks = heldByQa(p);
+                return `phase ${p} is done but its QA verdict is ${verdict}`
+                  + (blocks.length ? `, which holds phase${blocks.length === 1 ? '' : 's'} ${blocks.join(', ')}` : '');
+              }),
             ].join('; ');
 
             // The remedy tail names only doors that exist. It used to be one
@@ -3180,6 +3234,14 @@ export class Runner {
             }
             if (verificationParked.length) {
               remedies.push('an unrunnable §Verification takes a plan edit or Repair with AI, then Retry');
+            }
+            // Two doors, because there genuinely are two — and neither was ever
+            // named. A recorded verdict is not a defect the autopilot can clear:
+            // somebody has to give a verdict, or say the gate does not apply.
+            if (qaHolders.length) {
+              remedies.push('a QA verdict that holds the plan takes Record a verdict on that phase '
+                + '(pass or waived), or a fresh QA session — or "**QA gate:** off" in the plan\'s '
+                + '§Session budget if this plan should not gate on QA at all');
             }
             // The MCP park had NO remedy string at all, which is how a run
             // parked on three signed-out servers ended with a halt sentence
@@ -3215,16 +3277,24 @@ export class Runner {
               && verificationParked.length === readyRecords.length && !board.stuck.length;
             const allMcp = mcpParked.length > 0
               && mcpParked.length === readyRecords.length && !board.stuck.length;
+            // A plan nothing can move: no ready phase, no lane in flight, and a
+            // QA verdict holding the rest. It is anchored on the HOLDING phase
+            // — the one a person can actually act on — which is a phase the
+            // board reads done, and therefore one no record-derived anchor
+            // could ever have found.
+            const deadlocked = qaHolders.length > 0 && !board.ready.length && !board.inProgress.length;
             state.halt ??= {
               at: new Date().toISOString(),
               reason: held
                 ? `nothing left to run on its own — ${held}.${tail}`
                 : `nothing is ready to run: ${outstanding.length} phase(s) are still waiting on a gate or an earlier phase.`,
-              ...(allVerification
-                ? { kind: 'verification-preflight', phase: verificationParked[0].p }
-                : allMcp
-                  ? { kind: 'mcp-preflight', phase: mcpParked[0].p }
-                  : {}),
+              ...(deadlocked
+                ? { kind: 'plan-deadlocked', phase: qaHolders[0].p }
+                : allVerification
+                  ? { kind: 'verification-preflight', phase: verificationParked[0].p }
+                  : allMcp
+                    ? { kind: 'mcp-preflight', phase: mcpParked[0].p }
+                    : {}),
             };
             state.finishedReason = state.halt.reason;
           }
@@ -3255,8 +3325,12 @@ export class Runner {
     } finally {
       // A drain the loop never finished — a `break` that bypassed the loop top,
       // or the `catch` above halting with lanes still recorded — must still
-      // land on the final word: nothing is running past this line.
-      if (state.status === 'halting') state.status = 'halted';
+      // land on the final word: nothing is running past this line. A park that
+      // was draining lands on `parked`; only a halt lands on `halted`.
+      if (state.status === 'halting') {
+        state.status = this.parkPending ? 'parked' : 'halted';
+        this.parkPending = false;
+      }
       // Park pokes die with the loop: a stopped run's resume is the service's
       // boot/timer decision, made from `waitUntil` on the record — not a
       // callback into a loop that no longer exists.
@@ -3326,13 +3400,29 @@ export class Runner {
      * commands: Service.gateStatus passes no env. */
     const gate = readGateStatus(await this.engine(['--gate-status', String(phase)], { PHASE_EXEC_GATES: '1' }));
     record.gate = gate;
+    // A `human` gate the operator has DELEGATED behaves like an ai-clearable
+    // one: the boot prompt briefs the session to verify each condition against
+    // evidence it can cite and record the clearance, or stop with the condition
+    // it could not verify named. Off unless asked for — see `delegateHumanGates`.
+    // `--gate-status` reports the human family as `manual:` (the *kind* word
+    // `human` comes from `--gate-kind`), so match the same set the classifier
+    // does. "not executed" is excluded: that is a `cmd` gate the read declined
+    // to run, not a person's decision — and the runner passes PHASE_EXEC_GATES=1
+    // precisely so it never sees one.
+    const humanFamily = /^(manual|human|OVERDUE)$/i.test(gate.kind)
+      && !/\bnot executed\b/i.test(gate.detail ?? '');
+    const delegated = humanFamily && this.deps.delegateHumanGates?.() === true;
     if (!gate.clear) {
-      if (gate.kind === 'ai') {
+      if (gate.kind === 'ai' || delegated) {
         // An ai-clearable gate is the session's FIRST task, not a wall: the
         // engine's own boot prompt orders it to verify each condition, do the
         // work to make failing ones true, and record the clearance before
-        // implementing. Booting is exactly how this gate gets cleared.
-        this.record('phase.gate-ai', { gate }, phase);
+        // implementing. Booting is exactly how this gate gets cleared. A
+        // delegated human gate rides the same path under its own journal line,
+        // because "a person's gate a session was asked to verify" is a
+        // different fact from "a gate the plan marked ai-clearable" and an
+        // audit has to be able to tell them apart.
+        this.record(delegated ? 'phase.gate-delegated' : 'phase.gate-ai', { gate }, phase);
       } else {
         // human or auto: nothing this run can do — a person must approve (the
         // phase page's Gate card), or the world must change. `gated`, not
@@ -3612,7 +3702,15 @@ export class Runner {
     }
 
     /* ---- prompt ---- */
-    const engineText = readText(await this.engine(['--boot-prompt', String(phase)]));
+    // `PE_GATE_DELEGATE` swaps the human-gate block for the delegated brief:
+    // verify each condition against evidence you can cite, record the clearance,
+    // or STOP naming the condition you could not verify. Passed only when the
+    // operator asked for it — the default prompt still says a person must clear
+    // the gate, because by default one must.
+    const engineText = readText(await this.engine(
+      ['--boot-prompt', String(phase)],
+      this.deps.delegateHumanGates?.() === true ? { PE_GATE_DELEGATE: '1' } : undefined,
+    ));
     if (!engineText.trim()) {
       await this.release(phase, owner);
       this.halt(`the engine produced no boot prompt for phase ${phase}`, phase, 'plan-unreadable');

@@ -360,3 +360,32 @@ describe('the submits', () => {
     await waitFor(() => expect(savePrefs).toHaveBeenCalledWith({ gitMode: 'new-branch' }));
   });
 });
+
+describe('a PR run that cannot ask for its one tap says so', () => {
+  // The `openPr` carve-out pins `git push` and `gh pr create` to *ask* even
+  // under the Trusted profile — the run's one world-visible act, for one human
+  // tap. The answer window is an hour, and the only thing that tells anybody a
+  // card is up is a push notification. With push down, that deal silently
+  // becomes "the run parks in an hour" — which is what happened on a real run:
+  // a `git push` card at midday, nobody could know, and the journal records the
+  // park sixty minutes later.
+  const broken = {
+    environment: { issues: [{ kind: 'push-broken', detail: 'apns rejects', fix: 're-subscribe' }] },
+  };
+
+  it('warns when push is broken and the run will open a PR', async () => {
+    await mount(
+      { mode: 'start', context: { slug: 'alpha', run: null }, pushBroken: true },
+      { ...broken, prefs: { gitMode: 'new-branch', openPrOnComplete: true } },
+    );
+    expect(await screen.findByText(/cannot deliver notifications/)).toBeInTheDocument();
+  });
+
+  it('stays quiet when push is healthy', async () => {
+    await mount(
+      { mode: 'start', context: { slug: 'alpha', run: null }, pushBroken: false },
+      { prefs: { gitMode: 'new-branch', openPrOnComplete: true } },
+    );
+    expect(screen.queryByText(/cannot deliver notifications/)).toBeNull();
+  });
+});

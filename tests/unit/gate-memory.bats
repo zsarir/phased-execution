@@ -179,3 +179,47 @@ EOF
   run pg diamond --memory-block
   assert_contains "$output" "ready: 2, 3"
 }
+
+# --- delegated human gates (PE_GATE_DELEGATE) --------------------------------
+# A `human` gate says a person must decide, and the boot prompt says STOP. An
+# operator who wants a plan to run unattended can delegate that verification to
+# the session instead — which `gate-status.md`'s own header already names as a
+# legitimate approver ("an AI session that verified the conditions"), and which
+# this repository's own plans already record (`by: ai-session-delegated`).
+# Opt-in, per run, and never the default: the plan author wrote `human`.
+
+@test "boot-prompt: a human gate says STOP by default" {
+  setup_docs gatecheck gatecheck
+  run pg gatecheck --boot-prompt 5
+  assert_contains "$output" "a person must clear this gate"
+  assert_contains "$output" "Do NOT implement past an unapproved human gate"
+}
+
+@test "boot-prompt: PE_GATE_DELEGATE briefs the session to verify and clear it" {
+  setup_docs gatecheck gatecheck
+  PE_GATE_DELEGATE=1 run pg gatecheck --boot-prompt 5
+  assert_contains "$output" "DELEGATED"
+  assert_contains "$output" "ai-session-delegated"
+  refute_contains "$output" "Do NOT implement past an unapproved human gate"
+}
+
+@test "boot-prompt: a delegated gate still refuses to invent evidence" {
+  setup_docs gatecheck gatecheck
+  PE_GATE_DELEGATE=1 run pg gatecheck --boot-prompt 5
+  # The whole safety of delegation is NOT that the session is trusted to judge —
+  # it is that a condition it cannot verify from evidence STOPS it, by name.
+  assert_contains "$output" "verify it against evidence you can actually read"
+  assert_contains "$output" "Never record an approval you cannot cite evidence for"
+  assert_contains "$output" "cannot verify from evidence"
+  # And the stop is a declared outcome the supervisor reads, not prose.
+  assert_contains "$output" "blocked --reason"
+}
+
+@test "boot-prompt: delegation does not touch an ai gate's own wording" {
+  setup_docs gatecheck gatecheck
+  run pg gatecheck --boot-prompt 5
+  before="$output"
+  PE_GATE_DELEGATE=1 run pg gatecheck --boot-prompt 2
+  # phase 2 is a date gate (auto), not human — delegation must not reword it.
+  refute_contains "$output" "DELEGATED"
+}

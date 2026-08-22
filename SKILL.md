@@ -13,7 +13,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
 metadata:
-  version: 4.6.0
+  version: 4.7.0
 ---
 
 # Phased Execution
@@ -460,19 +460,25 @@ The load-bearing rules a session must not get wrong; full rationale in `referenc
 - **Scope decides concurrency — one session per working *tree*.** Never two live sessions whose scopes
   intersect; same repo ⇒ serialized; `all` ⇒ exclusive; disjoint ⇒ parallel. **Never `git stash`** to hand
   work across sessions — commit (a WIP commit if needed) instead. (conventions §Scoped concurrency)
-- **QA is opt-in; existing gates still bind.** No QA subagent runs unless the plan enables it
-  (`--qa-mode` says which regime applies). But once `test-status.md` exists — on ANY plan, old or new — a
-  dependent is `ready` only when its deps are `done` **and** QA `pass`/`waived`, and a recorded `fail`
-  holds every dependent until re-QA'd: turning QA "off by default" never clears an existing `fail` row.
-  **Closing the plan** (`close-plan.sh`) is the only other exit — it retires the report without a re-QA
-  because a closed plan claims nothing about progress, and reopening restores the gate untouched.
-  (conventions §QA gating)
+- **QA is opt-in, and the plan says whether it gates.** No QA subagent runs unless the plan enables it
+  (`--qa-mode` says which regime applies). With QA `on`, a dependent is `ready` only when its deps are
+  `done` **and** QA `pass`/`waived` — a `fail` **and a still-`pending` row hold every dependent equally**,
+  which is why finishing a phase under QA-on means dispatching the verdict, not just writing the handoff
+  (the boot prompt says so). Three exits: re-QA to `pass`/`waived`; **`**QA gate:** off` in §Session
+  budget**, which releases the gate for the whole plan (the verdicts stay recorded and reported, they
+  simply stop holding dependents); or **closing the plan** (`close-plan.sh`), which retires the report
+  without a re-QA because a closed plan claims nothing about progress, and reopening restores the gate
+  untouched. Anything that CREATES `test-status.md` backfills already-complete phases as `waived`, so
+  turning QA on mid-plan never retroactively un-verifies finished work. (conventions §QA gating)
 - **Gates are categorized; approval is the one door.** An `ai` gate is the fresh session's FIRST task —
   verify each condition, do the work to make failing ones true, record it (`gate-approve.sh`), then
   implement; a `manual` (human) gate stops everything until a person does the numbered steps and approves
   (console Gate card or `gate-approve.sh`); auto checks (`date`/`phase`/…) answer by themselves. An
-  approval clears ANY kind; `--revoke` restores the gate. Never implement past an unapproved human gate.
-  (plan-format §Gates; conventions §Gates)
+  approval clears ANY kind; `--revoke` restores the gate. Never implement past an unapproved human gate
+  — **unless the operator has delegated it** (Settings ▸ Automation, off by default), in which case the
+  boot prompt briefs you to verify each condition against evidence you can cite and record it as
+  `ai-session-delegated`, or STOP naming the condition you could not verify. Never approve a gate you
+  cannot cite evidence for. (plan-format §Gates; conventions §Gates)
 - **Validate before you trust the board** — `scripts/validate.sh <slug>` catches malformed rows, undefined
   deps, cycles, and inconsistent handoffs; a silently-wrong board is the worst failure.
 - **Skill vs work-state split.** The skill lives in its own install (a plugin, or a clone under

@@ -88,6 +88,13 @@ export interface RunSetupProps {
   planMcp?: string[];
   /** The plan's qa-mode; `off` is the only value that offers the QA toggle. */
   qaMode?: string;
+  /**
+   * This console cannot currently deliver a push notification (the environment
+   * doctor's `push-broken`). It matters HERE and nowhere else in this dialog:
+   * `openPr` is the one setting that guarantees the run will stop and ask for a
+   * human tap, and push is the only thing that tells anybody a card is up.
+   */
+  pushBroken?: boolean;
   /** Whether the console may WRITE — a different flag from `allowRun`. */
   allowWrites?: boolean;
   /**
@@ -125,6 +132,7 @@ export function RunSetup({
   planSkills = [],
   planMcp = [],
   qaMode,
+  pushBroken,
   allowWrites,
   skillsEnabled = true,
   blocked = false,
@@ -450,6 +458,21 @@ export function RunSetup({
           onChange={(next) => set('openPr', next)}
         />
       )}
+      {/* The `openPr` carve-out pins `git push` and `gh pr create` to *ask* even
+          under the Trusted profile — a push and a PR are the run's one
+          world-visible act, and the deal is one human tap. The answer window is
+          an hour; the only thing that tells anyone a card is up is a push. With
+          push down that deal silently becomes "the run parks in an hour", which
+          is exactly what happened: a real run raised a `git push` card at
+          midday, nobody could know, and the journal records the park. Said
+          before launching, because afterwards it costs the run its afternoon. */}
+      {on('openPr') && values.openPr && values.gitMode === 'new-branch' && pushBroken && (
+        <p className="text-2xs text-ink-faint">
+          This console cannot deliver notifications right now, and a PR run stops for one approval tap on the
+          push. Nothing will tell you the card is up, and it expires after an hour — fix delivery in Settings
+          ▸ Notifications, or watch the run yourself.
+        </p>
+      )}
       {/* Said rather than simply hidden: a row that disappears reads as a
           setting that does not exist, and this one is only inapplicable. */}
       {mode === 'defaults' && on('openPr') && values.gitMode !== 'new-branch' && (
@@ -611,6 +634,24 @@ export function RunSetup({
           }
           onChange={(next) => set('qa', next)}
         />
+      )}
+
+      {/* Said rather than simply hidden, the same rule the PR row above follows.
+          The QA control is offered only when the plan's gate is OFF, so on a plan
+          that declares "**QA gate:** on" the dialog said nothing about QA at all
+          — and an operator whose console default is "QA off" reasonably concluded
+          it was off. It was not: the plan outranks the default, every finished
+          phase then owes a verdict, and a `fail` or a still-`pending` row holds
+          every dependent. That is a thing to learn before launching, not after a
+          plan has been held for a day. */}
+      {on('qa') && mode !== 'qa' && mode !== 'defaults' && qaMode && qaMode !== 'off' && (
+        <p className="text-2xs text-ink-faint">
+          {qaMode === 'waived'
+            ? 'This plan declares “**QA gate:** off”, so recorded verdicts do not hold dependents.'
+            : 'This plan declares “**QA gate:** on”, so it gates on QA whatever this console’s default ' +
+              'is: each finished phase owes an independent verdict, and a phase without one holds ' +
+              'every phase that depends on it. Turn it off in the plan’s §Session budget.'}
+        </p>
       )}
 
       {on('autoRecover') && (

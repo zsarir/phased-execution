@@ -981,8 +981,10 @@ _is_done() {  # _is_done <phase>  (respects the assume-done override)
 # deps being QA-VERIFIED (handoff complete AND QA result pass|waived), not merely
 # done. No test-status.md → gating off → behaviour identical to before.
 qa_status_file="$DOCS_ROOT/docs/handoffs/${slug}/test-status.md"
+# Set below, once `qa_mode` is defined: whether QA GATES is a question about the
+# plan's directive, not merely about a file existing. See the assignment after
+# `qa_mode()`.
 QA_GATING=0
-[ -f "$qa_status_file" ] && QA_GATING=1
 qa_result() {  # qa_result <phase> → pass|fail|pending|waived|none  (from the "## QA status" table)
   [ -f "$qa_status_file" ] || { echo none; return; }
   sed 's/–/-/g; s/—/-/g' "$qa_status_file" | awk -F'|' -v want="$1" '
@@ -998,7 +1000,12 @@ qa_result() {  # qa_result <phase> → pass|fail|pending|waived|none  (from the 
   '
 }
 _is_verified() {  # done + QA-passed (when gating on); honours the assume-done hook
-  [ "$1" = "$assume_done" ] && return 0
+  # The hook means "treat N as DONE", which is all its name claims and all
+  # `--ready-after N` is asked. It used to short-circuit VERIFIED as well, so
+  # under QA-on the answer was "what unblocks once N is done and QA has passed"
+  # while every caller was asking "what unblocks once N is done" — and the gap
+  # is a boot prompt written for a phase the board will refuse to start.
+  # `_is_done` honours the hook on its own, so dropping it here is enough.
   _is_done "$1" || return 1
   [ "$QA_GATING" = 0 ] && return 0
   case "$(qa_result "$1")" in pass|waived) return 0 ;; *) return 1 ;; esac
@@ -1007,7 +1014,9 @@ _is_verified() {  # done + QA-passed (when gating on); honours the assume-done h
 # ---- QA mode (v3: QA subagents are OPT-IN, off by default) -----------------
 # Resolution order (first hit wins):
 #   1. canonical "**QA gate:** off" in plan §Session budget → "waived …" (record
-#      rows as waived, NEVER dispatch a QA subagent; existing fail rows still gate)
+#      rows as waived, NEVER dispatch a QA subagent, and DO NOT GATE — see the
+#      QA_GATING assignment below; a recorded fail stays recorded and visible,
+#      it simply stops holding dependents)
 #   2. canonical "**QA gate:** on"                          → "on …" (dispatch at finish)
 #   3. legacy waiver prose (a "QA gate" line containing "waiv") → "waived …"
 #   4. test-status.md already exists (legacy/back-compat)   → "on …"
@@ -1034,6 +1043,24 @@ qa_mode() {
   echo "off"
 }
 
+# Does QA GATE dependents on this plan? Gating needs BOTH a table to read and a
+# directive that says to honour it.
+#
+# This used to be `[ -f "$qa_status_file" ] && QA_GATING=1`, with `qa_mode`
+# never consulted — so "**QA gate:** off" turned off dispatch but not gating,
+# and a plan whose phase 1 had a recorded `fail` could not be released by ANY
+# plan-, run- or console-level setting. The only exit was hand-editing the
+# table. Measured on a real plan: two finished phases (one `fail`, one
+# `pending`) held six phases for ever, and turning QA off changed nothing.
+#
+# `waived` now means what it says. The verdicts stay in the table and every
+# surface still reports them; they stop being a wall. `fail` under `on` gates
+# exactly as before — the release is opt-in, per plan, in writing.
+case "$(qa_mode)" in
+  waived*) QA_GATING=0 ;;
+  *)       [ -f "$qa_status_file" ] && QA_GATING=1 ;;
+esac
+
 # Dependencies of <phase> not yet satisfied: not done, or — with QA gating on —
 # done but not yet QA-verified. Space-separated, may be empty.
 missing_deps() {  # missing_deps <phase>
@@ -1042,6 +1069,78 @@ missing_deps() {  # missing_deps <phase>
     _is_verified "$d" || out="$out $d"
   done
   echo "${out# }"
+}
+
+# WHY a dependency is unmet — the fact the runner never had. An empty `ready`
+# set is four different situations (finished · all in flight · closed · nothing
+# can ever move), and the console could not tell them apart because
+# `--memory-block` emitted buckets and no reasons. A phase that is DONE but
+# whose QA verdict is not pass|waived is the dangerous one: it looks settled on
+# the board and holds its whole downstream cone for ever.
+dep_block_reason() {  # dep_block_reason <dep> -> not-done | qa:<verdict>
+  _is_done "$1" || { echo "not-done"; return; }
+  echo "qa:$(qa_result "$1")"
+}
+
+# `missing_deps`, with the QA-held ones marked so `needs: 1` cannot sit two
+# lines under `done  1` reading like a contradiction.
+missing_deps_annotated() {  # missing_deps_annotated <phase>
+  local d out=""
+  for d in ${DEPS[$1]:-}; do
+    _is_verified "$d" && continue
+    case "$(dep_block_reason "$d")" in
+      qa:*) out="$out $d(QA)" ;;
+      *)    out="$out $d" ;;
+    esac
+  done
+  echo "${out# }"
+}
+
+# The `blocked:` line: every waiting phase, its unmet deps, and why each is
+# unmet. Emitted only when something is actually waiting, so the common case
+# costs nothing and old parsers see no new line.
+blocked_pairs() {
+  local p d out="" deps
+  for p in "${PHASES[@]}"; do
+    [ "$(phase_state "$p")" = waiting ] || continue
+    deps=""
+    for d in ${DEPS[$p]:-}; do
+      _is_verified "$d" && continue
+      deps="$deps,$d($(dep_block_reason "$d"))"
+    done
+    [ -n "$deps" ] && out="$out $p<-${deps#,}"
+  done
+  echo "${out# }"
+}
+
+# F19: an open plan that cannot progress — nothing ready, nothing in flight, and
+# every remaining phase held by a dependency. ADVISORY, same arm as F14-F18
+# (stderr, exit untouched). Born from a measured wedge: two phases finished, one
+# QA verdict `fail` and one still `pending`, six phases held for ever, and every
+# console surface said only "waiting on a gate or an earlier phase".
+deadlock_advisories() {
+  local p held="" any_open=0 reason
+  for p in "${PHASES[@]}"; do
+    case "$(phase_state "$p")" in
+      done)              : ;;
+      ready|in-progress) return 0 ;;
+      *)                 any_open=1 ;;
+    esac
+  done
+  [ "$any_open" = 1 ] || return 0
+  # Only QA-held and stuck deps make a plan UNABLE to move; a plan whose roots
+  # are merely unstarted is not deadlocked, it is unstarted.
+  for p in "${PHASES[@]}"; do
+    [ "$(phase_state "$p")" = waiting ] || continue
+    for d in ${DEPS[$p]:-}; do
+      _is_verified "$d" && continue
+      reason="$(dep_block_reason "$d")"
+      case "$reason" in qa:*) held="$held $d(${reason})" ;; esac
+    done
+  done
+  [ -n "$held" ] || return 0
+  printf 'F19 plan: this plan cannot progress — nothing is ready and nothing is in flight; %s hold every remaining phase. Re-run QA or record pass/waived (scripts/qa-record.sh), or set "**QA gate:** off" in §Session budget\n' \
+    "$(echo "${held# }" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 }
 
 # Compute a phase's runtime state (pure — no globals, safe across $(…) subshells).
@@ -1193,6 +1292,8 @@ case "$mode" in
       advisories="$(verification_lead_advisories)"
       [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
       advisories="$(verification_cwd_advisories)"
+      [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
+      advisories="$(deadlock_advisories)"
       [ -n "$advisories" ] && printf '%s\n' "$advisories" >&2
     fi
     if [ -n "$issues" ]; then
@@ -1413,6 +1514,11 @@ case "$mode" in
     [ -n "$md_st" ] && printf 'stuck: %s\n' "$(_csv "$md_st")"
     printf 'ready: %s\n' "$(_csv "$md_rd")"
     printf 'waiting: %s\n' "$(_csv "$md_wt")"
+    # WHY the waiting phases wait. Emitted only when something waits, so the
+    # line is additive: `readMemoryBlock` ignores lines it does not know, and a
+    # plan with nothing waiting looks exactly as it did.
+    md_bl="$(blocked_pairs)"
+    [ -n "$md_bl" ] && printf 'blocked: %s\n' "$md_bl"
     exit 0
     ;;
   --size)
@@ -1510,12 +1616,35 @@ case "$mode" in
               printf 'STOP, report exactly what is missing and what you verified, and hand it to the operator.\n'
               ;;
             human)
-              printf '🧍 GATED phase (human) — STOP: a person must clear this gate before implementation.\n'
-              printf 'Operator steps:\n'
-              printf '%s\n' "$gc_text" | sed 's/^/    /'
-              printf 'Ask the operator to do these steps and approve the gate — Phase Console → plan → phase %s\n' "$p"
-              printf -- '→ Gate card, or: bash %s/gate-approve.sh %s %s --by "<who>" --note "<what was done>"\n' "$SCRIPT_DIR" "$slug" "$p"
-              printf 'Do NOT implement past an unapproved human gate.\n'
+              if [ "${PE_GATE_DELEGATE:-0}" = "1" ]; then
+                # The operator delegated this gate's verification to the session.
+                # `gate-status.md`'s own header already names an AI session that
+                # verified the conditions as a legitimate approver, and plans in
+                # the wild record exactly that (`by: ai-session-delegated`). The
+                # safety is NOT that the session is trusted to judge — it is that
+                # a condition it cannot verify from evidence STOPS it, with the
+                # unverified condition named, rather than being waved through.
+                printf '🤖 GATED phase (human, DELEGATED to you) — verify it yourself before implementing.\n'
+                printf 'The operator has delegated this gate. Conditions, verbatim:\n'
+                printf '%s\n' "$gc_text" | sed 's/^/    /'
+                printf 'For EACH condition: verify it against evidence you can actually read (a command you\n'
+                printf 'run, a file, a URL you fetch, a CI status). Quote that evidence.\n'
+                printf -- '- Every condition verified → record it and continue into the phase:\n'
+                printf -- '    bash %s/gate-approve.sh %s %s --by "ai-session-delegated" --note "<condition: evidence, per condition>"\n' "$SCRIPT_DIR" "$slug" "$p"
+                printf -- '- ANY condition you cannot verify from evidence — a visual judgement nobody has made,\n'
+                printf -- '  a credential you lack, a person'"'"'s sign-off, a preview nobody has looked at — STOP.\n'
+                printf -- '  Do not approve it, do not implement past it, and say exactly which condition and why:\n'
+                printf -- '    bash %s/phase-outcome.sh %s %s blocked --reason "<the condition you could not verify>"\n' "$SCRIPT_DIR" "$slug" "$p"
+                printf 'Never record an approval you cannot cite evidence for. A gate approved on a guess is\n'
+                printf 'worse than a gate that stopped the run.\n'
+              else
+                printf '🧍 GATED phase (human) — STOP: a person must clear this gate before implementation.\n'
+                printf 'Operator steps:\n'
+                printf '%s\n' "$gc_text" | sed 's/^/    /'
+                printf 'Ask the operator to do these steps and approve the gate — Phase Console → plan → phase %s\n' "$p"
+                printf -- '→ Gate card, or: bash %s/gate-approve.sh %s %s --by "<who>" --note "<what was done>"\n' "$SCRIPT_DIR" "$slug" "$p"
+                printf 'Do NOT implement past an unapproved human gate.\n'
+              fi
               ;;
             *)
               gs="$(PHASE_EXEC_GATES=0 DOCS_ROOT="$DOCS_ROOT" "$0" "$slug" --gate-status "$p" 2>/dev/null || true)"
@@ -1562,6 +1691,23 @@ case "$mode" in
     printf 'then fill in docs/handoffs/%s/phase-%s-<kebab-title>.md and commit it.\n' "$slug" "$pad"
     printf 'Cannot finish? Hand off `in-progress` (paused, resumable) or `blocked` (needs help) —\n'
     printf 'never end the session without a handoff. Stop after the handoff exists.\n'
+    # The QA duty, stated where the session will actually read it. SKILL.md has
+    # always asked a QA-on plan's finishing session to dispatch a QA subagent;
+    # the boot prompt never repeated it, and an unattended session reads only
+    # this. So `new-handoff.sh ... complete` wrote a `pending` row, nothing ever
+    # replaced it, and that phase held its whole downstream cone for ever with
+    # no defect recorded anywhere. Named only when QA actually gates.
+    case "$(qa_mode)" in
+      on*)
+        printf '\nThis plan runs QA ON, so the handoff is not the last step: a `complete` handoff\n'
+        printf 'writes a `pending` QA row, and a pending row holds every dependent phase exactly\n'
+        printf 'as a failure does. Nothing dispatches QA on your behalf. Before you stop, run a\n'
+        printf 'FRESH-context QA subagent over this phase (get its brief with\n'
+        printf -- '`scripts/phase-graph.sh %s --qa-prompt %s`) and record what it finds:\n' "$slug" "$p"
+        printf -- '    bash %s/qa-record.sh %s %s <pass|fail|waived> --report reports/phase-%s-qa.md\n' "$SCRIPT_DIR" "$slug" "$p" "$pad"
+        printf 'Never review your own work as the QA verdict, and never hand-edit test-status.md.\n'
+        ;;
+    esac
     printf 'Waiting on something OUTSIDE this session (a CI build, a PR auto-merge, a deploy\n'
     printf 'window)? Saying so in prose is invisible to the supervisor. Hand off `in-progress`,\n'
     printf 'then declare it and stop:\n'
@@ -1637,7 +1783,7 @@ for p in "${PHASES[@]}"; do
     in-progress) icon="🚧"; extra=""; inprog_list="$inprog_list $p" ;;
     stuck)       icon="⛔"; extra=" (handoff status: blocked)"; inprog_list="$inprog_list $p" ;;
     ready)       icon="🔓"; extra=""; ready_list="$ready_list $p" ;;
-    waiting)     miss="$(missing_deps "$p")"; icon="⏳"; extra=" needs: ${miss}"
+    waiting)     miss="$(missing_deps "$p")"; icon="⏳"; extra=" needs: $(missing_deps_annotated "$p")"
                  waiting_list="$waiting_list $p(←${miss// /,})" ;;
   esac
   printf '  %s  %-2s %-12s %s%s%s\n' "$icon" "$p" "$state" "${TITLE[$p]}" "$gmark" "$extra"

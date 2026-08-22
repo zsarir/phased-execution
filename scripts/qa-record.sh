@@ -36,6 +36,23 @@ if [ ! -f "$f" ]; then
     printf 'complete AND its Result is `pass` or `waived`. Values: pass | fail | pending | waived.\n\n'
     printf '## QA status\n\n| Phase | Result | Report |\n|------:|--------|--------|\n'
   } > "$f"
+  # Mid-plan activation backfill — the same rule `new-handoff.sh` applies, and
+  # for the same reason. Gating is triggered by this file EXISTING, and a phase
+  # with no row reads `none`, which is not verified. Creating the file without
+  # backfilling therefore retroactively un-verifies every already-complete phase
+  # and flips its dependents ready -> waiting, with no verdict recorded anywhere
+  # and nothing in any UI to explain it. (The console's own "turn QA on" reaches
+  # this script, not new-handoff.sh, which is how that shipped unnoticed.)
+  for _hf in "$dir"/phase-*.md; do
+    [ -e "$_hf" ] || continue
+    _hn="$(basename "$_hf" | sed -E 's/^phase-0*([0-9]+)-.*/\1/')"
+    case "$_hn" in ''|*[!0-9]*) continue ;; esac
+    [ "$_hn" = "$phase" ] && continue
+    _hst="$(grep -m1 '^status:' "$_hf" | sed 's/^status:[[:space:]]*//; s/[[:space:]]*#.*$//' || true)"
+    [ "$_hst" = complete ] || continue
+    printf '| %s | waived | - |\n' "$_hn" >> "$f"
+    echo "backfilled phase $_hn as waived (completed before QA activation)"
+  done
 fi
 
 # Upsert the row for this phase: replace in place if present, else append to the

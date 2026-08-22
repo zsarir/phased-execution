@@ -210,17 +210,28 @@ run scripts from the repo root or set `DOCS_ROOT=/path/to/repo` explicitly when 
   `docs/handoffs/<slug>/reports/phase-NN-qa.md`, and records the result via `scripts/qa-record.sh` into
   `docs/handoffs/<slug>/test-status.md` (`## QA status`: pass | fail | pending | waived). The closeout
   dispatches a `qa-full` subagent for the whole plan.
-- Once `test-status.md` exists — on any plan, old or new — the engine **gates dependents on verification**:
-  a dependent is `ready` only when every dependency is `done` **and** QA `pass`/`waived`. A `fail` holds
-  all dependents until a re-QA passes — always commit + push the report + test-status.md so the gate
-  propagates to every clone. Turning QA off by default never clears an existing `fail` row.
+- **When QA is `on`, the engine gates dependents on verification**: a dependent is `ready` only when every
+  dependency is `done` **and** QA `pass`/`waived`. A `fail` holds all dependents until a re-QA passes —
+  always commit + push the report + test-status.md so the gate propagates to every clone.
+- **A `pending` row holds dependents exactly as hard as a `fail`.** It is the row `new-handoff.sh` writes
+  when a phase finishes under QA-on, and nothing in the system produces a verdict on its own — so
+  finishing a phase means *dispatching the verdict*, not just writing the handoff. The engine's boot
+  prompt says so; the autopilot's ladder climbs it (`qa-pending` → resume the phase's session and run the
+  subagent, `qa-failed` → fix what the report named and re-record) and asks a person only when that runs
+  out. A plan that finishes a phase and walks away is a plan that deadlocks itself.
+- **`**QA gate:** off` releases the gate for the whole plan.** Gating follows `--qa-mode`, not the mere
+  existence of `test-status.md`: under a waiver the recorded verdicts stay in the table and every surface
+  still reports them, they simply stop holding dependents. That is the plan-level exit; re-QA is the
+  per-phase one. (Before 2026-08-22 no setting at any level could release a recorded `fail` — the only
+  way out was editing the table by hand.)
 - **Closing the plan is the other way out of a `fail`, and it is a different claim.** A QA failure is a
   statement about *progress*, and a closed plan makes none — so `close-plan.sh` retires the report
   without a re-QA, while the row, the failed phase and the search hit all stay exactly as they were
   (reopening restores the gate, still holding). Re-QA is how you *clear* a failure; closure is how you
   stop *caring* about one. Never reach for closure to make a live plan's failure go away.
-- On first mid-plan activation, `new-handoff.sh` backfills already-complete phases as `waived`
-  (pre-activation) so gating doesn't retroactively block their dependents. Use `waived` only for a
+- On first mid-plan activation, **whatever creates `test-status.md`** — `new-handoff.sh` or
+  `qa-record.sh`, and the console's own "turn QA on" reaches the second — backfills already-complete
+  phases as `waived` (pre-activation) so gating doesn't retroactively block their dependents. Use `waived` only for a
   genuinely non-applicable check or a recorded plan-level waiver.
 
 ## Gates (human vs ai — one approval door)
@@ -237,7 +248,13 @@ engine and the console):
 - **human** (`Gate-check: manual <who/what>`, or a `*(GATED)*` heading with no directive at all) — a
   person does the Gates bullet's numbered steps, then approves: the console's phase-page **Gate
   card**, or `scripts/gate-approve.sh <slug> <N> --by "<who>" --note "<what was done>"`. Sessions and
-  the autopilot stop at an unapproved human gate, always.
+  the autopilot stop at an unapproved human gate — **unless the operator delegates it**
+  (Settings ▸ Automation ▸ *Delegate human gates*, **off by default**, per console). Delegation does not
+  make the gate the session's judgement to make: the boot prompt requires evidence it can cite for each
+  condition, records the clearance as `by: ai-session-delegated`, and STOPS with the condition named
+  (`phase-outcome.sh … blocked --reason`) the moment one cannot be verified — a visual sign-off nobody
+  has given, a credential it lacks, a preview nobody has looked at. Turn it on for a plan whose gates are
+  machine-verifiable in practice; leave it off when a gate means what it says.
 - **auto** (`date` / `deadline` / `by` / `phase` / `phases` / `plan` / `cmd`) — the engine evaluates
   it by itself. `cmd` executes only under `PHASE_EXEC_GATES=1` — the autopilot's deliberate opt-in;
   page views and boot prompts never execute a gate command.

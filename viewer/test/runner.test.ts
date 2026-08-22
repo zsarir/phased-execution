@@ -50,6 +50,12 @@ type Repo = {
   setInProgress: (phase: number) => void;
   /** Every not-done phase is ready at once — a graph with no edges. */
   setParallel: (yes: boolean) => void;
+  /**
+   * The board reads `phase` done, its verdict is `verdict`, and it holds every
+   * remaining phase: ready is empty, waiting is everything else, and the
+   * `blocked:` line names the verdict.
+   */
+  setQaBlocked: (phase: number | null, verdict?: string) => void;
   setLockRefused: (yes: boolean) => void;
   /** The same, for ONE phase — the others read free. */
   setLockRefusedFor: (phase: number, yes: boolean) => void;
@@ -88,6 +94,22 @@ case "$mode" in
     # on demand is what makes the gap between "the loop checked for a pause" and
     # "the loop started a phase" long enough to press a button inside.
     [ -f "$S/slow-board" ] && sleep 1
+    # A QA wedge: a phase the board reads DONE whose verdict holds every
+    # dependent. The ready set is empty while the plan is nowhere near
+    # finished - the exact shape a real run hit, and the one this harness
+    # could not express, which is why the halt branch below had no test.
+    if [ -f "$S/qa-blocked" ]; then
+      qp="$(cat "$S/qa-blocked")"; qv="$(cat "$S/qa-verdict" 2>/dev/null || echo fail)"
+      d=""; w=""; bl=""
+      for p in ${PHASES.join(' ')}; do
+        if grep -qx "$p" "$S/done" 2>/dev/null; then d="$d$p,"
+        else w="$w$p,"; bl="$bl $p<-$qp(qa:$qv)"; fi
+      done
+      echo "done: \${d%,}"; echo "in-progress: "; echo "stuck: "
+      echo "ready: "; echo "waiting: \${w%,}"
+      echo "blocked:$bl"
+      exit 0
+    fi
     d=""; r=""; w=""; s=""; i=""; found=0
     for p in ${PHASES.join(' ')}; do
       if grep -qx "$p" "$S/done" 2>/dev/null; then d="$d$p,"
@@ -152,6 +174,11 @@ echo "VALIDATE OK"
     setStuck: (phase) => writeFileSync(join(state, 'stuck'), `${phase}\n`),
     setInProgress: (phase) => writeFileSync(join(state, 'inprog'), `${phase}\n`),
     setParallel: (yes) => yes ? writeFileSync(join(state, 'parallel'), '') : rmSync(join(state, 'parallel'), { force: true }),
+    setQaBlocked: (phase, verdict = 'fail') => {
+      if (phase === null) { rmSync(join(state, 'qa-blocked'), { force: true }); return; }
+      writeFileSync(join(state, 'qa-blocked'), String(phase));
+      writeFileSync(join(state, 'qa-verdict'), verdict);
+    },
     setLockRefused: (yes) => yes ? writeFileSync(join(state, 'lock-refused'), '') : rmSync(join(state, 'lock-refused'), { force: true }),
     setLockRefusedFor: (phase, yes) => yes
       ? writeFileSync(join(state, `lock-refused-${phase}`), '')
@@ -4361,4 +4388,126 @@ test('two DAG leaves finishing together on a work-branch run: the last leaf\'s s
   assert.equal(ladderJournal(second.events, 'phase.pr-session-failed').length, 1);
   assert.match(pending.finishedReason ?? '', /still awaits its PR/);
   r2.cleanup();
+});
+
+test('a QA-wedged plan halts with a kind, an anchor phase and the verdict named', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  const { instance } = runner(r, workingSession(r, seen), '');
+  // Phase 1 runs and lands; its QA verdict then holds every remaining phase.
+  // The board goes ready=[] with the plan nowhere near finished — the exact
+  // shape that produced "nothing is ready to run: N phase(s) are still waiting
+  // on a gate or an earlier phase", a halt with no kind and no phase, and a
+  // healer that answered "no open phase of this run has a record to act on".
+  r.setQaBlocked(1, 'fail');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'parked');
+  assert.equal(state.halt?.kind, 'plan-deadlocked',
+    'a kindless halt is invisible to auto-recovery and to the halt card');
+  assert.equal(state.halt?.phase, 1, 'the anchor is the phase whose verdict holds the plan');
+  assert.match(state.halt?.reason ?? '', /QA/,
+    'the operator must be able to learn the cause from the halt itself');
+  assert.match(state.halt?.reason ?? '', /\b1\b/, 'and which phase it is');
+  assert.doesNotMatch(state.halt?.reason ?? '', /waiting on a gate or an earlier phase/,
+    'the generic sentence names neither the cause nor a door');
+  r.cleanup();
+});
+
+test('a plain waiting board still halts generically — no false QA claim', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  // Phase 1 parks at preflight (unscoped, no verification), so later phases
+  // stay waiting with no QA involved anywhere.
+  const { instance } = runner(r, workingSession(r, seen), '');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+  const state = instance.current()!;
+  assert.notEqual(state.halt?.kind, 'plan-deadlocked');
+  assert.doesNotMatch(state.halt?.reason ?? '', /QA verdict/);
+  r.cleanup();
+});
+
+test('park() does not claim the run is parked while its lanes are still editing trees', async () => {
+  // `halt()` uses `halting` for exactly this reason, with a comment saying so:
+  // "halted with live sessions still editing trees is a lie … halted is not
+  // IN_FLIGHT, so a dead console mid-drain would never pid-check those
+  // children". `park()` wrote `parked` unconditionally — and `park` is what the
+  // approval-timeout hook calls, from OUTSIDE the loop, while a lane is live.
+  // Measured on a real run: 17 minutes of sessions editing trees under a
+  // `parked` status.
+  const r = repo();
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const session: SpawnFn = async (request: SpawnRequest) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)?.[1]);
+    await held;                       // the lane stays live until this test says otherwise
+    r.markDone(phase);
+    return ok();
+  };
+  const { instance } = runner(r, session);   // a real §Verification, so the phase boards
+  try {
+    const started = instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+    const running = () => instance.current()?.phases?.['1']?.status;
+    const deadline = Date.now() + 5_000;
+    while (running() !== 'running' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(running(), 'running', 'the premise: a lane really is live');
+
+    assert.equal(instance.park('an approval went unanswered', 1), true);
+    assert.notEqual(instance.current()!.status, 'parked',
+      'a run with live lanes is DRAINING; claiming it is parked is the lie halt() avoids');
+
+    release();
+    await started;
+    await instance.wait();
+
+    // And it lands on the honest terminal word once the drain finishes: a park
+    // stays a park, only a halt becomes `halted`.
+    const after = instance.current()!;
+    assert.equal(after.status, 'parked', `a park must not finalize as ${after.status}`);
+    assert.equal(after.child, null, 'nothing is running past the end of the loop');
+    assert.equal(instance.busy(), false, 'and the loop itself is done');
+  } finally { release(); r.cleanup(); }
+});
+
+test('a human gate stops the run — unless the operator delegated it', async () => {
+  // The plan author wrote `human`, and by default that is a wall the run does
+  // not cross: the phase records `gated` and the loop moves on. An operator who
+  // wants a plan to run unattended can delegate the VERIFICATION to the phase's
+  // own session — which `gate-status.md`'s own header already names as a
+  // legitimate approver, and which real plans record as `ai-session-delegated`.
+  const r = repo();
+  r.setGate(1, 'manual: the owner approves the copy');
+  const seen: number[] = [];
+  const { instance } = runner(r, workingSession(r, seen));
+  try {
+    await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1] });
+    await instance.wait();
+    assert.equal(instance.current()!.phases['1'].status, 'gated', "a human gate is a person's by default");
+    assert.deepEqual(seen, [], 'and nothing was booted past it');
+  } finally { r.cleanup(); }
+
+  // Delegated: the same gate boots the phase, and the journal says which kind of
+  // clearance this was — a delegated human gate is not an ai-clearable one, and
+  // an audit has to be able to tell them apart.
+  const r2 = repo();
+  r2.setGate(1, 'manual: the owner approves the copy');
+  const seen2: number[] = [];
+  const { instance: delegated, events } = runner(r2, workingSession(r2, seen2), '`true`', undefined, {
+    delegateHumanGates: () => true,
+  });
+  try {
+    await delegated.start({ slug: 'demo', root: r2.root, autonomy: 'keep-going', onlyPhases: [1] });
+    await delegated.wait();
+    assert.deepEqual(seen2, [1], 'the session is booted to verify the gate itself');
+    const journal = events
+      .filter((e) => e.event === 'run:journal')
+      .map((e) => (e.data as { event: string }).event);
+    assert.ok(journal.includes('phase.gate-delegated'), `expected a delegation line, got: ${journal.join(',')}`);
+    assert.ok(!journal.includes('phase.gate-ai'), 'a delegated human gate is not an ai gate');
+  } finally { r2.cleanup(); }
 });

@@ -27,7 +27,7 @@ import { join } from 'node:path';
 
 import {
   reconcileRun, reconcileRecordsAgainstBoard, newRun, phaseRecord, saveRun, loadRun,
-  listRuns, latestRun, runDir, resetForRetry, IN_FLIGHT, CONSOLE_STOPPED_NOTE, type RunState,
+  listRuns, latestRun, runDir, resetForRetry, settleFinishedRun, IN_FLIGHT, CONSOLE_STOPPED_NOTE, type RunState,
 } from '../server/runner/state.ts';
 
 function scratchRoot(): { root: string; cleanup: () => void } {
@@ -468,4 +468,102 @@ test('a crashed run is stamped as the system\'s stop; a stop or pause the operat
   assert.equal(reconcileRun(waiting, null), true);
   assert.equal(waiting.status, 'paused');
   assert.equal(waiting.stoppedBy, 'system');
+});
+
+/* ------------------------------------------------------------------ *
+ * A run that is over must stop asking for attention
+ * ------------------------------------------------------------------ */
+
+test('settleFinishedRun: a run whose board is entirely done stops reading halted', () => {
+  // Measured across a real console's fleet: three runs sat at `status: halted`
+  // with `halt: null`, an auto `resolved`, and a finishedReason that literally
+  // read "the board has since closed it — nothing is left of the halt". One was
+  // 15/15 done; another had shipped as v3.0.0. `reconcileRecordsAgainstBoard`
+  // dissolves the halt and writes the reason but never touches `status`, and
+  // `shared/status-vocab.js` maps `halted` -> `needs-you` — the top attention
+  // state. Three finished runs cried wolf for ever, which is how the one run
+  // that genuinely needed a person went unnoticed.
+  const state = newRun({ slug: 'alpha', root: '/tmp/x' });
+  state.status = 'halted';
+  state.resolved = { at: new Date().toISOString(), auto: true, reason: 'superseded' };
+  state.finishedReason = 'halted on phase 2; the board has since closed it — nothing is left of the halt';
+  assert.equal(settleFinishedRun(state, { 1: 'done', 2: 'done' }), true);
+  assert.equal(state.status, 'finished');
+  assert.equal(state.halt, null);
+});
+
+test('settleFinishedRun: work still on the board keeps the run where it is', () => {
+  const state = newRun({ slug: 'alpha', root: '/tmp/x' });
+  state.status = 'parked';
+  assert.equal(settleFinishedRun(state, { 1: 'done', 2: 'ready' }), false);
+  assert.equal(state.status, 'parked');
+});
+
+test('settleFinishedRun: an unreadable or empty board settles nothing', () => {
+  const state = newRun({ slug: 'alpha', root: '/tmp/x' });
+  state.status = 'halted';
+  assert.equal(settleFinishedRun(state, {}), false, 'uncertainty must keep the card');
+  assert.equal(state.status, 'halted');
+});
+
+test('settleFinishedRun: a live or already-finished run is left alone', () => {
+  const running = newRun({ slug: 'alpha', root: '/tmp/x' });
+  running.status = 'running';
+  assert.equal(settleFinishedRun(running, { 1: 'done' }), false);
+  const finished = newRun({ slug: 'alpha', root: '/tmp/x' });
+  finished.status = 'finished';
+  assert.equal(settleFinishedRun(finished, { 1: 'done' }), false, 'no needless write');
+});
+
+test('settleFinishedRun: a run the OPERATOR stopped is theirs to restart', () => {
+  const state = newRun({ slug: 'alpha', root: '/tmp/x' });
+  state.status = 'parked';
+  state.stoppedBy = 'operator';
+  assert.equal(settleFinishedRun(state, { 1: 'done' }), false);
+  assert.equal(state.status, 'parked');
+});
+
+test('a record closed with no spend is marked unknown, not free', () => {
+  // `costUsd` is written only from the CLI's terminal `result` message, so a
+  // child the console's own shutdown killed books $0 for hours of real work —
+  // and `run.spentUsd` never repairs it. Two runs on a real console read
+  // `$0.00` against multi-hour sessions with real commits. A wrong number is
+  // worse than an honest gap.
+  const state = newRun({ slug: 'alpha', root: '/tmp/x' });
+  const ran = phaseRecord(state, 1);
+  ran.status = 'interrupted';   // what a child the console killed actually reads
+  ran.startedAt = new Date().toISOString();
+  ran.costUsd = 0;
+  const paid = phaseRecord(state, 2);
+  paid.status = 'failed';
+  paid.startedAt = new Date().toISOString();
+  paid.costUsd = 12.5;
+  const never = phaseRecord(state, 3);
+  never.status = 'pending';
+
+  reconcileRecordsAgainstBoard(state, { 1: 'done', 2: 'done', 3: 'done' });
+  assert.equal(state.phases['1'].costUnknown, true, 'it ran and reported nothing');
+  assert.equal(state.phases['2'].costUnknown, undefined, 'a real figure is not a gap');
+  assert.equal(state.phases['3'].costUnknown, undefined, 'a phase that never started cost nothing');
+});
+
+test('settleFinishedRun: a halt that dissolved stops the run reading halted', () => {
+  // The other half of the dissolved-halt story. `reconcileRecordsAgainstBoard`
+  // nulls `state.halt` when the board overtakes it, but leaves the status —
+  // and `halted` with no halt is a contradiction whether or not the plan is
+  // finished. Measured live: a run reading `halted`, `halt: null`, with a phase
+  // still in progress on the board and 240 dollars spent. `parked` is the honest
+  // word: stopped, work outstanding, nothing wrong that anybody named.
+  const state = newRun({ slug: 'alpha', root: '/tmp/x' });
+  state.status = 'halted';
+  state.halt = null;
+  assert.equal(settleFinishedRun(state, { 1: 'done', 2: 'in-progress', 3: 'waiting' }), true);
+  assert.equal(state.status, 'parked', 'stopped with work left is parked, not halted');
+
+  // A halt that still STANDS is untouched — it is the record of why.
+  const halted = newRun({ slug: 'alpha', root: '/tmp/x' });
+  halted.status = 'halted';
+  halted.halt = { at: new Date().toISOString(), reason: 'phase 2 did not verify', phase: 2 };
+  assert.equal(settleFinishedRun(halted, { 1: 'done', 2: 'ready' }), false);
+  assert.equal(halted.status, 'halted');
 });

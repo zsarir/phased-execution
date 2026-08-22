@@ -85,8 +85,21 @@ export function useInboxActions(): {
       setBusy(`${item.id}:${action.verb}`);
       void (async () => {
         try {
-          await api.inboxAct(action);
-          toast(`${action.label} — done.`, 'ok');
+          // The RESULT decides the word, not the status code. `/recover` answers
+          // 200 for every outcome it has — including `errand` ("nothing was
+          // launched, a person is needed") and `nothing-to-do` — so a blanket
+          // success toast reported that a wedged run had been recovered when
+          // nothing had happened at all. Measured: an operator pressed this
+          // three times, was told "done" three times, and the run never moved.
+          const result = (await api.inboxAct(action)) as
+            { outcome?: string; detail?: string } | null | undefined;
+          const stalled = result?.outcome === 'errand' || result?.outcome === 'nothing-to-do';
+          toast(
+            result?.detail ?? `${action.label} — done.`,
+            stalled ? 'warn' : 'ok',
+            // A refusal is a thing to read, not a thing to glimpse.
+            stalled ? 8000 : undefined,
+          );
         } catch (error) {
           toast((error as Error).message, 'error');
         } finally {

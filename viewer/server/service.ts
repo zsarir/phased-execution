@@ -1297,6 +1297,9 @@ export class Service {
       // one run, and the cap is about the machine.
       dayHistory: () => this.dayRungs(),
       unblockAttempts: () => this.prefs.unblockAttempts !== false,
+      // Opt-in, and absent means no: a `human` gate is a person's until an
+      // operator says otherwise for their own console.
+      delegateHumanGates: () => this.prefs.delegateHumanGates === true,
       origin: `http://${flags.host}:${flags.port}`,
       // The registry ids, so the runner's own engine calls (its validate.sh in
       // confirm(), its board reads) carry PE_MCP_SERVERS like the service's do.
@@ -2449,9 +2452,16 @@ export class Service {
       errand?: { at?: string; need?: string; how?: string; tried?: string[]; situation?: string };
     } | undefined;
     const { slug, runId, phase, errand } = event ?? {};
-    if (!slug || typeof phase !== 'number' || !errand?.need) return;
+    // A RUN-level errand carries no phase — converge writes one for a stop that
+    // belongs to no single phase, and `ConvergeDeps.announceErrand` types the
+    // parameter `number | null` precisely to allow it. This guard read `typeof
+    // phase !== 'number'` and dropped every one of them on the floor: the ask
+    // was stored on the run and rendered on the run page, and never pushed. The
+    // whole point of an errand is that it reaches somebody who is not looking.
+    if (!slug || !errand?.need) return;
+    if (phase != null && typeof phase !== 'number') return;
 
-    const key = `${runId ?? slug}:${phase}:${errand.at ?? ''}`;
+    const key = `${runId ?? slug}:${phase ?? 'run'}:${errand.at ?? ''}`;
     if (this.notifiedErrand.has(key)) return;
     this.notifiedErrand.add(key);
     // The set is per-process and unbounded only in theory; a console that ran
@@ -2462,15 +2472,15 @@ export class Service {
       if (oldest) this.notifiedErrand.delete(oldest);
     }
 
-    const title = this.store?.get(slug)?.plan?.phases[phase]?.title;
+    const title = phase != null ? this.store?.get(slug)?.plan?.phases[phase]?.title : undefined;
     this.announce('needs-you', {
-      title: `${slug} · phase ${phase} needs you`,
+      title: phase != null ? `${slug} · phase ${phase} needs you` : `${slug} needs you`,
       body: errand.need.slice(0, 200),
       // The how is the actionable half; a push that says only "it is stuck"
       // makes the operator open the console to learn what to do.
       ...(errand.how ? { detail: `${errand.how}${title ? ` — ${title}` : ''}`.slice(0, 400) } : {}),
       tag: tagFor('needs-you', slug, phase),
-    }, { slug, phase, ...(runId ? { runId } : {}) });
+    }, { slug, ...(phase != null ? { phase } : {}), ...(runId ? { runId } : {}) });
   }
 
   /**
@@ -4507,7 +4517,30 @@ export class Service {
         ? (after.recoveries?.[String(heal.phase)]?.errand
           ?? (heal.situation ? errandFor(heal.situation, after.recoveries?.[String(heal.phase)]?.rungs ?? [], heal.phase) : undefined))
         : undefined);
-    const errand = phaseErrand ?? after.errand ?? errandFor(situationOfHalt(after.halt), [], after.halt?.phase ?? 0);
+    // A halt that NAMES a phase can still be classified even when the healer
+    // had no candidate for it. `classifyPhase` reads the board and the QA table
+    // directly, so it answers correctly for the one shape `classifyOpenPhases`
+    // deliberately skips: a phase the board reads DONE whose QA verdict holds
+    // the plan — settled as work, unsettled as a blocker. Without this the
+    // answer was `errandFor('unknown', [], 0)`: an errand anchored on phase 0,
+    // telling the operator to open "Why is this not done?" on a page that does
+    // not exist, about a run whose real blocker the console already knew.
+    let haltErrand: Errand | undefined;
+    if (!phaseErrand && !after.errand && after.halt?.phase != null) {
+      try {
+        const { situation } = await this.classifyPhase(
+          slug, after.halt.phase, after, await this.boardStates(slug),
+        );
+        haltErrand = errandFor(situation.key, [], after.halt.phase);
+      } catch (error) {
+        // Classification is an improvement on the fallback, never a
+        // precondition for answering: a read that could not run must not turn
+        // "here is your ask" into an exception.
+        log.warn('run.halt-classify-failed', { slug, phase: after.halt.phase, error });
+      }
+    }
+    const errand = phaseErrand ?? after.errand ?? haltErrand
+      ?? errandFor(situationOfHalt(after.halt), [], after.halt?.phase ?? 0);
     if (!phaseErrand && !after.errand) {
       // A run-level stop with no phase behind it keeps its ask on the run.
       this.editStoredRunById(slug, after.id, (stored) => { stored.errand = errand; });
@@ -4593,6 +4626,15 @@ export class Service {
           return `${stat.mtimeMs}:${stat.size}`;
         } catch { return null; }
       },
+      // The board's QA verdicts, from the same read `board` already made. In
+      // the fingerprint for the same reason `gateStamp` is: giving the verdict
+      // a person was asked for moves nothing else the loop looks at.
+      qa: async (slug) => {
+        try {
+          const board = await this.board(slug);
+          return board.error ? null : board.qa;
+        } catch { return null; }
+      },
       prefs: () => ({ resumeAtBoot: this.prefs.resumeAtBoot }),
       presence: (lock) => this.sessions.presenceOfLock(lock),
       heal: (slug) => this.maybeAutoRecover(slug),
@@ -4607,8 +4649,10 @@ export class Service {
         journal.append(event, data, phase);
       },
       // The third producer of errands. Same channel, same dedupe.
+      // The third producer of errands. Same channel, same dedupe — including the
+      // run-level ones (`phase: null`), which this used to discard silently.
       announceErrand: (slug, runId, phase, errand) => {
-        if (typeof phase === 'number') this.announceErrand({ slug, runId, phase, errand });
+        this.announceErrand({ slug, runId, ...(phase != null ? { phase } : {}), errand });
       },
       locksChanged: (slug) => {
         // The store's lock view lags the disk by a watcher debounce, and the
@@ -5239,8 +5283,12 @@ export class Service {
       qa: async (_slug, phase) => {
         const mode = await this.qaMode(slug).catch((): QaMode => ({ mode: 'off' }));
         if (mode.mode === 'off') return { mode: 'off' };
-        const row = record ? qaFor(record, phase) : undefined;
-        return { mode: mode.mode, ...(row ? { result: row.result } : {}) };
+        // Live, not the store's parse: classifying a phase whose verdict is
+        // `fail` as `qa-pending` sends the ladder up the wrong rung (dispatch a
+        // review, rather than fix what the review already found) and tells the
+        // operator the wrong thing on the phase card.
+        const verdict = await this.qaVerdict(slug, phase);
+        return { mode: mode.mode, ...(verdict !== 'none' ? { result: verdict } : {}) };
       },
       health: async () => {
         if (!record) return [];
@@ -5278,6 +5326,38 @@ export class Service {
   }
 
   /**
+   * Is this DONE phase's QA verdict holding its dependents?
+   *
+   * Cheap and fail-safe: the mode read is cached by revision, and anything it
+   * cannot answer is `false` — a phase wrongly kept out of the candidate list
+   * costs a slower recovery, one wrongly let in costs a session.
+   */
+  /**
+   * A phase's QA verdict, from the ENGINE rather than the store's parse.
+   *
+   * The store lags a watcher debounce, and both callers ask precisely because
+   * somebody may have just recorded a verdict — the same reason the gate dep is
+   * a live `--gate-status` read and not `record.gate`. A read that could not run
+   * answers `none`, which is the fail-safe direction for both: it keeps a phase
+   * IN the candidate list (a slower recovery) rather than declaring work settled
+   * on a read that failed.
+   */
+  async qaVerdict(slug: string, phase: number): Promise<string> {
+    try {
+      const out = await run(this.engineOpts(), 'phase-graph.sh', [slug, '--qa-result', String(phase)]);
+      return out.stdout.trim().toLowerCase() || 'none';
+    } catch { return 'none'; }
+  }
+
+  private async qaHolds(slug: string, phase: number): Promise<boolean> {
+    try {
+      if ((await this.qaMode(slug)).mode !== 'on') return false;
+      const verdict = await this.qaVerdict(slug, phase);
+      return verdict !== 'pass' && verdict !== 'waived';
+    } catch { return false; }
+  }
+
+  /**
    * Every open phase of a run, classified — the healer's candidate list. Order
    * is the halt's phase, the active phase, live lanes, then ascending: the
    * first one whose ladder has a rung this console can climb is the anchor.
@@ -5310,7 +5390,17 @@ export class Service {
     const out: Array<{ phase: number; evidence: PhaseEvidence; situation: Situation }> = [];
     for (const phase of order) {
       if (!state.phases[String(phase)]) continue;
-      if (board[phase] === 'done') continue;
+      // A phase the board reads `done` is settled work — its record is closed by
+      // the reconcile pass, not diagnosed, and classifying every finished phase
+      // on every pass would cost a board read and a classify per phase for ever.
+      //
+      // The one exception is a done phase QA is HOLDING. It is settled as work
+      // and unsettled as a blocker: the engine keeps every dependent behind it,
+      // and since `qa-failed`/`qa-pending` gained rungs there is something real
+      // to climb — the session that built it can fix what the report named, or
+      // dispatch the verdict nobody ever asked for. Admitting it bought nothing
+      // while those rung lists were empty; it buys the whole plan now.
+      if (board[phase] === 'done' && !(await this.qaHolds(slug, phase))) continue;
       if (board[phase] === 'waiting' && !childrenOf(state).some((child) => child.phase === phase)) continue;
       try {
         out.push({ phase, ...(await this.classifyPhase(slug, phase, state, board)) });
@@ -5330,6 +5420,7 @@ export class Service {
    */
   private vehicleForRung(
     rung: Rung, situation: Situation, record: RunPhaseRecord | undefined, evidence: PhaseEvidence,
+    slug = '<slug>',
   ): DriveVehicle | null {
     // Capability flags (`--allow-run`, `--allow-agent`, node-pty) are NOT
     // consulted here: a vehicle the console has but may not use is still the
@@ -5346,10 +5437,37 @@ export class Service {
       case 'resume-own-session': {
         if (!resumable) return null;
         const mode = String(rung.params?.mode ?? 'continue');
-        const instruction = mode === 'fix-verification'
-          ? 'Your phase\'s §Verification is RED. Read the failing commands and their output below, fix the cause, '
-            + 're-run the verification until it is green, then commit and write the handoff.'
-          : 'You are RESUMING this phase — it is not finished. Read `git status` and `git diff` FIRST: anything '
+        // The QA modes. Both resume the phase's OWN session, which looks wrong
+        // for a review until you read SKILL.md §QA: the independence comes from
+        // the fresh-context SUBAGENT the session dispatches, not from the
+        // session being a different one. `--qa-prompt N` prints that subagent's
+        // brief, and `qa-record.sh` is its only writer. Resuming is also what
+        // makes the fix half cheap — the session that built the phase already
+        // holds the context the report is about.
+        // The real slug, phase and report path — never `<slug>`/`<N>`. A resumed
+        // session is mid-conversation and will paste what it is given; handing
+        // it a placeholder is handing it a guess.
+        const n = evidence.phase;
+        const pad = String(n).padStart(2, '0');
+        const report = `reports/phase-${pad}-qa.md`;
+        const instruction = mode === 'qa-verdict'
+          ? 'This plan gates on QA and your phase has NO recorded verdict, so it is holding every phase that '
+            + 'depends on it. Dispatch a FRESH-CONTEXT QA subagent over this phase now — get its brief with '
+            + `\`bash scripts/phase-graph.sh ${slug} --qa-prompt ${n}\` — and then record what it finds with `
+            + `\`bash scripts/qa-record.sh ${slug} ${n} <pass|fail|waived> --report ${report}\`. `
+            + 'Never grade your own work directly, and never hand-edit test-status.md.'
+          : mode === 'qa-fix'
+            ? 'QA recorded a FAIL against this phase, and that verdict is holding every phase that depends on '
+              + `it. Read the QA report (docs/handoffs/${slug}/${report}), fix what it found, re-run the `
+              + 'phase\'s §Verification until it is green, commit, then dispatch a fresh-context QA subagent '
+              + `again and record the new verdict with \`bash scripts/qa-record.sh ${slug} ${n} `
+              + `<pass|fail|waived> --report ${report}\`. If a finding is genuinely out of scope for this `
+              + 'phase, say so in the handoff\'s Outstanding section and record `waived` with the reason — '
+              + 'do not record `pass` over a finding you did not clear.'
+          : mode === 'fix-verification'
+            ? 'Your phase\'s §Verification is RED. Read the failing commands and their output below, fix the cause, '
+              + 're-run the verification until it is green, then commit and write the handoff.'
+            : 'You are RESUMING this phase — it is not finished. Read `git status` and `git diff` FIRST: anything '
             + 'uncommitted is your own earlier work; never stash, checkout or reset it away. Then carry the phase to '
             + 'its exit criteria (the Outstanding section of your handoff says what is left), verify, commit, and '
             + 'write the handoff as complete.'
@@ -5659,6 +5777,15 @@ export class Service {
         try { saveRun(state); } catch { /* a failed write must not block the verdict */ }
         this.emit('run:state', { state });
       }
+      // A `plan-deadlocked` halt is anchored on a phase the board reads DONE on
+      // purpose: the blocker IS a settled phase whose QA verdict holds its
+      // dependents. Reading that as "the board moved past the halt" retracted
+      // the one halt that was still completely true, and stood down the card
+      // that named it. It is superseded only when the wedge itself is gone —
+      // which the board says plainly, by having work to do again.
+      const wedgeAnchor = state.halt?.kind === 'plan-deadlocked' && state.halt.phase === phase;
+      const wedgeCleared = Object.values(board).some((word) => word === 'ready' || word === 'in-progress');
+      if (wedgeAnchor && !wedgeCleared) return 'proceed';
       if (result.closed.includes(phase) || board[phase] === 'done') {
         const now = new Date().toISOString();
         const slot = ((state.recoveries ??= {})[String(phase)] ??= { attempts: 0, lastAt: now });
@@ -5994,7 +6121,38 @@ export class Service {
      * on" about a phase that had simply never started. */
     const board = await this.boardStates(slug);
     const candidates = await this.classifyOpenPhases(slug, state, board);
-    if (!candidates.length) return no('no open phase of this run has a record to act on');
+    if (!candidates.length) {
+      // No candidate does NOT mean nothing is wrong. The candidate list is
+      // deliberately record-shaped — a phase the board reads done is closed by
+      // reconcile, not diagnosed — so a plan wedged by a SETTLED phase (a
+      // recorded QA verdict holding its dependents) yields none, and this used
+      // to return here, before the errand/journal/push machinery. Converge then
+      // swept the run every five minutes for ever, refused with the same
+      // sentence each time, and never asked the one person who could fix it.
+      //
+      // The halt names the phase now (`plan-deadlocked`), and `classifyPhase`
+      // reads the board and the QA table directly, so the ask is recoverable
+      // without letting a done phase back into the candidate list.
+      const anchor = state.halt?.phase;
+      if (anchor == null) return no('no open phase of this run has a record to act on');
+      try {
+        const { situation } = await this.classifyPhase(slug, anchor, state, board);
+        if (situation.actor === 'person' || situation.actor === 'machine') {
+          const journal = new Journal(this.root.path, slug, state.id);
+          const errand = errandFor(situation.key, [], anchor);
+          this.editStoredRunById(slug, state.id, (stored) => {
+            ((stored.recoveries ??= {})[String(anchor)] ??= { attempts: 0, lastAt: errand.at }).errand = errand;
+          });
+          journal.append('phase.errand', { ...errand }, anchor);
+          this.announceErrand({ slug, runId: state.id, phase: anchor, errand });
+          return no(`phase ${anchor} reads ${situation.label} — ${situation.label} is a person's to settle`,
+            { phase: anchor, situation: situation.key, label: situation.label });
+        }
+      } catch (error) {
+        log.warn('run.anchor-classify-failed', { slug, phase: anchor, error });
+      }
+      return no('no open phase of this run has a record to act on');
+    }
 
     const journal = new Journal(this.root.path, slug, state.id);
     const caps = ladderCaps(this.prefs);
@@ -6043,14 +6201,38 @@ export class Service {
           continue;
         }
       }
-      // The run's own per-phase launch cap (the launch dialog's number) and
-      // the legacy per-run cap still bound the healer, for the records and
-      // readers that predate rungs; the ladder's caps apply on top.
+      // The run's own per-phase launch cap (the launch dialog's number) and the
+      // per-run cap still bound the healer, for the records and readers that
+      // predate rungs; the ladder's caps apply on top.
+      //
+      // Both write the errand before refusing. They used to `refuse` and move
+      // on in silence — and a spent budget is exactly when a person has to be
+      // told: "everything the ladder had was tried and none of it worked" is
+      // the most actionable thing this system ever knows, and it was the one
+      // case that said nothing. (`ladder.ts`'s own exhaustion path always did.)
+      const askFor = (c2: { phase: number; situation: Situation }) => {
+        const key2 = String(c2.phase);
+        const slot2 = (recoveries[key2] ??= { attempts: 0, lastAt: new Date().toISOString() });
+        if (slot2.errand) return;
+        const errand = errandFor(c2.situation.key, slot2.rungs ?? [], c2.phase);
+        slot2.errand = errand;
+        journal.append('phase.errand', { ...errand }, c2.phase);
+        this.announceErrand({ slug, runId: state.id, phase: c2.phase, errand });
+      };
       if ((slot?.attempts ?? 0) >= cap) {
+        askFor(c);
         refuse(`phase ${c.phase}'s recovery budget is spent (${cap} launch${cap === 1 ? '' : 'es'})`, c);
         continue;
       }
-      if (totalAttempts >= 5) return no('the run recovery budget is spent (5 launches)', { phase: c.phase, situation: c.situation.key, label: c.situation.label });
+      // The run-wide ceiling is the LADDER's, not a second hardcoded number.
+      // `if (totalAttempts >= 5)` contradicted `ladderPerRunRungs` in Settings:
+      // an operator who raised the budget to 20 still got five, with nothing
+      // saying why.
+      if (totalAttempts >= caps.perRunRungs) {
+        askFor(c);
+        return no(`the run recovery budget is spent (${caps.perRunRungs} launches)`,
+          { phase: c.phase, situation: c.situation.key, label: c.situation.label });
+      }
 
       // A legacy slot that tried the identical failure once, before rungs were
       // recorded, is read as having climbed the rung the old healer drove —
@@ -6072,7 +6254,7 @@ export class Service {
         // The same day budget the runner's own climb counts against, so the
         // loop's rungs and the healer's cannot each spend it in full.
         situation: c.situation.key, history, runHistory, caps, dayHistory: this.dayRungs(),
-        available: (rung) => this.vehicleForRung(rung, c.situation, record, c.evidence) !== null,
+        available: (rung) => this.vehicleForRung(rung, c.situation, record, c.evidence, slug) !== null,
       });
       if (!next.ok) {
         if (next.exhausted || c.situation.actor === 'person') {
@@ -6087,7 +6269,7 @@ export class Service {
         refuse(`phase ${c.phase} reads ${c.situation.label} — ${next.reason}`, c);
         continue;
       }
-      const vehicle = this.vehicleForRung(next.rung, c.situation, record, c.evidence);
+      const vehicle = this.vehicleForRung(next.rung, c.situation, record, c.evidence, slug);
       if (!vehicle) { refuse(`phase ${c.phase} reads ${c.situation.label} — ${next.rung.label} cannot be driven here`, c); continue; }
       chosen = { ...c, rung: next.rung, vehicle };
       break;
@@ -6229,8 +6411,38 @@ export class Service {
 
     /* A fresh briefed pty agent — for plan-shaped repairs, for phases whose
      * own session is gone, and for the stronger second try. */
-    if (!agentEnabled(this.flags)) return no('agent auto-recovery needs --allow-agent', { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
-    if (this.terminals.availability() === 'no') return no('agent sessions are unavailable (node-pty)', { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
+    // Naming the flag rather than skipping the rung is deliberate (see
+    // `vehicleForRung`) — but the reason reached only a journal line and a
+    // HealResult, and the one person who can restart the console with the flag
+    // was never asked. A capability wall is a person's to clear, which is what
+    // an errand is for.
+    const blockedBy = (need: string, how: string, reason: string): AutoRecoverResult => {
+      const slot2 = ((state.recoveries ??= {})[String(phase)] ??= { attempts: 0, lastAt: new Date().toISOString() });
+      if (!slot2.errand) {
+        const errand: Errand = { phase, situation: situation.key, tried: (slot2.rungs ?? []).map((r) => r.rung), need, how, at: new Date().toISOString() };
+        slot2.errand = errand;
+        try { saveRun(state); } catch { /* the ask is worth more than the write */ }
+        journal.append('phase.errand', { ...errand }, phase);
+        this.announceErrand({ slug, runId: state.id, phase, errand });
+      }
+      return no(reason, { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
+    };
+    if (!agentEnabled(this.flags)) {
+      return blockedBy(
+        `A console that may run agent sessions — phase ${phase} reads ${situation.label} and the `
+          + 'only remaining rung is an agent session, which this console is not allowed to spawn.',
+        'Restart the console with --allow-agent, then press Recover & continue — or clear the phase by hand.',
+        'agent auto-recovery needs --allow-agent',
+      );
+    }
+    if (this.terminals.availability() === 'no') {
+      return blockedBy(
+        `A working pty layer — phase ${phase} reads ${situation.label} and the only remaining rung `
+          + 'is an agent session, which needs node-pty.',
+        'Reinstall the console so node-pty builds (see Settings ▸ Diagnostics), then press Recover & continue.',
+        'agent sessions are unavailable (node-pty)',
+      );
+    }
 
     const request: RecoveryRequest = { class: vehicle.cls, slug, phase, runId: state.id };
     const resolved = await this.resolveRecovery(request);

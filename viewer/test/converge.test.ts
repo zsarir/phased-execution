@@ -923,3 +923,80 @@ test('convergeView flattens a report: every action with its outcome, the relaunc
   assert.equal(quiet.noop, true);
   assert.equal(quiet.actions[0].why, 'nothing to climb');
 });
+
+/* ------------------------------------------------------------------ *
+ * The QA wedge: noticing the unblock, and continuing afterwards
+ * ------------------------------------------------------------------ */
+
+test('fingerprint: a QA verdict changing is a change — the same shape as clearing a gate', () => {
+  // Measured on a real run. Recording pass/waived for the phase whose verdict
+  // wedged the plan moves NOTHING this fingerprint used to read: the run is the
+  // same, its records are the same, and the blocking phase's board word is
+  // `done` before and after. So the healer's "found nothing to climb" latched
+  // for ever against a plan the operator had just repaired — exactly the bug
+  // the gate stamp was added to fix, in the one other place it could happen.
+  const parked = run({ status: 'parked', halt: { at: '', reason: 'nothing is ready', phase: 1, kind: 'plan-deadlocked' } },
+    [{ phase: 1, status: 'done' }]);
+  const wedged = { 1: 'done', 2: 'waiting', 3: 'waiting' } as Record<number, string>;
+  const before = evidenceFingerprint(parked, wedged, [], null, { 1: 'fail' });
+  const after = evidenceFingerprint(parked, wedged, [], null, { 1: 'pass' });
+  assert.notEqual(before, after, 'the verdict is the only thing that moved, and it must count');
+});
+
+test('fingerprint: the board opening up on a RECORD-LESS phase is a change', () => {
+  // The other half. Once the verdict is fixed, phase 2 goes waiting -> ready —
+  // but phase 2 has no record (it was never boarded), and the fingerprint only
+  // ever walked `run.phases`. The one event that means "this run can move
+  // again" was invisible to the loop that exists to notice it.
+  const parked = run({ status: 'parked', halt: { at: '', reason: 'nothing is ready', phase: 1 } },
+    [{ phase: 1, status: 'done' }]);
+  const wedged = evidenceFingerprint(parked, { 1: 'done', 2: 'waiting' }, []);
+  const open = evidenceFingerprint(parked, { 1: 'done', 2: 'ready' }, []);
+  assert.notEqual(wedged, open);
+});
+
+test('planner: a parked run whose board has ready work it never boarded is relaunched', () => {
+  // `systemStop` only reaches `relaunch` for paused/interrupted runs, so the
+  // runner's own "nothing is ready" park always fell through to `heal` — and
+  // the healer only ever acts on phases that already have RECORDS. A phase that
+  // was never boarded has none, so nothing continued the run even after a
+  // person cleared what was blocking it.
+  const parked = run({ status: 'parked', stoppedBy: 'system', halt: { at: '', reason: 'nothing is ready to run', phase: 1 } },
+    [{ phase: 1, status: 'done' }]);
+  const plan = planConvergence(facts({ runs: [parked], board: { 1: 'done', 2: 'ready', 3: 'waiting' } }));
+  assert.ok(kinds(plan).includes('relaunch'), `expected a relaunch, got: ${kinds(plan).join(',')}`);
+});
+
+test('planner: a parked run with nothing ready is NOT relaunched — it would only re-park', () => {
+  const parked = run({ status: 'parked', stoppedBy: 'system', halt: { at: '', reason: 'nothing is ready to run', phase: 1 } },
+    [{ phase: 1, status: 'done' }]);
+  const plan = planConvergence(facts({ runs: [parked], board: { 1: 'done', 2: 'waiting', 3: 'waiting' } }));
+  assert.ok(!kinds(plan).includes('relaunch'), `nothing to run: ${kinds(plan).join(',')}`);
+});
+
+test('planner: an operator-stopped run is still never relaunched by the loop', () => {
+  const stopped = run({ status: 'parked', stoppedBy: 'operator' }, [{ phase: 1, status: 'done' }]);
+  const plan = planConvergence(facts({ runs: [stopped], board: { 1: 'done', 2: 'ready' } }));
+  assert.ok(!kinds(plan).includes('relaunch'));
+});
+
+test('scheduler: the noop latch survives a skip pass — it used to erase itself', () => {
+  // `noop` is assigned only in the heal branch, so a pass whose single action is
+  // a `skip` — including the skip whose whole PURPOSE is the latch ("nothing has
+  // changed since the last pass found nothing to climb") — reported `noop: null`,
+  // and the scheduler then deleted the fingerprint it had just honoured. The next
+  // sweep had nothing to compare against, planned a heal, refused, latched, and
+  // skipped again: a board read, a healer pass and a journal line every OTHER
+  // sweep, for ever, on a run nobody could move.
+  const kept = new Map<string, string>();
+  const apply = (report: { noop: string | null; launched: boolean }) => {
+    if (report.noop) kept.set('alpha', report.noop);
+    else if (report.launched) kept.delete('alpha');
+  };
+  apply({ noop: 'FP', launched: false });          // the healer found nothing
+  assert.equal(kept.get('alpha'), 'FP');
+  apply({ noop: null, launched: false });          // the guard skip
+  assert.equal(kept.get('alpha'), 'FP', 'a skip must not forget why it skipped');
+  apply({ noop: null, launched: true });           // something actually moved
+  assert.equal(kept.get('alpha'), undefined, 'a launch invalidates the latch');
+});

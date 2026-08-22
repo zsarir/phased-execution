@@ -35,7 +35,22 @@ import { execFile } from 'node:child_process';
 /** Where macOS puts the CLI when Tailscale came from the App Store build. */
 const APP_BINARY = '/Applications/Tailscale.app/Contents/MacOS/Tailscale';
 
+/**
+ * How long one `tailscale` invocation may take before it reads as "no answer".
+ *
+ * Three seconds is right for the product: this is a local CLI on the same
+ * machine, the answer feeds a status chip, and a hung probe must not hold a page
+ * load. It is NOT right for a test suite — the fixtures fork a bash script, and
+ * under a full parallel run that alone has been measured at 2.2s of the 3s
+ * budget, so the suite flaked on whichever tailscale test happened to run while
+ * the machine was busiest. Overridable rather than widened: production keeps
+ * three seconds, and the suite stops depending on how loaded the host is.
+ */
 const PROBE_TIMEOUT_MS = 3000;
+const probeTimeoutMs = (): number => {
+  const override = Number(process.env.PHASE_CONSOLE_TAILSCALE_TIMEOUT_MS);
+  return Number.isFinite(override) && override > 0 ? override : PROBE_TIMEOUT_MS;
+};
 const CACHE_MS = 30_000;
 
 export type TailscaleDevice = {
@@ -111,7 +126,7 @@ function run(binary: string, args: string[]): Promise<Run> {
       binary,
       args,
       {
-        timeout: PROBE_TIMEOUT_MS,
+        timeout: probeTimeoutMs(),
         maxBuffer: 4 * 1024 * 1024,
         env: { ...process.env, TERM: process.env.TERM || 'dumb' },
       },

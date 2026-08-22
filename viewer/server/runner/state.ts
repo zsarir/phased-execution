@@ -190,6 +190,18 @@ export type PhaseRecord = {
   status: PhaseStatus;
   attempts: number;
   costUsd: number;
+  /**
+   * The recorded cost is known to be INCOMPLETE — the session really ran, and
+   * its spend was never harvested.
+   *
+   * `costUsd` comes only from the CLI's terminal `result` message
+   * (`spawn.ts` `total_cost_usd`), so a child the console's own shutdown killed
+   * books `$0` for hours of real work, and `run.spentUsd` never repairs. `$0.00`
+   * then reads as "this was free", which is the one thing it certainly was not.
+   * Marked rather than guessed: a wrong number is worse than an honest gap, and
+   * this is the posture the usage meters already take.
+   */
+  costUnknown?: boolean;
   /** Turns and wall-clock across every attempt, so a phase can be read at a glance. */
   turns?: number;
   durationMs?: number;
@@ -1372,6 +1384,9 @@ export function reconcileRecordsAgainstBoard(
     record.status = 'done';
     record.note = 'closed outside this run (the board reads done)';
     record.endedAt ??= now;
+    // A record that STARTED and reports no spend did not cost nothing — its
+    // session was lost before the CLI's terminal `result` arrived. Say so.
+    if (record.startedAt && !record.costUsd) record.costUnknown = true;
     delete record.parkedUntil;
     delete record.parkReason;
     delete record.lockWaitSince;
@@ -1426,6 +1441,56 @@ export function autoResolveRun(state: RunState, board: Record<number, string>): 
 }
 
 /**
+ * A run that is OVER stops asking for attention.
+ *
+ * `reconcileRecordsAgainstBoard` dissolves a halt the board has overtaken — it
+ * clears `state.halt`, resets the failure streak and rewrites `finishedReason`
+ * to say so — but it never touches `state.status`. `autoResolveRun` adds a
+ * `resolved` annotation and likewise leaves the status alone, and returns early
+ * for a run already resolved, so nothing ever revisits one.
+ *
+ * `shared/status-vocab.js` maps both `halted` and `parked` to `needs-you`, the
+ * worst-first attention state. The result, measured across a real console's
+ * fleet: three runs reading `halted` with `halt: null` and a reason that said
+ * "nothing is left of the halt" — one of them 15/15 done, another shipped as
+ * v3.0.0 — permanently at the top of the operator's attention surface. An
+ * attention surface that is mostly false is one nobody reads, which is how the
+ * single run that did need a person went unnoticed for a day.
+ *
+ * Conservative on purpose: only a run nobody is driving, that the OPERATOR did
+ * not stop (theirs to restart, and a stopped run with work left is not over),
+ * and only when the board is readable AND has nothing outstanding at all. An
+ * empty or unreadable board settles nothing — uncertainty keeps the card, the
+ * same direction `autoResolveRun` takes.
+ */
+export const SETTLEABLE: readonly RunStatus[] = ['halted', 'parked', 'interrupted'];
+
+export function settleFinishedRun(state: RunState, board: Record<number, string>): boolean {
+  if (!SETTLEABLE.includes(state.status)) return false;
+  if (state.stoppedBy === 'operator') return false;
+  const words = Object.values(board);
+  if (!words.length) return false;
+  if (words.every((word) => word === 'done')) {
+    state.status = 'finished';
+    state.halt = null;
+    delete state.stoppedBy;
+    state.finishedReason ??= `every phase of ${state.slug} is done.`;
+    return true;
+  }
+  // Work remains, so this run is not finished — but `halted` with NO halt is a
+  // contradiction all the same, and it is the shape the dissolve path leaves
+  // behind. Measured live: a run reading `halted`, `halt: null`, `$240 spent`,
+  // with a phase still in progress on the board. `parked` is the honest word —
+  // stopped, work outstanding, nothing wrong that anybody named — and unlike
+  // `halted` it is what the recovery paths already expect to find.
+  if (state.status === 'halted' && !state.halt) {
+    state.status = 'parked';
+    return true;
+  }
+  return false;
+}
+
+/**
  * Which plans a batch of runs would need a board for.
  *
  * Split out from the batch itself so the caller can pay for exactly the engine
@@ -1436,7 +1501,11 @@ export function autoResolveRun(state: RunState, board: Record<number, string>): 
 export function slugsNeedingBoard(runs: readonly RunState[]): string[] {
   return [...new Set(
     runs
-      .filter((run) => !run.resolved && !run.reopenedAt && RESOLVABLE.includes(run.status))
+      // `SETTLEABLE` is wider than `RESOLVABLE` (it includes `parked`) and does
+      // not exclude an already-resolved run — a run resolved days ago is
+      // exactly the one still reading `halted` on the fleet page.
+      .filter((run) => SETTLEABLE.includes(run.status)
+        || (!run.resolved && !run.reopenedAt && RESOLVABLE.includes(run.status)))
       .map((run) => run.slug),
   )];
 }
@@ -1463,7 +1532,13 @@ export function resolveRunsAgainst(
       ? reconcileRecordsAgainstBoard(run, board)
       : { changed: false, closed: [] };
     const resolved = autoResolveRun(run, board);
-    if (records.changed || resolved) changed.push(run);
+    // Last, and independent of the two above: both of those annotate a run that
+    // is over without ever moving it off a status the UI paints `needs-you`, and
+    // `autoResolveRun` returns early for one already resolved — so nothing
+    // revisits the runs that most need settling. This one is idempotent and
+    // refuses on an unreadable board, so running it every pass is free.
+    const settled = settleFinishedRun(run, board);
+    if (records.changed || resolved || settled) changed.push(run);
   }
   return changed;
 }

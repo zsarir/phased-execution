@@ -82,8 +82,17 @@ export const SUB_KINDS = Object.freeze({
  */
 export const SITUATION_ACTOR = Object.freeze({
   superseded: 'none',
-  'qa-failed': 'person',
-  'qa-pending': 'person',
+  // QA climbs. It read `person` until 2026-08-22, and a `pending` verdict that
+  // nothing ever dispatches is not a person's decision — it is a deadlock:
+  // `new-handoff.sh` writes the row, `_is_verified` accepts only pass|waived,
+  // and no process in the system gives the verdict. Six phases of a real plan
+  // were held behind one, for ever, with no defect recorded anywhere. The
+  // independence QA needs comes from the fresh-context SUBAGENT the session
+  // dispatches (SKILL.md §QA), not from the session being a different one, so
+  // the ladder has something honest to climb. A verdict it cannot produce is
+  // still a person's — that is what rung exhaustion and the errand are for.
+  'qa-failed': 'machine',
+  'qa-pending': 'machine',
   'foreign-live': 'wait',
   'foreign-stale': 'machine',
   'waiting-external': 'wait',

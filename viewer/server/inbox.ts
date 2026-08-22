@@ -587,6 +587,7 @@ function dismissAction(run: InboxRun): InboxAction {
 function errandDrafts(facts: InboxFacts): Draft[] {
   const out: Draft[] = [];
   const flags = facts.flags ?? {};
+  const closedPlans = new Set((facts.plans ?? []).filter((plan) => plan.closed).map((plan) => plan.slug));
 
   for (const run of stoppedRuns(facts.runs ?? [])) {
     const errands = errandsOf(run);
@@ -667,7 +668,32 @@ function errandDrafts(facts: InboxFacts): Draft[] {
     // never collide with a real errand's id.
     if (!(run.status === 'halted' || run.status === 'interrupted' || run.status === 'parked')) continue;
     if (run.stoppedBy === 'operator') continue;
-    if (flags.allowRun && run.autoRecover) continue;
+    // A closed plan keeps its voice for errands, approvals, locks and health —
+    // claims about a process, not a pulse (see `InboxPlan.closed`). This row is
+    // the one errand that is explicitly a claim about a STOPPED run, and on a
+    // plan somebody has closed there is nothing left to continue toward.
+    // Measured live: two closed, complete plans were contributing 2 of a
+    // console's 16 `needs-you` rows, months after anyone cared.
+    if (closedPlans.has(run.slug)) continue;
+    // Armed auto-recovery normally DOES own the stop, and saying so here too
+    // would be asking twice — that is what this guard is for, and it stays.
+    //
+    // But it was a promise the ladder cannot always keep. `classifyOpenPhases`
+    // skips every record the board reads `done`, so a run whose records ALL read
+    // done has no candidate, climbs nothing, and writes no errand — while this
+    // row, the one thing that would have told a person their run was waiting on
+    // them, stayed suppressed against an errand that could not come. Measured on
+    // a real run that sat parked for a day with six phases held behind a QA
+    // verdict nobody was asked for.
+    //
+    // Narrow on purpose: only the shape the ladder provably cannot reach. A run
+    // with no records yet, or with one still open, is still the ladder's.
+    const records = Object.values(run.phases ?? {});
+    const allSettled = records.length > 0
+      && records.every((record) => record.status === 'done' || record.status === 'skipped');
+    const engaged = Object.values(run.recoveries ?? {})
+      .some((slot) => slot.rungs?.length || slot.errand || (slot.attempts ?? 0) > 0);
+    if (flags.allowRun && run.autoRecover && !(allSettled && !engaged)) continue;
 
     const phase = positivePhase(run.halt?.phase ?? run.activePhase);
     out.push({
@@ -818,10 +844,18 @@ function planDrafts(facts: InboxFacts): Draft[] {
           // given and it was red", and an ack on the first must not silence the
           // second.
           subject: row.result,
-          // A recorded failure is a defect against work believed done; an owed
-          // verdict is a chore the operator scheduled by turning QA on. Same
-          // vocabulary, different loudness.
-          severity: failed ? 'needs-you' : 'fyi',
+          // Both are `needs-you`, and the owed verdict was the mistake.
+          //
+          // It was graded `fyi` as "a chore the operator scheduled by turning QA
+          // on" — which reads right until you notice what a pending row DOES:
+          // `_is_verified` accepts only `pass|waived`, so a pending verdict on a
+          // FINISHED phase holds every dependent exactly as hard as a failure,
+          // and nothing dispatches QA on its own, so it holds them for ever.
+          // The condition above is already the narrow one (QA on, and the phase
+          // actually done); only the loudness moves, because the consequence was
+          // always this loud. Measured: half of why a real plan was dead sat
+          // below forty stale `fyi` rulings.
+          severity: 'needs-you',
           slug: plan.slug,
           phase: row.phase,
           title: failed
@@ -829,10 +863,14 @@ function planDrafts(facts: InboxFacts): Draft[] {
             : `${plan.slug} phase ${row.phase} — QA verdict owed`,
           need: failed
             ? row.report || 'QA recorded a failure against this phase.'
-            : 'A QA verdict — the phase is done and this plan runs QA on.',
+            : 'A QA verdict — the phase is done, this plan runs QA on, and until one is '
+              + 'recorded it holds every phase that depends on it.',
           how: failed
-            ? 'Read the report, fix what it found, then re-record the verdict.'
-            : 'Start a QA session for the phase, then record pass or fail.',
+            ? 'Read the report, fix what it found, then record the new verdict from the phase '
+              + 'page (Record QA) — or turn the gate off for this plan with "**QA gate:** off" '
+              + 'in its §Session budget if it should not gate on QA at all.'
+            : 'Start a QA session for the phase, then record pass or waived from the phase page '
+              + '(Record QA). Until a verdict exists, this phase holds every phase that depends on it.',
           since: planSince,
           href: phaseHref(plan.slug, row.phase),
           actions: [
@@ -844,14 +882,15 @@ function planDrafts(facts: InboxFacts): Draft[] {
               body: { intent: 'qa', slug: plan.slug, phase: row.phase },
               ...gatedBy('agent', flags.allowAgent),
             },
-            {
-              verb: 'qa-record',
-              label: 'Record a verdict',
-              endpoint: '/api/write',
-              method: 'POST',
-              body: { action: 'qa-record', slug: plan.slug, phase: row.phase },
-              ...gatedBy('writes', flags.allowWrites),
-            },
+            // There is deliberately no one-press "Record a verdict" here. There
+            // was, and it could not work: the body carried neither `result` nor
+            // `report`, both of which `writes.ts` requires, so every press
+            // answered with a WriteError — on the one row an operator reaches
+            // for when a QA verdict has wedged their plan. It cannot be fixed by
+            // filling the fields in either: pass, fail and waived are a
+            // judgement, and a button that picks one for you is worse than no
+            // button. The verdict form lives on the phase page, which is where
+            // `href` points and what `how` now names.
             ...(mode === 'on'
               ? []
               : [

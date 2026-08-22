@@ -178,6 +178,24 @@ rather than refusing.
   parks) — and F18 when a cwd-sensitive lead (`pnpm`, `docker`, …) has no `**Verify in:**`, since
   verification runs at the repository root. `scripts/verify.env` is the F5-style single source for
   those two word-lists, sourced by bash and parsed by `runner/verify-env.ts` with a drift test.
+  **F19** closes the family: an open plan that cannot progress at all — nothing ready, nothing in
+  flight, and a QA verdict holding every remaining phase.
+- **An empty `ready` set is four facts, so the engine says which.** `--memory-block` is the only
+  engine command the runner reads, and it emitted five bucket lines — collapsing "finished", "all in
+  flight", "closed" and "nothing can ever move again" into one silence. It now also emits
+  `blocked: 2<-1(qa:fail) 4<-2(not-done),3(qa:pending)` when something is waiting, parsed into
+  `Board.blockedBy` / `Board.qa` (`engine.ts`), and that is what lets a deadlocked plan halt with
+  `kind: 'plan-deadlocked'` anchored on the phase actually holding it. The line is additive —
+  `readMemoryBlock` ignores lines it does not know — but it is a CONTRACT now: change the shape in
+  `phase-graph.sh` and `engine.ts` together, and run `viewer/test/engine-parity.test.ts`.
+- **QA gates only when the plan says so.** `QA_GATING` derives from `qa_mode()`, not from
+  `test-status.md` merely existing: `**QA gate:** off` (→ `waived`) means recorded verdicts stop
+  holding dependents, which is the only release there is. It is opt-in and in writing, per plan —
+  `fail` under `on` gates exactly as before. Two rules ride with it: a `pending` row holds dependents
+  as hard as a `fail` (so `--boot-prompt` names the finish-time QA duty an unattended session would
+  otherwise never learn), and anything that CREATES `test-status.md` must backfill already-complete
+  phases as `waived` — `new-handoff.sh` always did, `qa-record.sh` now does, and the console's own
+  "turn QA on" reaches the second one.
 - **bash 3.2.** The scripts' target runtime is macOS system bash. `tests/helpers/test_helper.bash`
   forces `/bin/bash` for every script under test — no associative arrays, no `${var^^}`, no `mapfile`.
 - **Never implicitly build the client.** `client/dist` is gitignored; the console warns when the build

@@ -6,6 +6,116 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [3.1.0] - 2026-08-22
+
+### Added — the autopilot finishes plans it used to hand back
+
+A plan with QA on **deadlocked itself**: finishing a phase writes a `pending` verdict, `_is_verified`
+accepts only `pass`/`waived`, and nothing in the system ever produced one. "A person's to settle" is
+the right word for a decision and the wrong word for a chore nobody scheduled.
+
+- **QA climbs.** `qa-pending` and `qa-failed` became machine situations with real rungs: resume the
+  phase's own session to dispatch the fresh-context QA subagent and record the verdict, or — on a
+  failure — to fix what the report named, re-verify and re-record, escalating to a fresh agent when
+  that session is gone. The independence QA needs comes from the SUBAGENT (SKILL.md §QA), not from
+  the session being a different one, so this is the mechanism the skill already prescribed. A verdict
+  the ladder cannot produce is still a person's — that is what exhaustion and the errand are for.
+- **A QA-held done phase is a candidate the healer can act on.** It is settled as work and unsettled
+  as a blocker; every other done phase is still left alone.
+- **Delegated human gates (opt-in, off by default).** `Settings ▸ Automation ▸ Delegate human gates`
+  briefs a `human` gate to the phase's own session: verify each condition against evidence you can
+  cite, record it as `by: ai-session-delegated`, or STOP naming the condition you could not verify.
+  The safety is the evidence requirement, not trust — a gate approved on a guess is worse than a gate
+  that stopped the run. `gate-status.md` already documented this approver; plans already used it.
+
+### Fixed
+
+- **A rung label belongs to the situation it was climbed for.** Resolving exact-params matches across
+  every table before the loose pass let a paramless rung in an earlier situation answer for another —
+  latent until two situations shared a vehicle, then the Pulse read "Fix what QA found" about a red
+  verification.
+- **The classifier reads QA live.** It parsed the store, which lags a watcher debounce, so a phase
+  whose verdict was `fail` classified as `qa-pending` — the wrong rung and the wrong words on the card.
+- **`tailscale.test.ts` no longer flakes under load.** The probe's 3s timeout is right for a status
+  chip and wrong for a suite that forks a bash fixture per probe (2.2s of the budget on an idle
+  machine); it is now overridable, and the suite pins a generous value. Production keeps three seconds.
+
+### Fixed — the QA wedge, and the missing fact behind it
+
+A run stopped with **nothing ready** could not be moved by any button on the page. Measured on a
+real plan: phase 1 finished with a QA verdict of `fail` and phase 3 with one still `pending`, which
+held the other six phases for ever. *Recover & continue* answered "no open phase", *Continue this
+run* re-parked instantly, and nobody was ever asked for the verdict that would have released it.
+
+The root was a fact the engine had and never passed on. `--memory-block` — the only engine command
+the runner reads — emitted five bucket lines, so an empty `ready` set was four unrelated situations
+(finished · all in flight · closed · deadlocked) collapsed into one silence.
+
+- **The engine says why.** `--memory-block` gains a `blocked:` line naming each waiting phase's
+  unmet dependencies *and the reason for each* (`2<-1(qa:fail) 4<-3(qa:pending)`), emitted only when
+  something is waiting and ignored by older parsers. The board's `needs:` column marks a QA-held
+  dependency, so `needs: 3` can no longer sit two lines under `done  3`. New **F19** advisory (the
+  F14–F18 arm: stderr, exit untouched) when a plan cannot progress at all.
+- **`**QA gate:** off` now releases the gate.** `QA_GATING` was set by `test-status.md` merely
+  existing and never consulted `qa_mode`, so no plan-, run- or console-level setting could release a
+  recorded `fail`; the only exit was editing the table by hand. Verdicts stay recorded and reported
+  — they stop being a wall.
+- **Turning QA on mid-plan no longer un-verifies finished phases.** `qa-record.sh` now backfills
+  already-complete phases as `waived` when it creates the table, which `new-handoff.sh` always did
+  and the console's own "turn QA on" path did not.
+- **The boot prompt names the QA duty.** `SKILL.md` asks a QA-on plan's finishing session to
+  dispatch a QA subagent; the prompt an unattended session actually reads never mentioned it, so
+  `new-handoff.sh` wrote `pending` and nothing replaced it.
+- **The halt is anchored and explained.** Its kind, phase and every remedy string were derived from
+  the ready set, which is empty in exactly this case. A deadlocked plan now halts
+  `kind: 'plan-deadlocked'` on the phase whose verdict holds it, and says so.
+- **An unrecoverable stop always leaves one errand.** `maybeAutoRecover` returned at its
+  empty-candidate guard, *before* the errand, journal and push machinery — so an unattended console
+  swept the run every five minutes for ever and never asked anybody. The halt's own phase is now
+  classified (the `qa-failed`/`qa-pending` situations and their errands already existed and were
+  unreachable), and the pre-recovery gate no longer reads a deadlock's anchor as superseded.
+- **Convergence notices the repair, and continues afterwards.** The evidence fingerprint gains the
+  QA verdicts and the whole board (it walked only phases the run held a record for, so a phase going
+  `waiting → ready` was invisible); its "nothing has changed" latch no longer erases itself on skip
+  passes; and a stopped run whose board has ready work it never boarded is relaunched.
+- **An approved gate stays approved.** `situation.ts` re-asked the record's pre-approval snapshot one
+  line after consulting the live read, so a cleared gate still classified `gated-manual` for ever —
+  a regression of the invariant that the engine is the authority on gate state.
+- **A run that is over stops asking for attention.** A dissolved halt never advanced the run's
+  status, so finished runs sat at `halted` — which the UI paints `needs-you` — indefinitely.
+- **Run-level errands are pushed.** They were written, stored, rendered on the run page, and
+  dropped by a `typeof phase !== 'number'` guard before ever reaching a device.
+- **Exhaustion is an ask, not a silence.** Both legacy recovery ceilings in
+  `maybeAutoRecover` refused and moved on without writing an errand — and a spent budget is exactly
+  when a person has to be told. The run-wide ceiling now comes from `ladderPerRunRungs` instead of a
+  hardcoded `5` that silently overrode it. A rung this console may not drive (`--allow-agent`, a
+  missing node-pty) still refuses by name, and now also asks the one person who can supply it.
+- **A park no longer claims a run is stopped while its sessions are still editing trees.** `halt()`
+  uses `halting` for exactly this reason; `park()` — which the approval-timeout hook calls from
+  outside the loop — wrote `parked` unconditionally, and the drive loop had no terminal branch for
+  it, so it went on re-reading the board and boarding candidates on a run the console had stopped.
+- **Lost spend is named rather than shown as zero.** A child the console's own shutdown killed never
+  reports its `total_cost_usd`, so hours of real work booked `$0.00` — which reads as "this was
+  free". The record is marked, and the Spent tile says the figure is a floor.
+- **A closed plan stops asking anyone to continue its stopped run**, and an owed QA verdict that is
+  holding a plan is `needs-you` rather than `fyi` — it holds every dependent exactly as hard as a
+  failure, and nothing dispatches QA on its own.
+- **A PR run says so when it cannot ask for its one tap.** The `openPr` carve-out stops the run for
+  one approval, the window is an hour, and a push notification is the only thing that says a card is
+  up — so with push down the deal silently becomes "the run parks in an hour".
+- **An unevaluated `cmd` gate is no longer read as a human decision.** `--gate-status` refuses to run
+  a command gate without `PHASE_EXEC_GATES=1` and answers `manual: cmd gate not executed`; the
+  classifier's read is the page-safe one, so every unapproved command gate classified `gated-manual`
+  and asked a person to clear a gate that would clear itself the moment the runner boarded the phase.
+  "I could not check" and "a person must decide" are different facts — the line the MCP probe already
+  draws. Nothing is boarded on that verdict; boarding re-reads the gate for real.
+- **The surfaces name the real cause.** "Why this is stopped" gave a QA-wedged plan a single row for
+  a downstream, already-approved gate; the Phases-done tile read "2 / 2" on an eight-phase plan; the
+  inbox's "Record a verdict" button posted a body the write layer always rejected; a remedy the
+  server refused was toasted as "— done."; the launch dialog said nothing about QA precisely when the
+  plan turned it on; and the waiting card promised a phase "starts by itself the moment these finish"
+  about a dependency that had already finished and was held by its QA verdict.
+
 ## [3.0.0] - 2026-08-22
 
 Phase Console grew fast along the *automation* axis over 2.0 → 2.3 — the outcome protocol, the
