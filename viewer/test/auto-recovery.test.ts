@@ -106,6 +106,17 @@ function stubMint(svc: ReturnType<typeof service>, availability = 'yes'): Array<
 }
 
 function haltedRun(root: string, over: Partial<RunState> = {}): RunState {
+  // Phase 1 finished, so the board reads phase 2 — the phase every run below
+  // halts on — as `ready`. A run cannot reach phase 2 with phase 1 unfinished:
+  // 2 depends on 1. Leaving it out described an impossible run, which stopped
+  // mattering only because nothing consulted the board; the healer's candidate
+  // list does now, and it correctly refuses to work a phase still `waiting`.
+  mkdirSync(join(root, 'docs', 'handoffs', 'alpha'), { recursive: true });
+  writeFileSync(
+    join(root, 'docs', 'handoffs', 'alpha', 'phase-01-schema.md'),
+    '---\nplan: docs/plans/alpha.md\nphase: 1\ntitle: schema\nstatus: complete\n---\n# done\n',
+    'utf8',
+  );
   const state = newRun({ slug: 'alpha', root, autoRecover: true });
   state.status = 'halted';
   state.activePhase = 2;
@@ -168,6 +179,47 @@ test('records written before kinds are read by their unmistakable sentences only
 /* ------------------------------------------------------------------ *
  * The guards, in the order a launch has to pass them
  * ------------------------------------------------------------------ */
+
+test('a phase the board is still WAITING on is not a recovery candidate', async () => {
+  // Measured on a real run: the healer boarded a phase 10 whose 7, 8 and 9 were
+  // sitting ready and untouched, halting every time with "the session for phase
+  // 10 ended cleanly but the board still reads waiting" — the runner correctly
+  // describing work it should never have started — until the run's entire
+  // recovery budget (5 launches) was spent on a phase that could not run.
+  //
+  // A waiting phase has unmet dependencies by definition: nothing has started,
+  // nothing can start, and no rung has a session worth launching for it.
+  const { root, cleanup } = scratch();
+  try {
+    const svc = service(root);
+    try {
+      const state = newRun({ slug: 'alpha', root, autoRecover: true });
+      state.status = 'halted';
+      // Records for all three, so record-existence is not what excludes them.
+      for (const phase of [1, 2, 3]) phaseRecord(state, phase).status = 'failed';
+      saveRun(state);
+
+      const board = (await svc.board('alpha')).states;
+      assert.equal(board[1], 'ready', 'phase 1 leads the plan');
+      assert.equal(board[2], 'waiting', 'phase 2 depends on 1');
+      assert.equal(board[3], 'waiting', 'phase 3 depends on 2');
+
+      const open = await svc.classifyOpenPhases('alpha', state, board);
+      const phases = open.map((entry) => entry.phase).sort((a, b) => a - b);
+      assert.deepEqual(phases, [1], `only the ready phase is a candidate, got ${phases.join(',')}`);
+
+      // …unless this run is actually driving it: out-of-order work is real work.
+      state.children = {
+        c1: { pid: 1, phase: 3, sessionId: 's', startedAt: new Date().toISOString() },
+      } as never;
+      const driving = await svc.classifyOpenPhases('alpha', state, board);
+      assert.ok(
+        driving.some((entry) => entry.phase === 3),
+        'a waiting phase with a live lane stays diagnosable',
+      );
+    } finally { svc.close(); }
+  } finally { cleanup(); }
+});
 
 test('a healable halt launches the recovery agent, and the attempt is persisted at launch', async () => {
   const { root, cleanup } = scratch();

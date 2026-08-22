@@ -5283,6 +5283,16 @@ export class Service {
    * first one whose ladder has a rung this console can climb is the anchor.
    * Phases the board reads done are not candidates; their records are closed
    * by the reconcile pass, not diagnosed.
+   *
+   * Nor is a phase the board reads `waiting`: its dependencies are unmet, so it
+   * has not started and cannot start, and there is no session a rung could
+   * usefully launch for it. That cost was measured rather than imagined — a run
+   * spent its ENTIRE recovery budget (5 launches) on a phase 10 whose 7, 8 and
+   * 9 were sitting ready and untouched, halting each time with "the session for
+   * phase 10 ended cleanly but the board still reads waiting", which is the
+   * runner correctly describing work it should never have boarded. The one
+   * exception is a phase this run is driving right now: out-of-order work is
+   * still real work, and it stays diagnosable.
    */
   async classifyOpenPhases(
     slug: string, state: RunState, board: Record<number, string>,
@@ -5301,6 +5311,7 @@ export class Service {
     for (const phase of order) {
       if (!state.phases[String(phase)]) continue;
       if (board[phase] === 'done') continue;
+      if (board[phase] === 'waiting' && !childrenOf(state).some((child) => child.phase === phase)) continue;
       try {
         out.push({ phase, ...(await this.classifyPhase(slug, phase, state, board)) });
       } catch (error) {

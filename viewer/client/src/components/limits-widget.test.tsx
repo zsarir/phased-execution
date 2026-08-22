@@ -59,6 +59,29 @@ beforeEach(() => {
  * nor that a weekly window is the real constraint. On a machine with two
  * accounts that is the difference between "stop working" and "switch account".
  */
+describe('two entries, one identity', () => {
+  it('says so — the pair looks like failover and is not', async () => {
+    // The ordinary way to reach this: sign the machine's own `claude` login in
+    // as the account you also registered as a profile. Each entry reads
+    // correctly alone; only together are they a trap.
+    renderOverview([
+      { id: 'default', kind: 'default', builtIn: true, name: 'default', email: 'one@example.com' },
+      { id: 'info', kind: 'profile', builtIn: false, name: 'info', email: 'One@Example.com' },
+    ] as never);
+    expect(await screen.findByText(/are the same Claude account/)).toBeTruthy();
+    expect(screen.getByText('default and info')).toBeTruthy();
+  });
+
+  it('stays quiet when the logins genuinely differ', async () => {
+    renderOverview([
+      { id: 'default', kind: 'default', builtIn: true, name: 'default', email: 'one@example.com' },
+      { id: 'work', kind: 'profile', builtIn: false, name: 'work', email: 'two@example.com' },
+    ] as never);
+    await screen.findByText(/Polled on a budget/);
+    expect(screen.queryByText(/are the same Claude account/)).toBeNull();
+  });
+});
+
 describe('the usage indicator', () => {
   const account = (id: string, buckets: Record<string, number>) => ({
     id,

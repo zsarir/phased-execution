@@ -23,7 +23,7 @@ import { api } from '@/lib/api';
 import type { AccountView, UsageBucket } from '@/lib/api';
 import { countdown, relativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
-import { Button, Chip, Dialog, DialogContent, Empty, toast } from '@/components/ui';
+import { Banner, Button, Chip, Dialog, DialogContent, Empty, toast } from '@/components/ui';
 import { RefreshMeters } from '@/components/refresh-meters';
 
 /** Human names for the endpoint's bucket keys; unknown keys stay readable. */
@@ -343,6 +343,28 @@ export function LimitsWidget({ variant }: { variant: 'header' | 'rail' | 'phone'
 }
 
 /** Every account × every bucket, with resets and staleness. Reused by Settings. */
+/**
+ * Registered accounts that are really the SAME Claude identity.
+ *
+ * Two entries pointing at one login look like failover and are not: their
+ * windows are the same windows, so `onLimit: 'switch'` moves a run onto the
+ * wall it just hit, and `auto` picks between two identical scores. It happens
+ * for an ordinary reason — signing the machine's own `claude` login in as the
+ * account you also registered as a profile — and nothing in the console said
+ * so, because each entry reads correctly on its own.
+ *
+ * Matched on email, which is the only identity the usage endpoint gives us.
+ */
+function duplicateIdentities(accounts: AccountView[]): { email: string; ids: string[] }[] {
+  const byEmail = new Map<string, string[]>();
+  for (const account of accounts) {
+    const email = account.email?.trim().toLowerCase();
+    if (!email) continue;
+    byEmail.set(email, [...(byEmail.get(email) ?? []), account.id]);
+  }
+  return [...byEmail.entries()].filter(([, ids]) => ids.length > 1).map(([email, ids]) => ({ email, ids }));
+}
+
 export function LimitsOverview({ accounts }: { accounts: AccountView[] | undefined }) {
   // The mute renders even with nothing to meter. A console with no REGISTERED
   // account still runs work as the default one, and still announces when that
@@ -357,8 +379,19 @@ export function LimitsOverview({ accounts }: { accounts: AccountView[] | undefin
       </div>
     );
   }
+  const duplicates = duplicateIdentities(accounts);
   return (
     <div className="flex flex-col gap-4">
+      {duplicates.map(({ email, ids }) => (
+        <Banner key={email} severity="warn">
+          <span>
+            <strong>{ids.join(' and ')}</strong> are the same Claude account ({email}). They share one set of
+            windows, so switching between them buys no headroom — a run set to{' '}
+            <code className="font-mono">switch</code> at a limit will move onto the wall it just hit. For real
+            failover, register a second account with a different login.
+          </span>
+        </Banner>
+      ))}
       {/* The numbers below are polled on a courtesy budget — up to ten minutes
           old on an idle account. One press re-reads every one of them. */}
       <div className="flex flex-wrap items-center justify-between gap-2">

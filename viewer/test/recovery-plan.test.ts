@@ -79,6 +79,15 @@ status: ${status}
 }
 
 function haltedRun(root: string, over: Partial<RunState> = {}): RunState {
+  // Phase 1 finished, so the board reads phase 2 — the phase these runs halt on
+  // — as `ready` rather than `waiting`. 2 depends on 1, so a run cannot reach
+  // it otherwise, and the healer now declines to work a phase the board is
+  // still waiting on.
+  writeFileSync(
+    join(root, 'docs', 'handoffs', 'alpha', 'phase-01-schema.md'),
+    '---\nplan: docs/plans/alpha.md\nphase: 1\ntitle: schema\nstatus: complete\n---\n# done\n',
+    'utf8',
+  );
   const state = newRun({ slug: 'alpha', root });
   state.status = 'halted';
   state.halt = {
@@ -101,7 +110,11 @@ test('a halt the board has moved past is stood down and the run resumes', async 
     const svc = service(root);
     const state = haltedRun(root);
     // The work landed outside the run: BOTH phases read done… no — phase 1
-    // stays open so there is something to continue into.
+    // stays open so there is something to continue into. So drop the finished
+    // phase 1 the helper writes: this is the one test here that needs the
+    // EARLIER phase open, and a phase-2 handoff reads `done` on its own merits
+    // whatever phase 1 says.
+    rmSync(join(root, 'docs', 'handoffs', 'alpha', 'phase-01-schema.md'), { force: true });
     handoff(root, 2, 'cart-api', 'complete');
 
     const started: unknown[] = [];
