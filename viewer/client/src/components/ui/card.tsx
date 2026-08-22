@@ -53,7 +53,14 @@ export function Tile({
 } & HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={cn('rounded-lg border border-rule bg-surface px-3 py-2.5', state, className)} {...props}>
-      <div className={cn('font-display text-2xl leading-none', state ? 'text-state' : 'text-ink')}>
+      {/* `tabular-nums` because every Tile value in this app is a figure — a
+          count, a sum of money, a duration — and a column of them that
+          re-flows digit by digit as the numbers tick is a column you cannot
+          compare down. It affects digits only, so it is inert on the `—` a
+          tile shows when it has nothing. */}
+      <div
+        className={cn('font-display text-2xl leading-none tabular-nums', state ? 'text-state' : 'text-ink')}
+      >
         {value}
       </div>
       <div className="mt-1 text-2xs tracking-wide text-ink-muted uppercase">{label}</div>

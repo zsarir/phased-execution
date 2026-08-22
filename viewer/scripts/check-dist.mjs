@@ -19,7 +19,13 @@
  *     terminal chunk NOT (89 KB of xterm is no use to someone who cannot open
  *     a shell).
  *   • the entry stays under the ~300 KB gzipped budget, and the terminal stays
- *     a lazy chunk the entry document never references.
+ *     a lazy chunk the entry document never references — in the precache OR
+ *     as a `modulepreload`, which is the second way a lazy chunk stops being
+ *     lazy and the one nothing checked until Phase 7.
+ *   • first paint (entry + every modulepreload) is REPORTED against a soft
+ *     200 KB target. Advisory, never fatal: the entry budget is the hard gate,
+ *     and a hard limit on a figure that moves with every dependency bump is a
+ *     limit that gets raised rather than read.
  *   • `dist/.build-rev` exists — proves the stamp stayed wired into
  *     `npm run build`, which is what `npm start`'s staleness warning reads.
  *
@@ -159,6 +165,63 @@ check(
   precachedXterm.length === 0,
   `precached: ${precachedXterm.join(', ')} — add it to globIgnores in vite.config.ts. ` +
     'A renamed shared chunk is the usual cause; see the note in views/terminal/pane.tsx.',
+);
+
+/*
+ * The modulepreload twin of the check above.
+ *
+ * The precache is one of TWO ways a lazy chunk stops being lazy. The other is
+ * `<link rel="modulepreload">` in the document: a preloaded chunk is fetched
+ * by every visitor on first paint, on the same connection as the entry, and
+ * nothing about it looks lazy from the network tab's point of view — it is
+ * simply there before anything asked.
+ *
+ * The named check above (`index.html never references the pane or agent
+ * chunks`) is the version of this that a rename defeats, for exactly the
+ * reason the note above gives. This one asks the build the same question the
+ * emulator-precache check asks: whichever chunk actually contains xterm, is
+ * the document pulling it in?
+ */
+const preloaded = [...html.matchAll(/<link[^>]+rel="modulepreload"[^>]+href="\/assets\/([^"]+)"/g)].map(
+  (match) => match[1],
+);
+const preloadedXterm = xtermChunks.filter((name) => preloaded.includes(name));
+check(
+  `the document never modulepreloads the emulator, whatever the chunk is called (${preloaded.length} preloaded)`,
+  preloadedXterm.length === 0,
+  `modulepreloaded: ${preloadedXterm.join(', ')} — a preloaded chunk is fetched by every visitor on ` +
+    'first paint. Usually a static import that should be a `lazy()`; see the note in vite.config.ts.',
+);
+
+/*
+ * First paint, as a number rather than as a name.
+ *
+ * The entry budget above (~300 KB gz) only counts the entry. What a visitor
+ * actually downloads before the first frame is the entry PLUS everything the
+ * document preloads, and a chunk that migrates out of the entry into a
+ * preload costs exactly as much while making the entry check greener. This
+ * counts the real total.
+ *
+ * SOFT on purpose: it prints and does not fail. The budget is a design
+ * decision that wants a person, and a hard gate on a figure that moves with
+ * every dependency bump is a gate that gets raised rather than read. The
+ * entry budget stays hard.
+ */
+const FIRST_PAINT_SOFT_GZ = 200 * 1024;
+const firstPaintGz =
+  (entryMatch ? gzipSync(readFileSync(join(DIST, 'assets', entryMatch[1]))).length : 0) +
+  preloaded.reduce(
+    (sum, name) =>
+      sum +
+      (existsSync(join(DIST, 'assets', name))
+        ? gzipSync(readFileSync(join(DIST, 'assets', name))).length
+        : 0),
+    0,
+  );
+process.stdout.write(
+  `${firstPaintGz <= FIRST_PAINT_SOFT_GZ ? '✓' : '·'} first paint is ${(firstPaintGz / 1024).toFixed(1)} KB gz ` +
+    `(entry + ${preloaded.length} modulepreload${preloaded.length === 1 ? '' : 's'}) ` +
+    `— soft target ${FIRST_PAINT_SOFT_GZ / 1024} KB, advisory\n`,
 );
 
 check('dist/.build-rev exists (npm run build stamps what it built)', existsSync(join(DIST, '.build-rev')));

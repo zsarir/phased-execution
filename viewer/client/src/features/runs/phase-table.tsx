@@ -199,7 +199,9 @@ export function groupOf(row: MergedPhase): PhaseGroupId {
 }
 
 /** The rows, split into the five groups, empty groups dropped. */
-export function groupRows(rows: readonly MergedPhase[]): { id: PhaseGroupId; label: string; hint: string; rows: MergedPhase[] }[] {
+export function groupRows(
+  rows: readonly MergedPhase[],
+): { id: PhaseGroupId; label: string; hint: string; rows: MergedPhase[] }[] {
   return PHASE_GROUPS.map((group) => ({
     id: group.id,
     label: group.label,

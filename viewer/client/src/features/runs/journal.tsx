@@ -75,7 +75,11 @@ export function journalHref(seq: number, hash: string = window.location.hash): s
  * and is the only thing in here worth memoising.
  */
 export function entryText(entry: JournalEntry): string {
-  const data = entry.data ? Object.entries(entry.data).map(([k, v]) => `${k} ${stringify(v)}`).join(' ') : '';
+  const data = entry.data
+    ? Object.entries(entry.data)
+        .map(([k, v]) => `${k} ${stringify(v)}`)
+        .join(' ')
+    : '';
   return `${entry.event} ${entry.phase != null ? `phase ${entry.phase}` : ''} ${data}`.toLowerCase();
 }
 
@@ -107,13 +111,7 @@ export function filterEntries(
   return entries.filter((entry) => entry.seq === linked || entryText(entry).includes(q));
 }
 
-export function Journal({
-  entries,
-  className,
-}: {
-  entries: readonly JournalEntry[];
-  className?: string;
-}) {
+export function Journal({ entries, className }: { entries: readonly JournalEntry[]; className?: string }) {
   const phone = usePhone();
   const [needle, setNeedle] = useState('');
   const [page, setPage] = useState(1);
@@ -168,44 +166,44 @@ export function Journal({
       </CardHeader>
       <CardBody>
         <div ref={box}>
-        {visible.length === 0 ? (
-          <Empty
-            title={needle ? 'Nothing matches that' : 'No journal yet'}
-            body={
-              needle
-                ? 'The journal holds what the runner did — boarded, verified, parked, recovered. Try the phase number, or an event name like "phase.stall".'
-                : 'A run writes one line here for every decision it makes. It survives the process, which is what makes it the record worth reading when something happened hours ago.'
-            }
-          />
-        ) : phone ? (
-          <>
-            <ol className="flex flex-col divide-y divide-rule">
-              {visible.map((entry) => (
-                <li key={entry.seq}>{row(entry)}</li>
-              ))}
-            </ol>
-            {visible.length < shown.length && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="mt-2 w-full"
-                onClick={() => setPage((n) => n + 1)}
-              >
-                Show {Math.min(PAGE, shown.length - visible.length)} older
-              </Button>
-            )}
-          </>
-        ) : (
-          <DataList
-            items={visible}
-            role="log"
-            label="Run journal"
-            keyOf={(entry) => entry.seq}
-            estimateRowHeight={38}
-            rowClassName="border-b border-rule"
-            renderRow={(entry) => row(entry)}
-          />
-        )}
+          {visible.length === 0 ? (
+            <Empty
+              title={needle ? 'Nothing matches that' : 'No journal yet'}
+              body={
+                needle
+                  ? 'The journal holds what the runner did — boarded, verified, parked, recovered. Try the phase number, or an event name like "phase.stall".'
+                  : 'A run writes one line here for every decision it makes. It survives the process, which is what makes it the record worth reading when something happened hours ago.'
+              }
+            />
+          ) : phone ? (
+            <>
+              <ol className="flex flex-col divide-y divide-rule">
+                {visible.map((entry) => (
+                  <li key={entry.seq}>{row(entry)}</li>
+                ))}
+              </ol>
+              {visible.length < shown.length && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="mt-2 w-full"
+                  onClick={() => setPage((n) => n + 1)}
+                >
+                  Show {Math.min(PAGE, shown.length - visible.length)} older
+                </Button>
+              )}
+            </>
+          ) : (
+            <DataList
+              items={visible}
+              role="log"
+              label="Run journal"
+              keyOf={(entry) => entry.seq}
+              estimateRowHeight={38}
+              rowClassName="border-b border-rule"
+              renderRow={(entry) => row(entry)}
+            />
+          )}
         </div>
       </CardBody>
     </Card>

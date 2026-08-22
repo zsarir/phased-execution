@@ -281,17 +281,18 @@ describe('filtering the fleet', () => {
  * The page
  * ------------------------------------------------------------------ */
 
-const { state, runs, approvals, auth, runTranscript } = vi.hoisted(() => ({
+const { state, runs, approvals, auth, runTranscript, spend } = vi.hoisted(() => ({
   state: vi.fn(),
   runs: vi.fn(),
   approvals: vi.fn(),
   auth: vi.fn(),
   runTranscript: vi.fn(),
+  spend: vi.fn(),
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
-  return { ...actual, api: { ...actual.api, state, runs, approvals, auth, runTranscript } };
+  return { ...actual, api: { ...actual.api, state, runs, approvals, auth, runTranscript, spend } };
 });
 
 function mount(node: React.ReactElement) {
@@ -327,6 +328,11 @@ beforeEach(() => {
   approvals.mockResolvedValue([]);
   auth.mockResolvedValue({ loggedIn: true, checkedAt: '2026-08-03T00:00:00Z' });
   runTranscript.mockResolvedValue([]);
+  spend.mockResolvedValue({
+    today: { settledUsd: 1.2, ladderUsd: 0.45, capUsd: 8 },
+    runs: [],
+    series: [],
+  });
 });
 
 describe('the runs page', () => {
@@ -472,5 +478,68 @@ describe('lifecycle from the fleet', () => {
     fireEvent.click(screen.getByRole('button', { name: /Show the phases of run done1/ }));
     expect(screen.queryByRole('button', { name: 'Freeze' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Phase 7: the fleet-and-money ledger
+ * ------------------------------------------------------------------ */
+
+describe('the fleet as a ledger', () => {
+  it("a row's plan links to that plan's RUN, not to the plan page", async () => {
+    // The fleet is a list of RUNS. A link that landed on the plan's overview
+    // made the one column anybody clicks the one that went somewhere else.
+    runs.mockResolvedValue([HALTED]);
+    const { default: RunsView } = await import('./index');
+    mount(<RunsView />);
+    const link = await screen.findByRole('link', { name: 'trade' });
+    expect(link.getAttribute('href')).toBe('#/plan/trade/run');
+  });
+
+  it('shows settled-today against the day cap — the figure that stops the fleet', async () => {
+    // NOT the sum of the rows: `fleetTotals` moves when a filter moves, and
+    // the cap is what `nextRung` refuses against. They were one tile.
+    runs.mockResolvedValue([HALTED]);
+    const { default: RunsView } = await import('./index');
+    mount(<RunsView />);
+    const tiles = await screen.findByRole('region', { name: 'What the fleet is doing' });
+    // Anchored to the TILE, not to the figure: `Spent` happens to read $1.65
+    // here too, and that coincidence is the point — the two tiles answer
+    // different questions and can agree without being the same number.
+    const tile = within(tiles).getByText('Settled today').closest('div.rounded-lg')!;
+    // 1.20 settled + 0.45 the ladder spent, in tabular figures so a column of
+    // money lines up rather than dancing digit by digit.
+    expect(within(tile as HTMLElement).getByText('$1.65').className).toMatch(/tabular-nums/);
+    expect(within(tile as HTMLElement).getByText(/of the \$8\.00 day cap/)).toBeInTheDocument();
+  });
+
+  it('says so when the day is over its cap, rather than showing a bigger number', async () => {
+    spend.mockResolvedValue({ today: { settledUsd: 9, ladderUsd: 0.5, capUsd: 8 }, runs: [], series: [] });
+    runs.mockResolvedValue([HALTED]);
+    const { default: RunsView } = await import('./index');
+    mount(<RunsView />);
+    const tiles = await screen.findByRole('region', { name: 'What the fleet is doing' });
+    expect(within(tiles).getByText(/over the \$8\.00 day cap/)).toBeInTheDocument();
+  });
+
+  it('invents no cap reading when the server cannot answer for one', async () => {
+    // An older server has no `/api/spend`. The tile that CAN be answered from
+    // what is on screen stays; the one that cannot is absent, not zero — a
+    // "$0.00 of the day cap" on a console that was never told is the exact
+    // false reassurance this tile exists to remove.
+    spend.mockRejectedValue(new Error('404'));
+    runs.mockResolvedValue([HALTED]);
+    const { default: RunsView } = await import('./index');
+    mount(<RunsView />);
+    const tiles = await screen.findByRole('region', { name: 'What the fleet is doing' });
+    expect(within(tiles).getByText('Spent')).toBeInTheDocument();
+    expect(within(tiles).queryByText('Settled today')).not.toBeInTheDocument();
+  });
+
+  it('says nothing is running rather than showing an empty console', async () => {
+    runs.mockResolvedValue([]);
+    const { default: RunsView } = await import('./index');
+    mount(<RunsView />);
+    expect(await screen.findByText('Nothing running right now')).toBeInTheDocument();
   });
 });

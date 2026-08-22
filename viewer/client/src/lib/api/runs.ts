@@ -762,7 +762,9 @@ export const runsApi = {
   runs: () => request<RunState[]>('/api/runs'),
   run: (slug: string) => request<RunDetail>(`/api/run/${q(slug)}`),
   runJournal: (slug: string, id?: number, limit?: number) =>
-    request<JournalEntry[]>(`/api/run/${q(slug)}/journal${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`),
+    request<JournalEntry[]>(
+      `/api/run/${q(slug)}/journal${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`,
+    ),
   /**
    * The PLAN's whole ruling ledger, oldest first — not the run's slice.
    *

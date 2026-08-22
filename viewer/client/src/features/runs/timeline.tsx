@@ -118,8 +118,8 @@ export function Timeline({
       <CardHeader className="flex-wrap items-baseline">
         <CardTitle>Timeline</CardTitle>
         <span className="max-w-prose text-2xs text-ink-faint">
-          Wall clock per phase, split into working, waiting on something outside the phase, and frozen.
-          Scaled against the longest phase.
+          Wall clock per phase, split into working, waiting on something outside the phase, and frozen. Scaled
+          against the longest phase.
         </span>
       </CardHeader>
       <CardBody>

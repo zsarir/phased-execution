@@ -87,7 +87,10 @@ export function FleetTiles({ rows, spend }: { rows: RunRow[]; spend?: SpendView 
   const over = settled != null && cap != null && cap > 0 && settled >= cap;
 
   return (
-    <section aria-label="What the fleet is doing" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+    <section
+      aria-label="What the fleet is doing"
+      className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5"
+    >
       <Tile
         label="In flight"
         value={totals.live}
@@ -100,13 +103,16 @@ export function FleetTiles({ rows, spend }: { rows: RunRow[]; spend?: SpendView 
         state={totals.attention ? 'state-ready' : undefined}
         hint={totals.attention ? 'stopped until someone moves it' : 'nothing is parked'}
       />
-      {/* Two different questions, and they were one tile.
-          "Spent" is about the rows in front of you and moves when a filter
-          moves. "Settled today" is about the CAP, comes off `/api/spend`, and
-          is the number that decides whether the next phase may board at all —
-          `nextRung` refuses against it. Conflating them meant the figure that
-          could stop the fleet was never on screen. */}
-      {settled != null ? (
+      {/* Two different questions, deliberately two tiles.
+          "Spent" is about the rows in FRONT of you and moves when a filter
+          moves — which is what makes it useful while narrowing the fleet, and
+          useless as a cap reading. "Settled today" is the cap's own
+          arithmetic off `/api/spend`: what finished runs cost plus what the
+          ladder spent, against `ladderPerDayUsd`. It is the figure `nextRung`
+          refuses against — the one that decides whether the next phase may
+          board at all — and it was on no screen anywhere. */}
+      <Tile label="Spent" value={money(totals.spent)} hint="across the runs shown" />
+      {settled != null && (
         <Tile
           label="Settled today"
           value={money(settled)}
@@ -119,8 +125,6 @@ export function FleetTiles({ rows, spend }: { rows: RunRow[]; spend?: SpendView 
                 : `of the ${money(cap)} day cap`
           }
         />
-      ) : (
-        <Tile label="Spent" value={money(totals.spent)} hint="across the runs shown" />
       )}
       <Tile
         label="Time on task"
