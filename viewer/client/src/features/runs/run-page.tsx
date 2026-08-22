@@ -258,7 +258,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
         onAct={act}
       />
 
-      {run && <RunTiles run={run} phases={phases} />}
+      {run && <RunTiles run={run} phases={phases} total={detail?.phases.length} />}
 
       {planPhases.length ? (
         <PhaseTable

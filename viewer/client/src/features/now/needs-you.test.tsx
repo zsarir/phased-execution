@@ -23,7 +23,18 @@ import { queryClientConfig } from '@/lib/queries';
 import type { ConvergeStatusView, InboxItem } from '@/lib/api';
 import { NeedsYou, nextSweepText } from './needs-you';
 
-const { inboxAct, inboxAck } = vi.hoisted(() => ({ inboxAct: vi.fn(), inboxAck: vi.fn() }));
+const { inboxAct, inboxAck, toast } = vi.hoisted(() => ({
+  inboxAct: vi.fn(),
+  inboxAck: vi.fn(),
+  toast: vi.fn(),
+}));
+
+// The toast is the whole observable result of pressing a remedy, so it is what
+// these assert on rather than a rendered Toaster the harness does not mount.
+vi.mock('@/components/ui', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/ui')>();
+  return { ...actual, toast };
+});
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -241,5 +252,57 @@ describe('the empty states', () => {
     unmount();
     mount({ items: [] });
     expect(screen.getByText('Nothing needs you')).toBeTruthy();
+  });
+});
+
+describe('a refusal must not read as success', () => {
+  // `POST /api/run/<slug>/recover` answers 200 for EVERY outcome, including
+  // `errand` ("nothing was launched, a person is needed") and `nothing-to-do`.
+  // `perform` toasted "<label> — done." on any 2xx, so pressing Recover &
+  // continue on a run nothing could move reported success and changed nothing.
+  // The operator pressed it three times and believed it three times.
+  const press = async () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /Recover & continue/ }));
+    await waitFor(() => expect(inboxAct).toHaveBeenCalledTimes(1));
+  };
+
+  it('says what actually happened when nothing was launched', async () => {
+    inboxAct.mockResolvedValue({
+      outcome: 'errand',
+      detail: 'phase 1 reads QA failed. Needed: a verdict of pass or waived.',
+      steps: [],
+    });
+    await press();
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    const [message, kind] = toast.mock.calls.at(-1)!;
+    expect(message).toMatch(/Needed: a verdict of pass or waived/);
+    expect(kind).toBe('warn');
+    expect(message).not.toMatch(/— done\./);
+  });
+
+  it('says so for nothing-to-do too', async () => {
+    inboxAct.mockResolvedValue({ outcome: 'nothing-to-do', detail: 'Nothing was wrong.' });
+    await press();
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(toast.mock.calls.at(-1)![1]).toBe('warn');
+  });
+
+  it('still reports success when something really was launched', async () => {
+    inboxAct.mockResolvedValue({ outcome: 'recovering', detail: 'A bounded recovery is running.' });
+    await press();
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    const [message, kind] = toast.mock.calls.at(-1)!;
+    expect(kind).toBe('ok');
+    expect(message).toMatch(/A bounded recovery is running/);
+  });
+
+  it('an action with no outcome shape is unchanged', async () => {
+    inboxAct.mockResolvedValue({ ok: true });
+    await press();
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    const [message, kind] = toast.mock.calls.at(-1)!;
+    expect(kind).toBe('ok');
+    expect(message).toMatch(/— done\./);
   });
 });

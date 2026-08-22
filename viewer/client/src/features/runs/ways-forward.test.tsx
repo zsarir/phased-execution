@@ -328,3 +328,67 @@ describe("nextStepRows — the ladder's errand", () => {
     expect(rows[0].retry).toBe('restarts');
   });
 });
+
+describe('a plan wedged by a QA verdict', () => {
+  // The measured shape. Phase 1 finished, its QA verdict is `fail`, and that
+  // holds every dependent — so the board has nothing ready and the plan is
+  // dead. `nextStepRows` walked the plan's phases and matched NONE of it:
+  // phase 1 `continue`d out at the `state === 'done'` branch (its record reads
+  // done too, so the red-record-on-green-phase branch did not fire either), and
+  // the waiting phases have no record. The single row it produced was for a
+  // DOWNSTREAM gated phase — already approved, six dependencies away — so the
+  // card titled "Why this is stopped" named a cause that was not the cause.
+  const wedged: PhaseView[] = [
+    phase({
+      phase: 1,
+      state: 'done',
+      title: 'backend',
+      qa: { result: 'fail', report: 'reports/phase-01-qa.md' },
+    } as never),
+    phase({
+      phase: 2,
+      state: 'waiting',
+      title: 'contracts',
+      row: { phase: 2, title: 'contracts', dependsOn: [1], parallelSafe: '', repos: '', exitCriteria: '' },
+    }),
+    phase({
+      phase: 6,
+      state: 'waiting',
+      title: 'ship',
+      gated: true,
+      gateKind: 'auto',
+      gates: 'the CD rail is armed',
+    }),
+  ];
+  const parked = run({
+    status: 'parked',
+    phases: { 1: { phase: 1, status: 'done', attempts: 1 } },
+    halt: { at: '', reason: 'nothing is ready to run', phase: 1, kind: 'plan-deadlocked' },
+  } as never);
+
+  it('names the QA verdict as the blocker', () => {
+    const rows = nextStepRows('demo', wedged, parked);
+    const qaRow = rows.find((r) => r.phase === 1);
+    expect(qaRow, 'the phase holding the plan must have a row').toBeTruthy();
+    expect(qaRow!.why).toMatch(/QA/);
+    expect(qaRow!.why).toMatch(/fail/);
+  });
+
+  it('does not lead with a downstream gate that is not the blocker', () => {
+    const rows = nextStepRows('demo', wedged, parked);
+    expect(rows[0]?.phase, 'the real blocker comes first').toBe(1);
+  });
+
+  it('leaves a genuinely done phase alone when its QA has passed', () => {
+    const clean: PhaseView[] = [
+      phase({ phase: 1, state: 'done', title: 'backend', qa: { result: 'pass' } } as never),
+      phase({ phase: 2, state: 'ready', title: 'contracts' }),
+    ];
+    expect(nextStepRows('demo', clean, parked).some((r) => r.phase === 1)).toBe(false);
+  });
+
+  it('says nothing about QA when the plan does not gate on it', () => {
+    const noQa: PhaseView[] = [phase({ phase: 1, state: 'done', title: 'backend' })];
+    expect(nextStepRows('demo', noQa, parked).some((r) => r.phase === 1)).toBe(false);
+  });
+});

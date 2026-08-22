@@ -6,6 +6,59 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [Unreleased]
+
+### Fixed — the QA wedge, and the missing fact behind it
+
+A run stopped with **nothing ready** could not be moved by any button on the page. Measured on a
+real plan: phase 1 finished with a QA verdict of `fail` and phase 3 with one still `pending`, which
+held the other six phases for ever. *Recover & continue* answered "no open phase", *Continue this
+run* re-parked instantly, and nobody was ever asked for the verdict that would have released it.
+
+The root was a fact the engine had and never passed on. `--memory-block` — the only engine command
+the runner reads — emitted five bucket lines, so an empty `ready` set was four unrelated situations
+(finished · all in flight · closed · deadlocked) collapsed into one silence.
+
+- **The engine says why.** `--memory-block` gains a `blocked:` line naming each waiting phase's
+  unmet dependencies *and the reason for each* (`2<-1(qa:fail) 4<-3(qa:pending)`), emitted only when
+  something is waiting and ignored by older parsers. The board's `needs:` column marks a QA-held
+  dependency, so `needs: 3` can no longer sit two lines under `done  3`. New **F19** advisory (the
+  F14–F18 arm: stderr, exit untouched) when a plan cannot progress at all.
+- **`**QA gate:** off` now releases the gate.** `QA_GATING` was set by `test-status.md` merely
+  existing and never consulted `qa_mode`, so no plan-, run- or console-level setting could release a
+  recorded `fail`; the only exit was editing the table by hand. Verdicts stay recorded and reported
+  — they stop being a wall.
+- **Turning QA on mid-plan no longer un-verifies finished phases.** `qa-record.sh` now backfills
+  already-complete phases as `waived` when it creates the table, which `new-handoff.sh` always did
+  and the console's own "turn QA on" path did not.
+- **The boot prompt names the QA duty.** `SKILL.md` asks a QA-on plan's finishing session to
+  dispatch a QA subagent; the prompt an unattended session actually reads never mentioned it, so
+  `new-handoff.sh` wrote `pending` and nothing replaced it.
+- **The halt is anchored and explained.** Its kind, phase and every remedy string were derived from
+  the ready set, which is empty in exactly this case. A deadlocked plan now halts
+  `kind: 'plan-deadlocked'` on the phase whose verdict holds it, and says so.
+- **An unrecoverable stop always leaves one errand.** `maybeAutoRecover` returned at its
+  empty-candidate guard, *before* the errand, journal and push machinery — so an unattended console
+  swept the run every five minutes for ever and never asked anybody. The halt's own phase is now
+  classified (the `qa-failed`/`qa-pending` situations and their errands already existed and were
+  unreachable), and the pre-recovery gate no longer reads a deadlock's anchor as superseded.
+- **Convergence notices the repair, and continues afterwards.** The evidence fingerprint gains the
+  QA verdicts and the whole board (it walked only phases the run held a record for, so a phase going
+  `waiting → ready` was invisible); its "nothing has changed" latch no longer erases itself on skip
+  passes; and a stopped run whose board has ready work it never boarded is relaunched.
+- **An approved gate stays approved.** `situation.ts` re-asked the record's pre-approval snapshot one
+  line after consulting the live read, so a cleared gate still classified `gated-manual` for ever —
+  a regression of the invariant that the engine is the authority on gate state.
+- **A run that is over stops asking for attention.** A dissolved halt never advanced the run's
+  status, so finished runs sat at `halted` — which the UI paints `needs-you` — indefinitely.
+- **Run-level errands are pushed.** They were written, stored, rendered on the run page, and
+  dropped by a `typeof phase !== 'number'` guard before ever reaching a device.
+- **The surfaces name the real cause.** "Why this is stopped" gave a QA-wedged plan a single row for
+  a downstream, already-approved gate; the Phases-done tile read "2 / 2" on an eight-phase plan; the
+  inbox's "Record a verdict" button posted a body the write layer always rejected; a remedy the
+  server refused was toasted as "— done."; and the launch dialog said nothing about QA precisely
+  when the plan turned it on.
+
 ## [3.0.0] - 2026-08-22
 
 Phase Console grew fast along the *automation* axis over 2.0 → 2.3 — the outcome protocol, the

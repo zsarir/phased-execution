@@ -92,3 +92,64 @@ add_budget_line() {  # add_budget_line <slug> <line...>
   run pg diamond --ready
   [ "$output" = "3" ]
 }
+
+# --- "**QA gate:** off" must actually RELEASE the gate ------------------------
+# Gating is triggered by test-status.md existing, and `qa_mode` was never
+# consulted — so a plan the operator explicitly turned QA off for kept every
+# `fail` and `pending` row holding its dependents, with no way out but editing
+# the table by hand. `off` now means off; the verdicts stay recorded and
+# visible, they just stop being a wall.
+
+qa_off_plan() {  # add "**QA gate:** off" to the fixture's §Session budget
+  printf '\n## Session budget\n\n**QA gate:** off\n' >> "$DOCS_ROOT/docs/plans/$1.md"
+}
+write_qa_row() {  # write_qa_row <slug> <phase> <result>
+  local f="$DOCS_ROOT/docs/handoffs/$1/test-status.md"
+  mkdir -p "$(dirname "$f")"
+  [ -f "$f" ] || printf '# QA\n\n## QA status\n\n| Phase | Result | Report |\n|--:|--|--|\n' > "$f"
+  printf '| %s | %s | - |\n' "$2" "$3" >> "$f"
+}
+
+@test "QA off: a recorded fail no longer holds dependents" {
+  setup_docs diamond diamond
+  qa_off_plan diamond
+  write_handoff diamond 1 root complete
+  write_qa_row diamond 1 fail
+  run pg diamond --ready
+  [ "$output" = "2 3" ]
+}
+
+@test "QA off: a pending row no longer holds dependents" {
+  setup_docs diamond diamond
+  qa_off_plan diamond
+  write_handoff diamond 1 root complete
+  write_qa_row diamond 1 pending
+  run pg diamond --ready
+  [ "$output" = "2 3" ]
+}
+
+@test "QA off: the recorded verdict is still reported, just not gating" {
+  setup_docs diamond diamond
+  qa_off_plan diamond
+  write_handoff diamond 1 root complete
+  write_qa_row diamond 1 fail
+  run pg diamond --qa-result 1
+  [ "$output" = "fail" ]
+}
+
+@test "QA off: no F19 deadlock advisory — nothing is held" {
+  setup_docs diamond diamond
+  qa_off_plan diamond
+  write_handoff diamond 1 root complete
+  write_qa_row diamond 1 fail
+  run pg diamond --lint
+  refute_contains "$output" "F19"
+}
+
+@test "QA on: a fail still holds dependents (the off switch is opt-in)" {
+  setup_docs diamond diamond
+  write_handoff diamond 1 root complete
+  write_qa_row diamond 1 fail
+  run pg diamond --ready
+  [ "$output" = "" ]
+}

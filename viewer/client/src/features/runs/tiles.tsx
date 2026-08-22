@@ -207,8 +207,15 @@ export function RunHeader({
  * no window reported there is nothing to say and the slot goes back to being a
  * freshness stamp.
  */
-export function RunTiles({ run, phases }: { run: RunState; phases: PhaseRecord[] }) {
+export function RunTiles({ run, phases, total }: { run: RunState; phases: PhaseRecord[]; total?: number }) {
   const done = phases.filter((p) => p.status === 'done').length;
+  // The denominator is the PLAN's phase count, not this run's record count. A
+  // run holds a record only for phases it boarded, so a plan wedged after two
+  // of eight read "2 / 2" in the tile above the fold — indistinguishable from a
+  // finished run — while the board said 2/8 and six phases were held. `total`
+  // is absent only until the plan detail loads, and then the old count is the
+  // honest thing to show.
+  const denominator = total ?? phases.length;
   const limits = run.limits;
 
   return (
@@ -223,7 +230,7 @@ export function RunTiles({ run, phases }: { run: RunState; phases: PhaseRecord[]
         value={
           <>
             {done}
-            <span className="text-lg text-ink-faint"> / {phases.length || '—'}</span>
+            <span className="text-lg text-ink-faint"> / {denominator || '—'}</span>
           </>
         }
       />

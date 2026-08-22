@@ -667,7 +667,25 @@ function errandDrafts(facts: InboxFacts): Draft[] {
     // never collide with a real errand's id.
     if (!(run.status === 'halted' || run.status === 'interrupted' || run.status === 'parked')) continue;
     if (run.stoppedBy === 'operator') continue;
-    if (flags.allowRun && run.autoRecover) continue;
+    // Armed auto-recovery normally DOES own the stop, and saying so here too
+    // would be asking twice — that is what this guard is for, and it stays.
+    //
+    // But it was a promise the ladder cannot always keep. `classifyOpenPhases`
+    // skips every record the board reads `done`, so a run whose records ALL read
+    // done has no candidate, climbs nothing, and writes no errand — while this
+    // row, the one thing that would have told a person their run was waiting on
+    // them, stayed suppressed against an errand that could not come. Measured on
+    // a real run that sat parked for a day with six phases held behind a QA
+    // verdict nobody was asked for.
+    //
+    // Narrow on purpose: only the shape the ladder provably cannot reach. A run
+    // with no records yet, or with one still open, is still the ladder's.
+    const records = Object.values(run.phases ?? {});
+    const allSettled = records.length > 0
+      && records.every((record) => record.status === 'done' || record.status === 'skipped');
+    const engaged = Object.values(run.recoveries ?? {})
+      .some((slot) => slot.rungs?.length || slot.errand || (slot.attempts ?? 0) > 0);
+    if (flags.allowRun && run.autoRecover && !(allSettled && !engaged)) continue;
 
     const phase = positivePhase(run.halt?.phase ?? run.activePhase);
     out.push({
@@ -831,8 +849,11 @@ function planDrafts(facts: InboxFacts): Draft[] {
             ? row.report || 'QA recorded a failure against this phase.'
             : 'A QA verdict — the phase is done and this plan runs QA on.',
           how: failed
-            ? 'Read the report, fix what it found, then re-record the verdict.'
-            : 'Start a QA session for the phase, then record pass or fail.',
+            ? 'Read the report, fix what it found, then record the new verdict from the phase '
+              + 'page (Record QA) — or turn the gate off for this plan with "**QA gate:** off" '
+              + 'in its §Session budget if it should not gate on QA at all.'
+            : 'Start a QA session for the phase, then record pass or waived from the phase page '
+              + '(Record QA). Until a verdict exists, this phase holds every phase that depends on it.',
           since: planSince,
           href: phaseHref(plan.slug, row.phase),
           actions: [
@@ -844,14 +865,15 @@ function planDrafts(facts: InboxFacts): Draft[] {
               body: { intent: 'qa', slug: plan.slug, phase: row.phase },
               ...gatedBy('agent', flags.allowAgent),
             },
-            {
-              verb: 'qa-record',
-              label: 'Record a verdict',
-              endpoint: '/api/write',
-              method: 'POST',
-              body: { action: 'qa-record', slug: plan.slug, phase: row.phase },
-              ...gatedBy('writes', flags.allowWrites),
-            },
+            // There is deliberately no one-press "Record a verdict" here. There
+            // was, and it could not work: the body carried neither `result` nor
+            // `report`, both of which `writes.ts` requires, so every press
+            // answered with a WriteError — on the one row an operator reaches
+            // for when a QA verdict has wedged their plan. It cannot be fixed by
+            // filling the fields in either: pass, fail and waived are a
+            // judgement, and a button that picks one for you is worse than no
+            // button. The verdict form lives on the phase page, which is where
+            // `href` points and what `how` now names.
             ...(mode === 'on'
               ? []
               : [

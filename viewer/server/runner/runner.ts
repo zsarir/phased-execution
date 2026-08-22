@@ -3155,12 +3155,30 @@ export class Runner {
                 && state.phases[key]?.status === 'parked' && (!asked || asked.has(Number(key))))
               .map(([key, slot]) => ({ p: Number(key), errand: slot.errand! }));
             const errandPhases = new Set(errands.map((e) => e.p));
+            // The phases whose QA verdict is holding the DAG, read from the
+            // board rather than from this run's records — the blocker is a
+            // phase the board reads DONE, so it has no open record to find it
+            // by. Everything below used to derive from `readyRecords`, which is
+            // empty in exactly the case that most needs explaining: a plan
+            // wedged with nothing ready at all.
+            const qaHolders = Object.entries(board.qa ?? {})
+              .filter(([, verdict]) => verdict !== 'pass' && verdict !== 'waived')
+              .map(([phase, verdict]) => ({ p: Number(phase), verdict }))
+              .filter(({ p }) => Number.isFinite(p))
+              .sort((x, y) => x.p - y.p);
+            const heldByQa = (p: number): number[] => Object.entries(board.blockedBy ?? {})
+              .filter(([, deps]) => deps.includes(p)).map(([blocked]) => Number(blocked)).sort((x, y) => x - y);
             const held = [
               ...errands.map(({ p, errand }) => `phase ${p} needs you — ${errand.need} (${errand.how})`),
               ...readyRecords.filter(({ p }) => !errandPhases.has(p)).map(({ p, record }) =>
                 `phase ${p} is ${record.status}${record.note ? ` (${record.note})` : ''}`),
               ...board.stuck.filter((p) => !errandPhases.has(p)).map((p) =>
                 `phase ${p}'s handoff is marked blocked — its Outstanding section says why`),
+              ...qaHolders.filter(({ p }) => !errandPhases.has(p)).map(({ p, verdict }) => {
+                const blocks = heldByQa(p);
+                return `phase ${p} is done but its QA verdict is ${verdict}`
+                  + (blocks.length ? `, which holds phase${blocks.length === 1 ? '' : 's'} ${blocks.join(', ')}` : '');
+              }),
             ].join('; ');
 
             // The remedy tail names only doors that exist. It used to be one
@@ -3180,6 +3198,14 @@ export class Runner {
             }
             if (verificationParked.length) {
               remedies.push('an unrunnable §Verification takes a plan edit or Repair with AI, then Retry');
+            }
+            // Two doors, because there genuinely are two — and neither was ever
+            // named. A recorded verdict is not a defect the autopilot can clear:
+            // somebody has to give a verdict, or say the gate does not apply.
+            if (qaHolders.length) {
+              remedies.push('a QA verdict that holds the plan takes Record a verdict on that phase '
+                + '(pass or waived), or a fresh QA session — or "**QA gate:** off" in the plan\'s '
+                + '§Session budget if this plan should not gate on QA at all');
             }
             // The MCP park had NO remedy string at all, which is how a run
             // parked on three signed-out servers ended with a halt sentence
@@ -3215,16 +3241,24 @@ export class Runner {
               && verificationParked.length === readyRecords.length && !board.stuck.length;
             const allMcp = mcpParked.length > 0
               && mcpParked.length === readyRecords.length && !board.stuck.length;
+            // A plan nothing can move: no ready phase, no lane in flight, and a
+            // QA verdict holding the rest. It is anchored on the HOLDING phase
+            // — the one a person can actually act on — which is a phase the
+            // board reads done, and therefore one no record-derived anchor
+            // could ever have found.
+            const deadlocked = qaHolders.length > 0 && !board.ready.length && !board.inProgress.length;
             state.halt ??= {
               at: new Date().toISOString(),
               reason: held
                 ? `nothing left to run on its own — ${held}.${tail}`
                 : `nothing is ready to run: ${outstanding.length} phase(s) are still waiting on a gate or an earlier phase.`,
-              ...(allVerification
-                ? { kind: 'verification-preflight', phase: verificationParked[0].p }
-                : allMcp
-                  ? { kind: 'mcp-preflight', phase: mcpParked[0].p }
-                  : {}),
+              ...(deadlocked
+                ? { kind: 'plan-deadlocked', phase: qaHolders[0].p }
+                : allVerification
+                  ? { kind: 'verification-preflight', phase: verificationParked[0].p }
+                  : allMcp
+                    ? { kind: 'mcp-preflight', phase: mcpParked[0].p }
+                    : {}),
             };
             state.finishedReason = state.halt.reason;
           }

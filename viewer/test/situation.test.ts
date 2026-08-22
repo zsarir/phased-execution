@@ -479,3 +479,28 @@ test('collectEvidence assembles the facts from the dependencies it is given, and
   assert.deepEqual(bare.work, { did: null, why: 'the working tree could not be read' });
   assert.equal(classifySituation(bare).id, 'never-started');
 });
+
+test('an APPROVED gate is not re-gated by the record\'s stale snapshot', () => {
+  // The invariant CLAUDE.md pins — "the engine is the authority on gate state,
+  // including for the healer" — had a hole one line wide. The live read is
+  // consulted first and correctly declines when the engine says `clear`; the
+  // very next statement then re-asked the RECORD's snapshot, taken before the
+  // operator approved, with no reference to the live read at all. So approving
+  // a gate left the classifier answering `gated-manual` for ever, the healer
+  // wrote an errand for a gate that was already open, and the run stayed put.
+  const base = {
+    phase: 2, board: 'ready' as const,
+    handoff: { exists: false }, lock: null, qa: null, health: [], work: { did: false, why: '' },
+    record: { status: 'gated', gate: { clear: false, kind: 'manual', detail: 'an operator must confirm' } },
+  };
+  const live = classifySituation({ ...base, gate: { clear: true, kind: 'clear', detail: 'no gate' } } as never);
+  assert.notEqual(live.id, 'gated-manual',
+    'the engine says clear — a snapshot from before the approval must not overrule it');
+
+  // The snapshot still speaks when the live read agrees...
+  const stillGated = classifySituation({ ...base, gate: { clear: false, kind: 'manual', detail: 'confirm' } } as never);
+  assert.equal(stillGated.id, 'gated-manual');
+  // ...and when the live read could not RUN at all, which is the case it exists for.
+  const unreadable = classifySituation({ ...base, gate: null } as never);
+  assert.equal(unreadable.id, 'gated-manual');
+});

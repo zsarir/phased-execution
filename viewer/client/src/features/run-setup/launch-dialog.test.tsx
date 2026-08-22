@@ -237,3 +237,22 @@ describe('a claimed phase', () => {
     expect(screen.getByRole('button', { name: /Run phase 4/ }).hasAttribute('disabled')).toBe(false);
   });
 });
+
+describe('the resolved QA gate is stated before launch', () => {
+  it('says so when the PLAN turns QA on, whatever the console default is', async () => {
+    await mount({ kind: 'phase', slug: 'alpha', phase: 3, run: null, qaMode: 'on' });
+    expect(await screen.findByText(/declares .*QA gate.*on/)).toBeInTheDocument();
+    expect(screen.queryByText(/Turn the QA gate on/)).toBeNull();
+  });
+
+  it('says so when the plan waives it', async () => {
+    await mount({ kind: 'phase', slug: 'alpha', phase: 3, run: null, qaMode: 'waived' });
+    expect(await screen.findByText(/do not hold dependents/)).toBeInTheDocument();
+  });
+
+  it('stays quiet when QA is simply off — the toggle speaks for itself', async () => {
+    await mount({ kind: 'phase', slug: 'alpha', phase: 3, run: null, qaMode: 'off', allowWrites: true });
+    expect(screen.queryByText(/declares/)).toBeNull();
+    expect((await screen.findAllByText(/Turn the QA gate on/)).length).toBeGreaterThan(0);
+  });
+});

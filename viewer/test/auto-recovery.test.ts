@@ -750,3 +750,113 @@ test('a work-in-progress phase with no session left re-boards through the runner
     assert.equal(disk.recoveries?.['1']?.rungs?.[0]?.rung, 'reboard-resume-brief', 'the healer accounts the rung; start({reboard}) does not double-count');
   } finally { cleanup(); }
 });
+
+/* ------------------------------------------------------------------ *
+ * The QA wedge: a stop whose blocker is a phase the board reads DONE
+ * ------------------------------------------------------------------ */
+
+/**
+ * The measured dead end. Phase 1 finished and its QA verdict is `fail`, so the
+ * engine holds 2 and 3 for ever and the board has nothing ready. Every record
+ * this run holds reads `done`, so `classifyOpenPhases` — which skips board-done
+ * and board-waiting phases — yields no candidate at all, and the healer used to
+ * answer "no open phase of this run has a record to act on" with `phase: 0,
+ * situation: 'unknown'`, writing no errand and pushing nothing. The operator
+ * pressed the button three times and got the same sentence each time.
+ */
+function qaWedgedRun(root: string): RunState {
+  mkdirSync(join(root, 'docs', 'handoffs', 'alpha'), { recursive: true });
+  writeFileSync(
+    join(root, 'docs', 'handoffs', 'alpha', 'phase-01-schema.md'),
+    '---\nplan: docs/plans/alpha.md\nphase: 1\ntitle: schema\nstatus: complete\n---\n# done\n',
+    'utf8',
+  );
+  writeFileSync(
+    join(root, 'docs', 'handoffs', 'alpha', 'test-status.md'),
+    '# QA\n\n## QA status\n\n| Phase | Result | Report |\n|--:|--|--|\n| 1 | fail | reports/phase-01-qa.md |\n',
+    'utf8',
+  );
+  const state = newRun({ slug: 'alpha', root, autoRecover: true });
+  state.status = 'parked';
+  state.stoppedBy = 'system';
+  const record = phaseRecord(state, 1);
+  record.status = 'done';
+  record.note = 'closed outside this run (the board reads done)';
+  state.halt = {
+    at: new Date().toISOString(),
+    reason: 'nothing left to run on its own — phase 1 is done but its QA verdict is fail, which holds phases 2, 3.',
+    phase: 1,
+    kind: 'plan-deadlocked',
+  };
+  saveRun(state);
+  return state;
+}
+
+test('the engine really does wedge on a recorded QA fail (the premise)', async () => {
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    qaWedgedRun(s.root);
+    const board = await svc.boardStates('alpha');
+    assert.equal(board[1], 'done');
+    assert.equal(board[2], 'waiting', 'a fail holds the dependent even though 1 is done');
+  } finally { s.cleanup(); }
+});
+
+test('a QA-wedged run answers with the QA errand, not "no open phase"', async () => {
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    stubMint(svc);
+    qaWedgedRun(s.root);
+
+    const result = await svc.recoverPlan('alpha');
+    assert.equal(result.outcome, 'errand', 'nothing is launchable — a person must give a verdict');
+    assert.equal(result.errand?.phase, 1,
+      'anchored on the phase holding the plan, never the phase-0 sentinel');
+    assert.match(result.errand?.situation ?? '', /^qa-/,
+      'the situation is the QA verdict, not "unknown"');
+    assert.match(result.errand?.need ?? '', /QA verdict/);
+    assert.match(result.errand?.how ?? '', /qa-record\.sh|QA/);
+    assert.doesNotMatch(result.detail ?? '', /no open phase/,
+      'the refusal that told the operator nothing');
+  } finally { s.cleanup(); }
+});
+
+test('the QA errand is stored, so the run page and the inbox can show it', async () => {
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    stubMint(svc);
+    const state = qaWedgedRun(s.root);
+    await svc.recoverPlan('alpha');
+    const after = loadRun(s.root, 'alpha', state.id)!;
+    const errand = after.errand ?? after.recoveries?.['1']?.errand;
+    assert.ok(errand, 'an unrecoverable stop must leave exactly one ask behind');
+    assert.match(errand!.need, /QA verdict/);
+  } finally { s.cleanup(); }
+});
+
+test('maybeAutoRecover leaves an errand for a wedge it cannot climb', async () => {
+  // The unattended half. `recoverPlan` (the button) now classifies the halt's
+  // phase, but converge calls `maybeAutoRecover` directly — and that returned
+  // at the empty-candidate guard, BEFORE the errand/journal/push machinery. So
+  // an unattended console swept this run every five minutes for ever, refused
+  // every time with the same sentence, and never once asked the person who
+  // could actually fix it. "A person is asked once, with an errand" simply did
+  // not hold for the one stop shape nothing can climb.
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    stubMint(svc);
+    const state = qaWedgedRun(s.root);
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.equal(result.launched, false, 'nothing here is launchable');
+    assert.equal(result.phase, 1, 'the refusal names the phase holding the plan');
+    assert.match(result.situation ?? '', /^qa-/, 'and its situation, not "unknown"');
+    const after = loadRun(s.root, 'alpha', state.id)!;
+    const errand = after.errand ?? after.recoveries?.['1']?.errand;
+    assert.ok(errand, 'the ask must be written, not just returned');
+    assert.match(errand!.need, /QA verdict/);
+  } finally { s.cleanup(); }
+});

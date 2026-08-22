@@ -50,6 +50,12 @@ type Repo = {
   setInProgress: (phase: number) => void;
   /** Every not-done phase is ready at once — a graph with no edges. */
   setParallel: (yes: boolean) => void;
+  /**
+   * The board reads `phase` done, its verdict is `verdict`, and it holds every
+   * remaining phase: ready is empty, waiting is everything else, and the
+   * `blocked:` line names the verdict.
+   */
+  setQaBlocked: (phase: number | null, verdict?: string) => void;
   setLockRefused: (yes: boolean) => void;
   /** The same, for ONE phase — the others read free. */
   setLockRefusedFor: (phase: number, yes: boolean) => void;
@@ -88,6 +94,22 @@ case "$mode" in
     # on demand is what makes the gap between "the loop checked for a pause" and
     # "the loop started a phase" long enough to press a button inside.
     [ -f "$S/slow-board" ] && sleep 1
+    # A QA wedge: a phase the board reads DONE whose verdict holds every
+    # dependent. The ready set is empty while the plan is nowhere near
+    # finished - the exact shape a real run hit, and the one this harness
+    # could not express, which is why the halt branch below had no test.
+    if [ -f "$S/qa-blocked" ]; then
+      qp="$(cat "$S/qa-blocked")"; qv="$(cat "$S/qa-verdict" 2>/dev/null || echo fail)"
+      d=""; w=""; bl=""
+      for p in ${PHASES.join(' ')}; do
+        if grep -qx "$p" "$S/done" 2>/dev/null; then d="$d$p,"
+        else w="$w$p,"; bl="$bl $p<-$qp(qa:$qv)"; fi
+      done
+      echo "done: \${d%,}"; echo "in-progress: "; echo "stuck: "
+      echo "ready: "; echo "waiting: \${w%,}"
+      echo "blocked:$bl"
+      exit 0
+    fi
     d=""; r=""; w=""; s=""; i=""; found=0
     for p in ${PHASES.join(' ')}; do
       if grep -qx "$p" "$S/done" 2>/dev/null; then d="$d$p,"
@@ -152,6 +174,11 @@ echo "VALIDATE OK"
     setStuck: (phase) => writeFileSync(join(state, 'stuck'), `${phase}\n`),
     setInProgress: (phase) => writeFileSync(join(state, 'inprog'), `${phase}\n`),
     setParallel: (yes) => yes ? writeFileSync(join(state, 'parallel'), '') : rmSync(join(state, 'parallel'), { force: true }),
+    setQaBlocked: (phase, verdict = 'fail') => {
+      if (phase === null) { rmSync(join(state, 'qa-blocked'), { force: true }); return; }
+      writeFileSync(join(state, 'qa-blocked'), String(phase));
+      writeFileSync(join(state, 'qa-verdict'), verdict);
+    },
     setLockRefused: (yes) => yes ? writeFileSync(join(state, 'lock-refused'), '') : rmSync(join(state, 'lock-refused'), { force: true }),
     setLockRefusedFor: (phase, yes) => yes
       ? writeFileSync(join(state, `lock-refused-${phase}`), '')
@@ -4361,4 +4388,44 @@ test('two DAG leaves finishing together on a work-branch run: the last leaf\'s s
   assert.equal(ladderJournal(second.events, 'phase.pr-session-failed').length, 1);
   assert.match(pending.finishedReason ?? '', /still awaits its PR/);
   r2.cleanup();
+});
+
+test('a QA-wedged plan halts with a kind, an anchor phase and the verdict named', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  const { instance } = runner(r, workingSession(r, seen), '');
+  // Phase 1 runs and lands; its QA verdict then holds every remaining phase.
+  // The board goes ready=[] with the plan nowhere near finished — the exact
+  // shape that produced "nothing is ready to run: N phase(s) are still waiting
+  // on a gate or an earlier phase", a halt with no kind and no phase, and a
+  // healer that answered "no open phase of this run has a record to act on".
+  r.setQaBlocked(1, 'fail');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+
+  const state = instance.current()!;
+  assert.equal(state.status, 'parked');
+  assert.equal(state.halt?.kind, 'plan-deadlocked',
+    'a kindless halt is invisible to auto-recovery and to the halt card');
+  assert.equal(state.halt?.phase, 1, 'the anchor is the phase whose verdict holds the plan');
+  assert.match(state.halt?.reason ?? '', /QA/,
+    'the operator must be able to learn the cause from the halt itself');
+  assert.match(state.halt?.reason ?? '', /\b1\b/, 'and which phase it is');
+  assert.doesNotMatch(state.halt?.reason ?? '', /waiting on a gate or an earlier phase/,
+    'the generic sentence names neither the cause nor a door');
+  r.cleanup();
+});
+
+test('a plain waiting board still halts generically — no false QA claim', async () => {
+  const r = repo();
+  const seen: number[] = [];
+  // Phase 1 parks at preflight (unscoped, no verification), so later phases
+  // stay waiting with no QA involved anywhere.
+  const { instance } = runner(r, workingSession(r, seen), '');
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await instance.wait();
+  const state = instance.current()!;
+  assert.notEqual(state.halt?.kind, 'plan-deadlocked');
+  assert.doesNotMatch(state.halt?.reason ?? '', /QA verdict/);
+  r.cleanup();
 });

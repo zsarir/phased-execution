@@ -613,6 +613,24 @@ export function RunSetup({
         />
       )}
 
+      {/* Said rather than simply hidden, the same rule the PR row above follows.
+          The QA control is offered only when the plan's gate is OFF, so on a plan
+          that declares "**QA gate:** on" the dialog said nothing about QA at all
+          — and an operator whose console default is "QA off" reasonably concluded
+          it was off. It was not: the plan outranks the default, every finished
+          phase then owes a verdict, and a `fail` or a still-`pending` row holds
+          every dependent. That is a thing to learn before launching, not after a
+          plan has been held for a day. */}
+      {on('qa') && mode !== 'qa' && mode !== 'defaults' && qaMode && qaMode !== 'off' && (
+        <p className="text-2xs text-ink-faint">
+          {qaMode === 'waived'
+            ? 'This plan declares “**QA gate:** off”, so recorded verdicts do not hold dependents.'
+            : 'This plan declares “**QA gate:** on”, so it gates on QA whatever this console’s default ' +
+              'is: each finished phase owes an independent verdict, and a phase without one holds ' +
+              'every phase that depends on it. Turn it off in the plan’s §Session budget.'}
+        </p>
+      )}
+
       {on('autoRecover') && (
         <Bool
           label={mode === 'defaults' ? 'Auto-recover halted runs' : 'Auto-recover halts'}

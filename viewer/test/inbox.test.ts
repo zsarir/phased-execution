@@ -62,6 +62,7 @@ import {
   type InboxFacts,
   type InboxItem,
 } from '../server/inbox.ts';
+import { planWrite } from '../server/writes.ts';
 import { INBOX_KINDS, INBOX_SEVERITIES, inboxItemId, sortInbox } from '../shared/attention-model.js';
 import { parseHash, toHash } from '../shared/routes.js';
 import { PLAN_TABS, isRouteHead } from '../shared/route-meta.js';
@@ -678,7 +679,18 @@ test('a capability flag never hides an item — it disables the action and names
   assert.equal(flagOf(inboxItemId({ kind: 'approval', slug: 'demo', phase: 4, runId: 'run-1', subject: 'a1' }), 'allow'), 'run');
   assert.equal(flagOf(inboxItemId({ kind: 'gate', slug: 'demo', phase: 6 }), 'approve'), 'writes');
   assert.equal(flagOf(inboxItemId({ kind: 'qa', slug: 'demo', phase: 2, subject: 'fail' }), 'qa-session'), 'agent');
-  assert.equal(flagOf(inboxItemId({ kind: 'qa', slug: 'demo', phase: 2, subject: 'fail' }), 'qa-record'), 'writes');
+  // There is no `qa-record` action to flag any more, and that is the fix rather
+  // than a regression: the body it posted carried neither `result` nor `report`,
+  // both of which `planWrite` requires, so it answered with a WriteError on every
+  // console — capable or not. A verdict is a judgement (pass, fail, waived) that
+  // no single press can make, so it belongs on the phase page's form, which is
+  // where the item's `href` and `how` now send people. Pinned so it is not
+  // re-added as a one-press button: see the write-body guard below.
+  assert.equal(
+    find(off.items, inboxItemId({ kind: 'qa', slug: 'demo', phase: 2, subject: 'fail' }))
+      ?.actions.some((a) => a.verb === 'qa-record'),
+    false,
+  );
   assert.equal(flagOf(inboxItemId({ kind: 'sign-in', subject: 'work' }), 'login'), 'accounts');
   assert.equal(flagOf(inboxItemId({ kind: 'mcp-auth', subject: 'ctx7' }), 'login'), 'mcp');
   assert.equal(flagOf(inboxItemId({ kind: 'lock', slug: 'demo', phase: 9, subject: 'expired' }), 'release'), 'writes');
@@ -885,4 +897,97 @@ test('the acks file is written the way small JSON state is written here', () => 
   const raw = readFileSync(acksFile(dir), 'utf8');
   assert.equal(JSON.parse(raw).version, 1, 'a version envelope, so a later shape is recognisable');
   assert.ok(raw.endsWith('\n'));
+});
+
+/* ------------------------------------------------------------------ *
+ * Every action must be one the server would actually accept
+ * ------------------------------------------------------------------ */
+
+test('no inbox action posts a /api/write body the write layer rejects', () => {
+  // `useInboxActions.perform` posts the endpoint, method and body off the action
+  // VERBATIM — deliberately, so the client holds no second copy of the routing
+  // table. The cost of that contract is that an incomplete body is a button that
+  // can only ever fail, and one shipped: the QA row's "Record a verdict" carried
+  // neither `result` nor `report`, both required by `planWrite`, so every press
+  // answered with a WriteError. It was the one button an operator reaches for
+  // when a QA verdict has wedged their plan.
+  //
+  // Asserted against the real `planWrite` rather than a list of expected shapes:
+  // a list would be a third copy of the same rule, and it would drift.
+  const all: Array<{ id: string; verb: string; body: unknown }> = [];
+  for (const flags of [
+    { allowWrites: true, allowRun: true, allowAgent: true, allowMcp: true, allowAccounts: true },
+    { allowWrites: false, allowRun: false, allowAgent: false, allowMcp: false, allowAccounts: false },
+  ]) {
+    for (const item of buildInbox(facts({ flags: flags as never }), NOW).items) {
+      for (const action of item.actions ?? []) {
+        if (action.endpoint === '/api/write') all.push({ id: item.id, verb: action.verb, body: action.body });
+      }
+    }
+  }
+  for (const { id, verb, body } of all) {
+    assert.doesNotThrow(
+      () => planWrite(body as never, { root: '/tmp/root', docsDir: '/tmp/root/docs' }),
+      `${id} offers a ${verb} button whose body the write layer refuses — it can only ever fail`,
+    );
+  }
+  // Positive control: the exact body that shipped must still be refused, so this
+  // guard is known to have teeth rather than merely being green.
+  assert.throws(
+    () => planWrite({ action: 'qa-record', slug: 'demo', phase: 1 } as never,
+      { root: '/tmp/root', docsDir: '/tmp/root/docs' }),
+    /QA result must be one of/,
+    'the shipped body was rejected by the write layer — that is what made the button dead',
+  );
+});
+
+test('a QA row still offers a door, and names the one that works', () => {
+  const { items } = buildInbox(facts(), NOW);
+  const qa = items.filter((i) => i.kind === 'qa');
+  for (const item of qa) {
+    assert.ok(item.href, 'the phase page is where the verdict form lives');
+    assert.match(item.how, /Record QA|QA session/,
+      'the remedy must name a door that exists');
+  }
+});
+
+test('a stop the ladder has not engaged with is still raised, even with auto-recovery armed', () => {
+  // The suppression reads "the ladder will climb this and leave an errand, so
+  // saying anything here would be saying it twice". That holds only for stops
+  // the ladder can actually reach. A run whose every record the board reads
+  // `done` yields no candidate at all, so nothing was ever written — and this
+  // row, the one thing that would have told a person their run was waiting on
+  // them, was suppressed on the assumption of an errand that never came.
+  const wedged = {
+    id: 'run-w', slug: 'wedged', status: 'parked' as const, stoppedBy: 'system' as const,
+    updatedAt: '2026-08-22T10:00:00.000Z',
+    autoRecover: { attempts: 2 },
+    halt: { at: '2026-08-22T09:00:00.000Z', reason: 'nothing is ready to run', phase: 1, kind: 'plan-deadlocked' },
+    phases: { 1: { phase: 1, status: 'done' } },
+  };
+  const { items } = buildInbox(
+    facts({ runs: [wedged as never], flags: { allowRun: true, allowWrites: true } as never }), NOW,
+  );
+  const row = items.find((i) => i.kind === 'errand' && i.slug === 'wedged');
+  assert.ok(row, 'a stop nothing has touched must reach the person it is waiting on');
+  assert.equal(row!.severity, 'needs-you');
+});
+
+test('once the ladder HAS engaged, the generic row stands down for the errand', () => {
+  const climbed = {
+    id: 'run-c', slug: 'climbed', status: 'parked' as const, stoppedBy: 'system' as const,
+    updatedAt: '2026-08-22T10:00:00.000Z',
+    autoRecover: { attempts: 2 },
+    halt: { at: '2026-08-22T09:00:00.000Z', reason: 'phase 2 did not verify', phase: 2, kind: 'verify-failed' },
+    phases: { 2: { phase: 2, status: 'failed' } },
+    recoveries: { 2: { attempts: 1, lastAt: NOW, rungs: [{ situation: 'verify-red', rung: 'resume-own-session', at: NOW, outcome: 'failed' }] } },
+  };
+  const { items } = buildInbox(
+    facts({ runs: [climbed as never], flags: { allowRun: true, allowWrites: true } as never }), NOW,
+  );
+  assert.equal(
+    items.some((i) => i.kind === 'errand' && i.slug === 'climbed' && i.subject === 'unattended-stop'),
+    false,
+    'the ladder is working on it — two voices for one ask is the duplication this guard exists to stop',
+  );
 });

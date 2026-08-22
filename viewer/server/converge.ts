@@ -111,6 +111,14 @@ export type ConvergeFacts = {
    */
   gateStamp?: string | null;
   /**
+   * The QA verdicts the board reported (`--memory-block`'s `blocked:` line),
+   * keyed by the phase whose verdict holds others. In the FACTS because it is
+   * in the fingerprint, for exactly the reason `gateStamp` is: recording a
+   * verdict changes neither the run, its records, nor the blocking phase's
+   * board word.
+   */
+  qa?: Record<number, string> | null;
+  /**
    * The fingerprint of the latest run's open records at the last pass that
    * healed nothing. The same evidence yields the same answer, so the healer —
    * and its journal lines — are not run again until something changes.
@@ -244,6 +252,7 @@ export function endedSessionLocks(
  */
 export function evidenceFingerprint(
   run: RunState, board: Record<number, string>, locks: readonly LockView[], gateStamp?: string | null,
+  qa?: Record<number, string> | null,
 ): string {
   const phases = Object.values(run.phases)
     .sort((a, b) => a.phase - b.phase)
@@ -251,7 +260,23 @@ export function evidenceFingerprint(
   const held = locks
     .map((l) => [l.phase, l.owner, l.expired ? 1 : 0, l.leaseUntil ?? 0])
     .sort((a, b) => Number(a[0]) - Number(b[0]));
-  return JSON.stringify([run.id, run.status, run.halt?.at ?? '', run.halt?.reason ?? '', run.resolved?.at ?? '', phases, held, gateStamp ?? '']);
+  // The WHOLE board, not just the phases this run happens to hold a record for.
+  // `phases` above samples `board[r.phase]`, so a phase that was never boarded
+  // going `waiting` -> `ready` — which is precisely the event meaning "this run
+  // can move again" — did not register at all, and the loop that exists to
+  // notice it skipped with "nothing has changed".
+  const words = Object.keys(board)
+    .map(Number).filter(Number.isFinite).sort((a, b) => a - b)
+    .map((p) => [p, board[p]]);
+  // And the QA verdicts, for the same reason the gate stamp is here: recording
+  // pass or waived for the phase whose verdict wedged the plan moves neither
+  // the run, nor its records, nor that phase's board word — it reads `done`
+  // before and after. Without this the healer's "found nothing to climb"
+  // latches for ever against a plan a person has just repaired.
+  const verdicts = Object.keys(qa ?? {})
+    .map(Number).filter(Number.isFinite).sort((a, b) => a - b)
+    .map((p) => [p, qa![p]]);
+  return JSON.stringify([run.id, run.status, run.halt?.at ?? '', run.halt?.reason ?? '', run.resolved?.at ?? '', phases, held, gateStamp ?? '', words, verdicts]);
 }
 
 function resumeErrand(phase: number, at: string, why: 'off' | 'capped', sessionId?: string): Errand {
@@ -414,11 +439,38 @@ export function planConvergence(facts: ConvergeFacts): ConvergePlan {
     return plan;
   }
 
+  /* The board opened up under a run that stopped because nothing was ready.
+   *
+   * Recovery is records-based: the healer classifies phases this run already
+   * BOARDED. A phase that was never boarded has no record, so when a person
+   * clears whatever was holding the plan — a QA verdict re-recorded, a gate
+   * approved, a dependency finished elsewhere — the newly-ready phase is
+   * invisible to every vehicle the healer owns, and the run sits parked with
+   * work waiting in front of it. `systemStop` above does not cover this: it is
+   * only paused/interrupted, and the runner's own "nothing is ready" park
+   * writes `parked`.
+   *
+   * Bounded like the killed-lane relaunch: the operator's own stop is never
+   * touched, and a run with nothing ready is left alone — relaunching that
+   * would only re-park it, which is the oscillation this loop must not become. */
+  if ((run.status === 'parked' || run.status === 'halted')
+    && !stoppedByOperator(run) && !run.resolved) {
+    const readyNow = remaining.filter((p) => board[p] === 'ready');
+    const boarded = new Set(Object.keys(run.phases).map(Number));
+    if (readyNow.length && readyNow.some((p) => !boarded.has(p))) {
+      actions.push({
+        kind: 'relaunch', runId: run.id, reboard: [], rearm: [],
+        why: [`the board has ready work again (phase ${readyNow.join(', ')}) and this run never boarded it`],
+      });
+      return plan;
+    }
+  }
+
   /* Everything else the loop stopped on — a halt, a park, an interrupted run
    * from before `stoppedBy` existed — goes to the healer: classify the open
    * phases, climb one rung, drive it through the runner. Once per evidence. */
   if (run.status === 'halted' || run.status === 'interrupted' || run.status === 'parked' || run.status === 'paused') {
-    const fingerprint = evidenceFingerprint(run, board, facts.locks, facts.gateStamp);
+    const fingerprint = evidenceFingerprint(run, board, facts.locks, facts.gateStamp, facts.qa);
     if (!pressed && facts.lastNoop === fingerprint) {
       return skip(run.id, 'nothing has changed since the last pass found nothing to climb');
     }
@@ -453,6 +505,8 @@ export type ConvergeDeps = {
   locks: (slug: string) => LockView[];
   /** `gate-status.md`'s stamp for the plan — see `ConvergeFacts.gateStamp`. */
   gateStamp?: (slug: string) => string | null;
+  /** The board's QA verdicts — see `ConvergeFacts.qa`. */
+  qa?: (slug: string) => Promise<Record<number, string> | null> | Record<number, string> | null;
   prefs: () => { resumeAtBoot?: boolean };
   pidAlive?: (pid: number) => boolean;
   /** The session registry's presence for a lock's session — see `ConvergeFacts.presence`. */
@@ -625,6 +679,7 @@ export async function convergePlan(
     live: deps.live(),
     locks: deps.locks(slug),
     gateStamp: deps.gateStamp?.(slug) ?? null,
+    qa: (deps.qa ? await deps.qa(slug) : null) ?? null,
     prefs: deps.prefs(),
     ...(deps.pidAlive ? { pidAlive: deps.pidAlive } : {}),
     ...(deps.presence ? { presence: deps.presence } : {}),
@@ -779,7 +834,16 @@ export class ConvergeScheduler {
     const pass = this.deps.run(slug, trigger, this.noops.get(slug) ?? null)
       .then((report) => {
         if (report) {
-          if (report.noop) this.noops.set(slug, report.noop); else this.noops.delete(slug);
+          // Only a pass that actually MOVED something invalidates the latch.
+          // `noop` is assigned in the heal branch alone, so a pass whose single
+          // action was a skip — the guard skip included — reported null here and
+          // deleted the fingerprint it had just honoured. The next sweep then had
+          // nothing to compare against and healed again: one board read, one
+          // healer pass and one journal line every other sweep, for ever, on a
+          // run nobody could move. Keeping a stale fingerprint is harmless (the
+          // comparison is exact); forgetting one is a permanent spin.
+          if (report.noop) this.noops.set(slug, report.noop);
+          else if (report.launched) this.noops.delete(slug);
           this.reports.set(slug, report);
           try { this.deps.onReport?.(report); } catch { /* a listener must never break the loop */ }
         }

@@ -465,7 +465,15 @@ export function classifySituation(e: PhaseEvidence): Situation {
   if (e.gate && !e.gate.clear && /^(manual|human|OVERDUE)$/i.test(e.gate.kind)) {
     return situation('gated-manual', [`the gate is ${e.gate.kind}: ${e.gate.detail ?? ''}`.trim()]);
   }
-  if (rec?.status === 'gated' && rec.gate && !rec.gate.clear && /^(manual|human|OVERDUE)$/i.test(rec.gate.kind)) {
+  // The record's snapshot may only speak when the LIVE read could not run, or
+  // when it agrees. It used to re-ask the same question one line after the live
+  // check with no reference to it, so a gate the operator had just approved —
+  // the engine answering `clear`, the board reading `ready` — still classified
+  // `gated-manual`, for ever. That is the exact invariant CLAUDE.md pins ("the
+  // engine is the authority on gate state, including for the healer"); the
+  // fallback had quietly grown back around it.
+  if (!e.gate?.clear
+    && rec?.status === 'gated' && rec.gate && !rec.gate.clear && /^(manual|human|OVERDUE)$/i.test(rec.gate.kind)) {
     return situation('gated-manual', [`the record is gated (${rec.gate.kind}): ${rec.gate.detail ?? ''}`.trim()]);
   }
 

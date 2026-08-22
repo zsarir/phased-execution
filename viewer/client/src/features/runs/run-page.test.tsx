@@ -322,3 +322,46 @@ describe('the completion promise', () => {
     expect(screen.queryByText(/^failures /)).toBeNull();
   });
 });
+
+describe("the Phases done tile counts the PLAN, not the run's records", () => {
+  const WEDGED = {
+    id: 'r1',
+    slug: 'demo',
+    status: 'parked',
+    model: 'opus',
+    effort: 'max',
+    autonomy: 'keep-going',
+    spentUsd: 0,
+    createdAt: '2026-08-22T10:00:00Z',
+    updatedAt: '2026-08-22T14:00:00Z',
+  } as unknown as RunState;
+
+  // A run holds a record only for phases it actually boarded. On a plan wedged
+  // after two of eight phases, both records read `done` — so the tile above the
+  // fold read "2 / 2", which is what a finished run looks like, while the board
+  // said 2/8 and six phases were held. The denominator has to come from the
+  // plan, which the page already has.
+  it('uses the plan total when it is known', () => {
+    const { container } = render(
+      <RunTiles
+        run={WEDGED}
+        phases={
+          [
+            { phase: 1, status: 'done', attempts: 1 },
+            { phase: 3, status: 'done', attempts: 1 },
+          ] as never
+        }
+        total={8}
+      />,
+    );
+    expect(container.textContent).toContain('/ 8');
+    expect(container.textContent).not.toContain('/ 2');
+  });
+
+  it('falls back to the record count when the plan detail has not loaded', () => {
+    const { container } = render(
+      <RunTiles run={WEDGED} phases={[{ phase: 1, status: 'done', attempts: 1 }] as never} />,
+    );
+    expect(container.textContent).toContain('/ 1');
+  });
+});

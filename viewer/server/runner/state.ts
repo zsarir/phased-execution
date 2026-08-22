@@ -1426,6 +1426,43 @@ export function autoResolveRun(state: RunState, board: Record<number, string>): 
 }
 
 /**
+ * A run that is OVER stops asking for attention.
+ *
+ * `reconcileRecordsAgainstBoard` dissolves a halt the board has overtaken — it
+ * clears `state.halt`, resets the failure streak and rewrites `finishedReason`
+ * to say so — but it never touches `state.status`. `autoResolveRun` adds a
+ * `resolved` annotation and likewise leaves the status alone, and returns early
+ * for a run already resolved, so nothing ever revisits one.
+ *
+ * `shared/status-vocab.js` maps both `halted` and `parked` to `needs-you`, the
+ * worst-first attention state. The result, measured across a real console's
+ * fleet: three runs reading `halted` with `halt: null` and a reason that said
+ * "nothing is left of the halt" — one of them 15/15 done, another shipped as
+ * v3.0.0 — permanently at the top of the operator's attention surface. An
+ * attention surface that is mostly false is one nobody reads, which is how the
+ * single run that did need a person went unnoticed for a day.
+ *
+ * Conservative on purpose: only a run nobody is driving, that the OPERATOR did
+ * not stop (theirs to restart, and a stopped run with work left is not over),
+ * and only when the board is readable AND has nothing outstanding at all. An
+ * empty or unreadable board settles nothing — uncertainty keeps the card, the
+ * same direction `autoResolveRun` takes.
+ */
+export const SETTLEABLE: readonly RunStatus[] = ['halted', 'parked', 'interrupted'];
+
+export function settleFinishedRun(state: RunState, board: Record<number, string>): boolean {
+  if (!SETTLEABLE.includes(state.status)) return false;
+  if (state.stoppedBy === 'operator') return false;
+  const words = Object.values(board);
+  if (!words.length || !words.every((word) => word === 'done')) return false;
+  state.status = 'finished';
+  state.halt = null;
+  delete state.stoppedBy;
+  state.finishedReason ??= `every phase of ${state.slug} is done.`;
+  return true;
+}
+
+/**
  * Which plans a batch of runs would need a board for.
  *
  * Split out from the batch itself so the caller can pay for exactly the engine
@@ -1436,7 +1473,11 @@ export function autoResolveRun(state: RunState, board: Record<number, string>): 
 export function slugsNeedingBoard(runs: readonly RunState[]): string[] {
   return [...new Set(
     runs
-      .filter((run) => !run.resolved && !run.reopenedAt && RESOLVABLE.includes(run.status))
+      // `SETTLEABLE` is wider than `RESOLVABLE` (it includes `parked`) and does
+      // not exclude an already-resolved run — a run resolved days ago is
+      // exactly the one still reading `halted` on the fleet page.
+      .filter((run) => SETTLEABLE.includes(run.status)
+        || (!run.resolved && !run.reopenedAt && RESOLVABLE.includes(run.status)))
       .map((run) => run.slug),
   )];
 }
@@ -1463,7 +1504,13 @@ export function resolveRunsAgainst(
       ? reconcileRecordsAgainstBoard(run, board)
       : { changed: false, closed: [] };
     const resolved = autoResolveRun(run, board);
-    if (records.changed || resolved) changed.push(run);
+    // Last, and independent of the two above: both of those annotate a run that
+    // is over without ever moving it off a status the UI paints `needs-you`, and
+    // `autoResolveRun` returns early for one already resolved — so nothing
+    // revisits the runs that most need settling. This one is idempotent and
+    // refuses on an unreadable board, so running it every pass is free.
+    const settled = settleFinishedRun(run, board);
+    if (records.changed || resolved || settled) changed.push(run);
   }
   return changed;
 }
