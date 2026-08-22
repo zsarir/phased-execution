@@ -12,7 +12,7 @@ import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import type { ReactNode } from 'react';
-import { NOTE_ORDER, RunStatusStack, looksLikeAuthFailure, runNotes } from './status';
+import { NOTE_ORDER, RunStatusStack, looksLikeAuthFailure, runNotes } from './status-strip';
 import { TooltipProvider } from '@/components/ui';
 import { keys } from '@/lib/queries';
 import type { RunState } from '@/lib/api';

@@ -42,7 +42,7 @@ import type { ViewProps } from '@/app/router';
  * was before the run view existed, for the same reason the plan surface is split
  * from the shell.
  */
-const RunView = lazy(() => import('../run'));
+const RunView = lazy(() => import('@/features/runs/run-page'));
 
 function PlanSkeleton() {
   return (

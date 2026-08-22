@@ -68,7 +68,7 @@ import { relativeTime } from '@/lib/format';
 import { RECOVERY_BLURBS, RECOVERY_LABELS, type RecoveryClass } from '@/lib/recovery';
 import { RecoveryActions } from '@/components/recovery-actions';
 import { ErrandCard } from '@/components/errand';
-import { LaunchDialog } from '@/components/launch-dialog';
+import { LaunchDialog } from '@/features/run-setup/launch-dialog';
 import { errandsOf, situationLabelFor } from '@/lib/ladder';
 import { useState } from 'react';
 

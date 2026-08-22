@@ -17,7 +17,7 @@ import { PlanPulse, fmtElapsed, foreignVehicle, isLiveRun, pulseLanes, pulseWait
 import { useNow } from '@/lib/clock';
 import { Page } from '../_page';
 import { useConsoleState, useRuns, useSessionRegistry, useConverge } from '@/lib/queries';
-import { isResolved } from '@/views/runs/model';
+import { isResolved } from '@/features/runs/model';
 import type { ForeignSession, RunState } from '@/lib/api';
 import type { ViewProps } from '@/app/router';
 

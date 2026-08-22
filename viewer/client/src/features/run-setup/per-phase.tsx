@@ -19,9 +19,9 @@
 
 import { useState } from 'react';
 import { Chip, TBody, TD, TH, THead, TR, Table, TableWrap } from '@/components/ui';
-import { EFFORTS, effortAlias, modelAlias } from '@/views/run/defaults';
-import { SkillPicker } from '@/views/run/skill-picker';
-import { McpPicker } from '@/views/run/mcp-picker';
+import { EFFORTS, effortAlias, modelAlias } from '@/features/runs/defaults';
+import { SkillPicker } from '@/features/run-setup/skill-picker';
+import { McpPicker } from '@/features/run-setup/mcp-picker';
 import { PERMISSION_CHOICES, SESSION_PERMISSIONS } from './modes';
 import type { McpServerView, PhaseOptions, PhaseView, SkillInfo } from '@/lib/api';
 

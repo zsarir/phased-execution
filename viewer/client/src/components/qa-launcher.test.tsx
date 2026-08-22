@@ -21,7 +21,7 @@ import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { QaButton, QaVerdict } from './qa-launcher';
-import { LaunchDialog } from './launch-dialog';
+import { LaunchDialog } from '@/features/run-setup/launch-dialog';
 import { canQa, isVerdict, liveQa, qaKey } from '@/lib/qa';
 
 vi.mock('@/lib/queries', async (original) => ({

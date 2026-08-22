@@ -15,7 +15,7 @@
 import { useMemo, useState } from 'react';
 import { Bot, ChevronDown } from 'lucide-react';
 import { Button, InfoTip, Tooltip, TooltipProvider } from '@/components/ui';
-import { LaunchDialog } from '@/components/launch-dialog';
+import { LaunchDialog } from '@/features/run-setup/launch-dialog';
 import { ErrandCard, LadderStrip } from '@/components/errand';
 import { useConsoleState, useSessions } from '@/lib/queries';
 import { ladderView } from '@/lib/ladder';

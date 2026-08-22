@@ -52,11 +52,11 @@ import { elapsed } from '@/lib/format';
 import { useQueryClient } from '@tanstack/react-query';
 import { isLive } from './defaults';
 import { ApprovalQueue, type Decide } from './approvals';
-import { Controls } from './controls';
+import { Controls } from './lane-setup';
 import { LiveConsole } from './console';
-import { RunHeader, RunTiles } from './header';
+import { RunHeader, RunTiles } from './tiles';
 import { PhaseTable } from './phase-table';
-import { NextSteps } from './next-steps';
+import { NextSteps } from './ways-forward';
 import {
   QueuedPane,
   SessionPanes,
@@ -68,7 +68,7 @@ import {
 } from './session-panes';
 import { LaneControls, laneFrozen } from './lane-controls';
 import { WaitingPane, waitingOf } from './waiting-pane';
-import { AuthCard, RunStatusStack, StaleServerNote, looksLikeAuthFailure } from './status';
+import { AuthCard, RunStatusStack, StaleServerNote, looksLikeAuthFailure } from './status-strip';
 import { RunHistory } from './history';
 import { RecoveryActions } from '@/components/recovery-actions';
 

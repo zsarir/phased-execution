@@ -24,7 +24,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClientConfig } from '@/lib/queries';
 import { setPrefs } from '@/lib/prefs';
 import type { RunState } from '@/lib/api';
-import { isLive } from '../run/defaults';
+import { isLive } from './defaults';
 import { runUiState } from '@/lib/status-vocab';
 import {
   NO_FILTERS,
@@ -437,7 +437,7 @@ describe('the runs page', () => {
 
 describe('lifecycle from the fleet', () => {
   it('a live row offers Freeze, and Stop only behind a dialog that names the cost', async () => {
-    const { Fleet } = await import('./fleet');
+    const { Fleet } = await import('./fleet-table');
     const onLifecycle = vi.fn();
     const rows = toRows([run({ id: 'live1', status: 'running', activePhase: 2 })]);
     const client = new QueryClient(queryClientConfig);
@@ -461,7 +461,7 @@ describe('lifecycle from the fleet', () => {
   });
 
   it('a finished row offers no lifecycle at all — there is nothing to act on', async () => {
-    const { Fleet } = await import('./fleet');
+    const { Fleet } = await import('./fleet-table');
     const rows = toRows([run({ id: 'done1', status: 'finished' })]);
     const client = new QueryClient(queryClientConfig);
     render(

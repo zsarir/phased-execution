@@ -96,6 +96,24 @@ export const keys = {
    */
   transcript: (slug: string) => ['transcript', slug] as const,
   diagnosis: (slug: string, phase: number | string) => ['diagnosis', slug, String(phase)] as const,
+  /**
+   * The journal, and — like the transcript above — deliberately NOT under
+   * `['run', slug]`.
+   *
+   * It is a one-shot read of the last N lines that the live `run:journal`
+   * firehose supersedes line by line. Under the run prefix every `run:phase`
+   * would re-read the whole tail from disk to learn what the stream had
+   * already appended.
+   */
+  journal: (slug: string, id?: number | string) => ['journal', slug, String(id ?? 'latest')] as const,
+  /**
+   * The plan's ruling ledger. Its own key for a different reason: it is per
+   * PLAN, not per run, and it outlives every run of that plan. Nothing but
+   * `run:rulings` moves it.
+   */
+  rulings: (slug: string) => ['rulings', slug] as const,
+  /** Money, instance-wide: today against the day cap, per run, and the 7-day series. */
+  spend: () => ['spend'] as const,
   auth: () => ['auth'] as const,
   accounts: () => ['accounts'] as const,
   mcp: () => ['mcp'] as const,
@@ -278,10 +296,26 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
      A run starting, finishing, or having a phase land changes the board too:
      `plans` carries each plan's ready-set, and that is what a finished phase
      moves. */
-  'run:run': { invalidate: [keys.runs(), keys.plans()], slugScoped: 'both' },
-  'run:phase': { invalidate: [keys.runs()], slugScoped: 'both' },
+  'run:run': { invalidate: [keys.runs(), keys.plans(), keys.spend()], slugScoped: 'both' },
+  'run:phase': { invalidate: [keys.runs(), keys.spend()], slugScoped: 'both' },
   'run:verify': { slugScoped: 'run' },
-  'run:state': { invalidate: [keys.runs(), keys.plans()], slugScoped: 'both' },
+  'run:state': { invalidate: [keys.runs(), keys.plans(), keys.spend()], slugScoped: 'both' },
+  /* A lane's liveness answer CHANGED — it went silent, started spinning, hit a
+     stalemate, or came back. `runner.ts` emits only transitions, so this is
+     news by construction and can afford to invalidate: the run payload carries
+     `liveness[]`, and the fleet table badges a stalled run without being on
+     its page. */
+  'run:liveness': { invalidate: [keys.runs()], slugScoped: 'run' },
+  /* A ruling landed in the ledger. Both halves move: the plan-wide ledger the
+     page reads, and `run.rulings` — the slice the run payload carries. */
+  'run:rulings': {
+    invalidate: [],
+    slugScoped: 'run',
+    patch: (client, data) => {
+      const slug = typeof data.slug === 'string' ? data.slug : null;
+      if (slug) void client.invalidateQueries({ queryKey: keys.rulings(slug) });
+    },
+  },
   /* Admission moved. `runs` because a phase crossing between queued and
      running is a change to a run; `state` because the header's "2 of 3
      running, 1 queued" is read from `/api/state`. Deliberately NOT
@@ -730,6 +764,56 @@ export function useDiagnosis(slug: string | undefined, phase: number | undefined
     queryKey: keys.diagnosis(slug ?? '', phase ?? ''),
     queryFn: () => api.phaseDiagnosis(slug!, phase!),
     enabled: Boolean(slug) && phase != null && enabled,
+    retry: false,
+  });
+}
+
+/**
+ * A run's journal — the audit trail, read once and then appended to live.
+ *
+ * `keepPreviousData` because the tail is re-read whenever the run id changes
+ * and the reader is usually mid-scroll; dropping to a skeleton there loses
+ * their place. A run with no journal file yet is not an error worth retrying.
+ */
+export function useJournal(slug: string | undefined, id?: number, limit = 500, enabled = true) {
+  return useQuery({
+    queryKey: keys.journal(slug ?? '', id),
+    queryFn: () => api.runJournal(slug!, id, limit),
+    enabled: Boolean(slug) && enabled,
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
+/**
+ * The plan's whole ruling ledger, oldest first.
+ *
+ * Answers for a plan nobody has ever started a run on, which is every plan
+ * somebody is driving by hand — so it is NOT gated on there being a run.
+ */
+export function useRulings(slug: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: keys.rulings(slug ?? ''),
+    queryFn: () => api.runRulings(slug!),
+    enabled: Boolean(slug) && enabled,
+    retry: false,
+  });
+}
+
+/**
+ * Money: today's settled spend against the day cap, each run against its
+ * budget, and the 7-day series.
+ *
+ * Instance-wide and cheap to invalidate — TanStack only refetches a query
+ * something is currently rendering, so the `run:phase` invalidation costs
+ * nothing on the pages that do not show it.
+ */
+export function useSpend(enabled = true) {
+  return useQuery({
+    queryKey: keys.spend(),
+    queryFn: api.spend,
+    enabled,
+    placeholderData: keepPreviousData,
     retry: false,
   });
 }

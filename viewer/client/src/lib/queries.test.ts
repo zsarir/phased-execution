@@ -24,8 +24,8 @@ describe('SSE → Query bridge', () => {
     expect(extra, `phantom events: ${extra.join(', ')}`).toEqual([]);
   });
 
-  it('carries the 21 wire names, run events included', () => {
-    expect(SSE_EVENTS).toHaveLength(21);
+  it('carries the 23 wire names, run events included', () => {
+    expect(SSE_EVENTS).toHaveLength(23);
     // Sessions are on the stream deliberately: the socket is a session's own
     // live channel, but the dashboard card and the nav badges do not hold it.
     expect(SSE_EVENTS).toContain('sessions');
@@ -38,6 +38,11 @@ describe('SSE → Query bridge', () => {
     // So does the MCP registry: a server that goes needs-auth changes what
     // every launch dialog may offer, and no page is holding that.
     expect(SSE_EVENTS).toContain('mcp');
+    // Phase 5 emits both server-side; Phase 7 is what renders them. A lane
+    // going silent and a session recording a judgement call are each the only
+    // thing that moves when they happen — no phase changes state for either.
+    expect(SSE_EVENTS).toContain('run:liveness');
+    expect(SSE_EVENTS).toContain('run:rulings');
     // The runner prefixes its own events (`server/runner/runner.ts` emits
     // `run:` + event). Listening for `phase` instead of `run:phase` is the
     // mistake this pins down.

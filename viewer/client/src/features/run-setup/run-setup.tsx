@@ -43,9 +43,9 @@ import {
 import { keys, useAccounts, useConsoleState, useMcp, useSkills } from '@/lib/queries';
 import { startSession } from '@/lib/start-session';
 import { cn } from '@/lib/cn';
-import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODEL_NOTE, MODELS } from '@/views/run/defaults';
-import { SkillPicker } from '@/views/run/skill-picker';
-import { McpPicker } from '@/views/run/mcp-picker';
+import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODEL_NOTE, MODELS } from '@/features/runs/defaults';
+import { SkillPicker } from '@/features/run-setup/skill-picker';
+import { McpPicker } from '@/features/run-setup/mcp-picker';
 import {
   NumberField,
   PressField,

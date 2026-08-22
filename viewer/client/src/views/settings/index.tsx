@@ -39,7 +39,7 @@ import { RestartButton } from './restart';
 import { ShutdownButton } from './shutdown';
 import { LauncherCard } from './launcher';
 import { TailscaleCard } from './tailscale';
-import { MODELS as FALLBACK_MODELS } from '../run/defaults';
+import { MODELS as FALLBACK_MODELS } from '@/features/runs/defaults';
 
 /**
  * The model lineup, from the server's own `offeredModels()` — the same list

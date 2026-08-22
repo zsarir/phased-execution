@@ -356,21 +356,21 @@ const RUN = {
 describe('runs', () => {
   it('explains a stale server rather than showing a wall of failed requests', async () => {
     state.mockResolvedValue({ ...BASE_STATE, autopilot: false });
-    const { default: RunsView } = await import('./runs');
+    const { default: RunsView } = await import('@/features/runs');
     mount(<RunsView />);
     expect(await screen.findByText(/older build/i)).toBeTruthy();
     expect(runs).not.toHaveBeenCalled();
   });
 
   it('says nothing is running rather than leaving the subtitle empty', async () => {
-    const { default: RunsView } = await import('./runs');
+    const { default: RunsView } = await import('@/features/runs');
     mount(<RunsView />);
     expect(await screen.findByText(/Nothing running right now/i)).toBeTruthy();
   });
 
   it('lists every run with a link into its own autopilot tab', async () => {
     runs.mockResolvedValue([RUN]);
-    const { default: RunsView } = await import('./runs');
+    const { default: RunsView } = await import('@/features/runs');
     mount(<RunsView />);
 
     const link = await screen.findByRole('link', { name: 'demo' });
@@ -382,7 +382,7 @@ describe('runs', () => {
 
   it('names the live run in the header when there is one', async () => {
     runs.mockResolvedValue([{ ...RUN, status: 'running', activePhase: 3 }]);
-    const { default: RunsView } = await import('./runs');
+    const { default: RunsView } = await import('@/features/runs');
     mount(<RunsView />);
     expect(await screen.findByText(/demo is running — phase 3/i)).toBeTruthy();
   });
@@ -397,7 +397,7 @@ describe('runs', () => {
       { ...RUN, id: 'r1', slug: 'alpha', status: 'running', activePhase: 5, phases: RECORDS(5) },
       { ...RUN, id: 'r2', slug: 'beta', status: 'running', activePhase: 2, phases: RECORDS(2) },
     ]);
-    const { default: RunsView } = await import('./runs');
+    const { default: RunsView } = await import('@/features/runs');
     mount(<RunsView />);
 
     const tabs = await screen.findAllByRole('tab');
@@ -408,7 +408,7 @@ describe('runs', () => {
     // The fallback is not dead code: a run you picked to re-read has no session
     // to tab to, and neither does a page with nothing running at all.
     runs.mockResolvedValue([RUN]);
-    const { default: RunsView } = await import('./runs');
+    const { default: RunsView } = await import('@/features/runs');
     setPrefs({ runsConsole: true });
     mount(<RunsView />);
 
@@ -504,7 +504,7 @@ describe('the autopilot page', () => {
       ],
     });
 
-    const { default: RunView } = await import('./run');
+    const { default: RunView } = await import('@/features/runs/run-page');
     mount(<RunView detail={planDetail()} />);
 
     // The count on Run is the lane count — the one number that says "there is
@@ -521,7 +521,7 @@ describe('the autopilot page', () => {
       history: [],
       eta: null,
     });
-    const { default: RunView } = await import('./run');
+    const { default: RunView } = await import('@/features/runs/run-page');
     mount(<RunView detail={planDetail()} />);
 
     await screen.findAllByRole('tab');
@@ -569,7 +569,7 @@ describe('the autopilot page', () => {
       ],
     });
 
-    const { default: RunView } = await import('./run');
+    const { default: RunView } = await import('@/features/runs/run-page');
     mount(<RunView detail={planDetail()} />);
 
     // On the row, and again in the pane behind the tab — both from one reading.
@@ -580,7 +580,7 @@ describe('the autopilot page', () => {
 
   /** Issue #17: the Repos cell has been parsed since before there was concurrency. */
   it('shows what each phase touches, and calls a blank cell what it is', async () => {
-    const { default: RunView } = await import('./run');
+    const { default: RunView } = await import('@/features/runs/run-page');
     mount(<RunView detail={planDetail()} />);
 
     const row = (await screen.findByRole('link', { name: 'the api' })).closest('tr')!;

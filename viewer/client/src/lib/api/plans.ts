@@ -4,7 +4,7 @@
  */
 
 import { request, post, q } from './client';
-import type { EtaEstimate, PhaseEta } from './runs';
+import type { EtaEstimate, EvidenceProof, PhaseEta } from './runs';
 
 export interface PlanSummary {
   slug: string;
@@ -170,6 +170,12 @@ export interface PhaseView {
   qa?: { result: string; report?: string };
   lock?: PhaseLock;
   handoff?: PhaseHandoffRef;
+  /**
+   * Claimed versus evidenced (`shared/evidence-model.js`). The board says a
+   * phase is done; this says whether the handoff, the §Verification result and
+   * the QA table agree. Absent on a server from before Phase 4.
+   */
+  proof?: EvidenceProof;
 }
 
 export interface RouteNode {

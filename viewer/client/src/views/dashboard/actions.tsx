@@ -21,7 +21,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api, type RunState } from '@/lib/api';
 import { keys } from '@/lib/queries';
 import { toast } from '@/components/ui';
-import type { LaunchRequest } from '@/components/launch-dialog';
+import type { LaunchRequest } from '@/features/run-setup/launch-dialog';
 import type { Demand, DemandAction } from './now';
 
 export function useDemandActions(runs: readonly RunState[]): {

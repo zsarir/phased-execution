@@ -89,11 +89,11 @@ describe('RunSetup is the only launch form', () => {
     // third patch, or either of these growing a field, fails this.
     const others = offenders(/\bapi\.runSettings\b/, [
       'features/run-setup/run-setup.tsx',
-      'views/run/index.tsx',
+      'features/runs/run-page.tsx',
     ]);
     expect(others).toEqual([]);
 
-    const runPage = FILES.find(({ path }) => path === 'views/run/index.tsx')!;
+    const runPage = FILES.find(({ path }) => path === 'features/runs/run-page.tsx')!;
     const calls = [...runPage.text.matchAll(/api\.runSettings\(slug, (\{[^}]*\})\)/g)].map((match) =>
       match[1]!.replace(/\s+/g, ' ').trim(),
     );
@@ -122,7 +122,7 @@ describe('RunSetup is the only launch form', () => {
     // disagree with the door the morning the lineup changes.
     const allowed = [
       // The fallback list and its notes — data, not a picker.
-      'views/run/defaults.ts',
+      'features/runs/defaults.ts',
       // The one form. (`per-phase.tsx` renders its rows from the list RunSetup
       // hands it, so it never names the vocabulary itself.)
       'features/run-setup/run-setup.tsx',

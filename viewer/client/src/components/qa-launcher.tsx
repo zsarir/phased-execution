@@ -18,9 +18,9 @@ import { ShieldCheck } from 'lucide-react';
 import { Button, StatusBadge } from '@/components/ui';
 import { qaResultTitle, qaUiState } from '@/lib/status-vocab';
 import { isVerdict } from '@/lib/qa';
-import { LaunchDialog, type QaTarget } from '@/components/launch-dialog';
+import { LaunchDialog, type QaTarget } from '@/features/run-setup/launch-dialog';
 
-export type { QaTarget } from '@/components/launch-dialog';
+export type { QaTarget } from '@/features/run-setup/launch-dialog';
 
 /**
  * Start a review, or go to the one already running.

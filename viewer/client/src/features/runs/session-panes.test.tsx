@@ -21,7 +21,7 @@ import { keys, queryClientConfig } from '@/lib/queries';
 import { __resetStreamForTests } from '@/lib/sse';
 import type { PhaseRecord, PhaseStatus, QueueEntry, RunState, TranscriptEntry } from '@/lib/api';
 import { forPhase } from './console';
-import { livePhases } from './header';
+import { livePhases } from './tiles';
 import {
   QueuedPane,
   SessionPanes,

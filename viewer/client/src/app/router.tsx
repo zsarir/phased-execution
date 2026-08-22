@@ -100,7 +100,7 @@ export const ROUTE_TABLE: Record<string, RouteEntry> = {
   // with the needs-you inbox and the live lanes; the route does not move.
   now: page(lazy(() => import('@/features/now'))),
   plans: page(lazy(() => import('@/views/plans'))),
-  runs: page(lazy(() => import('@/views/runs'))),
+  runs: page(lazy(() => import('@/features/runs'))),
   // A placeholder until Phase 10 rebuilds the terminal into it — it links to
   // the two pages that do the work today rather than pretending to be them.
   sessions: page(lazy(() => import('@/features/sessions'))),

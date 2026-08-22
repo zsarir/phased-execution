@@ -47,7 +47,7 @@ import { cn } from '@/lib/cn';
 import { phaseStatusTitle, phaseUiState, runStatusTitle, runUiState } from '@/lib/status-vocab';
 import { planHref } from '@shared/routes.js';
 import type { PhaseRecord } from '@/lib/api';
-import { PROFILE_LABEL } from '../run/defaults';
+import { PROFILE_LABEL } from './defaults';
 import { fleetTotals, groupRows, type RunRow } from './model';
 import { RecoveryActions } from '@/components/recovery-actions';
 import { usePhone } from '@/lib/media';

@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { keys, queryClientConfig } from '@/lib/queries';
 import { TooltipProvider } from '@/components/ui';
 import type { PhaseView, RunState } from '@/lib/api';
-import { NextSteps, nextStepRows } from './next-steps';
+import { NextSteps, nextStepRows } from './ways-forward';
 
 const { runRecheck } = vi.hoisted(() => ({ runRecheck: vi.fn() }));
 vi.mock('@/lib/api', async (importOriginal) => {

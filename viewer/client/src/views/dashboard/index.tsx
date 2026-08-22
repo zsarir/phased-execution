@@ -38,7 +38,7 @@ import {
 import { plural, weight } from '@/lib/format';
 import { Banner, Card, CardBody, CardHeader, CardTitle, Chip, Skeleton, Tile } from '@/components/ui';
 import { Bars, StackBar } from '@/components/charts';
-import { LaunchDialog } from '@/components/launch-dialog';
+import { LaunchDialog } from '@/features/run-setup/launch-dialog';
 import { plainText } from '@/components/markdown';
 import { isClosed } from '@/lib/closure';
 import { phaseHref, planHref } from '@shared/routes.js';

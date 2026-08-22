@@ -114,6 +114,113 @@ export interface PreflightWarning {
   command?: string;
 }
 
+/* ---------------- liveness (Phase 5's server B) ---------------- */
+
+/**
+ * What the runner can see about a lane that has NOT stopped.
+ *
+ * Three signals, worst first — the order `shared/attention-model.js`
+ * `STALL_SIGNALS` declares, which is the order a reader should be told about
+ * them in. Deliberately a different list from the inbox's `StallKind`: these
+ * are about a session that exists and is spending, and four of the inbox's
+ * five kinds describe a phase with no session at all.
+ */
+export type StallSignal = 'stalemate' | 'silent' | 'spinning';
+
+/** The episode in progress: which signal, since when, and the one line of evidence. */
+export interface StallState {
+  signal: StallSignal;
+  /** ISO — when the condition BECAME true, not when the ticker noticed. */
+  since: string;
+  detail: string;
+}
+
+/** A tool call that went out and has not come back. */
+export interface OpenTool {
+  id: string;
+  name: string;
+  since: string;
+}
+
+/**
+ * One live lane, as `GET /api/run/:slug` reports it (`liveness[]`).
+ *
+ * `commitsSinceStart` and `treeDirty` cost a subprocess each, so the server
+ * refreshes them every five minutes rather than every tick: they answer "has
+ * this phase produced anything at all", which does not change per turn. Read
+ * them as a few minutes old and never as a live clock.
+ */
+export interface LaneLiveness {
+  phase: number;
+  lastOutputAt: string;
+  lastToolUseAt?: string;
+  turnsSinceLastTool: number;
+  commitsSinceStart: number;
+  treeDirty: boolean;
+  openTool?: OpenTool;
+  stall?: StallState;
+}
+
+/* ---------------- rulings (Phase 5's ledger) ---------------- */
+
+export type RulingKind = 'ambiguity' | 'deviation' | 'deferral';
+
+/**
+ * One judgement call a session recorded — `phase-outcome.sh <slug> <N> ruling`.
+ *
+ * A ruling is not an outcome and never becomes one: nothing acts on it, which
+ * is the property that makes it safe for a session to record whenever it is in
+ * doubt. `ack` is an annotation, never a resolution — a ruling is never "done",
+ * and acking one appends a line to the ledger rather than editing the old one.
+ */
+export interface Ruling {
+  id: string;
+  slug: string;
+  phase: number;
+  kind: RulingKind;
+  what: string;
+  why?: string;
+  /** The field that makes a ruling worth reading. */
+  costIfWrong?: string;
+  sessionId?: string;
+  at: string;
+  ack?: { at: string; by?: string };
+}
+
+/* ---------------- the journal ---------------- */
+
+/**
+ * One line of a run's journal (`server/runner/journal.ts` `JournalEntry`).
+ *
+ * `seq` is per run and monotonic, which is what makes a line permalinkable:
+ * `#/plan/:slug/run?j=<seq>` names one entry for as long as the run exists.
+ */
+export interface JournalEntry {
+  seq: number;
+  time: string;
+  event: string;
+  phase?: number;
+  data?: Record<string, unknown>;
+}
+
+/* ---------------- claimed vs evidenced ---------------- */
+
+/**
+ * `shared/evidence-model.js` `deriveEvidence` output — the four facts behind a
+ * claim, and whether they back it.
+ *
+ * Named `evidenced`, never `done`: the board says a phase is done, and this
+ * says whether anything on disk agrees. `why` is never empty.
+ */
+export interface EvidenceProof {
+  board: 'done' | 'in-progress' | 'stuck' | 'ready' | 'waiting' | 'unknown';
+  handoff: 'absent' | 'pending' | 'in-progress' | 'blocked' | 'complete' | 'unknown';
+  verification: 'none' | 'red' | 'skipped' | 'human' | 'green';
+  qa: 'off' | 'fail' | 'pending' | 'pass' | 'waived';
+  evidenced: boolean;
+  why: string[];
+}
+
 export interface PhaseRecord {
   phase: number;
   status: PhaseStatus;
@@ -174,6 +281,17 @@ export interface PhaseRecord {
   mcpPark?: { at: string; degraded: McpDegradation[] };
   /** The gate evaluation at boarding. */
   gate?: { clear: boolean; kind: string; detail: string };
+  /**
+   * The lane's last liveness snapshot, persisted on the record.
+   *
+   * Stale by construction once the lane is gone — it is what the SERVER falls
+   * back to when no runner is live (`service.runLiveness`), and the record's
+   * own `status` is what says whether to believe it. Prefer `RunDetail.liveness`
+   * for anything in flight.
+   */
+  liveness?: LaneLiveness;
+  /** The stall episode in progress. Cleared when an attempt is given up on. */
+  stall?: StallState;
 }
 
 /** What a rung told the runner to do at the phase's next boarding. */
@@ -329,6 +447,15 @@ export interface RunState {
   recoveries?: Record<string, RecoverySlot>;
   /** Present when the run heals its own auto-recoverable halts. */
   autoRecover?: { attempts: number };
+  /**
+   * The rulings written SINCE this run started, folded in by the watcher.
+   *
+   * A slice, not the ledger: `runs/<instance>/<slug>/rulings.ndjson` is per
+   * plan and outlives every run, so a plan on its fourth run would otherwise
+   * carry three runs of history. `GET /api/run/:slug/rulings` reads the whole
+   * file, which is what the page shows.
+   */
+  rulings?: Ruling[];
   phases: Record<string, PhaseRecord>;
 }
 
@@ -465,6 +592,16 @@ export interface RunDetail {
    * under a newer client simply does not send it.
    */
   phaseEta?: PhaseEta[];
+  /**
+   * One entry per live lane. Rides along for the same reason `eta` does: "is
+   * this lane working" is a question about ONE moment, and a second request
+   * could be answered against a different one.
+   *
+   * Optional because an older server process under a newer client simply does
+   * not send it — read an absent array as "this server cannot tell you", never
+   * as "nothing is stalled".
+   */
+  liveness?: LaneLiveness[];
 }
 
 export interface Evidence {
@@ -553,6 +690,13 @@ export interface PhaseDiagnosis {
   } | null;
   /** The evidence it was decided from, as short lines. Absent on older servers. */
   evidence?: string[];
+  /**
+   * Claimed versus evidenced for this phase, from the four facts on disk.
+   * Absent on a server from before Phase 4.
+   */
+  proof?: EvidenceProof;
+  /** THIS phase's rulings, from the whole ledger — not just this run's slice. */
+  rulings?: Ruling[];
 }
 
 export interface TranscriptEntry {
@@ -618,7 +762,14 @@ export const runsApi = {
   runs: () => request<RunState[]>('/api/runs'),
   run: (slug: string) => request<RunDetail>(`/api/run/${q(slug)}`),
   runJournal: (slug: string, id?: number, limit?: number) =>
-    request<unknown>(`/api/run/${q(slug)}/journal${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`),
+    request<JournalEntry[]>(`/api/run/${q(slug)}/journal${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`),
+  /**
+   * The PLAN's whole ruling ledger, oldest first — not the run's slice.
+   *
+   * Answers before any run exists, which is the common case for a plan
+   * somebody is driving by hand.
+   */
+  runRulings: (slug: string) => request<{ rulings: Ruling[] }>(`/api/run/${q(slug)}/rulings`),
   runTranscript: (slug: string, id?: string, limit?: number) =>
     request<TranscriptEntry[]>(
       `/api/run/${q(slug)}/transcript${id ? `/${id}` : ''}${limit ? `?limit=${limit}` : ''}`,

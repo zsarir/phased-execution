@@ -58,10 +58,10 @@ import {
   TabsTrigger,
   toast,
 } from '@/components/ui';
-import { ApprovalQueue, type Decide } from '../run/approvals';
-import { LiveConsole } from '../run/console';
-import { isLive } from '../run/defaults';
-import { LaneControls, laneFrozen } from '../run/lane-controls';
+import { ApprovalQueue, type Decide } from './approvals';
+import { LiveConsole } from './console';
+import { isLive } from './defaults';
+import { LaneControls, laneFrozen } from './lane-controls';
 import {
   QueuedPane,
   SessionPanes,
@@ -69,11 +69,11 @@ import {
   lanesAcross,
   queueEntryFor,
   type Lane,
-} from '../run/session-panes';
-import { AuthCard, StaleServerNote, looksLikeAuthFailure } from '../run/status';
-import { Page } from '../_page';
-import { Controls } from './controls';
-import { Fleet, FleetTiles } from './fleet';
+} from './session-panes';
+import { AuthCard, StaleServerNote, looksLikeAuthFailure } from './status-strip';
+import { Page } from '@/views/_page';
+import { Controls } from './fleet-toolbar';
+import { Fleet, FleetTiles } from './fleet-table';
 import {
   NO_FILTERS,
   applyFilters,

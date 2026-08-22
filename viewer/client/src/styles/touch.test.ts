@@ -74,7 +74,7 @@ describe('the keyboard contract', () => {
 
 describe('scroll traps stay dead', () => {
   it('the live console body chains at its ends instead of stopping the page', () => {
-    const console_ = readFileSync(join(SRC, 'views', 'run', 'console.tsx'), 'utf8');
+    const console_ = readFileSync(join(SRC, 'features', 'runs', 'console.tsx'), 'utf8');
     expect(console_).not.toMatch(/live-body[^"]*overscroll-contain/);
   });
 

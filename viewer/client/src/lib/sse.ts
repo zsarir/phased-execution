@@ -72,6 +72,18 @@ export const SSE_EVENTS = [
   // built against an event nobody declared is a screen that silently stops
   // updating. `EVENT_EFFECTS` already gives it somewhere to land.
   'inbox',
+  // A lane's liveness answer changed — it went silent, started spinning, hit a
+  // stalemate, or came back. Only TRANSITIONS are emitted (`runner.ts`
+  // `evaluateLane` returns early when the answer has not moved), so this is
+  // news by construction rather than a per-minute heartbeat. The Run page
+  // renders it; the shell hears about it anyway because a stall also raises an
+  // inbox row.
+  'run:liveness',
+  // A ruling landed in the plan's ledger — a session recorded a judgement call
+  // the plan did not make for it. Its own event because nothing else moves
+  // when one is written: no phase changes state, no run advances, and the
+  // ledger outlives every run of the plan.
+  'run:rulings',
 ] as const;
 
 export type SseEvent = (typeof SSE_EVENTS)[number];

@@ -26,7 +26,7 @@ import {
 } from '@/lib/recovery';
 import { phaseHref, planHref } from '@shared/routes.js';
 import type { Errand, HealthIssue, RunState, TerminalSession } from '@/lib/api';
-import { isLive } from '../run/defaults';
+import { isLive } from '@/features/runs/defaults';
 import { runStatusTitle } from '@/lib/status-vocab';
 // Data + dialog only — the wizard never imports the pane, so this does not drag
 // xterm into the dashboard chunk. See the note at the top of `agent/wizard.tsx`.

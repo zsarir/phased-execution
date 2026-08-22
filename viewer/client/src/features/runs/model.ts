@@ -27,7 +27,7 @@
  * way through it.
  */
 
-import { isLive } from '../run/defaults';
+import { isLive } from './defaults';
 import {
   STATE_META,
   UI_STATES,
