@@ -522,3 +522,27 @@ test('settleFinishedRun: a run the OPERATOR stopped is theirs to restart', () =>
   assert.equal(settleFinishedRun(state, { 1: 'done' }), false);
   assert.equal(state.status, 'parked');
 });
+
+test('a record closed with no spend is marked unknown, not free', () => {
+  // `costUsd` is written only from the CLI's terminal `result` message, so a
+  // child the console's own shutdown killed books $0 for hours of real work —
+  // and `run.spentUsd` never repairs it. Two runs on a real console read
+  // `$0.00` against multi-hour sessions with real commits. A wrong number is
+  // worse than an honest gap.
+  const state = newRun({ slug: 'alpha', root: '/tmp/x' });
+  const ran = phaseRecord(state, 1);
+  ran.status = 'interrupted';   // what a child the console killed actually reads
+  ran.startedAt = new Date().toISOString();
+  ran.costUsd = 0;
+  const paid = phaseRecord(state, 2);
+  paid.status = 'failed';
+  paid.startedAt = new Date().toISOString();
+  paid.costUsd = 12.5;
+  const never = phaseRecord(state, 3);
+  never.status = 'pending';
+
+  reconcileRecordsAgainstBoard(state, { 1: 'done', 2: 'done', 3: 'done' });
+  assert.equal(state.phases['1'].costUnknown, true, 'it ran and reported nothing');
+  assert.equal(state.phases['2'].costUnknown, undefined, 'a real figure is not a gap');
+  assert.equal(state.phases['3'].costUnknown, undefined, 'a phase that never started cost nothing');
+});

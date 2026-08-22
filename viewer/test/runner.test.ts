@@ -4429,3 +4429,47 @@ test('a plain waiting board still halts generically — no false QA claim', asyn
   assert.doesNotMatch(state.halt?.reason ?? '', /QA verdict/);
   r.cleanup();
 });
+
+test('park() does not claim the run is parked while its lanes are still editing trees', async () => {
+  // `halt()` uses `halting` for exactly this reason, with a comment saying so:
+  // "halted with live sessions still editing trees is a lie … halted is not
+  // IN_FLIGHT, so a dead console mid-drain would never pid-check those
+  // children". `park()` wrote `parked` unconditionally — and `park` is what the
+  // approval-timeout hook calls, from OUTSIDE the loop, while a lane is live.
+  // Measured on a real run: 17 minutes of sessions editing trees under a
+  // `parked` status.
+  const r = repo();
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const session: SpawnFn = async (request: SpawnRequest) => {
+    const phase = Number(/BOOT phase (\d+)/.exec(request.prompt)?.[1]);
+    await held;                       // the lane stays live until this test says otherwise
+    r.markDone(phase);
+    return ok();
+  };
+  const { instance } = runner(r, session);   // a real §Verification, so the phase boards
+  try {
+    const started = instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+    const running = () => instance.current()?.phases?.['1']?.status;
+    const deadline = Date.now() + 5_000;
+    while (running() !== 'running' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(running(), 'running', 'the premise: a lane really is live');
+
+    assert.equal(instance.park('an approval went unanswered', 1), true);
+    assert.notEqual(instance.current()!.status, 'parked',
+      'a run with live lanes is DRAINING; claiming it is parked is the lie halt() avoids');
+
+    release();
+    await started;
+    await instance.wait();
+
+    // And it lands on the honest terminal word once the drain finishes: a park
+    // stays a park, only a halt becomes `halted`.
+    const after = instance.current()!;
+    assert.equal(after.status, 'parked', `a park must not finalize as ${after.status}`);
+    assert.equal(after.child, null, 'nothing is running past the end of the loop');
+    assert.equal(instance.busy(), false, 'and the loop itself is done');
+  } finally { release(); r.cleanup(); }
+});

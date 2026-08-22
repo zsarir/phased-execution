@@ -190,6 +190,18 @@ export type PhaseRecord = {
   status: PhaseStatus;
   attempts: number;
   costUsd: number;
+  /**
+   * The recorded cost is known to be INCOMPLETE — the session really ran, and
+   * its spend was never harvested.
+   *
+   * `costUsd` comes only from the CLI's terminal `result` message
+   * (`spawn.ts` `total_cost_usd`), so a child the console's own shutdown killed
+   * books `$0` for hours of real work, and `run.spentUsd` never repairs. `$0.00`
+   * then reads as "this was free", which is the one thing it certainly was not.
+   * Marked rather than guessed: a wrong number is worse than an honest gap, and
+   * this is the posture the usage meters already take.
+   */
+  costUnknown?: boolean;
   /** Turns and wall-clock across every attempt, so a phase can be read at a glance. */
   turns?: number;
   durationMs?: number;
@@ -1372,6 +1384,9 @@ export function reconcileRecordsAgainstBoard(
     record.status = 'done';
     record.note = 'closed outside this run (the board reads done)';
     record.endedAt ??= now;
+    // A record that STARTED and reports no spend did not cost nothing — its
+    // session was lost before the CLI's terminal `result` arrived. Say so.
+    if (record.startedAt && !record.costUsd) record.costUnknown = true;
     delete record.parkedUntil;
     delete record.parkReason;
     delete record.lockWaitSince;

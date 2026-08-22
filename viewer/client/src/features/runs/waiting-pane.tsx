@@ -115,7 +115,16 @@ export function WaitingPane({ rows }: { rows: readonly WaitingRow[] }) {
             <p className="text-2xs text-ink-faint">
               {row.stuck
                 ? 'Its handoff reports blocked — this one needs a person before it can move.'
-                : 'Starts by itself the moment these finish — the autopilot is not stuck.'}
+                : row.deps.some((dep) => dep.state.startsWith('QA '))
+                  ? // "Starts by itself the moment these finish" is true of a
+                    // dependency that is still running and false of one that is
+                    // FINISHED and held by its QA verdict: that phase is done,
+                    // nothing dispatches QA on its own, and the reassurance was
+                    // the opposite of the truth on the one plan that most needed
+                    // reading.
+                    'A dependency has finished but its QA verdict is holding it — nothing starts by ' +
+                    'itself until somebody records pass or waived, or runs QA again.'
+                  : 'Starts by itself the moment these finish — the autopilot is not stuck.'}
             </p>
           </CardBody>
         </Card>

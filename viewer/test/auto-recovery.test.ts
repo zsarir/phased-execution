@@ -279,6 +279,12 @@ test('the per-run cap counts every phase’s launches together', async () => {
   const { root, cleanup } = scratch();
   try {
     const svc = service(root);
+    // Stated rather than assumed: the ceiling is `ladderPerRunRungs`, which an
+    // operator sets. This used to lean on a hardcoded 5 in `maybeAutoRecover`
+    // that silently overrode that preference — so the test read as though it
+    // pinned the SUMMING (which is its point) while actually pinning the
+    // constant.
+    svc.prefs.ladderPerRunRungs = 5;
     const minted = stubMint(svc);
     haltedRun(root, {
       recoveries: {
@@ -858,5 +864,81 @@ test('maybeAutoRecover leaves an errand for a wedge it cannot climb', async () =
     const errand = after.errand ?? after.recoveries?.['1']?.errand;
     assert.ok(errand, 'the ask must be written, not just returned');
     assert.match(errand!.need, /QA verdict/);
+  } finally { s.cleanup(); }
+});
+
+test('a spent recovery budget still leaves the errand behind', async () => {
+  // Two ceilings sit ahead of the ladder in `maybeAutoRecover`: the run's
+  // per-phase launch cap and a hardcoded run-wide 5. Both `refuse` and move on
+  // WITHOUT writing an errand — so a phase whose budget ran out went quiet
+  // rather than asking. Exhaustion is exactly when a person has to be told:
+  // "the ladder climbed everything it had and none of it worked" is the most
+  // actionable thing this system ever knows, and it was the one case that said
+  // nothing. (`ladder.ts`'s own exhaustion path has always written one.)
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    stubMint(svc);
+    const state = haltedRun(s.root);
+    // Spend the per-phase budget the way the healer itself would have.
+    state.recoveries = { 2: { attempts: 5, lastAt: new Date().toISOString() } };
+    saveRun(state);
+
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.equal(result.launched, false);
+    assert.match(result.reason ?? '', /budget/);
+    const after = loadRun(s.root, 'alpha', state.id)!;
+    assert.ok(after.recoveries?.['2']?.errand, 'a spent budget is an ask, not a silence');
+    assert.ok((after.recoveries!['2'].errand!.need ?? '').length > 0);
+  } finally { s.cleanup(); }
+});
+
+test('the run-wide recovery ceiling comes from the ladder prefs, not a hardcoded 5', async () => {
+  // `if (totalAttempts >= 5)` was a second, silent ceiling that contradicted
+  // `ladderPerRunRungs` in Settings — an operator who raised the ladder budget
+  // to 20 still got five.
+  const s = scratch();
+  try {
+    const svc = service(s.root);
+    svc.prefs.ladderPerRunRungs = 12;
+    stubMint(svc);
+    const state = haltedRun(s.root);
+    state.recoveries = { 2: { attempts: 0, lastAt: new Date().toISOString() } };
+    // Six launches across other phases: over the old hardcoded 5, under 12.
+    state.recoveries['9'] = { attempts: 6, lastAt: new Date().toISOString() };
+    saveRun(state);
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.doesNotMatch(result.reason ?? '', /5 launches/,
+      'the prefs are the ceiling; a second hardcoded one is a setting that lies');
+  } finally { s.cleanup(); }
+});
+
+test('a rung this console may not drive still leaves an errand naming the flag', async () => {
+  // `vehicleForRung` deliberately does NOT consult capability flags: a vehicle
+  // the console has but may not use is still the right vehicle, and refusing it
+  // BY NAME ("needs --allow-agent") beats skipping it silently, which would read
+  // as "nothing to climb" and hide the flag that was actually in the way. That
+  // reasoning is sound and stays.
+  //
+  // What was missing is the other half. The refusal returned without writing an
+  // errand, so the reason reached a journal line and a HealResult — and the
+  // operator, who is the only one who can restart the console with the flag,
+  // was never told. The ladder's own exhaustion path has always written one.
+  const s = scratch();
+  try {
+    const svc = service(s.root, { allowAgent: false });
+    const state = haltedRun(s.root);
+    // No resumable session, so the ladder reaches for an agent rung.
+    delete state.phases['2'].sessionId;
+    delete state.phases['2'].resumeSessionId;
+    saveRun(state);
+
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.equal(result.launched, false);
+    assert.match(result.reason ?? '', /--allow-agent/, 'the refusal still names the flag');
+    const after = loadRun(s.root, 'alpha', state.id)!;
+    const errand = after.recoveries?.['2']?.errand;
+    assert.ok(errand, 'and the person who can supply the flag is asked for it');
+    assert.match(`${errand!.need} ${errand!.how}`, /allow-agent/);
   } finally { s.cleanup(); }
 });

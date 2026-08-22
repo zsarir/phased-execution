@@ -504,3 +504,34 @@ test('an APPROVED gate is not re-gated by the record\'s stale snapshot', () => {
   const unreadable = classifySituation({ ...base, gate: null } as never);
   assert.equal(unreadable.id, 'gated-manual');
 });
+
+test('a cmd gate the read did not EXECUTE is not "a person must clear it"', () => {
+  // `--gate-status` refuses to run a `cmd` gate without PHASE_EXEC_GATES=1 and
+  // prints `manual: cmd gate not executed (set PHASE_EXEC_GATES=1 to evaluate)`.
+  // The classifier's read is the page-safe one, so every unapproved cmd gate
+  // came back `manual` and was classified `gated-manual` — actor `person`, no
+  // rungs, an errand at once. The console asked somebody to clear a gate that is
+  // a COMMAND, and would have cleared itself the moment the runner boarded the
+  // phase (the runner does pass PHASE_EXEC_GATES=1).
+  //
+  // "I could not check" and "a person must decide" are different facts — the
+  // same rule the MCP probe already follows. Classification simply continues;
+  // nothing is boarded on the strength of it, because boarding re-reads the
+  // gate for real.
+  const base = {
+    phase: 2, board: 'ready' as const,
+    handoff: { exists: false }, lock: null, qa: null, health: [], work: { did: false, why: '' },
+  };
+  const notRun = classifySituation({
+    ...base,
+    gate: { clear: false, kind: 'manual', detail: 'cmd gate not executed (set PHASE_EXEC_GATES=1 to evaluate): task ready' },
+  } as never);
+  assert.notEqual(notRun.id, 'gated-manual', 'an unevaluated command is not a human decision');
+
+  // A gate that really does want a person is untouched.
+  const real = classifySituation({
+    ...base,
+    gate: { clear: false, kind: 'manual', detail: 'operator — confirm the price row' },
+  } as never);
+  assert.equal(real.id, 'gated-manual');
+});

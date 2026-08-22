@@ -461,8 +461,20 @@ export function classifySituation(e: PhaseEvidence): Situation {
     return situation('waiting-external', [`the gate is not met yet: ${e.gate.detail ?? e.gate.kind}`]);
   }
 
-  /* 6. A gate only a person clears. */
-  if (e.gate && !e.gate.clear && /^(manual|human|OVERDUE)$/i.test(e.gate.kind)) {
+  /* 6. A gate only a person clears.
+   *
+   * `--gate-status` refuses to RUN a `cmd` gate unless PHASE_EXEC_GATES=1, and
+   * prints `manual: cmd gate not executed (…)` when it does not. The read this
+   * classifier uses is the page-safe one, so every unapproved command gate came
+   * back `manual` — actor `person`, no rungs, an errand written at once — and
+   * the console asked somebody to clear a gate that is a COMMAND, and one that
+   * would clear itself the moment the runner boarded the phase (boarding does
+   * pass the flag). "I could not check" and "a person must decide" are
+   * different facts; the MCP probe already draws exactly this line. Falling
+   * through is safe because nothing is boarded on this verdict — the runner
+   * re-reads the gate for real before it spawns anything. */
+  const gateUnevaluated = /\bnot executed\b/i.test(e.gate?.detail ?? '');
+  if (e.gate && !e.gate.clear && !gateUnevaluated && /^(manual|human|OVERDUE)$/i.test(e.gate.kind)) {
     return situation('gated-manual', [`the gate is ${e.gate.kind}: ${e.gate.detail ?? ''}`.trim()]);
   }
   // The record's snapshot may only speak when the LIVE read could not run, or
@@ -472,8 +484,10 @@ export function classifySituation(e: PhaseEvidence): Situation {
   // `gated-manual`, for ever. That is the exact invariant CLAUDE.md pins ("the
   // engine is the authority on gate state, including for the healer"); the
   // fallback had quietly grown back around it.
-  if (!e.gate?.clear
-    && rec?.status === 'gated' && rec.gate && !rec.gate.clear && /^(manual|human|OVERDUE)$/i.test(rec.gate.kind)) {
+  if (!e.gate?.clear && !gateUnevaluated
+    && rec?.status === 'gated' && rec.gate && !rec.gate.clear
+    && !/\bnot executed\b/i.test(rec.gate.detail ?? '')
+    && /^(manual|human|OVERDUE)$/i.test(rec.gate.kind)) {
     return situation('gated-manual', [`the record is gated (${rec.gate.kind}): ${rec.gate.detail ?? ''}`.trim()]);
   }
 

@@ -216,6 +216,11 @@ export function RunTiles({ run, phases, total }: { run: RunState; phases: PhaseR
   // is absent only until the plan detail loads, and then the old count is the
   // honest thing to show.
   const denominator = total ?? phases.length;
+  // Phases that really ran and reported nothing (see `PhaseRecord.costUnknown`).
+  const lostSpend = phases
+    .filter((p) => p.costUnknown)
+    .map((p) => p.phase)
+    .join(', ');
   const limits = run.limits;
 
   return (
@@ -223,7 +228,16 @@ export function RunTiles({ run, phases, total }: { run: RunState; phases: PhaseR
       <Tile
         label="Spent"
         value={money(run.spentUsd)}
-        hint={run.runBudgetUsd ? `of $${run.runBudgetUsd}` : 'no run budget set'}
+        // A phase whose session was lost before the CLI reported its spend
+        // books $0, and $0 reads as "this was free" — which is the one thing it
+        // certainly was not. Named rather than guessed at.
+        hint={
+          lostSpend
+            ? `at least — phase ${lostSpend} ran and its spend was never reported`
+            : run.runBudgetUsd
+              ? `of $${run.runBudgetUsd}`
+              : 'no run budget set'
+        }
       />
       <Tile
         label="Phases done"

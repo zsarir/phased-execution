@@ -365,3 +365,40 @@ describe("the Phases done tile counts the PLAN, not the run's records", () => {
     expect(container.textContent).toContain('/ 1');
   });
 });
+
+describe('spend that was never reported is named, not shown as zero', () => {
+  const LOST = {
+    id: 'r2',
+    slug: 'demo',
+    status: 'parked',
+    model: 'opus',
+    effort: 'max',
+    autonomy: 'keep-going',
+    spentUsd: 0,
+    createdAt: '2026-08-22T10:00:00Z',
+    updatedAt: '2026-08-22T14:00:00Z',
+  } as unknown as RunState;
+
+  it('says the figure is a floor when a session ran and reported nothing', () => {
+    const { container } = render(
+      <RunTiles
+        run={LOST}
+        phases={[{ phase: 1, status: 'done', attempts: 1, costUsd: 0, costUnknown: true }] as never}
+        total={3}
+      />,
+    );
+    expect(container.textContent).toMatch(/at least/);
+    expect(container.textContent).toMatch(/phase 1/);
+  });
+
+  it('is unchanged when every phase reported its spend', () => {
+    const { container } = render(
+      <RunTiles
+        run={LOST}
+        phases={[{ phase: 1, status: 'done', attempts: 1, costUsd: 12 }] as never}
+        total={3}
+      />,
+    );
+    expect(container.textContent).not.toMatch(/at least/);
+  });
+});

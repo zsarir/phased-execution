@@ -226,6 +226,8 @@ export interface PhaseRecord {
   status: PhaseStatus;
   attempts: number;
   costUsd: number;
+  /** The recorded spend is known to be incomplete — see `PhaseRecord.costUnknown`. */
+  costUnknown?: boolean;
   turns?: number;
   durationMs?: number;
   frozenMs?: number;

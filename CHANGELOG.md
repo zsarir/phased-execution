@@ -53,11 +53,36 @@ the runner reads — emitted five bucket lines, so an empty `ready` set was four
   status, so finished runs sat at `halted` — which the UI paints `needs-you` — indefinitely.
 - **Run-level errands are pushed.** They were written, stored, rendered on the run page, and
   dropped by a `typeof phase !== 'number'` guard before ever reaching a device.
+- **Exhaustion is an ask, not a silence.** Both legacy recovery ceilings in
+  `maybeAutoRecover` refused and moved on without writing an errand — and a spent budget is exactly
+  when a person has to be told. The run-wide ceiling now comes from `ladderPerRunRungs` instead of a
+  hardcoded `5` that silently overrode it. A rung this console may not drive (`--allow-agent`, a
+  missing node-pty) still refuses by name, and now also asks the one person who can supply it.
+- **A park no longer claims a run is stopped while its sessions are still editing trees.** `halt()`
+  uses `halting` for exactly this reason; `park()` — which the approval-timeout hook calls from
+  outside the loop — wrote `parked` unconditionally, and the drive loop had no terminal branch for
+  it, so it went on re-reading the board and boarding candidates on a run the console had stopped.
+- **Lost spend is named rather than shown as zero.** A child the console's own shutdown killed never
+  reports its `total_cost_usd`, so hours of real work booked `$0.00` — which reads as "this was
+  free". The record is marked, and the Spent tile says the figure is a floor.
+- **A closed plan stops asking anyone to continue its stopped run**, and an owed QA verdict that is
+  holding a plan is `needs-you` rather than `fyi` — it holds every dependent exactly as hard as a
+  failure, and nothing dispatches QA on its own.
+- **A PR run says so when it cannot ask for its one tap.** The `openPr` carve-out stops the run for
+  one approval, the window is an hour, and a push notification is the only thing that says a card is
+  up — so with push down the deal silently becomes "the run parks in an hour".
+- **An unevaluated `cmd` gate is no longer read as a human decision.** `--gate-status` refuses to run
+  a command gate without `PHASE_EXEC_GATES=1` and answers `manual: cmd gate not executed`; the
+  classifier's read is the page-safe one, so every unapproved command gate classified `gated-manual`
+  and asked a person to clear a gate that would clear itself the moment the runner boarded the phase.
+  "I could not check" and "a person must decide" are different facts — the line the MCP probe already
+  draws. Nothing is boarded on that verdict; boarding re-reads the gate for real.
 - **The surfaces name the real cause.** "Why this is stopped" gave a QA-wedged plan a single row for
   a downstream, already-approved gate; the Phases-done tile read "2 / 2" on an eight-phase plan; the
   inbox's "Record a verdict" button posted a body the write layer always rejected; a remedy the
-  server refused was toasted as "— done."; and the launch dialog said nothing about QA precisely
-  when the plan turned it on.
+  server refused was toasted as "— done."; the launch dialog said nothing about QA precisely when the
+  plan turned it on; and the waiting card promised a phase "starts by itself the moment these finish"
+  about a dependency that had already finished and was held by its QA verdict.
 
 ## [3.0.0] - 2026-08-22
 

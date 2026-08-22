@@ -1516,7 +1516,10 @@ export class Runner {
       // A recovery has no drive loop to finalize a drain: its halt above was
       // written while its own lane was still in the table, so with that lane
       // gone the run lands on the final word here.
-      if (state.status === 'halting') state.status = 'halted';
+      if (state.status === 'halting') {
+        state.status = this.parkPending ? 'parked' : 'halted';
+        this.parkPending = false;
+      }
       this.syncMirror();
       this.childPid = null;
       this.handle = null;
@@ -2648,12 +2651,25 @@ export class Runner {
    * true thing instead — the question is still open, nothing is wrong with the
    * work, and the phase can be retried the moment someone answers.
    */
+  /** A park that is draining: the finalizer lands on `parked`, not `halted`. */
+  private parkPending = false;
+
   park(reason: string, phase: number | null = null): boolean {
     if (!this.state) return false;
     if (this.state.halt) return false;
     const at = phase ?? this.state.activePhase;
     this.state.halt = { at: new Date().toISOString(), reason, ...(at !== null ? { phase: at } : {}) };
-    this.state.status = 'parked';
+    // With lanes still live the run is DRAINING, not stopped — the same reason
+    // `halt()` uses `halting`, and for the same cost when it is got wrong:
+    // `parked` is not IN_FLIGHT, so a console that died mid-drain would never
+    // pid-check those children. `park` is also what the approval-timeout hook
+    // calls, from OUTSIDE the loop, while a lane is live: measured on a real
+    // run, 17 minutes of sessions editing trees under a `parked` status.
+    // `parkPending` carries the intended terminal word through the drain, so
+    // the finalizer lands on `parked` rather than `halted` — a park and a halt
+    // are different facts and the operator is shown different things for them.
+    this.parkPending = this.lanes.size > 0;
+    this.state.status = this.lanes.size ? 'halting' : 'parked';
     this.state.stoppedBy = 'system';
     // Not counted against the failure budget: nobody being awake is not the
     // phase going wrong twice.
@@ -2961,7 +2977,20 @@ export class Runner {
           // compound (halted is not IN_FLIGHT, so a dead console mid-drain
           // would never pid-check those children).
           if (await draining()) continue;
-          state.status = 'halted';
+          state.status = this.parkPending ? 'parked' : 'halted';
+          this.parkPending = false;
+          break;
+        }
+        // An out-of-band park — the approval-timeout hook is the one that
+        // matters — sets `state.halt` and `parked` from OUTSIDE this loop, and
+        // the loop had no branch for it. So it fell through, re-read the board
+        // and admitted candidates: `runPhase` then read the gate, took a lock
+        // and boarded a phase on a run the console had already stopped, two
+        // bash subprocesses and a journal line per turn, indefinitely. Fires at
+        // the default single lane too, as soon as the parked phase's own
+        // session finishes.
+        if (state.status === 'parked' && state.halt) {
+          if (await draining()) continue;
           break;
         }
         if (stopping) {
@@ -3289,8 +3318,12 @@ export class Runner {
     } finally {
       // A drain the loop never finished — a `break` that bypassed the loop top,
       // or the `catch` above halting with lanes still recorded — must still
-      // land on the final word: nothing is running past this line.
-      if (state.status === 'halting') state.status = 'halted';
+      // land on the final word: nothing is running past this line. A park that
+      // was draining lands on `parked`; only a halt lands on `halted`.
+      if (state.status === 'halting') {
+        state.status = this.parkPending ? 'parked' : 'halted';
+        this.parkPending = false;
+      }
       // Park pokes die with the loop: a stopped run's resume is the service's
       // boot/timer decision, made from `waitUntil` on the record — not a
       // callback into a loop that no longer exists.

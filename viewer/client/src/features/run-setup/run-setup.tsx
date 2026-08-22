@@ -88,6 +88,13 @@ export interface RunSetupProps {
   planMcp?: string[];
   /** The plan's qa-mode; `off` is the only value that offers the QA toggle. */
   qaMode?: string;
+  /**
+   * This console cannot currently deliver a push notification (the environment
+   * doctor's `push-broken`). It matters HERE and nowhere else in this dialog:
+   * `openPr` is the one setting that guarantees the run will stop and ask for a
+   * human tap, and push is the only thing that tells anybody a card is up.
+   */
+  pushBroken?: boolean;
   /** Whether the console may WRITE — a different flag from `allowRun`. */
   allowWrites?: boolean;
   /**
@@ -125,6 +132,7 @@ export function RunSetup({
   planSkills = [],
   planMcp = [],
   qaMode,
+  pushBroken,
   allowWrites,
   skillsEnabled = true,
   blocked = false,
@@ -449,6 +457,21 @@ export function RunSetup({
           value={values.openPr}
           onChange={(next) => set('openPr', next)}
         />
+      )}
+      {/* The `openPr` carve-out pins `git push` and `gh pr create` to *ask* even
+          under the Trusted profile — a push and a PR are the run's one
+          world-visible act, and the deal is one human tap. The answer window is
+          an hour; the only thing that tells anyone a card is up is a push. With
+          push down that deal silently becomes "the run parks in an hour", which
+          is exactly what happened: a real run raised a `git push` card at
+          midday, nobody could know, and the journal records the park. Said
+          before launching, because afterwards it costs the run its afternoon. */}
+      {on('openPr') && values.openPr && values.gitMode === 'new-branch' && pushBroken && (
+        <p className="text-2xs text-ink-faint">
+          This console cannot deliver notifications right now, and a PR run stops for one approval tap on the
+          push. Nothing will tell you the card is up, and it expires after an hour — fix delivery in Settings
+          ▸ Notifications, or watch the run yourself.
+        </p>
       )}
       {/* Said rather than simply hidden: a row that disappears reads as a
           setting that does not exist, and this one is only inapplicable. */}

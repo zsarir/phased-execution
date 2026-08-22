@@ -6124,14 +6124,38 @@ export class Service {
           continue;
         }
       }
-      // The run's own per-phase launch cap (the launch dialog's number) and
-      // the legacy per-run cap still bound the healer, for the records and
-      // readers that predate rungs; the ladder's caps apply on top.
+      // The run's own per-phase launch cap (the launch dialog's number) and the
+      // per-run cap still bound the healer, for the records and readers that
+      // predate rungs; the ladder's caps apply on top.
+      //
+      // Both write the errand before refusing. They used to `refuse` and move
+      // on in silence — and a spent budget is exactly when a person has to be
+      // told: "everything the ladder had was tried and none of it worked" is
+      // the most actionable thing this system ever knows, and it was the one
+      // case that said nothing. (`ladder.ts`'s own exhaustion path always did.)
+      const askFor = (c2: { phase: number; situation: Situation }) => {
+        const key2 = String(c2.phase);
+        const slot2 = (recoveries[key2] ??= { attempts: 0, lastAt: new Date().toISOString() });
+        if (slot2.errand) return;
+        const errand = errandFor(c2.situation.key, slot2.rungs ?? [], c2.phase);
+        slot2.errand = errand;
+        journal.append('phase.errand', { ...errand }, c2.phase);
+        this.announceErrand({ slug, runId: state.id, phase: c2.phase, errand });
+      };
       if ((slot?.attempts ?? 0) >= cap) {
+        askFor(c);
         refuse(`phase ${c.phase}'s recovery budget is spent (${cap} launch${cap === 1 ? '' : 'es'})`, c);
         continue;
       }
-      if (totalAttempts >= 5) return no('the run recovery budget is spent (5 launches)', { phase: c.phase, situation: c.situation.key, label: c.situation.label });
+      // The run-wide ceiling is the LADDER's, not a second hardcoded number.
+      // `if (totalAttempts >= 5)` contradicted `ladderPerRunRungs` in Settings:
+      // an operator who raised the budget to 20 still got five, with nothing
+      // saying why.
+      if (totalAttempts >= caps.perRunRungs) {
+        askFor(c);
+        return no(`the run recovery budget is spent (${caps.perRunRungs} launches)`,
+          { phase: c.phase, situation: c.situation.key, label: c.situation.label });
+      }
 
       // A legacy slot that tried the identical failure once, before rungs were
       // recorded, is read as having climbed the rung the old healer drove —
@@ -6310,8 +6334,38 @@ export class Service {
 
     /* A fresh briefed pty agent — for plan-shaped repairs, for phases whose
      * own session is gone, and for the stronger second try. */
-    if (!agentEnabled(this.flags)) return no('agent auto-recovery needs --allow-agent', { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
-    if (this.terminals.availability() === 'no') return no('agent sessions are unavailable (node-pty)', { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
+    // Naming the flag rather than skipping the rung is deliberate (see
+    // `vehicleForRung`) — but the reason reached only a journal line and a
+    // HealResult, and the one person who can restart the console with the flag
+    // was never asked. A capability wall is a person's to clear, which is what
+    // an errand is for.
+    const blockedBy = (need: string, how: string, reason: string): AutoRecoverResult => {
+      const slot2 = ((state.recoveries ??= {})[String(phase)] ??= { attempts: 0, lastAt: new Date().toISOString() });
+      if (!slot2.errand) {
+        const errand: Errand = { phase, situation: situation.key, tried: (slot2.rungs ?? []).map((r) => r.rung), need, how, at: new Date().toISOString() };
+        slot2.errand = errand;
+        try { saveRun(state); } catch { /* the ask is worth more than the write */ }
+        journal.append('phase.errand', { ...errand }, phase);
+        this.announceErrand({ slug, runId: state.id, phase, errand });
+      }
+      return no(reason, { phase, situation: situation.key, label: situation.label, rung: rung.vehicle });
+    };
+    if (!agentEnabled(this.flags)) {
+      return blockedBy(
+        `A console that may run agent sessions — phase ${phase} reads ${situation.label} and the `
+          + 'only remaining rung is an agent session, which this console is not allowed to spawn.',
+        'Restart the console with --allow-agent, then press Recover & continue — or clear the phase by hand.',
+        'agent auto-recovery needs --allow-agent',
+      );
+    }
+    if (this.terminals.availability() === 'no') {
+      return blockedBy(
+        `A working pty layer — phase ${phase} reads ${situation.label} and the only remaining rung `
+          + 'is an agent session, which needs node-pty.',
+        'Reinstall the console so node-pty builds (see Settings ▸ Diagnostics), then press Recover & continue.',
+        'agent sessions are unavailable (node-pty)',
+      );
+    }
 
     const request: RecoveryRequest = { class: vehicle.cls, slug, phase, runId: state.id };
     const resolved = await this.resolveRecovery(request);

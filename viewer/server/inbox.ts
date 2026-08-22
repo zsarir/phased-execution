@@ -587,6 +587,7 @@ function dismissAction(run: InboxRun): InboxAction {
 function errandDrafts(facts: InboxFacts): Draft[] {
   const out: Draft[] = [];
   const flags = facts.flags ?? {};
+  const closedPlans = new Set((facts.plans ?? []).filter((plan) => plan.closed).map((plan) => plan.slug));
 
   for (const run of stoppedRuns(facts.runs ?? [])) {
     const errands = errandsOf(run);
@@ -667,6 +668,13 @@ function errandDrafts(facts: InboxFacts): Draft[] {
     // never collide with a real errand's id.
     if (!(run.status === 'halted' || run.status === 'interrupted' || run.status === 'parked')) continue;
     if (run.stoppedBy === 'operator') continue;
+    // A closed plan keeps its voice for errands, approvals, locks and health —
+    // claims about a process, not a pulse (see `InboxPlan.closed`). This row is
+    // the one errand that is explicitly a claim about a STOPPED run, and on a
+    // plan somebody has closed there is nothing left to continue toward.
+    // Measured live: two closed, complete plans were contributing 2 of a
+    // console's 16 `needs-you` rows, months after anyone cared.
+    if (closedPlans.has(run.slug)) continue;
     // Armed auto-recovery normally DOES own the stop, and saying so here too
     // would be asking twice — that is what this guard is for, and it stays.
     //
@@ -836,10 +844,18 @@ function planDrafts(facts: InboxFacts): Draft[] {
           // given and it was red", and an ack on the first must not silence the
           // second.
           subject: row.result,
-          // A recorded failure is a defect against work believed done; an owed
-          // verdict is a chore the operator scheduled by turning QA on. Same
-          // vocabulary, different loudness.
-          severity: failed ? 'needs-you' : 'fyi',
+          // Both are `needs-you`, and the owed verdict was the mistake.
+          //
+          // It was graded `fyi` as "a chore the operator scheduled by turning QA
+          // on" — which reads right until you notice what a pending row DOES:
+          // `_is_verified` accepts only `pass|waived`, so a pending verdict on a
+          // FINISHED phase holds every dependent exactly as hard as a failure,
+          // and nothing dispatches QA on its own, so it holds them for ever.
+          // The condition above is already the narrow one (QA on, and the phase
+          // actually done); only the loudness moves, because the consequence was
+          // always this loud. Measured: half of why a real plan was dead sat
+          // below forty stale `fyi` rulings.
+          severity: 'needs-you',
           slug: plan.slug,
           phase: row.phase,
           title: failed
@@ -847,7 +863,8 @@ function planDrafts(facts: InboxFacts): Draft[] {
             : `${plan.slug} phase ${row.phase} — QA verdict owed`,
           need: failed
             ? row.report || 'QA recorded a failure against this phase.'
-            : 'A QA verdict — the phase is done and this plan runs QA on.',
+            : 'A QA verdict — the phase is done, this plan runs QA on, and until one is '
+              + 'recorded it holds every phase that depends on it.',
           how: failed
             ? 'Read the report, fix what it found, then record the new verdict from the phase '
               + 'page (Record QA) — or turn the gate off for this plan with "**QA gate:** off" '

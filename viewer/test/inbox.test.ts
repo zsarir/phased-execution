@@ -991,3 +991,45 @@ test('once the ladder HAS engaged, the generic row stands down for the errand', 
     'the ladder is working on it — two voices for one ask is the duplication this guard exists to stop',
   );
 });
+
+test('a closed plan does not ask anyone to continue its stopped run', () => {
+  // A closed plan keeps its voice for errands, approvals, locks and health —
+  // "claims about a process, not a pulse", and that policy is right. But
+  // `unattended-stop` is the one errand that is explicitly a claim about a
+  // STOPPED run ("nothing climbs this stop by itself"), and on a plan somebody
+  // has closed there is nothing to climb toward. Measured live: two closed,
+  // complete plans were contributing 2 of a console's 16 `needs-you` rows.
+  const stopped = {
+    id: 'run-done', slug: 'shut', status: 'parked' as const, stoppedBy: 'system' as const,
+    updatedAt: '2026-08-22T10:00:00.000Z',
+    halt: { at: '2026-08-22T09:00:00.000Z', reason: 'nothing is ready to run' },
+  };
+  const withPlan = (closed: boolean) => buildInbox(facts({
+    runs: [stopped as never],
+    plans: [{ slug: 'shut', closed, updatedAt: '2026-08-22T10:00:00.000Z' } as never],
+    flags: { allowRun: false } as never,
+  }), NOW).items.filter((i) => i.kind === 'errand' && i.slug === 'shut');
+
+  assert.equal(withPlan(false).length, 1, 'an OPEN plan still asks — that is the whole point of the row');
+  assert.equal(withPlan(true).length, 0, 'a closed plan has nothing to continue toward');
+});
+
+test('a QA verdict that is holding a plan is needs-you, not fyi', () => {
+  // `pending` was graded `fyi` because "an owed verdict is a chore the operator
+  // scheduled". That reads right until you notice what a pending row DOES: the
+  // engine's `_is_verified` accepts only `pass|waived`, so a pending verdict on
+  // a done phase holds every dependent exactly as hard as a failure — and
+  // nothing dispatches QA on its own, so it holds them for ever. Measured: half
+  // of why a real plan was dead sat below forty stale `fyi` rulings.
+  //
+  // The condition is unchanged (QA on, and the phase actually finished); only
+  // the loudness moves, because the consequence was always this loud.
+  const { items } = buildInbox(facts(), NOW);
+  // Phase 3 of the fixture: done, QA on, verdict still `pending`.
+  const owed = items.filter((i) => i.kind === 'qa' && i.phase === 3);
+  assert.equal(owed.length, 1, 'the fixture must still raise an owed verdict');
+  for (const item of owed) {
+    assert.equal(item.severity, 'needs-you', `${item.id} holds its dependents and says so quietly`);
+    assert.match(item.need, /holds|depend/i, 'and the ask names the consequence');
+  }
+});

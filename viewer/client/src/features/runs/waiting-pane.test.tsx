@@ -104,3 +104,28 @@ describe('WaitingPane', () => {
     expect(container.innerHTML).toBe('');
   });
 });
+
+describe('a dependency held by its QA verdict is not "starts by itself"', () => {
+  // The reassurance is true of a dependency that is still running and false of
+  // one that has FINISHED and is held by its verdict: that phase is done,
+  // nothing dispatches QA on its own, and the card was telling the operator the
+  // opposite of the truth on the one plan that most needed reading.
+  const qaHeld = () => {
+    const d = detail();
+    const dep = d.phases[0] as { state: string; qa?: { result: string } };
+    dep.state = 'done';
+    dep.qa = { result: 'fail' };
+    return waitingOf(d);
+  };
+
+  it('says a person is needed when a dep is held by its verdict', () => {
+    render(<WaitingPane rows={qaHeld()} />);
+    expect(screen.getAllByText(/nothing starts by itself/i).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the reassurance for a dep that is simply unfinished', () => {
+    render(<WaitingPane rows={waitingOf(detail())} />);
+    expect(screen.getAllByText(/the autopilot is not stuck/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/nothing starts by itself/i)).toBeNull();
+  });
+});

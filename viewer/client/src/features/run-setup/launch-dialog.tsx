@@ -15,8 +15,10 @@
  * every caller keeps working untouched.
  */
 
+import { useQuery } from '@tanstack/react-query';
 import { Banner, Button, Dialog, DialogClose, DialogContent } from '@/components/ui';
-import { type PhaseLock, type RunState } from '@/lib/api';
+import { api, type PhaseLock, type RunState } from '@/lib/api';
+import { keys } from '@/lib/queries';
 import { countdown, relativeTime } from '@/lib/format';
 import { ReleaseStaleButton } from '@/components/release-lock';
 import { isVerdict } from '@/lib/qa';
@@ -141,6 +143,10 @@ export function LaunchDialog({
   onDone?: (sessionId?: string) => void;
 }) {
   const { title, description } = heading(request);
+  // The one fact from `/api/state` this dialog needs: an `openPr` run WILL stop
+  // for an approval tap, and push is the only thing that says a card is up.
+  const state = useQuery({ queryKey: keys.state(), queryFn: api.state });
+  const pushBroken = (state.data?.environment?.issues ?? []).some((i) => i.kind === 'push-broken');
   const claim = claimOn(request);
   // A live claim refuses; a lapsed one does not. The server agrees with both,
   // so this is the same rule shown early rather than a second, softer one.
@@ -169,6 +175,7 @@ export function LaunchDialog({
             : {})}
           planSkills={planSkillsOf(request)}
           planMcp={planMcpOf(request)}
+          pushBroken={pushBroken}
           blocked={blocked}
           {...(blocked
             ? { blockedReason: 'The claim has to be released before a session can start here.' }
