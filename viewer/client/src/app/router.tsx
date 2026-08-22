@@ -96,8 +96,8 @@ const redirect = (to: (route: Route) => string): RedirectRoute => ({ kind: 'redi
  */
 export const ROUTE_TABLE: Record<string, RouteEntry> = {
   /* ---- the six destinations ---- */
-  // v1 is the old dashboard inside the new shell. Phase 8 replaces its body
-  // with the needs-you inbox and the live lanes; the route does not move.
+  // The needs-you inbox, the live lanes, next up and the plans in flight —
+  // the four pages this one absorbed, on the route that was always its home.
   now: page(lazy(() => import('@/features/now'))),
   plans: page(lazy(() => import('@/views/plans'))),
   runs: page(lazy(() => import('@/features/runs'))),
@@ -109,8 +109,6 @@ export const ROUTE_TABLE: Record<string, RouteEntry> = {
 
   /* ---- pages a destination has not absorbed yet ---- */
   plan: page(lazy(() => import('@/views/plan'))),
-  ready: page(lazy(() => import('@/views/ready'))),
-  pulse: page(lazy(() => import('@/views/pulse'))),
   // Only `#/notifications/settings` reaches this now; the bare head is a
   // redirect into the drawer (see `redirectTarget`).
   notifications: page(lazy(() => import('@/views/notifications'))),
@@ -127,6 +125,10 @@ export const ROUTE_TABLE: Record<string, RouteEntry> = {
   stats: redirect(REDIRECTS.stats),
   search: redirect(REDIRECTS.search),
   guide: redirect(REDIRECTS.guide),
+  // Phase 8: Now grew the two sections these pages were, so both retire into
+  // it with the `?focus=` that keeps what each address MEANT.
+  ready: redirect(REDIRECTS.ready),
+  pulse: redirect(REDIRECTS.pulse),
 };
 
 /** `''` and anything unregistered land on Now rather than nowhere. */

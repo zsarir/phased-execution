@@ -32,7 +32,7 @@ export default function NotificationsView() {
       <Banner severity="info">
         <div className="min-w-0">
           <strong>Looking for what the console has said?</strong> It is the bell in the header —{' '}
-          <a href="#/now?bell=1" className="text-action underline">
+          <a href="#/now?bell=1&amp;panel=announcements" className="text-action underline">
             open the announcements
           </a>
           .

@@ -8,10 +8,12 @@ import type { ConsoleState } from '@/lib/api';
  * The 2.x nav had thirteen entries and still could not answer "does anything
  * need me?" without visiting three of them. The six below are the questions an
  * operator actually has, in the order they have them; everything else in the
- * URL space is either a page one of these will absorb (`#/ready`, `#/pulse`,
- * `#/mcp`) or an overlay that rides on top of whatever is on screen (the
- * palette, the help sheet, the announcements drawer). `app/routes.ts`
- * `destinationFor` is what keeps those older heads lighting the right entry.
+ * URL space is either a page one of these has absorbed (`#/ready` and
+ * `#/pulse` became Now's Next up and Running now in Phase 8; `#/mcp` becomes a
+ * Settings section in Phase 11) or an overlay that rides on top of whatever is
+ * on screen (the palette, the help sheet, the announcements drawer).
+ * `app/routes.ts` `destinationFor` is what keeps those older heads lighting the
+ * right entry.
  *
  * `tab: true` marks the four that get a bottom-bar slot on a phone; Insights,
  * Settings and Help live in the More sheet, so every destination is one or two

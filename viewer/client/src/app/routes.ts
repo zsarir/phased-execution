@@ -16,12 +16,12 @@
  *    mapping between them, and it is why `#/plan/x/run` lights up *Plans* and
  *    `#/terminal/abc` lights up *Sessions*.
  *
- * 2. **A redirect is a page whose new home already exists.** `REDIRECTS` holds
- *    only the four that are true today. `#/ready`, `#/pulse` and `#/mcp` are
- *    deliberately NOT here: Now does not absorb the first two until Phase 8 and
- *    Settings does not grow an MCP section until Phase 11, and a redirect onto
- *    a home that has not been built yet is a broken link with extra steps. Each
- *    becomes a redirect in the phase that builds its destination.
+ * 2. **A redirect is a page whose new home already exists.** `#/ready` and
+ *    `#/pulse` joined the list in Phase 8, when Now grew the sections that
+ *    answered them — each becomes a redirect in the phase that builds its
+ *    destination, never before, because a redirect onto a home that does not
+ *    exist yet is a broken link with extra steps. `#/mcp` is still a page for
+ *    exactly that reason: Settings does not grow an MCP section until Phase 11.
  *
  * 3. **The three overlays are query parameters, not routes.** `?k=` (command
  *    palette), `?help=` (help sheet) and `?bell=` (announcements drawer) ride on
@@ -29,6 +29,14 @@
  *    the Runs page away. That also makes all three deep-linkable and reloadable
  *    for free, which is what lets `#/search?q=…`, `#/guide/:section` and
  *    `#/notifications` retire into them without losing a single old link.
+ *
+ * 4. **`?focus=` and `?panel=` say WHERE ON a page, not which page.** Now is
+ *    four bands and the bell drawer is two panels, so an address that could
+ *    only name the route lost the half of the old page's meaning that mattered:
+ *    `#/ready` was never "the home page", it was "the part of it about what to
+ *    start next". Both are plain query values on the destination — see
+ *    `FOCUS_KEYS` and `PANEL_KEYS` — which keeps them deep-linkable, reloadable
+ *    and, unlike a hash fragment, composable with the overlays above.
  */
 
 import { DEFAULT_HEAD, DESTINATIONS, ROUTE_HEADS } from '@shared/route-meta.js';
@@ -103,8 +111,14 @@ export const REDIRECTS: Record<string, (route: Route) => string> = {
   stats: (route) => (route.query.plan ? `insights?plan=${enc(route.query.plan)}` : 'insights'),
   // The announcements are the bell drawer. The settings half of the old page is
   // still a page (`#/notifications/settings`), so only the BARE head redirects
-  // — `redirectTarget` below is what enforces that.
-  notifications: () => bellHref('now'),
+  // — `redirectTarget` below is what enforces that. `panel` names the half of
+  // the drawer this address always meant: the LOG of what was announced, not
+  // the list of what is still waiting.
+  notifications: () => bellHref('now', PANEL_KEYS.announcements),
+  // The departures board is Now's Next up section, and the Pulse is its
+  // Running now. Both kept their whole meaning by keeping their `?focus=`.
+  ready: () => nowHref(FOCUS_KEYS.next),
+  pulse: () => nowHref(FOCUS_KEYS.lanes),
 };
 
 /**
@@ -141,7 +155,43 @@ export const FULL_HEIGHT_HEADS: ReadonlySet<string> = new Set(['terminal', 'agen
 
 /* ---------------- href builders ---------------- */
 
-export const nowHref = (): string => '#/now';
+/**
+ * Now, optionally scrolled to one of its bands.
+ *
+ * The vocabulary is closed and it is here rather than in the page, because the
+ * redirects above build these URLs and a value the page did not recognise
+ * would be a silently ignored deep link — the same defect class as
+ * `#/plan/x/autopilot`, a tab that was registered as `run` and that every
+ * approval notification opened wrong for the life of that feature.
+ */
+export const FOCUS_KEYS = { inbox: 'inbox', lanes: 'lanes', next: 'next', plans: 'plans' } as const;
+
+export type FocusKey = (typeof FOCUS_KEYS)[keyof typeof FOCUS_KEYS];
+
+/** Which band this route asks for, or `undefined`. An unknown value is ignored. */
+export function focusOf(route: Route): FocusKey | undefined {
+  const value = route.query.focus;
+  return (Object.values(FOCUS_KEYS) as string[]).includes(value ?? '') ? (value as FocusKey) : undefined;
+}
+
+/**
+ * Which half of the bell drawer.
+ *
+ * `inbox` is what still needs a person; `announcements` is the log of what the
+ * console has said. They were one page in 2.x and they answer completely
+ * different questions — which is exactly why `#/notifications` redirects with
+ * `announcements` named rather than letting the drawer's default decide.
+ */
+export const PANEL_KEYS = { inbox: 'inbox', announcements: 'announcements' } as const;
+
+export type PanelKey = (typeof PANEL_KEYS)[keyof typeof PANEL_KEYS];
+
+export function panelOf(route: Route): PanelKey | undefined {
+  const value = route.query.panel;
+  return (Object.values(PANEL_KEYS) as string[]).includes(value ?? '') ? (value as PanelKey) : undefined;
+}
+
+export const nowHref = (focus?: FocusKey): string => (focus ? `#/now?focus=${enc(focus)}` : '#/now');
 export const plansHref = (): string => '#/plans';
 export const runsHref = (): string => '#/runs';
 export const insightsHref = (plan?: string): string => (plan ? `#/insights?plan=${enc(plan)}` : '#/insights');
@@ -193,15 +243,20 @@ export const paletteHref = (term = '', base: string | Route = 'now'): string =>
 export const helpHref = (section?: string, card?: string, base: string | Route = 'now'): string =>
   overlayHref(OVERLAY_KEYS.help, section ?? '', base, { card });
 
-/** `?bell=1` — the announcements drawer. */
-export const bellHref = (base: string | Route = 'now'): string => overlayHref(OVERLAY_KEYS.bell, '1', base);
+/** `?bell=1[&panel=…]` — the drawer, optionally on one of its two panels. */
+export const bellHref = (base: string | Route = 'now', panel?: PanelKey): string =>
+  overlayHref(OVERLAY_KEYS.bell, '1', base, panel ? { panel } : undefined);
 
 /** The same route with every overlay closed — what Escape and a backdrop mean. */
 export function closeOverlaysHref(route: Route): string {
   const query = { ...route.query };
   for (const k of Object.values(OVERLAY_KEYS)) delete query[k];
-  // `card` is the help sheet's second half and has no meaning without it.
+  // `card` is the help sheet's second half and `panel` is the drawer's; neither
+  // has any meaning without the overlay it belongs to, and a `?panel=` left on
+  // the address after the drawer closes is a parameter that reopens nothing and
+  // survives every later navigation.
   delete query.card;
+  delete query.panel;
   const search = new URLSearchParams(query).toString();
   return `#/${route.path}${search ? `?${search}` : ''}`;
 }

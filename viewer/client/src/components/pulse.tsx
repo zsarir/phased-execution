@@ -6,7 +6,10 @@
  * what vehicle, for how long, what is queued behind what, and what is parked
  * waiting on the outside world. One component serves both askers: the plan
  * page mounts it above the route cards with the board in hand, and the global
- * `#/pulse` view mounts one per plan with whatever the run state alone knows.
+ * plan page mounts one per plan with whatever the run state alone knows. (It
+ * was also `#/pulse`, one per plan, until Phase 8 rebuilt that page as Now's
+ * Running now — which reads LANES rather than runs and shares nothing with
+ * this. Phase 9 owns the plan page and this component with it.)
  *
  * Everything here is derived per render from `RunState` + the board — no
  * stored cursor, same rule as the engine. The only state is the clock tick

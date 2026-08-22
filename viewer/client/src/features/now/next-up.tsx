@@ -1,33 +1,66 @@
 /**
- * One phase, as a thing you can decide about.
+ * **Next up** — what to start, ranked, with the whole board one disclosure
+ * away.
  *
- * Two shapes of the same facts. The **hero** is the board's recommendation: it
- * spends the space to say why this one, and carries the action the whole page
- * exists for — the boot prompt, on the clipboard, without navigating. Every
- * other departure is a **row**: the same facts compressed to a line, with the
- * prompt one disclosure away.
+ * ## Why the departures board is here and not on a page of its own
  *
- * The prompt is fetched on click rather than on render. A boot prompt costs an
+ * `#/ready` and the dashboard's "the board's next move is…" line were two
+ * implementations of ONE decision, and for a fortnight they recommended
+ * different phases because only one of them had learned that a live claim is
+ * a blocker. Two pages that answer the same question will always eventually
+ * answer it differently. So the ranking, the hero and the row moved here whole
+ * — this file is `views/ready/departure.tsx` under a new name — and `#/ready`
+ * redirects to `#/now?focus=next`.
+ *
+ * ## What survives from the board, and what did not
+ *
+ * The transit reading survives: plans are lines, phases are stations, `pad2`
+ * exists because a departures board writes phase 7 as `07`. **Leverage before
+ * size** survives, because the cost of picking wrong is not a slow session, it
+ * is a week of the board staying narrow. **A claim is a blocker** survives —
+ * a phase another session holds sinks below every unclaimed one in every
+ * order and is never the recommendation.
+ *
+ * What did not survive is the repo and plan `<select>` filters. A home page is
+ * not a query tool, and a `<select>` sizes to its widest option — the one
+ * interpolating a plan slug measured 423 px inside a 390 px phone (Phase 6).
+ * Rank and the two boolean filters are what the DECISION needs; `#/plans` is
+ * where "show me only this repo" lives.
+ *
+ * The boot prompt is fetched on click rather than on render. A prompt costs an
  * engine invocation, and a board of thirteen rows that each pre-fetched one
  * would shell out thirteen times to answer a question nobody asked.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, GitBranch, Lock, ShieldAlert } from 'lucide-react';
 import { Button, Chip, CopyButton, StateChip } from '@/components/ui';
 import { PromptCard } from '@/components/prompt-card';
-import { plainText } from '@/components/markdown';
+import { plainText } from '@/lib/plain-text';
 import { LoadMeter } from '@/components/charts';
 import { api } from '@/lib/api';
 import { keys, useConsoleState, useSessions } from '@/lib/queries';
+import { usePrefs } from '@/lib/prefs';
 import { liveQa } from '@/lib/qa';
 import { QaButton } from '@/components/qa-launcher';
 import { countdown, pad2, plural, weight as fmtWeight } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { phaseHref, planHref } from '@shared/routes.js';
-import { isClaimed, load, type Departure } from './model';
+import {
+  NO_FILTERS,
+  RANKS,
+  applyFilters,
+  isClaimed,
+  load,
+  queueTotals,
+  rank as rankBy,
+  type Departure,
+  type Filters,
+  type RankId,
+} from './model';
 import { ForceReleaseButton, ReleaseStaleButton } from '@/components/release-lock';
+import type { PlanSummaryFull } from '@/lib/api';
 
 /** Fetch-then-copy, so a prompt costs an engine run only when it is wanted. */
 function usePromptText(slug: string, phase: number) {
@@ -396,5 +429,159 @@ export function DepartureRow({ d, index }: { d: Departure; index: number }) {
         </div>
       )}
     </li>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * The section
+ * ------------------------------------------------------------------ */
+
+/** How many rows sit under the hero before the rest folds away. */
+const SHOWN = 4;
+
+export interface NextUpProps {
+  /** Every ready phase across every open plan, unranked. */
+  departures: Departure[];
+  plans: readonly PlanSummaryFull[];
+  allowRun: boolean;
+  loading: boolean;
+  /** `?focus=next` landed here. */
+  focused?: boolean;
+}
+
+export function NextUp({ departures, plans, allowRun, loading, focused = false }: NextUpProps) {
+  const [prefs, setPrefs] = usePrefs();
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [open, setOpen] = useState(false);
+
+  const rankId = (prefs.readyRank ?? 'leverage') as RankId;
+  const visible = useMemo(
+    () => rankBy(applyFilters(departures, filters), rankId),
+    [departures, filters, rankId],
+  );
+  const totals = queueTotals(visible, plans);
+  const filtered = filters.unclaimed || filters.open;
+  const [top, ...rest] = visible;
+
+  return (
+    <section aria-label="Next up" data-testid="next-up" {...(focused ? { 'data-focused': 'true' } : {})}>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h2 className="text-2xs font-medium uppercase tracking-[0.14em] text-ink-faint">Next up</h2>
+        {visible.length > 0 && (
+          <span className="text-2xs text-ink-faint">
+            {plural(totals.phases, 'phase')} across {plural(totals.plans, 'plan')}
+            {totals.claimed ? ` · ${totals.claimed} claimed` : ''}
+            {totals.gated ? ` · ${totals.gated} behind a gate` : ''}
+          </span>
+        )}
+        {/* Pressable chips rather than a `<select>`: they wrap, they need no
+            listbox, and a select sizes to its widest option — which is the
+            423px-inside-390px overflow Phase 6 measured. The board's own
+            controls used the same shape below the shell breakpoint. */}
+        <div
+          role="group"
+          aria-label="Order the board by"
+          className="ml-auto flex shrink-0 flex-wrap items-center gap-1"
+        >
+          {RANKS.map((option) => (
+            <Button
+              key={option.id}
+              size="sm"
+              variant={rankId === option.id ? 'action' : 'ghost'}
+              aria-pressed={rankId === option.id}
+              onClick={() => setPrefs({ readyRank: option.id })}
+              title={option.blurb}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+      {/* The blurb is not help text. Five orders that all sound reasonable are
+          five orders nobody switches between; this sentence is what makes the
+          choice mean something. */}
+      <p className="mb-2 text-2xs text-ink-faint">{RANKS.find((option) => option.id === rankId)?.blurb}</p>
+
+      {!visible.length ? (
+        <p className="rounded-lg border border-rule bg-surface px-3 py-2.5 text-sm text-ink-muted">
+          {loading
+            ? 'Reading the board…'
+            : departures.length
+              ? 'Every ready phase is filtered out.'
+              : 'Nothing is ready: every remaining phase is waiting on one that has not landed, and every plan with ready work is closed or finished.'}
+          {!loading && departures.length > 0 && (
+            <Button size="sm" className="ml-2" onClick={() => setFilters(NO_FILTERS)}>
+              Clear the filters
+            </Button>
+          )}
+        </p>
+      ) : (
+        <>
+          <NextDeparture d={top} allowRun={allowRun} />
+          {rest.length > 0 && (
+            <ul className="mt-2 flex flex-col gap-1.5">
+              {rest.slice(0, SHOWN).map((d, i) => (
+                <DepartureRow key={d.key} d={d} index={i} />
+              ))}
+            </ul>
+          )}
+
+          {/* The FULL board, folded. Everything `#/ready` used to be, on the
+              page that already answers the question it answered. */}
+          {(rest.length > SHOWN || filtered) && (
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => setOpen(!open)}
+                aria-expanded={open}
+                className="flex items-center gap-1 text-2xs text-ink-muted hover:text-ink [@media(hover:none)]:min-h-(--tap-min)"
+              >
+                <ChevronDown
+                  size={12}
+                  aria-hidden
+                  className={cn('transition-transform', open && 'rotate-180')}
+                />
+                {open ? 'Hide the full board' : `The full board · ${plural(visible.length, 'phase')}`}
+              </button>
+              {open && (
+                <div className="mt-2">
+                  <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      aria-pressed={filters.unclaimed}
+                      onClick={() => setFilters((f) => ({ ...f, unclaimed: !f.unclaimed }))}
+                      title="Hide phases another session is holding."
+                    >
+                      Unclaimed only
+                    </Button>
+                    <Button
+                      size="sm"
+                      aria-pressed={filters.open}
+                      onClick={() => setFilters((f) => ({ ...f, open: !f.open }))}
+                      title="Hide phases that cannot start until a gate is cleared."
+                    >
+                      Ungated only
+                    </Button>
+                    <span className="text-2xs text-ink-faint">
+                      {departures.length - visible.length > 0
+                        ? `${departures.length - visible.length} hidden`
+                        : `${plural(totals.sessions, 'session')} of work on the board`}
+                    </span>
+                  </div>
+                  <ul className="flex flex-col gap-1.5">
+                    {rest.slice(SHOWN).map((d, i) => (
+                      <DepartureRow key={d.key} d={d} index={i} />
+                    ))}
+                  </ul>
+                  {rest.length <= SHOWN && (
+                    <p className="text-2xs text-ink-faint">Everything ready is already shown above.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }

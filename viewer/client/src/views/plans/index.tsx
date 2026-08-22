@@ -4,7 +4,8 @@
  * ## What the page is for
  *
  * The console has four list surfaces and they answer four different questions.
- * `#/ready` answers *what next* — one phase, promoted, with its boot prompt.
+ * Now's **Next up** answers *what next* — one phase, promoted, with its boot
+ * prompt (it was `#/ready` until Phase 8).
  * `#/dashboard` answers *what now* — whatever is blocked on a person this
  * minute. `#/stats` answers *over time*. This one answers **where does
  * everything stand**: every plan side by side, comparable, findable, and sorted
@@ -268,7 +269,7 @@ function subtitle(
 /**
  * Say what the list is leaving out, when leaving it out is most of the estate.
  *
- * The `#/ready` page has said this for phases since the closure work landed —
+ * Now's Next up has said this for phases since the closure work landed —
  * *"N phases in closed plans are not counted — reopen a plan to put its work
  * back on the board"* — and this page, which is the one whose whole job is
  * "where does everything stand", said nothing but a grey count. On the source
