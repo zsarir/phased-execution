@@ -267,7 +267,14 @@ export function PortfolioPanel({
                       closed
                     </Chip>
                   )}
-                  <span className="min-w-0 flex-1 text-sm text-ink-muted">{issue.message}</span>
+                  {/* `break-words`: an issue message quotes plan text — slugs,
+                      paths, `bash -c '…'` — and a token with no space in it for
+                      forty characters has nothing to wrap AT, so `min-w-0`
+                      alone leaves the row wider than the phone. Measured at
+                      390: the list ran to 397 in a 366 track. Phase 9 found the
+                      same thing on a recorded command; any surface rendering
+                      text it did not write needs this. */}
+                  <span className="min-w-0 flex-1 text-sm break-words text-ink-muted">{issue.message}</span>
                   {/* Per ROW, not per card: this list mixes plans, and a repair
                       session works on one. The row is the only place that knows
                       which plan the operator meant.

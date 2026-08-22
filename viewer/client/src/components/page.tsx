@@ -31,7 +31,14 @@ export function Page({
             {title != null && <h1 className="font-display text-3xl leading-none">{title}</h1>}
             {subtitle != null && <p className="mt-1.5 text-sm text-ink-muted">{subtitle}</p>}
           </div>
-          {actions != null && <div className="flex shrink-0 flex-wrap gap-2">{actions}</div>}
+          {/* `min-w-0`, never `shrink-0`. This row holds whatever a page puts
+              in it — a select whose widest option is a plan slug, chips
+              carrying counts that grow a digit — and `shrink-0` on a
+              variable-length row makes it PUSH the page rather than wrap
+              inside it. Measured on Insights at 320: 322.8 in a 320 track, and
+              the shell scrolled sideways. `flex-wrap` alone does not save it,
+              because a row that may not shrink has nothing to wrap into. */}
+          {actions != null && <div className="flex min-w-0 flex-wrap gap-2">{actions}</div>}
         </header>
       )}
       {children}

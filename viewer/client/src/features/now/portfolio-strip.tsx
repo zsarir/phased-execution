@@ -179,7 +179,15 @@ export function PlansInFlight({
                 >
                   {plainText(plan.title || plan.slug)}
                 </a>
-                <span className="shrink-0 font-mono text-2xs tabular-nums text-ink-faint">
+                {/* `min-w-0`, not `shrink-0`. The ETA phrase makes this row a
+                    variable length — `3/9 · 33%` is 60 px and
+                    `3/9 · 33% · ~1.5 h–5 h (from other plans)` is 295 — and
+                    `shrink-0` on a variable-length row is what makes it push
+                    the page instead of wrapping. Measured at 320: it ran to
+                    324.3 and the shell scrolled sideways by 4 px. Same defect
+                    class as Phase 10's session strip and the run console's
+                    action row. */}
+                <span className="min-w-0 font-mono text-2xs break-words tabular-nums text-ink-faint">
                   {plan.done}/{plan.phases} · {plan.percent}%
                   {plan.eta && (
                     <span title={etaTitle(plan.eta)}>
@@ -192,7 +200,18 @@ export function PlansInFlight({
 
               <div className="mt-1.5 flex items-center gap-2">
                 {nodes.length > 0 ? (
-                  <a href={planHref(plan.slug)} className="min-w-0 flex-1" title="Open the route map">
+                  // `aria-label`, not `title`: a title is a desktop hover and a
+                  // phone never shows one, so a link whose ONLY name is a
+                  // title has no name at all on the surface this band was
+                  // designed for. The strip inside is `role="img"` with its own
+                  // summary, so without this the link would announce as that
+                  // summary — "8 phases, 5 done" — which says nothing about
+                  // where pressing it goes.
+                  <a
+                    href={planHref(plan.slug)}
+                    className="min-w-0 flex-1"
+                    aria-label={`Open ${plan.slug}'s route map`}
+                  >
                     <RouteStrip phases={[...nodes].sort((a, b) => a.phase - b.phase)} />
                   </a>
                 ) : (

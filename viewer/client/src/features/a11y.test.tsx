@@ -246,10 +246,24 @@ async function mountAt(segments: string[], query: Record<string, string> = {}) {
   );
 }
 
-// axe over a whole page takes seconds in jsdom, and this file runs it
-// fourteen times. The default 5 s turns a slow assertion into a timeout that
-// reads like a page that never painted.
-const TIMEOUT = 20_000;
+/*
+ * Two generous clocks, for two different reasons.
+ *
+ * `TIMEOUT` — axe over a whole page takes seconds in jsdom and this file runs
+ * it fourteen times; the default 5 s turns a slow assertion into a timeout
+ * that reads like a page that never painted.
+ *
+ * `WAIT` — every destination is behind a `lazy()`, and this file is the only
+ * one that resolves six of those chunks. Under the full 95-file suite the
+ * workers contend and the first import has been seen to take past 10 s, which
+ * surfaced as `now` failing with the Suspense fallback still on screen while
+ * the same test passed in isolation and alongside its neighbours. The ceiling
+ * is deliberately far above the observed worst case rather than retried: a
+ * chunk that genuinely never resolves must still fail, and a retry would hide
+ * exactly that.
+ */
+const TIMEOUT = 40_000;
+const WAIT = 30_000;
 
 describe('axe — every destination', () => {
   for (const destination of DESTINATIONS) {
@@ -277,7 +291,7 @@ describe('axe — every settings section', () => {
         // CardTitle, and `findBy*` retries on "found multiple" exactly as it
         // retries on "found none" — so an ambiguous query does not fail, it
         // times out, which reads as a page that never rendered.
-        await screen.findByRole('heading', { name: section.title, level: 2 });
+        await screen.findByRole('heading', { name: section.title, level: 2 }, { timeout: WAIT });
         await expectNoAxeViolations(container);
       },
       TIMEOUT,

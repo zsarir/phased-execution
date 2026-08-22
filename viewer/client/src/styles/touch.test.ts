@@ -172,3 +172,75 @@ describe('per-page mobile fixes stay fixed', () => {
     expect(tabs).toMatch(/lastActive/);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * `shrink-0` on a variable-length row — the defect three phases found
+ * ------------------------------------------------------------------ */
+
+/**
+ * The rule, stated once because it has now cost four surfaces:
+ *
+ * a flex row whose CONTENT can grow — an actions bar that gains a button when a
+ * lane goes live, a facts line that gains an ETA phrase, a page header whose
+ * `<select>` sizes to a plan slug — must be allowed to shrink and to wrap.
+ * `shrink-0` on such a row makes it PUSH instead, and because the shell's one
+ * scroller has `overflow-y: auto` (which computes `overflow-x` to `auto`), the
+ * push becomes a horizontal scroll of the whole app.
+ *
+ * `flex-wrap` alone does not save it: a row that may not shrink has nothing to
+ * wrap into. Measured, each caught only by the tour:
+ *
+ *   Phase 10  the session strip           1326 in a 1204 track (tabs at x = −25)
+ *   Phase 11  the run console's actions     441 in a  390 track
+ *   Phase 11  Now's plan facts line         324 in a  320 track
+ *   Phase 11  `Page`'s actions row          323 in a  320 track (every page)
+ */
+describe('a row that can grow may shrink and wrap', () => {
+  const rows: [string, string][] = [
+    ['components/page.tsx', 'flex min-w-0 flex-wrap gap-2'],
+    ['features/runs/console.tsx', 'flex min-w-0 flex-wrap items-center justify-end gap-1.5'],
+  ];
+
+  for (const [file, cls] of rows) {
+    it(`${file} keeps its actions row shrinkable`, () => {
+      const text = readFileSync(join(SRC, file), 'utf8');
+      expect(text).toContain(cls);
+      expect(text, `${file} must not put shrink-0 back on that row`).not.toContain(
+        cls.replace('min-w-0', 'shrink-0'),
+      );
+    });
+  }
+
+  it("Now's plan facts line is min-w-0, not shrink-0", () => {
+    // `3/9 · 33%` is 60 px; `3/9 · 33% · ~1.5 h–5 h (from other plans)` is 295.
+    const text = readFileSync(join(SRC, 'features/now/portfolio-strip.tsx'), 'utf8');
+    expect(text).toContain('min-w-0 font-mono text-2xs break-words tabular-nums text-ink-faint');
+  });
+});
+
+describe('text the app did not write can wrap', () => {
+  it('a health issue message breaks long words', () => {
+    // Issue messages quote plan text — slugs, paths, `bash -c '…'` — and a
+    // token with no space in it for forty characters has nothing to wrap AT.
+    // Phase 9 found this on a recorded command; Phase 11 on this list.
+    const text = readFileSync(join(SRC, 'features/insights/portfolio.tsx'), 'utf8');
+    expect(text).toContain('min-w-0 flex-1 text-sm break-words text-ink-muted');
+  });
+});
+
+describe('every Settings section is reachable by thumb', () => {
+  it('the nav links carry the tap minimum', () => {
+    // The whole section list is links, and a link is the only way into a
+    // section — a 28 px row here is a page a phone cannot open.
+    const text = readFileSync(join(SRC, 'features/settings/nav.tsx'), 'utf8');
+    expect(text).toContain('min-h-(--tap-min)');
+  });
+
+  it('the plan scope select cannot size to its widest option', () => {
+    // A `<select>` sizes to its WIDEST option, and every option here is a plan
+    // slug. Unbounded, one long slug made a 423 px control inside a 390 px
+    // phone and scrolled the whole page sideways (Phase 6's trap).
+    const text = readFileSync(join(SRC, 'features/insights/index.tsx'), 'utf8');
+    expect(text).toMatch(/w-full max-w-\d+ min-w-0/);
+  });
+});

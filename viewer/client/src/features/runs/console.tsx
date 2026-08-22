@@ -328,7 +328,14 @@ export function LiveConsole({
           <strong className="truncate text-sm">{title}</strong>
           {subtitle && <span className="truncate font-mono text-2xs text-ink-faint">{subtitle}</span>}
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        {/* `flex-wrap` and NO `shrink-0`. This row grows with the run: Freeze
+            and Stop appear on a live lane, the line count grows a digit, Search
+            opens an input, Detail carries a number. `shrink-0` on a
+            variable-length row is what makes it PUSH rather than wrap — at 390
+            it ran to 441 and took the whole page sideways with it. Phase 10
+            found the same defect on the session strip; the rule is the same
+            wherever a row can grow a control. */}
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
           {actions}
           <span className="font-mono text-2xs text-ink-faint tabular-nums">
             {shown.length}
