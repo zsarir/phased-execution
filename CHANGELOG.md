@@ -6,6 +6,18 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [3.1.2] - 2026-08-22
+
+### Fixed
+
+- **`sessions-presence.test.ts` no longer flakes on a loaded runner.** Its `poll` helper waits on a
+  file WATCHER — an inbox outcome consumed, a lock released, a run minted from a declaration — on a
+  4s default that assumes an idle machine, and a shared CI runner blew past it on a path this
+  release never touched. Two call sites had already been bumped to 6s one at a time; the default is
+  now sized for what these actually wait on, which fixes the shape rather than the next symptom.
+  Third of the same family after `tailscale` and `reliability`, and the last one: every wall-clock
+  wait in the suite now carries a budget matched to the OS event it is waiting for.
+
 ## [3.1.1] - 2026-08-22
 
 ### Fixed — the last gate between a chosen QA rung and an actual launch

@@ -1,6 +1,6 @@
 {
   "name": "phase-console",
-  "version": "3.1.1",
+  "version": "3.1.2",
   "description": "Phase Console — local web console for the phased-execution Claude Code skill: plan boards, phase handoffs, QA gating, autopilot runs.",
   "license": "MIT",
   "author": "mobin (https://github.com/zsarir)",

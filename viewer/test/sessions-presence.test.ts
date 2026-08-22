@@ -163,7 +163,22 @@ const writeInbox = (file: string, body: string): void => {
   renameSync(tmp, file);
 };
 
-const poll = async (check: () => boolean, ms = 4_000): Promise<boolean> => {
+/**
+ * Wait for something a FILE WATCHER has to notice — an inbox outcome consumed, a
+ * lock released, a run minted from a declaration.
+ *
+ * The default is generous on purpose. Every one of these waits on the OS to
+ * deliver a filesystem event and on a debounce to fire, and under a full
+ * parallel suite on a shared CI runner that has been measured well past four
+ * seconds — which is how a release-blocking failure appeared here ("handed to
+ * the live runner") on a path this change set never touched, in a suite that
+ * passes locally every time. Two call sites below had already been bumped to 6s
+ * one at a time; this fixes the shape rather than the next symptom.
+ *
+ * A generous ceiling costs nothing when the condition is met — the loop returns
+ * on the first check that passes.
+ */
+const poll = async (check: () => boolean, ms = 20_000): Promise<boolean> => {
   const until = Date.now() + ms;
   while (Date.now() < until) {
     if (check()) return true;
