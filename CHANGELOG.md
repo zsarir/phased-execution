@@ -71,6 +71,45 @@ Nothing is removed from the URL space: `#/dashboard` `#/ready` `#/pulse` `#/sear
 `#/stats` `#/notifications` `#/mcp` `#/terminal` `#/agent` and the three retired plan tabs all
 resolve, and the server may keep minting the older shapes.
 
+### Fixed before the tag
+
+The first hours of driving real work on the 3.0 client, and the three CI failures that stood on
+`main` while it did.
+
+- **An approved gate now wakes the run it was blocking.** Two independent faults, both measured on
+  `website-luxalgo-redesign`, which sat halted for three hours after its owner did exactly what the
+  errand asked. `collectEvidence` accepts a `gate` dep and `Service.evidenceDeps` never passed one,
+  so the classifier judged the phase by `record.gate` — the snapshot the runner stored *before* the
+  approval — and answered `gated-manual` on every pass, a situation whose only rung is "ask a
+  person". And `evidenceFingerprint` did not include the gate either, so even a correct verdict
+  would have been skipped as "nothing has changed": approving moves neither the run, its records,
+  nor the board word. The engine is the authority on gate state now, here as everywhere else; a read
+  that cannot RUN still degrades to the record, because "I could not check" and "it is not clear"
+  are different facts. The run boarded phase 6 on the first pass after the fix.
+- **The gate is answerable from the run.** The Gate card was private to the plan's phase panel, so
+  the one halt whose fix is a person pressing a button was the one halt you had to leave the
+  autopilot to clear. It is `features/plans/gate-card.tsx` now, with a self-resolving `PhaseGate`
+  mounted on the run's phase drawer — one component, one mutation, one set of invalidations.
+- **Session logs carry a wall clock.** Every folded console line already held `at` and nothing
+  rendered it, so a reader could see the order of two lines but never the gap between them. One
+  column reaches the run page, the plan's autopilot tab and every lane's session pane.
+- **Now opens on what you touched last.** `activity` is the newest mtime across a plan and its
+  handoffs — which is what `momentum` already sorted on — so that order is renamed to what it is,
+  *Last modified*, and made the default. No sixth comparator on a key that already had one.
+- **One definition of "live".** The fleet row, Now's lanes and the plan pulse each carried a copy of
+  the same seven statuses; it is `isLiveStatus` in `shared/status-vocab.js` now.
+- **The boot prompt asks for a real task list.** "Then build the pN.task* list" read as a naming
+  convention: a live phase spent 221 tool calls without one TodoWrite or TaskCreate, with the skill
+  loaded and 89 tools available, and three finished runs look the same. The console's task panel was
+  empty for an honest reason — both the emitter and the model already handled both spellings. The
+  prompt now names the tool and names who reads it.
+- **CI.** `a11y.test.tsx` fixtured `/api/policy` and `/api/tailscale` in shapes the API never
+  returns, crashing two components mid-render while every assertion passed (two unhandled errors,
+  exit 1). And `sessions-presence.test.ts` wrote inbox files with a plain `writeFileSync` where
+  `phase-outcome.sh` writes tmp+`mv` — Linux inotify fires on the zero-length file, and the 250 ms
+  debounce then reads, rejects and consumes a declaration that was never malformed, which is why
+  only the ubuntu leg failed.
+
 ## [2.3.0] - 2026-08-21
 
 Measured on the live state dir (19 runs, 14 plans, Aug 5–19), the autopilot stopped for a person far

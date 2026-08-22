@@ -88,6 +88,31 @@ velocity). `server/service.ts` is the model, `engine.ts` the script wrapper, `st
 artifact, `api/routes.ts` the surface. `shared/` is dependency-free ESM imported by both the Node
 tests and the client.
 
+### The client — six destinations, and the vocabularies they share
+
+Since 3.0 the client is six destinations — **Now · Plans · Runs · Sessions · Insights · Settings** —
+under one shell (`client/src/app/`), with every older address still resolving. `views/` is gone;
+a page lives in `client/src/features/<destination>/`. Overlays (`?k=` palette, `?help=`, `?bell=`)
+are query params, never routes: open ⟺ the URL says so, so navigating anywhere closes them.
+
+Its rule is the same one-source rule as `sizing.env`, and it is what the whole redesign existed to
+establish — a vocabulary lives in `shared/` and is imported by identity by server, client and tests:
+
+- `shared/status-vocab.js` — the 8 UI states worst-first (`needs-you failed running verifying
+  waiting queued skipped done`), the status→state maps, and `isLiveStatus`/`LIVE_RUN_STATUSES`
+  (which is deliberately NOT the server's `IN_FLIGHT`: it includes `queued`, because a loop is
+  behind a queued run even though it holds no child and no lock). Hue and icon are read in exactly
+  one component, `ui/status-badge.tsx`.
+- `shared/route-meta.js` — the route heads and the six destinations, asserted at module load.
+- `shared/situation-model.js` · `shared/ladder-model.js` · `shared/recovery-model.js` — the
+  situation, rung and recovery-class vocabularies.
+- `shared/attention-model.js` (the inbox) and `shared/evidence-model.js` (`deriveEvidence`, exposed
+  as `proof`, never `evidence` and never `done`).
+
+Add a state, a rung or a route in the shared file and nowhere else. Three copies that agree today
+are three copies that disagree the day a word is added — which is how a finished run gets painted as
+running on one page and settled on another.
+
 ### Accounts and the usage window
 
 `server/accounts/` is per-instance, like the push keys and unlike `runs/` — two consoles on one
@@ -200,6 +225,14 @@ rather than refusing.
   vocabularies (situation, ladder, recovery) are imported by identity by server, client and tests
   — add a situation, rung or class in the shared file and nowhere else. QA is never dispatched by
   itself; `autoClass: 'ladder*'` in `KIND_PROFILE` is a word for a surface, never a launch.
+- **The engine is the authority on gate state, including for the healer.** `collectEvidence` takes
+  a `gate` dep and `Service.evidenceDeps` supplies it as a live `--gate-status` read; the
+  `record.gate` fallback is only for a read that could not RUN. It once had no dep at all, so the
+  classifier judged a phase by the snapshot stored before the operator approved, answered
+  `gated-manual` forever, and left the run halted while the board and the engine both said `clear`.
+  For the same reason `evidenceFingerprint` includes the gate's stamp: approving moves neither the
+  run, its records, nor the board word, so without it converge skips with "nothing has changed"
+  against a gate a person has just opened. Both are pinned by tests — don't drop either.
 - **A foreign unexpired lock queues, never terminally parks.** The scheduler owns the wait (holder
   named, lease end shown; woken by the docs watcher, a lease-expiry timer, and the idle poll;
   bounded by the 2-hour lock-wait cap); the boarding belt-check owns only the grant→spawn race
