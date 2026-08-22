@@ -3,6 +3,7 @@ import {
   CardBody,
   CardHeader,
   CardTitle,
+  CopyButton,
   StateChip,
   Table,
   TableWrap,
@@ -188,6 +189,29 @@ export function RouteTab({ detail }: { detail: PlanDetail }) {
             />
           ))}
         </div>
+      )}
+
+      {/* The same board, as the terminal prints it.
+          It was the Analysis tab's last card and Analysis is gone; the board is
+          not analysis, it is this route in the other rendering — the one you
+          paste into a message or diff against `phase-graph.sh` output. Collapsed,
+          because the map above is the better answer to the same question for
+          anyone who is looking at a screen. */}
+      {detail.boardText && (
+        <Card>
+          <CardHeader>
+            <CardTitle>What the terminal shows</CardTitle>
+            <CopyButton text={detail.boardText} label="Copy board" />
+          </CardHeader>
+          <details>
+            <summary className="cursor-pointer px-4 py-2 text-2xs text-ink-faint">
+              <code className="font-mono">phase-graph.sh {slug}</code>
+            </summary>
+            <pre className="m-0 max-h-96 overflow-auto overscroll-contain border-t border-rule bg-ground-deep p-3 font-mono text-xs leading-relaxed whitespace-pre">
+              {detail.boardText}
+            </pre>
+          </details>
+        </Card>
       )}
 
       {lastDone != null && (

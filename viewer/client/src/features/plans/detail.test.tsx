@@ -522,6 +522,16 @@ describe('the plan surface renders its parts', () => {
     expect(screen.getByText('P2 + P3')).toBeTruthy();
   });
 
+  it('keeps the terminal board on the route, copyable — Analysis is gone, the board is not', async () => {
+    renderPlan(['demo']);
+    expect(await screen.findByText('What the terminal shows')).toBeTruthy();
+    // Inside a <details> and a <pre>: assert the CONTENT, whitespace and all,
+    // rather than the normalised text a default matcher would compare.
+    expect(
+      screen.getByText((_, el) => el?.tagName === 'PRE' && el.textContent === DETAIL.boardText),
+    ).toBeTruthy();
+  });
+
   it('makes every departures row reachable by keyboard', async () => {
     renderPlan(['demo']);
     await screen.findByText('Departures');
