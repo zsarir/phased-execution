@@ -20,15 +20,13 @@ import { Suspense, lazy } from 'react';
 import { Banner, Button, Skeleton, Spinner, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { useAutoReadNotifications, usePlan } from '@/lib/queries';
 import { navigate, planHref } from '@shared/routes.js';
-import { Page } from '../_page';
+import { Page } from '@/components/page';
 import { PlanHeader } from './header';
 import { RouteTab } from './route-tab';
 import { PhasesTab } from './phases-tab';
 import { PhasePanel } from './phase-panel';
-import { HandoffPanel, HandoffsTab } from './handoffs';
-import { AnalysisTab } from './analysis-tab';
-import { OverviewTab } from './overview-tab';
-import { RawTab } from './raw-tab';
+import { HandoffPanel, HandoffsTab } from './handoffs-tab';
+import { SourceTab, sourceViewOf } from './source-tab';
 import { DETAIL_TABS, TAB_IDS, isDetailRoute, resolveTab, tabLabel } from './tabs';
 import type { PlanDetail } from '@/lib/api';
 import type { ViewProps } from '@/app/router';
@@ -58,7 +56,18 @@ function PlanSkeleton() {
 }
 
 /** What each tab shows. Total over `PLAN_TABS` — a client test asserts it. */
-function TabBody({ tab, arg, detail }: { tab: string; arg?: string; detail: PlanDetail }) {
+function TabBody({
+  tab,
+  arg,
+  detail,
+  view,
+}: {
+  tab: string;
+  arg?: string;
+  detail: PlanDetail;
+  /** `?view=` — which half of a tab, for the one tab that has two. */
+  view?: string;
+}) {
   const slug = detail.summary.slug;
   switch (tab) {
     case 'phase':
@@ -69,12 +78,8 @@ function TabBody({ tab, arg, detail }: { tab: string; arg?: string; detail: Plan
       return <PhasesTab detail={detail} />;
     case 'handoffs':
       return <HandoffsTab detail={detail} />;
-    case 'analysis':
-      return <AnalysisTab detail={detail} />;
-    case 'overview':
-      return <OverviewTab detail={detail} />;
-    case 'raw':
-      return <RawTab slug={slug} />;
+    case 'source':
+      return <SourceTab detail={detail} slug={slug} view={sourceViewOf(view)} />;
     case 'run':
       return (
         <Suspense fallback={<Spinner label="Reading run state" />}>
@@ -141,7 +146,7 @@ export default function PlanView({ route }: ViewProps) {
                     </Button>
                   </div>
                 )}
-                <TabBody tab={detailKind ?? tabId} arg={arg} detail={data} />
+                <TabBody tab={detailKind ?? tabId} arg={arg} detail={data} view={route.query.view} />
               </>
             )}
           </TabsContent>

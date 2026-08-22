@@ -47,7 +47,7 @@ import {
 import { usePrefs } from '@/lib/prefs';
 import { Banner } from '@/components/ui';
 import { ApiError, type PlanSummaryFull } from '@/lib/api';
-import { Page } from '@/views/_page';
+import { Page } from '@/components/page';
 import type { ViewProps } from '@/app/router';
 import { FOCUS_KEYS, focusOf } from '@/app/routes';
 import { NeedsYou } from './needs-you';

@@ -80,7 +80,7 @@ import {
   type Lane,
 } from './session-panes';
 import { AuthCard, StaleServerNote, looksLikeAuthFailure } from './status-strip';
-import { Page } from '@/views/_page';
+import { Page } from '@/components/page';
 import { Controls } from './fleet-toolbar';
 import { Fleet, FleetTiles } from './fleet-table';
 import {

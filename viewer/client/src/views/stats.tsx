@@ -30,7 +30,7 @@ import { BarList, Bars, Calendar, StackBar, type ChartTone } from '@/components/
 import { ReleaseAllStaleButton, ReleaseStaleButton } from '@/components/release-lock';
 import { classifyIssue } from '@/lib/recovery';
 import type { HealthIssue, Portfolio } from '@/lib/api';
-import { Page } from './_page';
+import { Page } from '@/components/page';
 import { RecoveryActions } from '@/components/recovery-actions';
 
 const SEVERITY_ORDER: Record<string, number> = { error: 0, warning: 1, info: 2 };

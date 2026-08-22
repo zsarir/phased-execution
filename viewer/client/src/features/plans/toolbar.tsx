@@ -1,20 +1,19 @@
 /**
  * How the estate is ordered, and what it leaves out.
  *
- * One component, two shapes — the same split `views/ready/controls.tsx` makes,
- * for the same reason: on a wide screen seeing "Closest to done" beside "Needs
- * attention" is what tells you the other orders exist, and on a phone a hundred
- * and forty pixels of toggles has pushed the thing they control off the screen.
+ * The mechanism — the search field, the phone sheet, the active-filter count,
+ * the note underneath — is `components/toolbar.tsx`, shared with the Runs
+ * fleet. What is left here is the only part that is about PLANS: which orders
+ * exist, which shapes are hidden, and what pressing a toggle would bring back.
  *
- * The search box is the exception and stays visible in both. With sixty-five
- * plans it is the control most reached for, and burying the fastest way to find
- * one behind a button that says "Sort & filter" would be filing it under the
- * wrong verb.
+ * The search box stays visible in both shapes. With sixty-five plans it is the
+ * control most reached for, and burying the fastest way to find one behind a
+ * button that says "Sort & filter" would be filing it under the wrong verb.
  */
 
-import { LayoutGrid, Search, SlidersHorizontal, Table2, X } from 'lucide-react';
-import { Button, ButtonGroup, Chip, Sheet, SheetContent, SheetTrigger } from '@/components/ui';
-import { usePhone } from '@/lib/media';
+import { LayoutGrid, Table2 } from 'lucide-react';
+import { Button, ButtonGroup } from '@/components/ui';
+import { Toolbar, ToolbarSorts, countedLabel, fieldClass, type ToolbarShape } from '@/components/toolbar';
 import { cn } from '@/lib/cn';
 import {
   CLOSED_ONLY,
@@ -43,10 +42,6 @@ export interface ControlsProps {
   onShowEverything: () => void;
 }
 
-const fieldClass =
-  'h-9 min-w-0 rounded border border-rule bg-surface px-2 text-sm text-ink ' +
-  'hover:border-rule-strong [@media(hover:none)]:min-h-(--tap-min)';
-
 /**
  * How many filters are away from their default.
  *
@@ -54,98 +49,12 @@ const fieldClass =
  * `showComplete` it replaces, because the default moved: hiding closed plans is
  * now the resting state, and showing them is the deliberate act.
  */
-/** `Show closed` → `Show closed — 71 more`, and plain again when there is nothing to add. */
-function countedLabel(label: string, count: number): string {
-  return count > 0 ? `${label} — ${count} more` : label;
-}
-
 export function activeFilterCount(filters: Filters): number {
   return (
     Number(filters.showDocuments) +
     Number(filters.showClosed) +
     Number(Boolean(filters.repo)) +
     Number(Boolean(filters.status))
-  );
-}
-
-/* ------------------------------------------------------------------ *
- * The search box
- * ------------------------------------------------------------------ */
-
-function SearchBox({
-  value,
-  onChange,
-  className,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  className?: string;
-}) {
-  return (
-    <div className={cn('relative flex min-w-0 items-center', className)}>
-      <Search size={14} className="pointer-events-none absolute left-2.5 text-ink-faint" aria-hidden />
-      <input
-        type="search"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="Find a plan"
-        aria-label="Find a plan by name or slug"
-        // `pr-8` leaves the clear button its own room; without it the text runs
-        // under a control that then cannot be pressed.
-        className={cn(fieldClass, 'w-full pl-8 pr-8 [&::-webkit-search-cancel-button]:appearance-none')}
-      />
-      {value && (
-        <button
-          type="button"
-          onClick={() => onChange('')}
-          aria-label="Clear the search"
-          className="absolute right-1 grid size-7 place-items-center rounded text-ink-faint hover:text-ink"
-        >
-          <X size={14} aria-hidden />
-        </button>
-      )}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ *
- * The pieces, shared by both shapes
- * ------------------------------------------------------------------ */
-
-function SortRow({ sortId, onSort, wrap }: { sortId: SortId; onSort: (id: SortId) => void; wrap: boolean }) {
-  // A joined segmented control cannot wrap without its borders coming apart, so
-  // the phone sheet uses separate pressable buttons of the same vocabulary.
-  if (wrap) {
-    return (
-      <div className="flex flex-wrap gap-1.5">
-        {SORTS.map((s) => (
-          <Button
-            key={s.id}
-            size="sm"
-            variant={sortId === s.id ? 'action' : 'default'}
-            aria-pressed={sortId === s.id}
-            onClick={() => onSort(s.id)}
-          >
-            {s.label}
-          </Button>
-        ))}
-      </div>
-    );
-  }
-  return (
-    <ButtonGroup>
-      {SORTS.map((s) => (
-        <Button
-          key={s.id}
-          size="sm"
-          aria-pressed={sortId === s.id}
-          onClick={() => onSort(s.id)}
-          title={s.blurb}
-        >
-          {s.label}
-        </Button>
-      ))}
-    </ButtonGroup>
   );
 }
 
@@ -304,82 +213,51 @@ function FilterFields({
   );
 }
 
-/* ------------------------------------------------------------------ *
- * The two shapes
- * ------------------------------------------------------------------ */
-
 export function Controls(props: ControlsProps) {
-  const phone = usePhone();
   const sort = SORTS.find((s) => s.id === props.sortId) ?? SORTS[0];
-  const active = activeFilterCount(props.filters);
 
-  if (phone) {
-    return (
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2">
-          <SearchBox
-            value={props.filters.query}
-            onChange={(query) => props.onFilters({ query })}
-            className="flex-1"
-          />
-          <Sheet>
-            <SheetTrigger asChild>
-              <Button size="sm" className="shrink-0">
-                <SlidersHorizontal size={14} aria-hidden />
-                Sort
-                {active > 0 && <Chip tone="warn">{active}</Chip>}
-              </Button>
-            </SheetTrigger>
-            <SheetContent title="Sort and filter the plans">
-              <p className="mb-1 text-2xs uppercase tracking-wide text-ink-faint">Order by</p>
-              <SortRow sortId={props.sortId} onSort={props.onSort} wrap />
-              <p className="mt-2 text-sm text-ink-muted">{sort.blurb}</p>
-              <hr className="my-3 border-rule" />
-              <p className="mb-2 text-2xs uppercase tracking-wide text-ink-faint">Show</p>
-              <FilterFields {...props} stacked />
-              <hr className="my-3 border-rule" />
-              <p className="mb-2 text-2xs uppercase tracking-wide text-ink-faint">As</p>
-              <LayoutToggle layout={props.layout} onLayout={props.onLayout} />
-            </SheetContent>
-          </Sheet>
-        </div>
-        <p className="min-w-0 text-2xs text-ink-faint">
-          <span className="text-ink-muted">{sort.label}</span> — {sort.hint}
+  const body = (shape: ToolbarShape) =>
+    shape === 'sheet' ? (
+      <>
+        <p className="mb-1 text-2xs uppercase tracking-wide text-ink-faint">Order by</p>
+        <ToolbarSorts sorts={SORTS} value={props.sortId} onSort={props.onSort} shape="sheet" />
+        <p className="mt-2 text-sm text-ink-muted">{sort.blurb}</p>
+        <hr className="my-3 border-rule" />
+        <p className="mb-2 text-2xs uppercase tracking-wide text-ink-faint">Show</p>
+        <FilterFields {...props} stacked />
+      </>
+    ) : (
+      <>
+        <ToolbarSorts sorts={SORTS} value={props.sortId} onSort={props.onSort} shape="inline" />
+        <FilterFields {...props} stacked={false} />
+      </>
+    );
+
+  return (
+    <Toolbar
+      search={{
+        value: props.filters.query,
+        onChange: (query) => props.onFilters({ query }),
+        placeholder: 'Find a plan',
+        label: 'Find a plan by name or slug',
+      }}
+      activeCount={activeFilterCount(props.filters)}
+      sheetTitle="Sort and filter the plans"
+      trailing={<LayoutToggle layout={props.layout} onLayout={props.onLayout} />}
+      note={
+        <>
+          {sort.blurb}
           {props.hiddenBy.total > 0 && (
             <>
               {' '}
               · <HiddenNote hiddenBy={props.hiddenBy} onShowEverything={props.onShowEverything} />
             </>
           )}
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <SearchBox
-          value={props.filters.query}
-          onChange={(query) => props.onFilters({ query })}
-          className="w-52"
-        />
-        <SortRow sortId={props.sortId} onSort={props.onSort} wrap={false} />
-        <FilterFields {...props} stacked={false} />
-        <div className="ml-auto">
-          <LayoutToggle layout={props.layout} onLayout={props.onLayout} />
-        </div>
-      </div>
-      <p className="text-2xs text-ink-faint">
-        {sort.blurb}
-        {props.hiddenBy.total > 0 && (
-          <>
-            {' '}
-            · <HiddenNote hiddenBy={props.hiddenBy} onShowEverything={props.onShowEverything} />
-          </>
-        )}
-      </p>
-    </div>
+        </>
+      }
+    >
+      {body}
+    </Toolbar>
   );
 }
 

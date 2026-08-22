@@ -19,7 +19,7 @@
  */
 
 import { Banner } from '@/components/ui';
-import { Page } from '../_page';
+import { Page } from '@/components/page';
 import { DevicesCard } from './devices';
 import { PreferencesCard } from './preferences';
 

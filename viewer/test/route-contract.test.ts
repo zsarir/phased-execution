@@ -25,7 +25,7 @@ import assert from 'node:assert/strict';
 
 import { CATEGORIES, routeFor } from '../server/push/catalogue.ts';
 import type { RouteContext } from '../server/push/catalogue.ts';
-import { ROUTE_HEADS, PLAN_TABS, isRouteHead } from '../shared/route-meta.js';
+import { ROUTE_HEADS, PLAN_TABS, LEGACY_PLAN_TABS, isRouteHead } from '../shared/route-meta.js';
 import { parseHash, toHash, planHref, phaseHref, handoffHref } from '../shared/routes.js';
 
 /** Full, partial, empty and hostile — the payload states a real push can be in. */
@@ -84,7 +84,7 @@ test('toHash accepts every form this system produces for the same route', () => 
 test('the href builders round-trip a slug that needs encoding, and a phase number', () => {
   const slug = 'p8 demo/tricky?plan';
 
-  assert.deepEqual(parseHash(planHref(slug, 'analysis')).segments, ['plan', slug, 'analysis']);
+  assert.deepEqual(parseHash(planHref(slug, 'source')).segments, ['plan', slug, 'source']);
   assert.deepEqual(parseHash(phaseHref(slug, 8)).segments, ['plan', slug, 'phase', '8']);
   assert.deepEqual(parseHash(handoffHref(slug, 7)).segments, ['plan', slug, 'handoff', '7']);
 
@@ -93,6 +93,20 @@ test('the href builders round-trip a slug that needs encoding, and a phase numbe
   const bare = parseHash(planHref(slug)).segments;
   assert.equal(bare[0], 'plan');
   assert.ok(PLAN_TABS.includes(bare[2]), `planHref's default tab '${bare[2]}' is not in PLAN_TABS`);
+});
+
+test('every retired plan tab still names somewhere real', () => {
+  // These ids are in bookmarks, in handoff prose, and in push payloads minted
+  // by servers older than this build. `app/routes.ts` `planTabRedirect` builds
+  // the URL; this asserts the VOCABULARY it reads is not self-contradictory —
+  // a `tab` that is not a tab, or an id that is both retired and live, is a
+  // redirect into nothing.
+  for (const [id, to] of Object.entries(LEGACY_PLAN_TABS as Record<string, { tab?: string; head?: string }>)) {
+    assert.ok(!PLAN_TABS.includes(id), `'${id}' is both a live tab and a retired one`);
+    assert.ok(to.tab || to.head, `retired tab '${id}' names no destination`);
+    if (to.tab) assert.ok(PLAN_TABS.includes(to.tab), `'${id}' → '${to.tab}', which is not a tab`);
+    if (to.head) assert.ok(isRouteHead(to.head), `'${id}' → head '${to.head}', which is not a route head`);
+  }
 });
 
 test('a query survives the parse', () => {

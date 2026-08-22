@@ -56,6 +56,7 @@ export const keys = {
   plans: () => ['plans'] as const,
   plan: (slug: string) => ['plan', slug] as const,
   planRaw: (slug: string) => ['plan', slug, 'raw'] as const,
+  verifyPreflight: (slug: string) => ['plan', slug, 'verify-preflight'] as const,
   handoff: (slug: string, phase: number | string) => ['plan', slug, 'handoff', String(phase)] as const,
   prompt: (slug: string, phase: number | string) => ['plan', slug, 'prompt', String(phase)] as const,
   nextPrompt: (slug: string, phase: number | string) => ['plan', slug, 'next-prompt', String(phase)] as const,
@@ -645,6 +646,28 @@ export function usePlanRaw(slug: string | undefined, enabled = true) {
     queryKey: keys.planRaw(slug ?? ''),
     queryFn: () => api.planRaw(slug!),
     enabled: Boolean(slug) && enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * What boarding would find wrong with this plan's §Verification commands.
+ *
+ * Under the `['plan', slug]` prefix on purpose, unlike the journal and the
+ * rulings: it is a reading OF the plan file and of this machine's PATH, so the
+ * one thing that invalidates it — the plan changing on disk — is exactly what
+ * that prefix already invalidates.
+ *
+ * Failure is not an error worth retrying at people: a console whose server
+ * predates the endpoint 404s, and the health panel's honest answer to that is
+ * to say nothing rather than to claim the plan is clean.
+ */
+export function useVerifyPreflight(slug: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: keys.verifyPreflight(slug ?? ''),
+    queryFn: () => api.verifyPreflight(slug!),
+    enabled: Boolean(slug) && enabled,
+    retry: false,
     placeholderData: keepPreviousData,
   });
 }

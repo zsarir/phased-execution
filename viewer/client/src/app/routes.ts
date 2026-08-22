@@ -39,7 +39,7 @@
  *    and, unlike a hash fragment, composable with the overlays above.
  */
 
-import { DEFAULT_HEAD, DESTINATIONS, ROUTE_HEADS } from '@shared/route-meta.js';
+import { DEFAULT_HEAD, DESTINATIONS, LEGACY_PLAN_TABS, ROUTE_HEADS } from '@shared/route-meta.js';
 import { handoffHref, navigate, parseHash, phaseHref, planHref, toHash } from '@shared/routes.js';
 
 /** A parsed hash. The shape every page receives and every helper here reads. */
@@ -122,15 +122,51 @@ export const REDIRECTS: Record<string, (route: Route) => string> = {
 };
 
 /**
+ * A retired plan tab's address today, or `null` if this is not one.
+ *
+ * Three of the seven 3.0 tabs retired, and their ids are in bookmarks, in
+ * handoff prose and in push payloads minted by servers older than this build.
+ * The vocabulary is `LEGACY_PLAN_TABS` in `shared/route-meta.js` (the server
+ * reads the same file); the URL is built here, because only the client knows
+ * the slug came out of a hash and has to go back into one encoded.
+ *
+ * `analysis` is the one that leaves the page: its numbers are the Insights
+ * destination's whole subject, so it carries `?plan=` rather than dropping
+ * which plan it was about — the same parameter `#/stats?plan=` has always used.
+ */
+interface LegacyPlanTab {
+  tab?: string;
+  head?: string;
+  view?: string;
+}
+
+export function planTabRedirect(route: Route): string | null {
+  if (route.segments[0] !== 'plan') return null;
+  const [, slug, tab] = route.segments;
+  if (!slug || !tab) return null;
+  const to = (LEGACY_PLAN_TABS as Record<string, LegacyPlanTab | undefined>)[tab];
+  if (!to) return null;
+  if (to.head === 'insights') return insightsHref(slug);
+  if (!to.tab) return null;
+  return planHref(slug, to.tab) + (to.view ? `?view=${enc(to.view)}` : '');
+}
+
+/**
  * Where this route actually goes, or `null` if it is already there.
  *
  * `notifications` is the one head whose redirect depends on its depth:
  * `#/notifications` is the retired inbox and becomes the drawer, while
  * `#/notifications/settings` is a real page that Phase 11 folds into Settings.
+ *
+ * `plan` is a page, not an alias — so its redirect is asked about the SECOND
+ * segment. A retired tab has to be caught here rather than inside the plan view,
+ * or the address bar keeps saying `#/plan/x/raw` while the page shows Source,
+ * and the next reload has to resolve it again.
  */
 export function redirectTarget(route: Route): string | null {
   const head = route.segments[0];
   if (!head) return null;
+  if (head === 'plan') return planTabRedirect(route);
   if (head === 'notifications' && route.segments.length > 1) return null;
   const to = REDIRECTS[head];
   return to ? to(route) : null;

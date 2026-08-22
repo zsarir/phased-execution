@@ -153,7 +153,7 @@ describe('the full-text leg', () => {
     for (const [i, expected] of [
       '#/plan/demo/phase/3',
       '#/plan/demo/handoff/2',
-      '#/plan/demo/overview',
+      '#/plan/demo/source',
     ].entries()) {
       fireEvent.click(rows[i]!);
       expect(onNavigate, expected).toHaveBeenCalledWith(expected);

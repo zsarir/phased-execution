@@ -34,10 +34,11 @@ const KIND_LABEL: Record<string, string> = {
 export function hrefFor(hit: Pick<SearchHit, 'kind' | 'slug' | 'phase'>): string {
   if (hit.kind === 'handoff' && hit.phase != null) return handoffHref(hit.slug, hit.phase);
   if (hit.kind === 'phase' && hit.phase != null) return phaseHref(hit.slug, hit.phase);
-  // `overview` while the plan page still has that tab. Phase 9 renames it to
-  // `source` and brings the `LEGACY_PLAN_TABS` map with it; pointing there now
-  // would be a dead link for six phases.
-  return planHref(hit.slug, 'overview');
+  // The prose reading of the plan file — where a text hit that is neither a
+  // phase nor a handoff actually is. (This was `overview` until Phase 9 folded
+  // that tab and `raw` into one; `LEGACY_PLAN_TABS` keeps the old address
+  // working, but a live link should name the live tab.)
+  return planHref(hit.slug, 'source');
 }
 
 /**

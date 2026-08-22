@@ -96,9 +96,40 @@ export const DESTINATIONS = Object.freeze(['now', 'plans', 'runs', 'sessions', '
  * in-flight-run notification to it); a test asserts it stays present. `phase` and
  * `handoff` are detail sub-routes (`#/plan/:slug/phase/:n`), not tabs, so they are
  * not listed here.
+ *
+ * Five in 3.0, down from seven. `analysis`, `overview` and `raw` were three
+ * readings of the same file that a person had to try in turn: the numbers, the
+ * prose, the bytes. The numbers are Insights' subject and the other two are one
+ * tab with a switch — see `LEGACY_PLAN_TABS`.
  * @type {readonly string[]}
  */
-export const PLAN_TABS = Object.freeze(['route', 'phases', 'run', 'handoffs', 'analysis', 'overview', 'raw']);
+export const PLAN_TABS = Object.freeze(['route', 'phases', 'run', 'handoffs', 'source']);
+
+/**
+ * A retired tab id -> where its address goes now.
+ *
+ * Shared rather than client-local for the same reason `PLAN_TABS` is: these ids
+ * are in bookmarks, in handoff prose, and in push payloads minted by servers
+ * older than this build. `insights` is a HEAD, not a tab — the analysis numbers
+ * became the Insights destination, so that redirect leaves the plan page
+ * entirely and carries `?plan=` to keep which plan it was about. The other two
+ * are tabs of this page.
+ *
+ * A value naming a head is spelled with no leading `#/`; the caller builds the
+ * URL (`app/routes.ts` `planTabRedirect`), because only it knows the slug and
+ * how to encode it. `view` is the half of a tab an address meant — the same
+ * device `?focus=` uses for Now's bands, and the reason `#/plan/x/raw` does not
+ * quietly become "the prose reading of x".
+ * @type {Readonly<Record<string, {tab?: string, head?: string, view?: string}>>}
+ */
+export const LEGACY_PLAN_TABS = Object.freeze({
+  // The prose reading and the byte reading of one file: one tab, one switch.
+  overview: Object.freeze({ tab: 'source' }),
+  raw: Object.freeze({ tab: 'source', view: 'raw' }),
+  // Velocity, completions, spend, ETA — the estate-wide questions, which is
+  // where they answer better than on one plan.
+  analysis: Object.freeze({ head: 'insights' }),
+});
 
 /**
  * Guide section ids — the segment of `#/guide/:section`. The guide is rebuilt as

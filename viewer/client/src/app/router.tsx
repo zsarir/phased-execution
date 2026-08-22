@@ -99,7 +99,7 @@ export const ROUTE_TABLE: Record<string, RouteEntry> = {
   // The needs-you inbox, the live lanes, next up and the plans in flight —
   // the four pages this one absorbed, on the route that was always its home.
   now: page(lazy(() => import('@/features/now'))),
-  plans: page(lazy(() => import('@/views/plans'))),
+  plans: page(lazy(() => import('@/features/plans'))),
   runs: page(lazy(() => import('@/features/runs'))),
   // A placeholder until Phase 10 rebuilds the terminal into it — it links to
   // the two pages that do the work today rather than pretending to be them.
@@ -108,7 +108,7 @@ export const ROUTE_TABLE: Record<string, RouteEntry> = {
   settings: page(lazy(() => import('@/views/settings'))),
 
   /* ---- pages a destination has not absorbed yet ---- */
-  plan: page(lazy(() => import('@/views/plan'))),
+  plan: page(lazy(() => import('@/features/plans/detail'))),
   // Only `#/notifications/settings` reaches this now; the bare head is a
   // redirect into the drawer (see `redirectTarget`).
   notifications: page(lazy(() => import('@/views/notifications'))),

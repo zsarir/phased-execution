@@ -47,7 +47,7 @@ import {
   type TerminalSession,
 } from '@/lib/api';
 import { countdown, duration, elapsed, money, pad2 } from '@/lib/format';
-import { DepsCell, LockCell, PhaseDetails, SizeCell } from '@/views/plan/phase-cells';
+import { DepsCell, LockCell, PhaseDetails, SizeCell } from '@/features/plans/phase-cells';
 import { ForceReleaseButton } from '@/components/release-lock';
 import { useNow } from '@/lib/clock';
 import { useConsoleState } from '@/lib/queries';
@@ -191,17 +191,31 @@ export type PhaseGroupId = (typeof PHASE_GROUPS)[number]['id'];
  * that vanishes because the server learned a new word is the worst outcome
  * here.
  */
-export function groupOf(row: MergedPhase): PhaseGroupId {
+export function groupOf(row: GroupablePhase): PhaseGroupId {
   const running = row.record?.status === 'running';
   const showing = displayState(row.state, { running });
   const group = PHASE_GROUPS.find((g) => (g.states as readonly string[]).includes(showing));
   return group?.id ?? 'waiting';
 }
 
+/**
+ * The least a row has to be to be grouped: a board state, and optionally what a
+ * run recorded against it.
+ *
+ * Wider than `MergedPhase` because Phase 9's plan page groups the SAME five
+ * ways over rows that have no run at all. One rule, two callers — a second
+ * `groupOf` on the plan page is how "Needs you" ends up meaning two things.
+ */
+export interface GroupablePhase {
+  phase: number;
+  state: string;
+  record?: { status?: string };
+}
+
 /** The rows, split into the five groups, empty groups dropped. */
-export function groupRows(
-  rows: readonly MergedPhase[],
-): { id: PhaseGroupId; label: string; hint: string; rows: MergedPhase[] }[] {
+export function groupRows<Row extends GroupablePhase>(
+  rows: readonly Row[],
+): { id: PhaseGroupId; label: string; hint: string; rows: Row[] }[] {
   return PHASE_GROUPS.map((group) => ({
     id: group.id,
     label: group.label,

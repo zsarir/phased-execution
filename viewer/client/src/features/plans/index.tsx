@@ -30,7 +30,7 @@
 
 import { useMemo, useState } from 'react';
 import { FileText, Filter, X } from 'lucide-react';
-import { useConsoleState, usePlans, useRuns } from '@/lib/queries';
+import { useAttentionInbox, useConsoleState, usePlans, useRuns } from '@/lib/queries';
 import { usePrefs } from '@/lib/prefs';
 import { plural } from '@/lib/format';
 import { Banner, Button, Card, Empty, Skeleton, StatusStack, type StatusNote } from '@/components/ui';
@@ -38,12 +38,13 @@ import { NewPlanButton } from '@/components/write-menu';
 // The AI wizard, NOT gated on allowWrites: the claude session writes the plan,
 // not the console — `allowAgent` is its capability. It never imports the pane,
 // so mounting it here costs the plans chunk no xterm.
-import { NewPlanWizardButton } from '../agent/wizard';
+import { NewPlanWizardButton } from '@/views/agent/wizard';
 import { planHref } from '@shared/routes.js';
 import type { PlanSummaryFull } from '@/lib/api';
-import { Page } from '../_page';
-import { Controls } from './controls';
-import { PlanCard, PlanTable } from './row';
+import { Page } from '@/components/page';
+import { Controls } from './toolbar';
+import { PlanCard } from './card';
+import { PlanTable } from './list';
 import {
   NO_FILTERS,
   applyFilters,
@@ -78,10 +79,17 @@ export default function PlansView() {
   // once before learning the endpoint is not there.
   const runsEnabled = state != null && state.autopilot !== false;
   const { data: runs } = useRuns(runsEnabled);
+  // What is waiting on a PERSON, per plan. Already fetched and cached by the
+  // shell's bell badge, so on almost every visit this costs one cache read —
+  // and it is the one fact a row could not derive from `/api/plans`.
+  const { data: inbox } = useAttentionInbox();
 
   // Memoised: a fresh `[]` per render would re-run every memo below on every render.
   const summaries = useMemo(() => (plans ?? []) as unknown as PlanSummaryFull[], [plans]);
-  const all = useMemo(() => toRows(summaries, runs ?? []), [summaries, runs]);
+  const all = useMemo(
+    () => toRows(summaries, runs ?? [], Date.now(), inbox?.items ?? []),
+    [summaries, runs, inbox],
+  );
 
   const filters: Filters = useMemo(
     () => ({ ...local, showDocuments: prefs.showDocuments, showClosed: prefs.showClosed }),

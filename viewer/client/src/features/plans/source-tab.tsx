@@ -1,10 +1,31 @@
+/**
+ * The plan file — read two ways, in one tab.
+ *
+ * 3.0 folded `overview` and `raw` together. They were never two subjects: one
+ * rendered the file's prose and its machine-read graph table, the other printed
+ * the same file byte for byte, and a person who wanted to check what the engine
+ * would parse had to try both tabs to find out which one showed it. One tab,
+ * one switch.
+ *
+ * **`?view=raw` is why the switch is in the address.** `#/plan/x/raw` is in
+ * bookmarks and in handoff prose; redirecting it to a tab that opens on the
+ * prose would keep the link working and lose what it meant. The parameter is
+ * the same device `?focus=` uses for Now's bands — deep-linkable, reloadable,
+ * and composable with the overlays.
+ */
+
 import {
+  Banner,
+  Button,
+  ButtonGroup,
   Card,
   CardBody,
   CardHeader,
   CardTitle,
   Chip,
+  CopyButton,
   Empty,
+  Skeleton,
   Table,
   TableWrap,
   TBody,
@@ -14,22 +35,98 @@ import {
   TR,
 } from '@/components/ui';
 import { Markdown, MarkdownInline } from '@/components/markdown';
+import { usePlanRaw } from '@/lib/queries';
 import { countdown, pad2 } from '@/lib/format';
-import { phaseHref } from '@shared/routes.js';
+import { navigate, phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
 import { DepsCell, LockCell } from './phase-cells';
 
-/** The plan file itself: its prose, the machine-read graph table, its memory. */
-export function OverviewTab({ detail }: { detail: PlanDetail }) {
+export type SourceView = 'reading' | 'raw';
+
+/** Which reading this address asks for. Anything unknown is the prose one. */
+export const sourceViewOf = (value: string | undefined): SourceView => (value === 'raw' ? 'raw' : 'reading');
+
+export function SourceTab({ detail, view, slug }: { detail: PlanDetail; view: SourceView; slug: string }) {
+  const switcher = (
+    <ButtonGroup>
+      <Button
+        size="sm"
+        aria-pressed={view === 'reading'}
+        // Replaced, not pushed: flipping the switch is not a place you go, and
+        // three flips should not be three presses of Back.
+        onClick={() => navigate(`plan/${encodeURIComponent(slug)}/source`, { replace: true })}
+      >
+        Reading
+      </Button>
+      <Button
+        size="sm"
+        aria-pressed={view === 'raw'}
+        onClick={() => navigate(`plan/${encodeURIComponent(slug)}/source?view=raw`, { replace: true })}
+      >
+        Markdown
+      </Button>
+    </ButtonGroup>
+  );
+
+  return view === 'raw' ? (
+    <RawSource slug={slug} switcher={switcher} />
+  ) : (
+    <Reading detail={detail} switcher={switcher} />
+  );
+}
+
+/* ---------------- the bytes ---------------- */
+
+/** The plan file exactly as it is on disk — the thing every reading is a reading of. */
+function RawSource({ slug, switcher }: { slug: string; switcher: React.ReactNode }) {
+  const { data, error, isPending } = usePlanRaw(slug);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="font-mono text-sm normal-case">docs/plans/{slug}.md</CardTitle>
+        <div className="flex items-center gap-2">
+          {data != null && <CopyButton text={data} label="Copy markdown" />}
+          {switcher}
+        </div>
+      </CardHeader>
+      {error ? (
+        <CardBody>
+          <Banner severity="error">{String((error as Error).message ?? error)}</Banner>
+        </CardBody>
+      ) : isPending || data == null ? (
+        <CardBody>
+          <Skeleton className="h-96" />
+        </CardBody>
+      ) : (
+        <pre className="m-0 max-h-[70vh] overflow-auto overscroll-contain border-t border-rule bg-ground-deep p-3 font-mono text-xs leading-relaxed whitespace-pre">
+          {data}
+        </pre>
+      )}
+    </Card>
+  );
+}
+
+/* ---------------- the prose ---------------- */
+
+/** The plan file's own words, its machine-read graph, its budget and its memory. */
+function Reading({ detail, switcher }: { detail: PlanDetail; switcher: React.ReactNode }) {
   const plan = detail.plan;
 
   if (!plan) {
-    return <Empty title="No plan file" body="This slug has handoffs but no plan in docs/plans." />;
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex justify-end">{switcher}</div>
+        <Empty title="No plan file" body="This slug has handoffs but no plan in docs/plans." />
+      </div>
+    );
   }
 
   return (
     <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] lg:items-start">
       <div className="flex min-w-0 flex-col gap-3">
+        <div className="flex justify-end lg:hidden">{switcher}</div>
+
         {plan.provenance && (
           <Card>
             <CardBody>
@@ -140,6 +237,8 @@ export function OverviewTab({ detail }: { detail: PlanDetail }) {
       </div>
 
       <div className="flex min-w-0 flex-col gap-3">
+        <div className="hidden justify-end lg:flex">{switcher}</div>
+
         <Card>
           <CardHeader>
             <CardTitle>Session budget</CardTitle>

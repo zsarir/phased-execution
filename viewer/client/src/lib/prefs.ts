@@ -83,6 +83,15 @@ export interface Prefs {
    * ids, not the open ones, so a group added later opens by default.
    */
   runPhasesCollapsed: string[];
+  /**
+   * The same, for the PLAN page's Phases tab — deliberately its own key.
+   *
+   * The two lists group by the same five states and answer different
+   * questions: the run page is "what is this run doing", where Done is the
+   * receipts, and the plan page is "where does this plan stand", where Done is
+   * most of the plan. Collapsing one has never meant collapsing the other.
+   */
+  planPhasesCollapsed: string[];
   /** Keep the session console open on the runs page while nothing is running. */
   runsConsole: boolean;
   /**
@@ -141,6 +150,7 @@ const DEFAULTS: Prefs = {
   runsGroup: false,
   // Only `done` — the one group that is usually the longest and least read.
   runPhasesCollapsed: ['done'],
+  planPhasesCollapsed: ['done'],
   runsConsole: false,
   mapPanZoom: false,
   terminalFontStep: 0,

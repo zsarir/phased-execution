@@ -42,7 +42,7 @@ import {
 } from '@/components/ui';
 import { navigate } from '@/app/router';
 import type { ViewProps } from '@/app/router';
-import { Page } from '../_page';
+import { Page } from '@/components/page';
 
 /** How many servers is a working number, per the ecosystem's own experience. */
 const COMFORTABLE = 6;

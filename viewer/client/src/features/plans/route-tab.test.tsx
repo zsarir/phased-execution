@@ -54,11 +54,11 @@ const DETAIL = {
 
 async function mount(detail: PlanDetail) {
   const client = new QueryClient(queryClientConfig);
-  const { RouteCards } = await import('./route-cards');
+  const { HealthPanel } = await import('./health-panel');
   return render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
-        <RouteCards detail={detail} />
+        <HealthPanel detail={detail} />
       </TooltipProvider>
     </QueryClientProvider>,
   );

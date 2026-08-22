@@ -27,7 +27,7 @@ import {
 } from '@/components/ui';
 import { useState } from 'react';
 import { applyUpdateNow } from '@/lib/pwa';
-import { Page } from '../_page';
+import { Page } from '@/components/page';
 import { AutomationCard } from './automation';
 import { LadderCard } from './ladder';
 import { SessionHookCard } from './hooks';

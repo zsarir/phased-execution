@@ -350,12 +350,27 @@ export function useMapView({
 
   const zoomCentre = (factor: number) => zoomAt((size.w || 0) / 2, (size.h || 0) / 2, (k) => k * factor);
 
+  /**
+   * Put a plan point in the middle of the frame, at whatever zoom is current.
+   *
+   * Pan only, never zoom: the caller is saying "look here", not "look closer",
+   * and a map that also re-scaled itself would throw away a zoom the operator
+   * chose. Stable across renders so an effect can depend on it.
+   */
+  const centreOn = useCallback(
+    (x: number, y: number) => {
+      setView((v) => (size.w && size.h ? { ...v, x: x - size.w / v.k / 2, y: y - size.h / v.k / 2 } : v));
+    },
+    [size.w, size.h],
+  );
+
   return {
     frame,
     view,
     size,
     fit,
     zoomCentre,
+    centreOn,
     /** Read at click time: a drag that crossed a station is not a tap on it. */
     dragged,
     handlers: {
@@ -423,6 +438,15 @@ export interface RouteMapProps {
   budget?: number;
   onSelect?: (phase: number) => void;
   selected?: number | null;
+  /**
+   * The station the map opens looking at.
+   *
+   * A plan of forty phases fits the frame by being drawn small, and the one
+   * node that wanted a person was as likely to be in a corner as anywhere. The
+   * caller decides WHICH — this only knows how to look at it — and it is
+   * honoured once per plan, so panning away is not undone on the next render.
+   */
+  focus?: number | null;
   className?: string;
 }
 
@@ -445,19 +469,35 @@ function stationTitle(
   return lines.join('\n');
 }
 
-export function RouteMap({ route, batches, budget, onSelect, selected, className }: RouteMapProps) {
+export function RouteMap({ route, batches, budget, onSelect, selected, focus, className }: RouteMapProps) {
   const { points, width, height } = useMemo(() => positions(route), [route]);
   const contentH = height + LABEL_DROP;
 
   const [hover, setHover] = useState<number | null>(null);
   const [prefs, setPrefs] = usePrefs();
   const narrow = useNarrow();
-  const { frame, view, size, fit, zoomCentre, dragged, handlers } = useMapView({
+  const fitKey = `${route.nodes.length}:${width}:${height}`;
+  const { frame, view, size, fit, zoomCentre, centreOn, dragged, handlers } = useMapView({
     width,
     contentH,
-    fitKey: `${route.nodes.length}:${width}:${height}`,
+    fitKey,
     interactive: prefs.mapPanZoom,
   });
+
+  /* Look at the station the caller named — once per plan, after the fit has
+     landed. Once per plan and not once per render, because the point of the
+     gesture is where you go NEXT, and a map that snapped back to the same node
+     every time the run stream ticked could not be panned at all. */
+  const focused = useRef<string | null>(null);
+  useEffect(() => {
+    if (focus == null || !size.w || !size.h) return;
+    const key = `${fitKey}:${focus}`;
+    if (focused.current === key) return;
+    const point = points.get(focus);
+    if (!point) return;
+    focused.current = key;
+    centreOn(point.x, point.y);
+  }, [focus, fitKey, points, size.w, size.h, centreOn]);
 
   /** What each station waits on — the edges, read the way a tooltip needs them. */
   const incoming = useMemo(() => {

@@ -1,7 +1,7 @@
 import { Bot, TerminalSquare } from 'lucide-react';
 import { useConsoleState } from '@/lib/queries';
 import { Banner, Card, Empty } from '@/components/ui';
-import { Page } from '@/views/_page';
+import { Page } from '@/components/page';
 
 /**
  * **Sessions** — the destination, before the page.

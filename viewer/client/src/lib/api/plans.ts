@@ -4,7 +4,7 @@
  */
 
 import { request, post, q } from './client';
-import type { EtaEstimate, EvidenceProof, PhaseEta } from './runs';
+import type { EtaEstimate, EvidenceProof, PhaseEta, PreflightWarning } from './runs';
 
 export interface PlanSummary {
   slug: string;
@@ -258,6 +258,30 @@ export interface HandoffRow {
   skillsUsed: string[];
 }
 
+/**
+ * What boarding will find wrong with this plan's §Verification, BEFORE a run
+ * exists and before any money is spent.
+ *
+ * The warnings are the RUN's own `PreflightWarning` — deliberately the same
+ * type, because they are computed by the same extractor and the same lead
+ * resolver, and a second shape here would let the plan page and the run page
+ * describe one finding two ways. The server has written these to the journal as
+ * prose since Phase 4, where they predicted the dominant halt class forty-four
+ * times and were rendered by nothing.
+ *
+ * None of the four kinds is fatal on its own, which is why the plan page badges
+ * rather than blocks: `missing-lead` is a command the supervisor will SKIP and
+ * record, `human-check` is a §Verification only a person can answer,
+ * `cwd-unpinned` runs at the repository root and usually means it, and only
+ * `nothing-runnable` is certain to park the phase.
+ *
+ * Only OPEN phases appear — a done phase's verification already ran.
+ */
+export interface VerifyPreflight {
+  phases: { phase: number; warnings: PreflightWarning[] }[];
+  computedAt: string;
+}
+
 export interface PlanDetail {
   summary: PlanSummaryFull;
   plan: PlanFile | null;
@@ -387,6 +411,10 @@ export const plansApi = {
     ),
   sessionPlan: (slug: string, model?: string) =>
     request<unknown>(`/api/plans/${q(slug)}/session-plan${model ? `?model=${q(model)}` : ''}`),
+  /* Read-only and advisory: what boarding would find, per open phase. It costs
+     the plan's own extractor plus a PATH lookup per lead — cheap, but not free,
+     so it is its own request rather than a field on `detail()`. */
+  verifyPreflight: (slug: string) => request<VerifyPreflight>(`/api/plans/${q(slug)}/verify-preflight`),
   write: (body: WriteRequest, dry?: boolean) => post<WriteResult>(`/api/write${dry ? '?dry=1' : ''}`, body),
 
   /* ---- stale claims ----

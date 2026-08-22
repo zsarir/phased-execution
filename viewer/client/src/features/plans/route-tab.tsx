@@ -3,7 +3,6 @@ import {
   CardBody,
   CardHeader,
   CardTitle,
-  Chip,
   StateChip,
   Table,
   TableWrap,
@@ -15,16 +14,16 @@ import {
 } from '@/components/ui';
 import { RouteMap } from '@/components/dag';
 import { PromptCard } from '@/components/prompt-card';
-import { RouteCards } from './route-cards';
+import { HealthPanel } from './health-panel';
 import { api } from '@/lib/api';
 import { isClosed } from '@/lib/closure';
 import { keys } from '@/lib/queries';
-import { pad2, weight } from '@/lib/format';
+import { pad2 } from '@/lib/format';
 import { navigate, phaseHref } from '@shared/routes.js';
 import type { PlanDetail } from '@/lib/api';
 import { DepsCell, FlagsCell, LockCell, ScopeCell, SizeCell, TitleCell } from './phase-cells';
 import { usePhone } from '@/lib/media';
-import { PhasesTab as PhonePhaseList } from './phases-tab';
+import { PhasesTab } from './phases-tab';
 
 /** The estimate for one phase, or nothing on a source with no plan detail. */
 const etaFor = (detail: PlanDetail, phase: number) => detail.eta?.perPhase.find((e) => e.phase === phase);
@@ -109,6 +108,23 @@ function DeparturesBoard({ detail }: { detail: PlanDetail }) {
   );
 }
 
+/**
+ * The station the map should open looking at.
+ *
+ * Needs-you first, then a failure, then whatever is moving, then the first
+ * thing that COULD move — in that order, because they are in that order of
+ * urgency and because a map of forty phases is drawn small enough that the one
+ * node worth seeing was as likely to be off in a corner as anywhere.
+ *
+ * `null` on a plan where nothing wants anything: a map that always snapped
+ * somewhere would teach the operator that the snap means nothing.
+ */
+export function focusPhase(detail: PlanDetail): number | null {
+  const by = (...states: string[]) => detail.phases.find((p) => states.includes(p.state))?.phase ?? null;
+  // `stuck` is a handoff that reads blocked — a person is being asked for.
+  return by('stuck') ?? by('in-progress') ?? by('ready');
+}
+
 export function RouteTab({ detail }: { detail: PlanDetail }) {
   const phone = usePhone();
   const slug = detail.summary.slug;
@@ -119,20 +135,21 @@ export function RouteTab({ detail }: { detail: PlanDetail }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <RouteCards detail={detail} />
+      <HealthPanel detail={detail} />
 
       <RouteMap
         route={detail.route}
         batches={detail.batches}
         budget={detail.summary.budget}
+        focus={focusPhase(detail)}
         onSelect={(phase) => navigate(phaseHref(slug, phase))}
       />
 
       {/* `--session-plan` answers a closed plan with its CLOSED banner and "No
-          sessions to plan", so `groups` is empty and the card below would simply
-          vanish. Say why instead: an absent card on a plan that still shows
-          unfinished phases reads as the console failing to compute one. */}
-      {closed ? (
+          sessions to plan", so the health panel's batching simply vanishes. Say
+          why instead: an absent card on a plan that still shows unfinished
+          phases reads as the console failing to compute one. */}
+      {closed && (
         <Card>
           <CardHeader>
             <CardTitle>No sessions to plan</CardTitle>
@@ -147,31 +164,12 @@ export function RouteTab({ detail }: { detail: PlanDetail }) {
             </p>
           </CardBody>
         </Card>
-      ) : detail.batches?.groups?.length ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Suggested sessions</CardTitle>
-            <span className="text-xs text-ink-faint">
-              from <code className="font-mono">phase-graph.sh --session-plan</code> · budget{' '}
-              {weight(detail.summary.budget)}
-            </span>
-          </CardHeader>
-          <CardBody className="flex flex-wrap gap-1.5">
-            {detail.batches.groups.map((group) => (
-              <Chip key={group.index} title={group.note ?? ''}>
-                <b>S{group.index}</b>&nbsp;{group.phases.map((p) => `P${p}`).join(' + ')}
-                &nbsp;<span className="text-ink-faint">{group.weight}</span>
-                {group.gated ? ' · gated' : ''}
-              </Chip>
-            ))}
-          </CardBody>
-        </Card>
-      ) : null}
+      )}
 
-      {/* The 8-column nowrap table cannot be true on a phone; the phases-tab
-          card list is the same facts, one thumb wide. The DAG above stays —
-          its touch stack is the good part. */}
-      {phone ? <PhonePhaseList detail={detail} /> : <DeparturesBoard detail={detail} />}
+      {/* The 8-column nowrap table cannot be true on a phone; the Phases tab's
+          state-grouped list is the same facts, one thumb wide. The DAG above
+          stays — its touch stack is the good part. */}
+      {phone ? <PhasesTab detail={detail} /> : <DeparturesBoard detail={detail} />}
 
       {/* `--boot-prompt` has no closure guard of its own — it will happily write
           a full prompt for an abandoned plan's phase — so the gate has to be

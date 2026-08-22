@@ -21,7 +21,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PLAN_TABS } from '@shared/route-meta.js';
 import { queryClientConfig } from '@/lib/queries';
 import type { PlanDetail } from '@/lib/api';
-import PlanView from './index';
+import PlanView from './detail';
 import { DETAIL_TABS, TAB_IDS, resolveTab, tabLabel } from './tabs';
 
 /* The api module is the only thing this view talks to. */
@@ -507,7 +507,9 @@ describe('the plan surface renders its parts', () => {
     vi.mocked(api.plan).mockResolvedValue(closedDetail());
     renderPlan(['demo']);
     expect(await screen.findByText('No sessions to plan')).toBeTruthy();
-    expect(screen.queryByText('Suggested sessions')).toBeNull();
+    // The batching lives in the health panel's "What is left" card, which a
+    // closed plan does not get at all.
+    expect(screen.queryByText('What is left')).toBeNull();
   });
 
   it('still offers the boot prompt and the batches on an OPEN plan', async () => {
@@ -515,7 +517,9 @@ describe('the plan surface renders its parts', () => {
     // fixture that never had these in the first place.
     renderPlan(['demo']);
     expect(await screen.findByRole('link', { name: 'P2 ready' })).toBeTruthy();
-    expect(screen.getByText('Suggested sessions')).toBeTruthy();
+    expect(screen.getByText('What is left')).toBeTruthy();
+    // The batch itself, not just the card around it.
+    expect(screen.getByText('P2 + P3')).toBeTruthy();
   });
 
   it('makes every departures row reachable by keyboard', async () => {

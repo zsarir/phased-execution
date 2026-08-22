@@ -94,6 +94,29 @@ describe('the aliases', () => {
     expect(redirectTarget(route('#/pulse'))).toBe('#/now?focus=lanes');
   });
 
+  it('sends a retired plan TAB where it went, keeping what the address meant', () => {
+    // `plan` is a page, not an alias, so its redirect is about the SECOND
+    // segment. Catching it here rather than inside the plan view is what keeps
+    // the address bar honest: otherwise it goes on saying `/raw` while the
+    // page shows Source, and the next reload has to resolve it again.
+    expect(redirectTarget(route('#/plan/demo/overview'))).toBe('#/plan/demo/source');
+    // `raw` and `overview` became ONE tab, so the parameter is what keeps them
+    // distinguishable — the same device `?focus=` uses for Now's bands.
+    expect(redirectTarget(route('#/plan/demo/raw'))).toBe('#/plan/demo/source?view=raw');
+    // Analysis left the plan page entirely; `?plan=` is which plan it was about.
+    expect(redirectTarget(route('#/plan/demo/analysis'))).toBe('#/insights?plan=demo');
+    // A slug that needs encoding survives the round trip.
+    expect(redirectTarget(route('#/plan/a%2Fb/raw'))).toBe('#/plan/a%2Fb/source?view=raw');
+  });
+
+  it('leaves a LIVE plan tab, and the phase/handoff detail routes, exactly where they are', () => {
+    for (const tail of ['route', 'phases', 'run', 'handoffs', 'source', 'phase/3', 'handoff/2']) {
+      expect(redirectTarget(route(`#/plan/demo/${tail}`)), tail).toBeNull();
+    }
+    // And the bare plan address is not a redirect either.
+    expect(redirectTarget(route('#/plan/demo'))).toBeNull();
+  });
+
   it('leaves the notification SETTINGS page alone — only the bare head retired', () => {
     // Phase 11 folds it into Settings; until then it is a page, and a redirect
     // here would take the device register away with the inbox.

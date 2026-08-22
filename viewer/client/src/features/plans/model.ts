@@ -89,6 +89,19 @@ export interface PlanRow {
   firstIssue?: string;
   /** A live claim by another session, and whether its lease has lapsed. */
   claim?: { owner: string; phase?: number; expired: boolean };
+  /**
+   * How many inbox items are waiting on a PERSON for this plan.
+   *
+   * Not derived from the row like `concerns` is — it is the unified inbox
+   * (`/api/inbox`, Phase 4) counted per slug, which knows about gates, errands,
+   * sign-ins and MCP walls that no field of `/api/plans` mentions. `fyi` is
+   * excluded: a ruling is worth reading and is not a thing anyone is waiting
+   * for, and a list that counted it would tell every plan it needs attention.
+   *
+   * Zero on a console whose server predates the endpoint. A silent zero is the
+   * honest answer there — the row makes no claim rather than a false one.
+   */
+  needsYou: number;
 
   run?: RowRun;
 }
@@ -110,7 +123,16 @@ export function toRows(
   plans: readonly PlanSummaryFull[],
   runs: readonly RunState[] = [],
   now = Date.now(),
+  /** The unified inbox, or nothing on a console that cannot answer for it. */
+  inbox: readonly { slug?: string; severity: string }[] = [],
 ): PlanRow[] {
+  // `fyi` is informational — see `PlanRow.needsYou`.
+  const waiting = new Map<string, number>();
+  for (const item of inbox) {
+    if (!item.slug || item.severity === 'fyi') continue;
+    waiting.set(item.slug, (waiting.get(item.slug) ?? 0) + 1);
+  }
+
   const newest = new Map<string, RowRun>();
   for (const run of runs) {
     if (newest.has(run.slug)) continue;
@@ -167,6 +189,10 @@ export function toRows(
       warnings: plan.issueCounts?.warning ?? 0,
       firstIssue: plan.engineError ?? worst?.message,
       claim: claim ? { owner: claim.owner, phase: claim.phase, expired: claim.expired } : undefined,
+      // A closed plan reports nothing to do, for the same reason its ready
+      // chips are suppressed — the inbox already drops it, and this is the
+      // belt to that braces.
+      needsYou: closed ? 0 : (waiting.get(plan.slug) ?? 0),
 
       run: newest.get(plan.slug),
     };
@@ -223,6 +249,15 @@ export function concerns(row: PlanRow): Concern[] {
   }
   if (row.isClosed) return out;
 
+  // First after a broken plan, because it is the only concern that is somebody
+  // ALREADY WAITING rather than a condition that might want looking at.
+  if (row.needsYou > 0) {
+    out.push({
+      key: 'needs-you',
+      text: `${plural(row.needsYou, 'thing')} waiting on you`,
+      tone: 'bad',
+    });
+  }
   if (row.run?.status === 'halted') {
     out.push({ key: 'halted', text: 'the autopilot halted here', tone: 'bad' });
   }
