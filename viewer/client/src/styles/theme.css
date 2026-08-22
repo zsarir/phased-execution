@@ -189,6 +189,19 @@
 
   --rail-width: 236px;
   --content-max: 1560px;
+
+  /* ---- Density ----
+     The ONE lever behind `prefs.density`. Every card, tile and section stack
+     reads these four, so `data-density` on the root is the whole switch — the
+     same shape as the theme above, and the reason a density does not mean
+     editing forty className strings. Comfortable is what 3.0 shipped; compact
+     is roughly a fifth tighter, which is the difference between six rows and
+     seven on a phone without changing a single type size (the 12 px floor is
+     not negotiable, so density buys space out of padding, never out of ink). */
+  --pad-x: calc(var(--spacing) * 4);
+  --pad-y: calc(var(--spacing) * 3);
+  --tile-pad-x: calc(var(--spacing) * 3);
+  --tile-pad-y: calc(var(--spacing) * 2.5);
   /* The 3.0 header. A definite height so the one scroller below it gets a
      definite remainder — a header that sizes to its contents makes the whole
      shell relayout whenever a usage meter appears. */
@@ -197,6 +210,13 @@
 
 :root[data-theme='dark'] { color-scheme: dark; }
 :root[data-theme='light'] { color-scheme: light; }
+
+:root[data-density='compact'] {
+  --pad-x: calc(var(--spacing) * 3);
+  --pad-y: calc(var(--spacing) * 2);
+  --tile-pad-x: calc(var(--spacing) * 2.5);
+  --tile-pad-y: calc(var(--spacing) * 1.5);
+}
 
 /* ------------------------------------------------------------------ *
  * Tailwind theme

@@ -1,6 +1,6 @@
 /**
- * The MCP page: what it says with the flag off, what it warns about, and that
- * the destructive verb states its cost before it happens.
+ * The MCP section: what it says with the flag off, what it warns about, and
+ * that the destructive verb states its cost before it happens.
  *
  * Asserted through roles and copy rather than implementation, like every other
  * view test here — the point is that an operator can read the page and act on
@@ -40,7 +40,7 @@ vi.mock('@/app/router', async (importOriginal) => ({
   navigate: vi.fn(),
 }));
 
-import McpView from './index';
+import { McpSection } from './mcp';
 
 function server(patch: Partial<McpServerView> = {}): McpServerView {
   return {
@@ -55,11 +55,12 @@ function server(patch: Partial<McpServerView> = {}): McpServerView {
   };
 }
 
-function mount() {
-  const route = { segments: ['mcp'], query: {}, path: '/mcp' };
+function mount(query: Record<string, string> = {}) {
+  // `#/settings/mcp` — the section, at the address the old `#/mcp` redirects to.
+  const route = { segments: ['settings', 'mcp'], query, path: 'settings/mcp' };
   return render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <McpView route={route} />
+      <McpSection route={route} />
     </QueryClientProvider>,
   );
 }
@@ -69,7 +70,7 @@ beforeEach(() => {
   catalogMock.mockResolvedValue({ entries: [] });
 });
 
-describe('the MCP page', () => {
+describe('the MCP section', () => {
   it('names the flag when registration is off, and offers no verbs', async () => {
     mcpMock.mockResolvedValue({ servers: [server()], allowMcp: false });
     mount();

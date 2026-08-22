@@ -126,11 +126,11 @@ describe('RunSetup is the only launch form', () => {
       // The one form. (`per-phase.tsx` renders its rows from the list RunSetup
       // hands it, so it never names the vocabulary itself.)
       'features/run-setup/run-setup.tsx',
-      // Settings' "Session plan model" row, which imports that same fallback
-      // under an explicit alias and prefers `state.models`. It had its OWN
-      // hardcoded list of full ids until Phase 6 — the fourth one, and the
-      // reason this assertion exists.
-      'views/settings/index.tsx',
+      // Settings ▸ Appearance's "Session plan model" row, which imports that
+      // same fallback under an explicit alias and prefers `state.models`. It
+      // had its OWN hardcoded list of full ids until Phase 6 — the fourth one,
+      // and the reason this assertion exists.
+      'features/settings/appearance.tsx',
     ];
     expect(offenders(/\bMODELS\b/, allowed)).toEqual([]);
   });

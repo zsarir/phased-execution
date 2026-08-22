@@ -1,36 +1,27 @@
 /**
- * Portfolio statistics: what exists, what is moving, and what is wrong.
+ * The portfolio panel — what exists, and what is wrong with it.
  *
- * Ported from `web/views/stats.js`. The charts are restyled rather than
- * redesigned (see `components/charts.tsx`); what changed here is that every
- * navigable thing is a link. The old view rendered plan references and issue
- * rows as `<button onClick=navigate>`, so a page whose entire purpose is "which
- * of these should I look at next" could not be opened in a second tab.
+ * The census half of Insights: how the phases are distributed across states and
+ * sizes, which plans are busiest, what is claimed, what the engine flagged, and
+ * what has ready work nobody has touched. Ported from `views/stats.tsx` (2.x
+ * `#/stats`), which was ALL of Insights in one scroll; the trend, money, ETA
+ * and mix halves are now their own panels, so this one answers only "what is
+ * the shape of the work, and is any of it broken".
+ *
+ * Every navigable thing is a link. The 2.x view rendered plan references and
+ * issue rows as `<button onClick=navigate>`, so a page whose entire purpose is
+ * "which of these should I look at next" could not be opened in a second tab.
  */
 
 import { useMemo, useState } from 'react';
-import { useConsoleState, usePlans, useStats } from '@/lib/queries';
-import { countdown, plural, weight } from '@/lib/format';
-import { isClosed } from '@/lib/closure';
+import { plural } from '@/lib/format';
+import { countdown } from '@/lib/format';
 import { phaseHref, planHref } from '@shared/routes.js';
-import {
-  Banner,
-  Button,
-  ButtonGroup,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
-  Chip,
-  Empty,
-  Skeleton,
-  Tile,
-} from '@/components/ui';
-import { BarList, Bars, Calendar, StackBar, type ChartTone } from '@/components/charts';
+import { Button, ButtonGroup, Card, CardBody, CardHeader, CardTitle, Chip, Empty } from '@/components/ui';
+import { BarList, StackBar, type ChartTone } from '@/components/charts';
 import { ReleaseAllStaleButton, ReleaseStaleButton } from '@/components/release-lock';
 import { classifyIssue } from '@/lib/recovery';
 import type { HealthIssue, Portfolio } from '@/lib/api';
-import { Page } from '@/components/page';
 import { RecoveryActions } from '@/components/recovery-actions';
 
 const SEVERITY_ORDER: Record<string, number> = { error: 0, warning: 1, info: 2 };
@@ -59,147 +50,45 @@ export function recentRate(rate: Portfolio['rate'], mediumWeight = 40_000): stri
   return ` · recent rate ≈ ${minutes} min per M phase`;
 }
 
-export default function StatsView() {
-  const { data: stats, isPending, error } = useStats();
-  const { data: state } = useConsoleState();
+export function PortfolioPanel({
+  stats,
+  allowWrites,
+  closedSlugs,
+}: {
+  stats: Portfolio;
+  allowWrites: boolean;
+  closedSlugs: ReadonlySet<string>;
+}) {
   const [severity, setSeverity] = useState<Severity>('all');
-  const allowWrites = Boolean(state?.allowWrites);
   // Debris does not count. A lapsed lease on a closed plan blocks nothing —
   // `phase-lock.sh conflicts` skips it — so folding it into this number would
   // put an amber "N leases ran out" band and a Release-all button in front of
   // the operator for a chore that does not exist.
-  const expiredLocks = (stats?.activeLocks ?? []).filter((lock) => lock.expired && !lock.closed).length;
-
-  // Which slugs are closed, so an issue row can say so and can stop offering a
-  // repair the server would refuse anyway (`plan-repair` 409s on a closed plan).
-  // `/api/plans` rather than a new wire field: every other page has already
-  // fetched it, so this is a cache read, and `HealthIssue` stays five fields.
-  const { data: plans } = usePlans();
-  const closedSlugs = useMemo(
-    () => new Set((plans ?? []).filter((p) => isClosed(p)).map((p) => p.slug)),
-    [plans],
-  );
+  const expiredLocks = stats.activeLocks.filter((lock) => lock.expired && !lock.closed).length;
 
   const counts = useMemo(() => {
     const out = { error: 0, warning: 0, info: 0 };
-    for (const issue of stats?.issues ?? []) out[issue.severity]++;
+    for (const issue of stats.issues) out[issue.severity]++;
     return out;
   }, [stats]);
 
-  const issues = useMemo(() => {
-    if (!stats) return [];
-    return [...stats.issues]
-      .filter((issue) => severity === 'all' || issue.severity === severity)
-      .sort(
-        (a, b) =>
-          (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3) ||
-          a.slug.localeCompare(b.slug),
-      );
-  }, [stats, severity]);
-
-  if (error) {
-    return (
-      <Page title="Statistics">
-        <Banner severity="error">{String((error as Error).message ?? error)}</Banner>
-      </Page>
-    );
-  }
-
-  if (isPending || !stats) {
-    return (
-      <Page title="Statistics" subtitle="Reading every plan">
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-20" />
-          ))}
-        </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          {[0, 1].map((i) => (
-            <Skeleton key={i} className="h-40" />
-          ))}
-        </div>
-      </Page>
-    );
-  }
+  const issues = useMemo(
+    () =>
+      [...stats.issues]
+        .filter((issue) => severity === 'all' || issue.severity === severity)
+        .sort(
+          (a, b) =>
+            (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3) ||
+            a.slug.localeCompare(b.slug),
+        ),
+    [stats, severity],
+  );
 
   const t = stats.totals;
-  const generated = new Date(stats.generatedAt).toISOString().slice(0, 16).replace('T', ' ');
 
   return (
-    <Page
-      title="Statistics"
-      subtitle={`Portfolio · ${generated}`}
-      actions={
-        <>
-          <Chip mono>{plural(t.plans, 'plan')}</Chip>
-          <Chip mono>{plural(t.documents, 'document')}</Chip>
-          {t.orphans > 0 && (
-            <Chip mono tone="warn">
-              {plural(t.orphans, 'orphan folder')}
-            </Chip>
-          )}
-        </>
-      }
-    >
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Tile label="Phases" value={t.phases} hint={`${t.done} done · ${t.percent}% of everything`} />
-        <Tile
-          label="Ready now"
-          value={t.ready}
-          state={t.ready > 0 ? 'state-ready' : undefined}
-          hint={`${t.inProgress} in flight · ${t.waiting} waiting`}
-        />
-        {/* The page counted phases and never said how long one takes, which is
-            the quantity every other figure on it is implicitly about. Stated per
-            M phase because M is the unit the sizing constants are anchored on —
-            "40K of weight" is the same number and means nothing out loud. */}
-        <Tile
-          label="Work left"
-          value={weight(t.remainingWeight)}
-          hint={`≈ ${plural(t.remainingSessions, 'session')} across open plans${recentRate(stats.rate, state?.sizing?.M)}`}
-        />
-        <Tile
-          label="Errors"
-          value={counts.error}
-          state={counts.error > 0 ? 'state-blocked' : undefined}
-          hint={`${plural(counts.warning, 'warning')} · ${plural(counts.info, 'note')}`}
-        />
-      </div>
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Velocity</CardTitle>
-            <span className="text-2xs text-ink-faint">phases completed per week · 26 weeks</span>
-          </CardHeader>
-          <CardBody>
-            <Bars data={stats.velocity} label="phases" />
-            <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2 text-2xs text-ink-faint">
-              <span className="font-mono">{stats.velocity[0]?.week}</span>
-              <span>
-                median gap between phases{' '}
-                {stats.medianCycleDays == null
-                  ? '—'
-                  : stats.medianCycleDays === 0
-                    ? 'same day'
-                    : `${stats.medianCycleDays}d`}
-              </span>
-              <span className="font-mono">{stats.velocity.at(-1)?.week}</span>
-            </div>
-          </CardBody>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Completions by day</CardTitle>
-          </CardHeader>
-          <CardBody>
-            <Calendar data={stats.calendar} />
-          </CardBody>
-        </Card>
-      </div>
-
-      <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+    <div className="flex min-w-0 flex-col gap-3">
+      <div className="grid min-w-0 gap-3 md:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader>
             <CardTitle>Phase states</CardTitle>
@@ -252,38 +141,7 @@ export default function StatsView() {
         </Card>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle>Repos touched</CardTitle>
-          </CardHeader>
-          <CardBody>
-            <BarList items={stats.repos.map((row) => ({ name: row.repo, value: row.count }))} />
-          </CardBody>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Skills used</CardTitle>
-          </CardHeader>
-          <CardBody>
-            {stats.skills.length ? (
-              <BarList items={stats.skills.map((row) => ({ name: row.skill, value: row.count }))} />
-            ) : (
-              <span className="text-sm text-ink-faint">No handoff records a skill yet.</span>
-            )}
-          </CardBody>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Target models</CardTitle>
-          </CardHeader>
-          <CardBody>
-            <BarList items={stats.models.map((row) => ({ name: row.model, value: row.count }))} />
-          </CardBody>
-        </Card>
-      </div>
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+      <div className="grid min-w-0 gap-3 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Locks</CardTitle>
@@ -460,7 +318,7 @@ export default function StatsView() {
           </CardBody>
         </Card>
       )}
-    </Page>
+    </div>
   );
 }
 

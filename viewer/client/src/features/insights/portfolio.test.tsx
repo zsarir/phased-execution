@@ -1,11 +1,16 @@
 /**
- * The statistics page.
+ * Insights, and the portfolio panel that is most of it.
  *
  * Its job is "which of these should I look at next", so the properties worth
  * asserting are the ones that make it answerable: the health filter actually
  * filters, an issue points at the phase it is about rather than only the plan,
  * and an empty filter says *which* filter is empty rather than implying the
  * portfolio is clean.
+ *
+ * Mounted through the destination (`./index`) rather than the panel alone,
+ * because the panel's inputs — the portfolio, the closed-plan set, whether
+ * writes are allowed — are exactly what the destination assembles, and a test
+ * that hand-built them would pass while the real page passed the wrong ones.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -17,11 +22,16 @@ import type { Portfolio } from '@/lib/api';
 // `plans` as well as `stats`: the page joins closure on from the plan list,
 // because the search-independent `HealthIssue` carries no status of its own.
 // Unmocked it would reach for a real fetch under jsdom.
-const { stats, plans } = vi.hoisted(() => ({ stats: vi.fn(), plans: vi.fn() }));
+const { stats, plans, spend, state } = vi.hoisted(() => ({
+  stats: vi.fn(),
+  plans: vi.fn(),
+  spend: vi.fn(),
+  state: vi.fn(),
+}));
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
-  return { ...actual, api: { ...actual.api, stats, plans } };
+  return { ...actual, api: { ...actual.api, stats, plans, spend, state } };
 });
 
 const PORTFOLIO: Portfolio = {
@@ -82,12 +92,15 @@ const PORTFOLIO: Portfolio = {
   busiest: [{ slug: 'demo', completions: 12 }],
 };
 
+/** The bare `#/insights` route — the portfolio scope. */
+const ROUTE = { segments: ['insights'], query: {}, path: 'insights' };
+
 function mount() {
   const client = new QueryClient(queryClientConfig);
-  return import('./stats').then(({ default: StatsView }) =>
+  return import('./index').then(({ default: InsightsView }) =>
     render(
       <QueryClientProvider client={client}>
-        <StatsView />
+        <InsightsView route={ROUTE} />
       </QueryClientProvider>,
     ),
   );
@@ -96,6 +109,19 @@ function mount() {
 beforeEach(() => {
   vi.clearAllMocks();
   stats.mockResolvedValue(PORTFOLIO);
+  // The destination also asks for money and for the console's own sizing. Both
+  // are their own panels; here they only have to answer.
+  spend.mockResolvedValue({ today: { settledUsd: 0, ladderUsd: 0, capUsd: null }, runs: [], series: [] });
+  state.mockResolvedValue({
+    autopilot: true,
+    allowRun: true,
+    allowWrites: false,
+    staticRoot: 'dist',
+    scriptsDir: '/scripts',
+    sizing: { S: 15_000, M: 40_000, L: 90_000, budgetBig: 200_000, budgetHaiku: 40_000 },
+    recentRoots: [],
+    unread: 0,
+  });
   plans.mockResolvedValue([
     { slug: 'demo', kind: 'plan', phases: 8, ready: [2], status: 'active', closed: false },
     { slug: 'other', kind: 'plan', phases: 6, ready: [2, 3], status: 'active', closed: false },
@@ -103,7 +129,7 @@ beforeEach(() => {
   ]);
 });
 
-describe('statistics', () => {
+describe('insights', () => {
   it('counts issues by severity in the tiles and the filter labels', async () => {
     await mount();
     await screen.findByRole('button', { name: 'All 3' });
@@ -229,14 +255,14 @@ describe('recentRate — how long a phase actually takes', () => {
   it('states the rate per M phase, not per unit of weight', async () => {
     // "60 ms per unit of weight" is the right thing to store and an unreadable
     // thing to print. M is the size the sizing constants are anchored on.
-    const { recentRate } = await import('./stats');
+    const { recentRate } = await import('./portfolio');
     expect(recentRate({ ratePerWeight: 60, basis: 'plan', samples: 5, spread: 0.35 }, 40_000)).toBe(
       ' · recent rate ≈ 40 min per M phase',
     );
   });
 
   it("scales with the machine's own sizing rather than a baked-in 40K", async () => {
-    const { recentRate } = await import('./stats');
+    const { recentRate } = await import('./portfolio');
     expect(recentRate({ ratePerWeight: 60, basis: 'portfolio', samples: 5, spread: 0.5 }, 20_000)).toContain(
       '20 min',
     );
@@ -245,7 +271,7 @@ describe('recentRate — how long a phase actually takes', () => {
   it('says nothing at all when there is nothing to say', async () => {
     // It rides on the end of a hint that already says something, so `· unknown`
     // is worse than silence — and the heuristic is not a measured rate.
-    const { recentRate } = await import('./stats');
+    const { recentRate } = await import('./portfolio');
     expect(recentRate(undefined)).toBe('');
     expect(recentRate({ ratePerWeight: 60, basis: 'heuristic', samples: 0, spread: 0.6 })).toBe('');
     expect(recentRate({ ratePerWeight: 0, basis: 'plan', samples: 1, spread: 0.7 })).toBe('');

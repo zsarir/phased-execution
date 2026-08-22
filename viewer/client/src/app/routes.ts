@@ -20,8 +20,9 @@
  *    `#/pulse` joined the list in Phase 8, when Now grew the sections that
  *    answered them — each becomes a redirect in the phase that builds its
  *    destination, never before, because a redirect onto a home that does not
- *    exist yet is a broken link with extra steps. `#/mcp` is still a page for
- *    exactly that reason: Settings does not grow an MCP section until Phase 11.
+ *    exist yet is a broken link with extra steps. `#/mcp` was still a page for
+ *    exactly that reason until Phase 11 gave Settings its eight addressed
+ *    sections; it is an alias now, and `#/settings/mcp` is the page.
  *
  * 3. **The three overlays are query parameters, not routes.** `?k=` (command
  *    palette), `?help=` (help sheet) and `?bell=` (announcements drawer) ride on
@@ -127,7 +128,23 @@ export const REDIRECTS: Record<string, (route: Route) => string> = {
   // exist before an agent pty does. Same rule as `#/ready` → `?focus=next`.
   terminal: (route) => sessionsOrNew(route, 'shell'),
   agent: (route) => sessionsOrNew(route, 'agent'),
+  // Phase 11: Settings became eight addressed sections, so the two pages it had
+  // not absorbed move into it. The MCP page's second SEGMENT becomes a query
+  // value — `#/settings/:section` is the address space now, and a section that
+  // could also own a sub-path would let every section invent its own
+  // vocabulary. `?tab=` keeps the half of the old address that meant something,
+  // the `#/ready` → `?focus=next` rule.
+  mcp: (route) => (route.segments[1] === 'catalog' ? 'settings/mcp?tab=catalog' : 'settings/mcp'),
 };
+
+/**
+ * The two pages Settings absorbed in Phase 11, as a note for the next reader:
+ * `#/mcp[/catalog]` → `#/settings/mcp[?tab=catalog]` above, and
+ * `#/notifications/settings` → `#/settings/alerts` in `redirectTarget` (it is
+ * the only redirect that depends on a head's DEPTH, so it cannot live in the
+ * table, which is keyed on the head alone).
+ */
+const NOTIFICATION_SETTINGS_HOME = 'settings/alerts';
 
 /** `#/terminal/abc` → `#/sessions/abc`; bare `#/terminal` → `#/sessions?new=shell`. */
 function sessionsOrNew(route: Route, kind: 'agent' | 'shell'): string {
@@ -169,8 +186,9 @@ export function planTabRedirect(route: Route): string | null {
  * Where this route actually goes, or `null` if it is already there.
  *
  * `notifications` is the one head whose redirect depends on its depth:
- * `#/notifications` is the retired inbox and becomes the drawer, while
- * `#/notifications/settings` is a real page that Phase 11 folds into Settings.
+ * `#/notifications` is the retired inbox and becomes the bell drawer, while
+ * `#/notifications/settings` — a real page until Phase 11 — is now Settings ▸
+ * Alerts. Two destinations for one head is why this cannot be a table entry.
  *
  * `plan` is a page, not an alias — so its redirect is asked about the SECOND
  * segment. A retired tab has to be caught here rather than inside the plan view,
@@ -181,7 +199,10 @@ export function redirectTarget(route: Route): string | null {
   const head = route.segments[0];
   if (!head) return null;
   if (head === 'plan') return planTabRedirect(route);
-  if (head === 'notifications' && route.segments.length > 1) return null;
+  // `#/notifications` is the retired inbox and becomes the drawer; the deeper
+  // `#/notifications/settings` was a real page until Phase 11 folded it into
+  // Settings ▸ Alerts. Both now redirect, to different places.
+  if (head === 'notifications' && route.segments.length > 1) return NOTIFICATION_SETTINGS_HOME;
   const to = REDIRECTS[head];
   return to ? to(route) : null;
 }

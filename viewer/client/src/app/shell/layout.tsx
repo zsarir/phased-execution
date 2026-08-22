@@ -112,6 +112,12 @@ export function ShellLayout({
   const content = (
     <main
       ref={main}
+      id="main"
+      // Focusable only programmatically: `app/shell/route-frame.tsx` focuses it
+      // after a navigation, because a hash change moves focus nowhere and a
+      // keyboard user who has just chosen a destination is still inside the nav.
+      // `-1` keeps it out of the tab order, so nothing has to be tabbed THROUGH.
+      tabIndex={-1}
       className={
         fullHeight
           ? // Terminal/agent own their height: banners stay in flow and the
@@ -132,6 +138,26 @@ export function ShellLayout({
 
   return (
     <SlotContext.Provider value={{ headerActions, banner }}>
+      {/* The first focusable thing on the page, and invisible until it is
+          focused. Without it a keyboard user starts every page inside the rail
+          or the header and tabs past a dozen destinations, a project switcher,
+          a spend meter and a bell before reaching what they came for. It is
+          rendered OUTSIDE the grid on purpose: inside, it would be a grid item
+          and would claim a row. */}
+      <a
+        href="#main"
+        onClick={(event) => {
+          // The href is what makes it a real link (and what a screen reader
+          // reads); the focus is what actually moves, because `#main` in a hash
+          // router would otherwise be parsed as a route.
+          event.preventDefault();
+          main.current?.focus({ preventScroll: true });
+        }}
+        className="sr-only rounded bg-surface px-3 py-2 text-sm text-ink outline-2 outline-accent
+          focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-(--z-toast)"
+      >
+        Skip to content
+      </a>
       <div
         // `.is-phone` is the shell contract: the class the layout, the tests and
         // the browser checks all agree means "header + tab bar, no rail".

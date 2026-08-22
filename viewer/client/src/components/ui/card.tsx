@@ -18,7 +18,10 @@ export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
 export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn('flex items-start justify-between gap-3 border-b border-rule px-4 py-3', className)}
+      className={cn(
+        'flex items-start justify-between gap-3 border-b border-rule px-(--pad-x) py-(--pad-y)',
+        className,
+      )}
       {...props}
     />
   );
@@ -29,7 +32,7 @@ export function CardTitle({ className, ...props }: HTMLAttributes<HTMLHeadingEle
 }
 
 export function CardBody({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('px-4 py-3', className)} {...props} />;
+  return <div className={cn('px-(--pad-x) py-(--pad-y)', className)} {...props} />;
 }
 
 /**
@@ -52,7 +55,14 @@ export function Tile({
   state?: string;
 } & HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn('rounded-lg border border-rule bg-surface px-3 py-2.5', state, className)} {...props}>
+    <div
+      className={cn(
+        'rounded-lg border border-rule bg-surface px-(--tile-pad-x) py-(--tile-pad-y)',
+        state,
+        className,
+      )}
+      {...props}
+    >
       {/* `tabular-nums` because every Tile value in this app is a figure — a
           count, a sum of money, a duration — and a column of them that
           re-flows digit by digit as the numbers tick is a column you cannot

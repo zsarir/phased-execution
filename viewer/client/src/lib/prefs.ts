@@ -185,6 +185,7 @@ export function setPrefs(patch: Partial<Prefs>): void {
     /* private mode */
   }
   if (patch.theme) applyTheme(state.theme);
+  if (patch.density) applyDensity(state.density);
   for (const notify of listeners) notify();
 }
 
@@ -212,4 +213,23 @@ export function applyTheme(theme: Theme): void {
   const root = document.documentElement;
   if (theme === 'system') root.removeAttribute('data-theme');
   else root.setAttribute('data-theme', theme);
+}
+
+/**
+ * The density switch — the twin of `applyTheme`, and for the same reason.
+ *
+ * `theme.css` declares the four padding tokens once and every card, tile and
+ * section stack reads them, so one attribute on the root repaints the spacing
+ * of the whole app. `comfortable` is the absence of the attribute, which keeps
+ * the shipped look free of a rule that has to win a specificity fight.
+ *
+ * Only PADDING moves. The type floor (12 px) and the tap-target minimum
+ * (`--tap-min`) are contracts the phone bar tests assert, so a density that
+ * bought its space out of either would be a preference that silently breaks
+ * accessibility on the surface it is most useful on.
+ */
+export function applyDensity(density: Prefs['density']): void {
+  const root = document.documentElement;
+  if (density === 'compact') root.setAttribute('data-density', 'compact');
+  else root.removeAttribute('data-density');
 }

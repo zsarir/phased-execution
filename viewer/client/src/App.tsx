@@ -18,7 +18,7 @@ import { Banner, Spinner, Toaster, TooltipProvider, toast } from '@/components/u
 import { installAppHeight } from '@/lib/viewport';
 import { resolveView, useNavigate, useRoute } from '@/app/router';
 import { CHROMELESS_HEADS, FULL_HEIGHT_HEADS, redirectTarget } from '@/app/routes';
-import { LegacyRoute } from '@/app/legacy-route';
+import { RouteFrame } from '@/app/shell/route-frame';
 import { ShellLayout } from '@/app/shell/layout';
 import { Palette } from '@/app/command/palette';
 import { NotificationsDrawer } from '@/app/notifications/drawer';
@@ -283,7 +283,7 @@ export function App() {
           )
         }
       >
-        <LegacyRoute view={View} route={route} fullHeight={fullHeight} />
+        <RouteFrame view={View} route={route} fullHeight={fullHeight} />
       </ShellLayout>
 
       {/* The three overlays. Each is open exactly when the URL says so, which is

@@ -22,7 +22,8 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { api, type PolicyLists } from '@/lib/api';
-import { keys, usePlans, usePolicy } from '@/lib/queries';
+import { keys, useConsoleState, usePlans, usePolicy } from '@/lib/queries';
+import { SettingsSectionFrame, sectionFor } from './nav';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -645,5 +646,22 @@ function RuleChips({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * The Permissions section — the card in its own frame.
+ *
+ * Its own export rather than a wrapper in `index.tsx` so that the lazy import
+ * pulls the rule editor and this heading together; a section whose title lived
+ * in the eagerly-loaded chunk and whose body did not would paint a bare heading
+ * for as long as the chunk took.
+ */
+export function PermissionsSection() {
+  const { data: state } = useConsoleState();
+  return (
+    <SettingsSectionFrame section={sectionFor('permissions')!}>
+      <PolicyCard allowWrites={Boolean(state?.allowWrites)} />
+    </SettingsSectionFrame>
   );
 }

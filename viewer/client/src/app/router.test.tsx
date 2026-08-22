@@ -118,19 +118,25 @@ describe('the aliases', () => {
     expect(redirectTarget(route('#/plan/demo'))).toBeNull();
   });
 
-  it('leaves the notification SETTINGS page alone — only the bare head retired', () => {
-    // Phase 11 folds it into Settings; until then it is a page, and a redirect
-    // here would take the device register away with the inbox.
-    expect(redirectTarget(route('#/notifications/settings'))).toBeNull();
+  it('sends the two halves of the notifications head to two different places', () => {
+    // The one head whose redirect depends on its DEPTH. The bare address was
+    // the announcement log and becomes the drawer; the deeper one was the
+    // device register and preferences, and is now a Settings section. One
+    // destination for both would take the device register away with the inbox.
+    // The bare one is built by `bellHref`, which mints a whole hash; the other
+    // is a bare path like every other entry in the table. `navigate()` accepts
+    // both, and the difference is which builder owns the URL.
+    expect(redirectTarget(route('#/notifications'))).toBe('#/now?bell=1&panel=announcements');
+    expect(redirectTarget(route('#/notifications/settings'))).toBe('settings/alerts');
   });
 
-  it('does not redirect a page whose new home has not been built', () => {
-    // Settings grows an MCP section in Phase 11. Until then a redirect would be
-    // a broken link with extra steps — which is the rule `#/ready` and
-    // `#/pulse` waited on until Phase 8 built the sections that answer them.
-    for (const hash of ['#/mcp']) {
-      expect(redirectTarget(route(hash)), hash).toBeNull();
-    }
+  it('folds the MCP page into Settings, keeping which half of it you asked for', () => {
+    // Phase 11 built the section, so the redirect is no longer a broken link
+    // with extra steps — the rule `#/ready` and `#/pulse` waited on until
+    // Phase 8. The second SEGMENT becomes a query value because
+    // `#/settings/:section` is the address space now.
+    expect(redirectTarget(route('#/mcp'))).toBe('settings/mcp');
+    expect(redirectTarget(route('#/mcp/catalog'))).toBe('settings/mcp?tab=catalog');
   });
 });
 

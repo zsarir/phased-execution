@@ -41,7 +41,7 @@ const CATEGORIES = [
 function mount(notify: Record<string, boolean> = {}) {
   state.mockResolvedValue({ prefs: { notify } });
   const client = new QueryClient(queryClientConfig);
-  return import('./preferences').then(({ PreferencesCard }) =>
+  return import('./alerts').then(({ PreferencesCard }) =>
     render(
       <QueryClientProvider client={client}>
         <PreferencesCard />

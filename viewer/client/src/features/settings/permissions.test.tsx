@@ -60,7 +60,7 @@ vi.mock('@/lib/queries', async (importOriginal) => {
 
 async function mount() {
   const client = new QueryClient(queryClientConfig);
-  const { PolicyCard } = await import('./policy');
+  const { PolicyCard } = await import('./permissions');
   return render(
     <QueryClientProvider client={client}>
       <PolicyCard allowWrites />

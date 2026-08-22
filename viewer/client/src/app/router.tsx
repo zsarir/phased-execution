@@ -106,16 +106,20 @@ export const ROUTE_TABLE: Record<string, RouteEntry> = {
   // chunk: `session-page.tsx` reaches the pane through a `lazy()` of its own,
   // because Sessions is a destination and destination chunks are precached.
   sessions: page(lazy(() => import('@/features/sessions'))),
-  insights: page(lazy(() => import('@/views/stats'))),
-  settings: page(lazy(() => import('@/views/settings'))),
+  // Velocity, cost against the caps, the ETA and the portfolio — plan-scoped
+  // with `?plan=`, which is the parameter `#/stats` always carried.
+  insights: page(lazy(() => import('@/features/insights'))),
+  // Eight addressed sections under `#/settings/:section`; the index is a real
+  // page rather than a bounce to the first one, because on a phone the list IS
+  // the screen.
+  settings: page(lazy(() => import('@/features/settings'))),
 
   /* ---- pages a destination has not absorbed yet ---- */
   plan: page(lazy(() => import('@/features/plans/detail'))),
-  // Only `#/notifications/settings` reaches this now; the bare head is a
-  // redirect into the drawer (see `redirectTarget`).
-  notifications: page(lazy(() => import('@/views/notifications'))),
-  mcp: page(lazy(() => import('@/views/mcp'))),
-  source: page(lazy(() => import('@/views/source'))),
+  // The chromeless pre-open directory picker: it renders INSTEAD of the shell,
+  // because there is nothing to navigate to until a root is open. Settings ▸
+  // General is the door to it.
+  source: page(lazy(() => import('@/features/settings/source'))),
 
   /* ---- aliases: a head whose new home already exists ---- */
   dashboard: redirect(REDIRECTS.dashboard),
@@ -131,6 +135,11 @@ export const ROUTE_TABLE: Record<string, RouteEntry> = {
   // address still says which KIND it meant.
   terminal: redirect(REDIRECTS.terminal),
   agent: redirect(REDIRECTS.agent),
+  // Phase 11: the last two pages Settings had not absorbed. `notifications` is
+  // the only head with two destinations — bare goes to the bell drawer, and
+  // `/settings` to Settings ▸ Alerts — which `redirectTarget` decides on depth.
+  mcp: redirect(REDIRECTS.mcp),
+  notifications: redirect(REDIRECTS.notifications),
 };
 
 /** `''` and anything unregistered land on Now rather than nowhere. */

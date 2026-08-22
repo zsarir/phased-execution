@@ -14,9 +14,9 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ReactElement } from 'react';
+import { lazy, type ReactElement } from 'react';
 import { MemoryRouterProvider } from '@/app/router';
 import { parseHash, type Route } from '@/app/routes';
 import { TooltipProvider } from '@/components/ui';
@@ -163,5 +163,66 @@ describe('the navigation names itself', () => {
     await expectNoAxeViolations(container);
     // The glyph is `aria-hidden`, so the word beside it is the whole name.
     expect(screen.getByRole('button', { name: 'More' })).toBeTruthy();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The three jobs a hash router has to do by hand
+ * ------------------------------------------------------------------ */
+
+describe('a hash change is a navigation, and is treated as one', () => {
+  it('offers a skip link as the first focusable thing on the page', async () => {
+    mount(<ShellLayout state={STATE} counts={COUNTS} route={route()} phone={false} children={null} />);
+    const skip = await screen.findByRole('link', { name: /skip to content/i });
+    // Visually hidden until focused — `sr-only` plus a `focus:not-sr-only`
+    // escape. A skip link that is always visible is the one everybody deletes.
+    expect(skip.className).toContain('sr-only');
+    expect(skip.className).toContain('focus:not-sr-only');
+    expect(skip.getAttribute('href')).toBe('#main');
+  });
+
+  it('moves focus into the page it lands on, and says where it is', async () => {
+    const { RouteFrame } = await import('./route-frame');
+    const Page = lazy(async () => ({ default: () => <p>the page</p> }));
+
+    function Harness({ path }: { path: string }) {
+      return (
+        <>
+          <main id="main" tabIndex={-1}>
+            <RouteFrame view={Page} route={parseHash(`#/${path}`) as Route} />
+          </main>
+        </>
+      );
+    }
+
+    const { rerender } = mount(<Harness path="now" />);
+    await screen.findByText('the page');
+    // Nothing on the FIRST paint: nothing was navigated from, and stealing
+    // focus on load is noise on top of the page the reader just opened.
+    expect(document.activeElement).not.toBe(document.querySelector('main'));
+
+    rerender(
+      <QueryClientProvider client={new QueryClient(queryClientConfig)}>
+        <TooltipProvider>
+          <MemoryRouterProvider initial="#/insights">
+            <Harness path="insights" />
+          </MemoryRouterProvider>
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(document.activeElement).toBe(document.querySelector('main')));
+    // And a screen reader is told, politely, which destination this is.
+    const live = document.querySelector('[aria-live="polite"]');
+    expect(live?.textContent).toBe('Insights');
+  });
+
+  it('names the destination and where in it, never the raw hash', async () => {
+    const { routeAnnouncement } = await import('./route-frame');
+    expect(routeAnnouncement(parseHash('#/now') as Route)).toBe('Now');
+    expect(routeAnnouncement(parseHash('#/settings/automation') as Route)).toBe('Settings, automation');
+    // A head that is not itself a destination still announces the one it
+    // belongs under — the same mapping that keeps the nav lit.
+    expect(routeAnnouncement(parseHash('#/plan/demo/route') as Route)).toBe('Plans, demo route');
   });
 });

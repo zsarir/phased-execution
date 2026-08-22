@@ -4,24 +4,30 @@
  * Two halves, because they answer two different questions. **Registry** is
  * "what do I have, and is it working" — the one a person opens when a phase
  * parked. **Catalog** is "what could I have" — the one they open once, when
- * setting a machine up.
+ * setting a machine up. The catalog lives in its own module (`./mcp-catalog`).
  *
  * Registration is gated by `--allow-mcp`; READING is not. Without the flag the
- * page still shows the registry, the statuses and the catalog, and says what
+ * section still shows the registry, the statuses and the catalog, and says what
  * the flag would add — a capability that hides when disabled looks like a bug.
  *
- * The page is deliberately opinionated about restraint. Every attached server
- * costs context on every turn and adds tool names that can collide, so the
- * header states the working range rather than leaving people to discover it,
- * and a phase's own call counts (on the run page) are what settle the argument.
+ * The section is deliberately opinionated about restraint. Every attached
+ * server costs context on every turn and adds tool names that can collide, so
+ * the header states the working range rather than leaving people to discover
+ * it, and a phase's own call counts (on the run page) are what settle the
+ * argument.
+ *
+ * 3.0 folded `#/mcp` and `#/mcp/catalog` in here (`#/settings/mcp` and
+ * `?tab=catalog`). The tab is a QUERY value rather than a path segment because
+ * `#/settings/:section` is the address space now: a second segment would mean
+ * every section could invent its own sub-path vocabulary, and the redirect that
+ * carries the old links needs somewhere to put the half of the address that
+ * survived — the `#/ready` → `?focus=next` rule.
  */
 
-import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import * as Tabs from '@radix-ui/react-tabs';
 
-import { keys, useMcp, useMcpCatalog } from '@/lib/queries';
-import { api, type McpCatalogEntry, type McpServerView } from '@/lib/api';
+import { keys, useMcp } from '@/lib/queries';
+import { api, type McpServerView } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 import {
   AlertDialog,
@@ -41,16 +47,21 @@ import {
   toast,
 } from '@/components/ui';
 import { navigate } from '@/app/router';
-import type { ViewProps } from '@/app/router';
-import { Page } from '@/components/page';
+import type { Route } from '@/app/router';
+import { useState } from 'react';
+import * as Tabs from '@radix-ui/react-tabs';
+import { SettingsSectionFrame, sectionFor } from './nav';
+import { Catalog } from './mcp-catalog';
 
 /** How many servers is a working number, per the ecosystem's own experience. */
 const COMFORTABLE = 6;
 
+/** The one control class this half needs — see `ui/field.ts` for the rule. */
 const field = 'w-full rounded-md border border-rule bg-surface px-2 py-1.5 text-sm';
 
-export default function McpView({ route }: ViewProps) {
-  const tab = route.segments[1] === 'catalog' ? 'catalog' : 'registry';
+export function McpSection({ route }: { route: Route }) {
+  const section = sectionFor('mcp')!;
+  const tab = route.query.tab === 'catalog' ? 'catalog' : 'registry';
   const { data, isPending } = useMcp();
   const servers = data?.servers ?? [];
   const allowed = data?.allowMcp ?? false;
@@ -65,38 +76,43 @@ export default function McpView({ route }: ViewProps) {
   const attention = attached.filter(needsAttention);
 
   return (
-    <Page
-      title="MCP servers"
-      subtitle="Tools your sessions may connect to — registered here, named by plans, attached per run"
-      actions={
-        <Button size="sm" onClick={() => refresh.mutate()} disabled={refresh.isPending || !attached.length}>
-          {refresh.isPending ? 'Checking…' : 'Re-check all'}
-        </Button>
-      }
-    >
+    <SettingsSectionFrame section={section}>
       {attention.length > 0 && (
-        <Banner severity="error" className="mb-3">
+        <Banner severity="error">
           {attention.length === 1
             ? `${attention[0].label} needs attention — any phase naming it will park at boarding.`
             : `${attention.length} servers need attention — phases naming them will park at boarding.`}
         </Banner>
       )}
 
-      <Tabs.Root value={tab} onValueChange={(next) => navigate(next === 'catalog' ? 'mcp/catalog' : 'mcp')}>
-        <Tabs.List className="mb-3 flex gap-1 border-b border-rule">
-          {(['registry', 'catalog'] as const).map((id) => (
-            <Tabs.Trigger
-              key={id}
-              value={id}
-              className="-mb-px border-b-2 border-transparent px-3 py-1.5 text-sm text-ink-muted
-                data-[state=active]:border-accent data-[state=active]:text-ink"
-            >
-              {id === 'registry' ? `Registered (${servers.length})` : 'Catalog'}
-            </Tabs.Trigger>
-          ))}
-        </Tabs.List>
+      <Tabs.Root
+        value={tab}
+        onValueChange={(next) => navigate(next === 'catalog' ? 'settings/mcp?tab=catalog' : 'settings/mcp')}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule">
+          <Tabs.List className="flex min-w-0 gap-1">
+            {(['registry', 'catalog'] as const).map((id) => (
+              <Tabs.Trigger
+                key={id}
+                value={id}
+                className="-mb-px min-h-(--tap-min) border-b-2 border-transparent px-3 py-1.5 text-sm text-ink-muted
+                  data-[state=active]:border-accent data-[state=active]:text-ink"
+              >
+                {id === 'registry' ? `Registered (${servers.length})` : 'Catalog'}
+              </Tabs.Trigger>
+            ))}
+          </Tabs.List>
+          <Button
+            size="sm"
+            className="mb-1.5 shrink-0"
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending || !attached.length}
+          >
+            {refresh.isPending ? 'Checking…' : 'Re-check all'}
+          </Button>
+        </div>
 
-        <Tabs.Content value="registry">
+        <Tabs.Content value="registry" className="mt-3">
           {isPending ? (
             <div className="grid gap-3">
               <Skeleton className="h-32" />
@@ -107,15 +123,13 @@ export default function McpView({ route }: ViewProps) {
           )}
         </Tabs.Content>
 
-        <Tabs.Content value="catalog">
+        <Tabs.Content value="catalog" className="mt-3">
           <Catalog allowed={allowed} registered={new Set(servers.map((server) => server.id))} />
         </Tabs.Content>
       </Tabs.Root>
-    </Page>
+    </SettingsSectionFrame>
   );
 }
-
-/** A server whose state would stop a phase, or whose tools moved under us. */
 function needsAttention(server: McpServerView): boolean {
   return server.status === 'needs-auth' || server.status === 'failed' || Boolean(server.toolsChanged);
 }
@@ -399,211 +413,4 @@ function StatusChip({ server }: { server: McpServerView }) {
     default:
       return <Chip>not checked</Chip>;
   }
-}
-
-/* ---------------- catalog ---------------- */
-
-function Catalog({ allowed, registered }: { allowed: boolean; registered: Set<string> }) {
-  const [query, setQuery] = useState('');
-  const { data, isFetching } = useMcpCatalog(query);
-  const [adding, setAdding] = useState<McpCatalogEntry | null>(null);
-
-  const entries = data?.entries ?? [];
-  const groups = new Map<string, McpCatalogEntry[]>();
-  for (const entry of entries) {
-    groups.set(entry.category, [...(groups.get(entry.category) ?? []), entry]);
-  }
-
-  return (
-    <div className="grid gap-3">
-      <input
-        className={field}
-        value={query}
-        placeholder="Search — try github, browser, database, docs"
-        onChange={(event) => setQuery(event.target.value)}
-      />
-
-      {data?.registryError && (
-        <Banner severity="warn">
-          The official registry could not be reached ({data.registryError}), so this is the curated list only.
-          Everything below still works.
-        </Banner>
-      )}
-
-      <p className="text-xs text-ink-muted">
-        Keep the attached set small — three to six. Every server costs context on every turn, and a server you
-        add is a server whose tool descriptions enter your prompts: only connect ones you would trust with the
-        repository this console is pointed at.
-      </p>
-
-      {isFetching && !entries.length ? <Skeleton className="h-24" /> : null}
-
-      {[...groups].map(([category, items]) => (
-        <section key={category}>
-          <h2 className="mb-1.5 text-2xs uppercase tracking-wide text-ink-faint">{category}</h2>
-          <div className="grid gap-2">
-            {items.map((entry) => (
-              <CatalogRow
-                key={entry.id}
-                entry={entry}
-                allowed={allowed}
-                already={registered.has(entry.id)}
-                onAdd={() => setAdding(entry)}
-              />
-            ))}
-          </div>
-        </section>
-      ))}
-
-      {!isFetching && !entries.length && (
-        <Empty title="Nothing matched" body="Try a shorter search, or a product name." />
-      )}
-
-      {adding && <AddDialog entry={adding} onClose={() => setAdding(null)} />}
-    </div>
-  );
-}
-
-function CatalogRow({
-  entry,
-  allowed,
-  already,
-  onAdd,
-}: {
-  entry: McpCatalogEntry;
-  allowed: boolean;
-  already: boolean;
-  onAdd: () => void;
-}) {
-  return (
-    <Card>
-      <CardBody className="grid gap-1.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium">{entry.label}</span>
-          <code className="text-xs text-ink-faint">{entry.id}</code>
-          <Chip>{entry.transport}</Chip>
-          {entry.auth !== 'none' && <Chip>{authLabel(entry.auth)}</Chip>}
-          {entry.source === 'registry' && <Chip tone="warn">from the registry</Chip>}
-        </div>
-        <p className="text-sm text-ink-muted">{entry.description}</p>
-        {entry.authNote && <p className="text-xs text-ink-faint">{entry.authNote}</p>}
-        <div className="flex flex-wrap items-center gap-2">
-          {already ? (
-            <Chip tone="ok">registered</Chip>
-          ) : allowed ? (
-            <Button size="sm" onClick={onAdd}>
-              Add
-            </Button>
-          ) : (
-            <span className="text-xs text-ink-faint">
-              needs <code>--allow-mcp</code>
-            </span>
-          )}
-          {entry.homepage && (
-            <a className="text-xs underline" href={entry.homepage} target="_blank" rel="noreferrer">
-              docs
-            </a>
-          )}
-          <Button size="sm" onClick={() => void copy(addCommand(entry), 'Command copied')}>
-            Copy CLI command
-          </Button>
-        </div>
-      </CardBody>
-    </Card>
-  );
-}
-
-function authLabel(auth: McpCatalogEntry['auth']): string {
-  if (auth === 'oauth') return 'sign-in';
-  if (auth === 'header') return 'needs a token';
-  return 'needs an env var';
-}
-
-/** The equivalent `claude mcp add`, so somebody can do it outside the console. */
-function addCommand(entry: McpCatalogEntry): string {
-  if (entry.transport === 'stdio') {
-    return `claude mcp add ${entry.id} -- ${entry.command} ${(entry.args ?? []).join(' ')}`.trim();
-  }
-  return `claude mcp add --transport ${entry.transport} ${entry.id} ${entry.url ?? ''}`.trim();
-}
-
-function AddDialog({ entry, onClose }: { entry: McpCatalogEntry; onClose: () => void }) {
-  const client = useQueryClient();
-  const [secret, setSecret] = useState('');
-  const ref = entry.secretRefs?.[0];
-
-  const add = useMutation({
-    mutationFn: () =>
-      api.mcpAdd({
-        id: entry.id,
-        label: entry.label,
-        transport: entry.transport,
-        ...(entry.url ? { url: entry.url } : {}),
-        ...(entry.command ? { command: entry.command } : {}),
-        ...(entry.args ? { args: entry.args } : {}),
-        ...(entry.secretRefs ? { secretRefs: entry.secretRefs } : {}),
-        ...(ref && secret.trim() ? { secrets: { [`${ref.kind}:${ref.name}`]: secret.trim() } } : {}),
-        source: 'catalog',
-      }),
-    onSuccess: () => {
-      onClose();
-      void client.invalidateQueries({ queryKey: keys.mcp() });
-      toast(
-        entry.auth === 'oauth'
-          ? `${entry.label} registered — sign it in from the Registered tab.`
-          : `${entry.label} registered. Checking the connection…`,
-        'ok',
-      );
-    },
-    onError: (error: Error) => toast(String(error.message ?? error), 'error'),
-  });
-
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogContent title={`Add ${entry.label}`}>
-        <p className="text-sm text-ink-muted">{entry.description}</p>
-        <p className="mt-2 text-xs text-ink-faint">
-          It registers as <code>{entry.id}</code> — the name a plan uses on its
-          <code> **MCP servers (every session):** </code> line, and the name a permission rule uses as{' '}
-          <code>mcp__{entry.id}</code>.
-        </p>
-
-        {entry.auth === 'oauth' && (
-          <p className="mt-2 text-sm">
-            Signs in with OAuth. Register it now, then use Sign in — the token goes to the Claude CLI's own
-            store, which this console never reads or writes.
-          </p>
-        )}
-        {entry.authNote && <p className="mt-2 text-sm">{entry.authNote}</p>}
-
-        {ref && (
-          <label className="mt-2 block text-sm">
-            <span className="text-2xs uppercase tracking-wide text-ink-faint">{ref.name}</span>
-            <input
-              className={`${field} mt-1`}
-              type="password"
-              autoFocus
-              value={secret}
-              placeholder="Paste the token — stored in this machine's keychain"
-              onChange={(event) => setSecret(event.target.value)}
-            />
-          </label>
-        )}
-
-        <div className="mt-3 flex gap-2">
-          <Button size="sm" onClick={() => add.mutate()} disabled={add.isPending}>
-            {add.isPending ? 'Adding…' : 'Add server'}
-          </Button>
-          <Button size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
 }

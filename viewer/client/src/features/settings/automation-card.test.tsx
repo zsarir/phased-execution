@@ -23,7 +23,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 function mount(prefs: Record<string, unknown> = {}, defaultSkills: string[] = ['graph-tool']) {
   state.mockResolvedValue({ prefs, defaultSkills });
   const client = new QueryClient(queryClientConfig);
-  return import('./automation').then(({ AutomationCard }) =>
+  return import('./automation-card').then(({ AutomationCard }) =>
     render(
       <QueryClientProvider client={client}>
         <AutomationCard />
