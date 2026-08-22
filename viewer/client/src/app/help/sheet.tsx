@@ -22,14 +22,19 @@
  * still a test failure rather than an empty tab.
  */
 
+import { Suspense, lazy } from 'react';
 import { cn } from '@/lib/cn';
 import { usePhone } from '@/lib/media';
 import { useConsoleState } from '@/lib/queries';
-import { Sheet, SheetContent } from '@/components/ui';
+import { Sheet, SheetContent, Spinner } from '@/components/ui';
 import { useNavigate } from '@/app/router';
 import { OVERLAY_KEYS, closeOverlaysHref, helpHref, type Route } from '@/app/routes';
 import { SECTIONS, resolveSection } from './sections';
-import { SectionPanel } from './section';
+// Lazy: the sheet is mounted in the composition root and is CLOSED on every
+// page until somebody asks for it, and the panel carries the guide's prose,
+// its splitter and `marked`. Statically imported, all of that is in the entry
+// chunk that every visitor downloads before the first paint.
+const SectionPanel = lazy(() => import('./section').then((m) => ({ default: m.SectionPanel })));
 
 export function HelpSheet({ route }: { route: Route }) {
   const navigate = useNavigate();
@@ -77,7 +82,15 @@ export function HelpSheet({ route }: { route: Route }) {
               })}
             </nav>
 
-            <SectionPanel section={section} card={route.query.card} />
+            <Suspense
+              fallback={
+                <div className="grid place-items-center py-12">
+                  <Spinner />
+                </div>
+              }
+            >
+              <SectionPanel section={section} card={route.query.card} />
+            </Suspense>
           </div>
         )}
       </SheetContent>

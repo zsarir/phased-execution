@@ -23,10 +23,10 @@
  *     a lazy chunk the entry document never references — in the precache OR
  *     as a `modulepreload`, which is the second way a lazy chunk stops being
  *     lazy and the one nothing checked until Phase 7.
- *   • first paint (entry + every modulepreload) is REPORTED against a soft
- *     200 KB target. Advisory, never fatal: the entry budget is the hard gate,
- *     and a hard limit on a figure that moves with every dependency bump is a
- *     limit that gets raised rather than read.
+ *   • first paint (entry + every modulepreload) is GATED at 200 KB gz. It was
+ *     advisory for four phases, drifted 211 → 220 KB, and nobody read the
+ *     printed line; the cause turned out to be a one-line barrel import, not a
+ *     dependency bump. See the note above the constant.
  *   • `dist/.build-rev` exists — proves the stamp stayed wired into
  *     `npm run build`, which is what `npm start`'s staleness warning reads.
  *
@@ -94,6 +94,18 @@ check(
     'If this fails while the emulator check passes, the destination chunk was excluded by name — the thing ' +
     'to exclude is the pane, never the page.',
 );
+/*
+ * The other two destinations Phase 11 built, by the same rule.
+ *
+ * A destination is precached; the expensive thing INSIDE it is not. Settings
+ * is eight sections and only two of them are heavy (the MCP catalog with its
+ * search and add dialog; the permissions rule editor), so both are `lazy()`
+ * inside the section chunk — the same shape as Sessions and its pane, for the
+ * same reason: nobody who opened Settings to flip a theme should download a
+ * rule grammar.
+ */
+check('the precache DOES include the Settings destination chunk', /\bsettings-[^"'`\s]*\.js/.test(sw));
+check('the precache DOES include the Insights destination chunk', /\binsights-[^"'`\s]*\.js/.test(sw));
 
 /* The entry — parsed from the document, not guessed from filenames. */
 const entryMatch = /<script[^>]+type="module"[^>]+src="\/assets\/(index-[^"]+\.js)"/.exec(html);
@@ -127,6 +139,14 @@ check(
   'index.html never references the pane chunk',
   !html.includes('pane-'),
   'referenced from the document, it would load for every reader of a route map',
+);
+check(
+  "Settings' two heavy sections are chunks of their own",
+  assets.some((name) => /^mcp-.*\.js$/.test(name)) &&
+    assets.some((name) => /^permissions-.*\.js$/.test(name)),
+  'features/settings/index.tsx reaches the MCP catalog and the permissions editor through `lazy()`. ' +
+    'A static import folds both into the precached Settings chunk — which every visitor downloads ' +
+    'on install, including one who only ever changes the theme.',
 );
 
 /*
@@ -213,12 +233,24 @@ check(
  * preload costs exactly as much while making the entry check greener. This
  * counts the real total.
  *
- * SOFT on purpose: it prints and does not fail. The budget is a design
- * decision that wants a person, and a hard gate on a figure that moves with
- * every dependency bump is a gate that gets raised rather than read. The
- * entry budget stays hard.
+ * HARD since 3.0. It was advisory for four phases on the reasoning that a
+ * figure moving with every dependency bump becomes a gate people raise rather
+ * than read — and in those four phases it drifted 211 → 220 KB and nobody
+ * acted on a single printed line.
+ *
+ * What it was hiding was not a dependency bump. The help sheet is mounted in
+ * the composition root, so it is on every page, and it imported its section
+ * panel STATICALLY — which put the guide's eleven `?raw` markdown bodies and
+ * `marked` in the entry chunk for every visitor, including one who never opens
+ * the guide. One `lazy()` took first paint from 220.5 to 172.8 KB.
+ *
+ * That is the argument for the gate rather than against it, and the entry
+ * budget above is why: with the panel static the ENTRY check reads a
+ * comfortable 128.6 of 300 KB and says nothing is wrong. Only the total says
+ * so. Raise this deliberately if a real dependency needs the room — with the
+ * reason, here.
  */
-const FIRST_PAINT_SOFT_GZ = 200 * 1024;
+const FIRST_PAINT_GZ = 200 * 1024;
 const firstPaintGz =
   (entryMatch ? gzipSync(readFileSync(join(DIST, 'assets', entryMatch[1]))).length : 0) +
   preloaded.reduce(
@@ -229,10 +261,13 @@ const firstPaintGz =
         : 0),
     0,
   );
-process.stdout.write(
-  `${firstPaintGz <= FIRST_PAINT_SOFT_GZ ? '✓' : '·'} first paint is ${(firstPaintGz / 1024).toFixed(1)} KB gz ` +
-    `(entry + ${preloaded.length} modulepreload${preloaded.length === 1 ? '' : 's'}) ` +
-    `— soft target ${FIRST_PAINT_SOFT_GZ / 1024} KB, advisory\n`,
+check(
+  `first paint is ${(firstPaintGz / 1024).toFixed(1)} KB gz (entry + ${preloaded.length} ` +
+    `modulepreload${preloaded.length === 1 ? '' : 's'}) of ${FIRST_PAINT_GZ / 1024} KB`,
+  firstPaintGz <= FIRST_PAINT_GZ,
+  'the entry PLUS everything index.html preloads — a chunk that migrates from the entry into a ' +
+    'preload costs exactly as much while making the entry check greener. Usually a static import ' +
+    'that should be a `lazy()`, or a barrel re-export pulling a parser in behind a helper.',
 );
 
 check('dist/.build-rev exists (npm run build stamps what it built)', existsSync(join(DIST, '.build-rev')));

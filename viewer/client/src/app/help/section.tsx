@@ -38,6 +38,7 @@ import { RouteStrip } from './route-strip';
 import { StatusProse } from './prose';
 import { cardsOf, splitGuide, type GuideCard as GuideCardData, type GuideOutline } from './split';
 import type { GuideSection } from './sections';
+import { BODIES } from './bodies';
 
 /**
  * Bring one card to the top of the pane it lives in — and of nothing else.
@@ -74,7 +75,10 @@ function initialOpen(outline: GuideOutline, phone: boolean, wanted?: string): Se
 
 export function SectionPanel({ section, card: wanted }: { section: GuideSection; card?: string }) {
   const phone = usePhone();
-  const outline = useMemo(() => splitGuide(section.body), [section.body]);
+  // The prose lives in `bodies.ts`, not on the section record: this component
+  // is behind the sheet's `lazy()`, and the record is not — see `sections.ts`.
+  const body = BODIES[section.id] ?? '';
+  const outline = useMemo(() => splitGuide(body), [body]);
   const cards = useMemo(() => cardsOf(outline), [outline]);
   const known = useMemo(() => new Set(cards.map((c) => c.id)), [cards]);
   const target = wanted && known.has(wanted) ? wanted : undefined;

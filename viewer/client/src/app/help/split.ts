@@ -30,7 +30,13 @@
  * the prose already says beats a registry that has to be kept in step with it.
  */
 
-import { plainText } from '@/components/markdown';
+// From `lib/plain-text`, NOT from `components/markdown`'s re-export of it —
+// that re-export pulls `marked` (≈40 KB gz) in behind it, which is the trap
+// `lib/plain-text.ts`'s own header exists to prevent. It costs nothing today
+// because `section.tsx` (this module's only importer) is behind the help
+// sheet's `lazy()`; it would cost 40 KB of entry the day anything on a page
+// imports the splitter.
+import { plainText } from '@/lib/plain-text';
 
 /** Who moves next — the distinction `concepts.md` calls the hardest to hold. */
 export type Actor = 'machine' | 'person';

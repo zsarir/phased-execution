@@ -15,6 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { SECTIONS } from './sections';
+import { BODIES } from './bodies';
 import { cardsOf, slug, splitGuide } from './split';
 
 /** Trailing whitespace and blank-line runs are not content. */
@@ -38,7 +39,7 @@ function reassemble(markdown: string): string {
 describe('the outline is lossless', () => {
   it('reassembles every guide section byte-for-byte', () => {
     for (const section of SECTIONS) {
-      expect(norm(reassemble(section.body)), section.id).toBe(norm(section.body));
+      expect(norm(reassemble(BODIES[section.id] ?? '')), section.id).toBe(norm(BODIES[section.id] ?? ''));
     }
   });
 
@@ -46,13 +47,13 @@ describe('the outline is lossless', () => {
     // The point of the refactor. A section that still splits into one card is a
     // section whose headings did not survive the rewrite.
     for (const section of SECTIONS) {
-      expect(cardsOf(splitGuide(section.body)).length, section.id).toBeGreaterThan(1);
+      expect(cardsOf(splitGuide(BODIES[section.id] ?? '')).length, section.id).toBeGreaterThan(1);
     }
   });
 
   it('gives every card a non-empty id and title', () => {
     for (const section of SECTIONS) {
-      for (const card of cardsOf(splitGuide(section.body))) {
+      for (const card of cardsOf(splitGuide(BODIES[section.id] ?? ''))) {
         expect(card.id, `${section.id}: empty id`).toBeTruthy();
         expect(card.title.trim(), `${section.id}/${card.id}: empty title`).toBeTruthy();
       }
@@ -61,7 +62,7 @@ describe('the outline is lossless', () => {
 
   it('keeps card ids unique within a section', () => {
     for (const section of SECTIONS) {
-      const ids = cardsOf(splitGuide(section.body)).map((c) => c.id);
+      const ids = cardsOf(splitGuide(BODIES[section.id] ?? '')).map((c) => c.id);
       expect(new Set(ids).size, section.id).toBe(ids.length);
     }
   });

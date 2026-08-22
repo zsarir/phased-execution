@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GUIDE_SECTIONS } from '@shared/route-meta.js';
 import { queryClientConfig } from '@/lib/queries';
 import { SECTIONS, resolveSection, sectionIds } from './sections';
+import { BODIES } from './bodies';
 import { splitGuide } from './split';
 import { HelpSheet } from './sheet';
 
@@ -71,7 +72,9 @@ function renderHelp(section?: string, query: Record<string, string> = {}) {
 /** The sheet's own body — every query below is scoped to it, not to the page. */
 const panelOf = () => screen.findByRole('dialog');
 
-const outlineOf = (id: string) => splitGuide(SECTIONS.find((s) => s.id === id)!.body);
+/** A section's prose. It moved to `bodies.ts` when the sheet went lazy. */
+const bodyOf = (id: string) => BODIES[id] ?? '';
+const outlineOf = (id: string) => splitGuide(bodyOf(id));
 
 describe('the help section registry', () => {
   it('covers every frozen GUIDE_SECTIONS id, in both directions', () => {
@@ -84,8 +87,8 @@ describe('the help section registry', () => {
       expect(section.lede, section.id).toBeTruthy();
       // `?raw` returning '' is exactly what a renamed or deleted markdown file
       // looks like — the import succeeds and the tab is blank.
-      expect(section.body.length, section.id).toBeGreaterThan(400);
-      expect(section.body, section.id).toMatch(/^##? /m);
+      expect(bodyOf(section.id).length, section.id).toBeGreaterThan(400);
+      expect(bodyOf(section.id), section.id).toMatch(/^##? /m);
     }
   });
 
@@ -122,16 +125,16 @@ describe('the help section registry', () => {
 
     for (const section of SECTIONS) {
       for (const pattern of forbidden) {
-        expect(section.body, `${section.id} matched ${pattern}`).not.toMatch(pattern);
+        expect(bodyOf(section.id), `${section.id} matched ${pattern}`).not.toMatch(pattern);
       }
       for (const secret of local) {
-        expect(names(section.body, secret), `${section.id} names local identity`).toBe(false);
+        expect(names(bodyOf(section.id), secret), `${section.id} names local identity`).toBe(false);
       }
-      for (const found of section.body.match(addresses) ?? []) {
+      for (const found of bodyOf(section.id).match(addresses) ?? []) {
         expect(ALLOWED.has(found), `${section.id} names ${found}`).toBe(true);
       }
       // Placeholder hostnames only — never a real tailnet.
-      for (const host of section.body.match(/[\w.-]+\.ts\.net/g) ?? []) {
+      for (const host of bodyOf(section.id).match(/[\w.-]+\.ts\.net/g) ?? []) {
         expect(host, section.id).toBe('your-machine.your-tailnet.ts.net');
       }
     }
@@ -139,8 +142,8 @@ describe('the help section registry', () => {
 
   it('warns against the one flag that would undo the whole security model', () => {
     const mobile = SECTIONS.find((s) => s.id === 'mobile')!;
-    expect(mobile.body).toMatch(/--host 0\.0\.0\.0/);
-    expect(mobile.body).toMatch(/127\.0\.0\.1|loopback/);
+    expect(bodyOf(mobile.id)).toMatch(/--host 0\.0\.0\.0/);
+    expect(bodyOf(mobile.id)).toMatch(/127\.0\.0\.1|loopback/);
   });
 });
 
@@ -154,7 +157,10 @@ describe('the help sheet', () => {
     renderHelp('mobile');
     const panel = await panelOf();
     const first = outlineOf('mobile').groups[0].cards[0];
-    expect(within(panel).getByRole('heading', { name: first.title })).toBeTruthy();
+    // `findBy`, not `getBy`: the panel is behind the sheet's `lazy()` — the
+    // guide's prose, its splitter and `marked` are ~40 KB that has no business
+    // in the entry chunk, so the dialog paints before its body resolves.
+    expect(await within(panel).findByRole('heading', { name: first.title })).toBeTruthy();
   });
 
   it('marks that section current so a reload lands where you were', async () => {
@@ -192,7 +198,7 @@ describe('the help sheet', () => {
   it('renders markdown through the sanitizer — a table becomes a real table', async () => {
     renderHelp('reference');
     const panel = await panelOf();
-    expect(within(panel).getAllByRole('table').length).toBeGreaterThan(0);
+    expect((await within(panel).findAllByRole('table')).length).toBeGreaterThan(0);
   });
 
   it('paints the reference glossary words as their real badges, with the hover help', async () => {

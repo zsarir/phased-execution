@@ -9,24 +9,18 @@
  * anything a handoff could not.
  *
  * `GUIDE_SECTIONS` in `shared/route-meta.js` is the frozen vocabulary; this
- * module supplies a title, a one-line lede and the body for each id. A client
- * test asserts the two agree in **both** directions, so a section added to the
- * shared list without content — or content with no route — fails rather than
- * rendering an empty tab.
+ * module supplies a title, a one-line lede and a shape for each id, and
+ * `bodies.ts` supplies the prose. A client test asserts all three agree, so a
+ * section added to the shared list without content — or content with no route
+ * — fails rather than rendering an empty tab.
+ *
+ * The split is a budget decision, not a tidiness one: the help sheet is mounted
+ * in the composition root, so anything this module imports is in the ENTRY
+ * chunk. The eleven `?raw` bodies are ~40 KB of string nobody reads until they
+ * open the guide.
  */
 
 import { GUIDE_SECTIONS } from '@shared/route-meta.js';
-import concepts from '@/content/guide/concepts.md?raw';
-import running from '@/content/guide/running.md?raw';
-import run from '@/content/guide/run.md?raw';
-import autopilot from '@/content/guide/autopilot.md?raw';
-import sessions from '@/content/guide/sessions.md?raw';
-import notifications from '@/content/guide/notifications.md?raw';
-import permissions from '@/content/guide/permissions.md?raw';
-import mcp from '@/content/guide/mcp.md?raw';
-import mobile from '@/content/guide/mobile.md?raw';
-import troubleshooting from '@/content/guide/troubleshooting.md?raw';
-import reference from '@/content/guide/reference.md?raw';
 
 export interface GuideSection {
   id: string;
@@ -46,7 +40,6 @@ export interface GuideSection {
    * for a first step that is not there.
    */
   kind: 'route' | 'topic';
-  body: string;
 }
 
 export const SECTIONS: readonly GuideSection[] = [
@@ -55,7 +48,6 @@ export const SECTIONS: readonly GuideSection[] = [
     label: 'Concepts',
     lede: 'What a plan is, the two lines a machine reads, and who does which part.',
     kind: 'route',
-    body: concepts,
   },
   {
     id: 'running',
@@ -64,70 +56,60 @@ export const SECTIONS: readonly GuideSection[] = [
     // A menu, not a journey: you pick ONE of these ways in, you do not walk
     // them in order.
     kind: 'topic',
-    body: running,
   },
   {
     id: 'run',
     label: 'Runs',
     lede: 'Starting a run, what one phase actually does, and how to watch, ask, pause or stop it.',
     kind: 'route',
-    body: run,
   },
   {
     id: 'autopilot',
     label: 'Autopilot',
     lede: 'Answering what needs you, what “verified” means, and the verbs for a phase that stalled.',
     kind: 'topic',
-    body: autopilot,
   },
   {
     id: 'sessions',
     label: 'Sessions',
     lede: 'Work that outlives the browser — plus the recovery and QA sessions the console starts for you, and the shutdown button.',
     kind: 'topic',
-    body: sessions,
   },
   {
     id: 'notifications',
     label: 'Alerts',
     lede: 'One switch per category, governing every way a message could reach you — and how the inbox gets back to zero.',
     kind: 'topic',
-    body: notifications,
   },
   {
     id: 'permissions',
     label: 'Permissions',
     lede: 'Which layer actually stops an unattended run — and which one fails open.',
     kind: 'topic',
-    body: permissions,
   },
   {
     id: 'mcp',
     label: 'MCP servers',
     lede: 'Attaching tools to a plan, and finding out they are signed in before an hour is spent.',
     kind: 'topic',
-    body: mcp,
   },
   {
     id: 'mobile',
     label: 'Mobile setup',
     lede: 'Reaching the console from a phone, end to end, with nothing on the public internet.',
     kind: 'route',
-    body: mobile,
   },
   {
     id: 'troubleshooting',
     label: 'When stuck',
     lede: 'The four ways a run comes to rest, and the things that look broken and are not.',
     kind: 'topic',
-    body: troubleshooting,
   },
   {
     id: 'reference',
     label: 'Reference',
     lede: 'Flags, environment, verbs, gates, paths, and every status word the console can show you.',
     kind: 'topic',
-    body: reference,
   },
 ];
 
