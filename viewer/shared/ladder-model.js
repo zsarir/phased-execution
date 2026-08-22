@@ -106,8 +106,40 @@ const R = (vehicle, label, blurb, spends, params) =>
  */
 export const RUNGS_BY_SITUATION = Object.freeze({
   superseded: Object.freeze([]),
-  'qa-failed': Object.freeze([]),
-  'qa-pending': Object.freeze([]),
+  // A recorded failure against work believed done. The session that built it
+  // still has the context to fix what the report named — and the report is
+  // specific, which is exactly the input a resume needs. A fresh agent takes
+  // over when that session is gone.
+  'qa-failed': Object.freeze([
+    R(
+      'resume-own-session',
+      'Fix what QA found, then re-record',
+      "Resumes the phase's own session with the QA report: fix what it named, re-run the verification, " +
+        'dispatch a fresh-context QA subagent again and record the new verdict. Costs a session.',
+      true,
+      { mode: 'qa-fix' },
+    ),
+    R(
+      'fix-agent',
+      'Fix what QA found with a new agent',
+      'Briefs a fresh agent with the QA report and the phase, at a stronger model, to clear the findings ' +
+        'and re-record the verdict. Costs a session.',
+      true,
+    ),
+  ]),
+  // No verdict at all — the phase finished and nobody reviewed it. This is the
+  // chore nobody scheduled, and it holds every dependent exactly as hard as a
+  // failure does.
+  'qa-pending': Object.freeze([
+    R(
+      'resume-own-session',
+      'Run QA and record the verdict',
+      "Resumes the phase's own session and asks it to dispatch the fresh-context QA subagent the plan's " +
+        'QA gate requires, then record pass, fail or waived with qa-record.sh. Costs a session.',
+      true,
+      { mode: 'qa-verdict' },
+    ),
+  ]),
   'foreign-live': Object.freeze([]),
   'foreign-stale': Object.freeze([
     R(
@@ -361,16 +393,30 @@ const humanised = (vehicle) => vehicle.replace(/-/g, ' ');
 export function rungLabel(vehicle, params, situation) {
   const same = (/** @type {Rung} */ rung) =>
     rung.vehicle === vehicle && rungKey('x', { vehicle, params }) === rungKey('x', rung);
-  const tables = situation
-    ? [rungsFor(situation), ...Object.values(RUNGS_BY_SITUATION)]
-    : Object.values(RUNGS_BY_SITUATION);
-  for (const table of tables) {
+  const loose = (/** @type {Rung} */ rung) => rung.vehicle === vehicle;
+
+  // The caller's own situation is resolved COMPLETELY first — exact params, then
+  // the vehicle alone — before any other table is consulted.
+  //
+  // It used to run the exact pass across EVERY table before the loose one, which
+  // let a paramless rung in an earlier situation steal the label from the
+  // params-bearing rung of the situation actually being described. Latent until
+  // two situations shared a vehicle: `verify-red`'s `fix-agent` carries
+  // `{escalate:'model'}`, so a call passing no params skipped it, matched
+  // `qa-failed`'s paramless `fix-agent` — earlier in the object — and the Pulse
+  // read "Fix what QA found" about a red verification.
+  if (situation) {
+    const own = rungsFor(situation);
+    const row = own.find(same) ?? own.find(loose);
+    if (row) return row.label;
+  }
+  for (const table of Object.values(RUNGS_BY_SITUATION)) {
     const row = table.find(same);
     if (row) return row.label;
   }
   // A looser match — same vehicle, whatever the params — still beats the raw id.
-  for (const table of tables) {
-    const row = table.find((rung) => rung.vehicle === vehicle);
+  for (const table of Object.values(RUNGS_BY_SITUATION)) {
+    const row = table.find(loose);
     if (row) return row.label;
   }
   return humanised(vehicle);

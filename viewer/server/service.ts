@@ -1297,6 +1297,9 @@ export class Service {
       // one run, and the cap is about the machine.
       dayHistory: () => this.dayRungs(),
       unblockAttempts: () => this.prefs.unblockAttempts !== false,
+      // Opt-in, and absent means no: a `human` gate is a person's until an
+      // operator says otherwise for their own console.
+      delegateHumanGates: () => this.prefs.delegateHumanGates === true,
       origin: `http://${flags.host}:${flags.port}`,
       // The registry ids, so the runner's own engine calls (its validate.sh in
       // confirm(), its board reads) carry PE_MCP_SERVERS like the service's do.
@@ -5280,8 +5283,12 @@ export class Service {
       qa: async (_slug, phase) => {
         const mode = await this.qaMode(slug).catch((): QaMode => ({ mode: 'off' }));
         if (mode.mode === 'off') return { mode: 'off' };
-        const row = record ? qaFor(record, phase) : undefined;
-        return { mode: mode.mode, ...(row ? { result: row.result } : {}) };
+        // Live, not the store's parse: classifying a phase whose verdict is
+        // `fail` as `qa-pending` sends the ladder up the wrong rung (dispatch a
+        // review, rather than fix what the review already found) and tells the
+        // operator the wrong thing on the phase card.
+        const verdict = await this.qaVerdict(slug, phase);
+        return { mode: mode.mode, ...(verdict !== 'none' ? { result: verdict } : {}) };
       },
       health: async () => {
         if (!record) return [];
@@ -5319,6 +5326,38 @@ export class Service {
   }
 
   /**
+   * Is this DONE phase's QA verdict holding its dependents?
+   *
+   * Cheap and fail-safe: the mode read is cached by revision, and anything it
+   * cannot answer is `false` — a phase wrongly kept out of the candidate list
+   * costs a slower recovery, one wrongly let in costs a session.
+   */
+  /**
+   * A phase's QA verdict, from the ENGINE rather than the store's parse.
+   *
+   * The store lags a watcher debounce, and both callers ask precisely because
+   * somebody may have just recorded a verdict — the same reason the gate dep is
+   * a live `--gate-status` read and not `record.gate`. A read that could not run
+   * answers `none`, which is the fail-safe direction for both: it keeps a phase
+   * IN the candidate list (a slower recovery) rather than declaring work settled
+   * on a read that failed.
+   */
+  async qaVerdict(slug: string, phase: number): Promise<string> {
+    try {
+      const out = await run(this.engineOpts(), 'phase-graph.sh', [slug, '--qa-result', String(phase)]);
+      return out.stdout.trim().toLowerCase() || 'none';
+    } catch { return 'none'; }
+  }
+
+  private async qaHolds(slug: string, phase: number): Promise<boolean> {
+    try {
+      if ((await this.qaMode(slug)).mode !== 'on') return false;
+      const verdict = await this.qaVerdict(slug, phase);
+      return verdict !== 'pass' && verdict !== 'waived';
+    } catch { return false; }
+  }
+
+  /**
    * Every open phase of a run, classified — the healer's candidate list. Order
    * is the halt's phase, the active phase, live lanes, then ascending: the
    * first one whose ladder has a rung this console can climb is the anchor.
@@ -5351,7 +5390,17 @@ export class Service {
     const out: Array<{ phase: number; evidence: PhaseEvidence; situation: Situation }> = [];
     for (const phase of order) {
       if (!state.phases[String(phase)]) continue;
-      if (board[phase] === 'done') continue;
+      // A phase the board reads `done` is settled work — its record is closed by
+      // the reconcile pass, not diagnosed, and classifying every finished phase
+      // on every pass would cost a board read and a classify per phase for ever.
+      //
+      // The one exception is a done phase QA is HOLDING. It is settled as work
+      // and unsettled as a blocker: the engine keeps every dependent behind it,
+      // and since `qa-failed`/`qa-pending` gained rungs there is something real
+      // to climb — the session that built it can fix what the report named, or
+      // dispatch the verdict nobody ever asked for. Admitting it bought nothing
+      // while those rung lists were empty; it buys the whole plan now.
+      if (board[phase] === 'done' && !(await this.qaHolds(slug, phase))) continue;
       if (board[phase] === 'waiting' && !childrenOf(state).some((child) => child.phase === phase)) continue;
       try {
         out.push({ phase, ...(await this.classifyPhase(slug, phase, state, board)) });
@@ -5371,6 +5420,7 @@ export class Service {
    */
   private vehicleForRung(
     rung: Rung, situation: Situation, record: RunPhaseRecord | undefined, evidence: PhaseEvidence,
+    slug = '<slug>',
   ): DriveVehicle | null {
     // Capability flags (`--allow-run`, `--allow-agent`, node-pty) are NOT
     // consulted here: a vehicle the console has but may not use is still the
@@ -5387,10 +5437,37 @@ export class Service {
       case 'resume-own-session': {
         if (!resumable) return null;
         const mode = String(rung.params?.mode ?? 'continue');
-        const instruction = mode === 'fix-verification'
-          ? 'Your phase\'s §Verification is RED. Read the failing commands and their output below, fix the cause, '
-            + 're-run the verification until it is green, then commit and write the handoff.'
-          : 'You are RESUMING this phase — it is not finished. Read `git status` and `git diff` FIRST: anything '
+        // The QA modes. Both resume the phase's OWN session, which looks wrong
+        // for a review until you read SKILL.md §QA: the independence comes from
+        // the fresh-context SUBAGENT the session dispatches, not from the
+        // session being a different one. `--qa-prompt N` prints that subagent's
+        // brief, and `qa-record.sh` is its only writer. Resuming is also what
+        // makes the fix half cheap — the session that built the phase already
+        // holds the context the report is about.
+        // The real slug, phase and report path — never `<slug>`/`<N>`. A resumed
+        // session is mid-conversation and will paste what it is given; handing
+        // it a placeholder is handing it a guess.
+        const n = evidence.phase;
+        const pad = String(n).padStart(2, '0');
+        const report = `reports/phase-${pad}-qa.md`;
+        const instruction = mode === 'qa-verdict'
+          ? 'This plan gates on QA and your phase has NO recorded verdict, so it is holding every phase that '
+            + 'depends on it. Dispatch a FRESH-CONTEXT QA subagent over this phase now — get its brief with '
+            + `\`bash scripts/phase-graph.sh ${slug} --qa-prompt ${n}\` — and then record what it finds with `
+            + `\`bash scripts/qa-record.sh ${slug} ${n} <pass|fail|waived> --report ${report}\`. `
+            + 'Never grade your own work directly, and never hand-edit test-status.md.'
+          : mode === 'qa-fix'
+            ? 'QA recorded a FAIL against this phase, and that verdict is holding every phase that depends on '
+              + `it. Read the QA report (docs/handoffs/${slug}/${report}), fix what it found, re-run the `
+              + 'phase\'s §Verification until it is green, commit, then dispatch a fresh-context QA subagent '
+              + `again and record the new verdict with \`bash scripts/qa-record.sh ${slug} ${n} `
+              + `<pass|fail|waived> --report ${report}\`. If a finding is genuinely out of scope for this `
+              + 'phase, say so in the handoff\'s Outstanding section and record `waived` with the reason — '
+              + 'do not record `pass` over a finding you did not clear.'
+          : mode === 'fix-verification'
+            ? 'Your phase\'s §Verification is RED. Read the failing commands and their output below, fix the cause, '
+              + 're-run the verification until it is green, then commit and write the handoff.'
+            : 'You are RESUMING this phase — it is not finished. Read `git status` and `git diff` FIRST: anything '
             + 'uncommitted is your own earlier work; never stash, checkout or reset it away. Then carry the phase to '
             + 'its exit criteria (the Outstanding section of your handoff says what is left), verify, commit, and '
             + 'write the handoff as complete.'
@@ -6177,7 +6254,7 @@ export class Service {
         // The same day budget the runner's own climb counts against, so the
         // loop's rungs and the healer's cannot each spend it in full.
         situation: c.situation.key, history, runHistory, caps, dayHistory: this.dayRungs(),
-        available: (rung) => this.vehicleForRung(rung, c.situation, record, c.evidence) !== null,
+        available: (rung) => this.vehicleForRung(rung, c.situation, record, c.evidence, slug) !== null,
       });
       if (!next.ok) {
         if (next.exhausted || c.situation.actor === 'person') {
@@ -6192,7 +6269,7 @@ export class Service {
         refuse(`phase ${c.phase} reads ${c.situation.label} — ${next.reason}`, c);
         continue;
       }
-      const vehicle = this.vehicleForRung(next.rung, c.situation, record, c.evidence);
+      const vehicle = this.vehicleForRung(next.rung, c.situation, record, c.evidence, slug);
       if (!vehicle) { refuse(`phase ${c.phase} reads ${c.situation.label} — ${next.rung.label} cannot be driven here`, c); continue; }
       chosen = { ...c, rung: next.rung, vehicle };
       break;

@@ -546,3 +546,24 @@ test('a record closed with no spend is marked unknown, not free', () => {
   assert.equal(state.phases['2'].costUnknown, undefined, 'a real figure is not a gap');
   assert.equal(state.phases['3'].costUnknown, undefined, 'a phase that never started cost nothing');
 });
+
+test('settleFinishedRun: a halt that dissolved stops the run reading halted', () => {
+  // The other half of the dissolved-halt story. `reconcileRecordsAgainstBoard`
+  // nulls `state.halt` when the board overtakes it, but leaves the status —
+  // and `halted` with no halt is a contradiction whether or not the plan is
+  // finished. Measured live: a run reading `halted`, `halt: null`, with a phase
+  // still in progress on the board and 240 dollars spent. `parked` is the honest
+  // word: stopped, work outstanding, nothing wrong that anybody named.
+  const state = newRun({ slug: 'alpha', root: '/tmp/x' });
+  state.status = 'halted';
+  state.halt = null;
+  assert.equal(settleFinishedRun(state, { 1: 'done', 2: 'in-progress', 3: 'waiting' }), true);
+  assert.equal(state.status, 'parked', 'stopped with work left is parked, not halted');
+
+  // A halt that still STANDS is untouched — it is the record of why.
+  const halted = newRun({ slug: 'alpha', root: '/tmp/x' });
+  halted.status = 'halted';
+  halted.halt = { at: new Date().toISOString(), reason: 'phase 2 did not verify', phase: 2 };
+  assert.equal(settleFinishedRun(halted, { 1: 'done', 2: 'ready' }), false);
+  assert.equal(halted.status, 'halted');
+});

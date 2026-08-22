@@ -1469,12 +1469,25 @@ export function settleFinishedRun(state: RunState, board: Record<number, string>
   if (!SETTLEABLE.includes(state.status)) return false;
   if (state.stoppedBy === 'operator') return false;
   const words = Object.values(board);
-  if (!words.length || !words.every((word) => word === 'done')) return false;
-  state.status = 'finished';
-  state.halt = null;
-  delete state.stoppedBy;
-  state.finishedReason ??= `every phase of ${state.slug} is done.`;
-  return true;
+  if (!words.length) return false;
+  if (words.every((word) => word === 'done')) {
+    state.status = 'finished';
+    state.halt = null;
+    delete state.stoppedBy;
+    state.finishedReason ??= `every phase of ${state.slug} is done.`;
+    return true;
+  }
+  // Work remains, so this run is not finished — but `halted` with NO halt is a
+  // contradiction all the same, and it is the shape the dissolve path leaves
+  // behind. Measured live: a run reading `halted`, `halt: null`, `$240 spent`,
+  // with a phase still in progress on the board. `parked` is the honest word —
+  // stopped, work outstanding, nothing wrong that anybody named — and unlike
+  // `halted` it is what the recovery paths already expect to find.
+  if (state.status === 'halted' && !state.halt) {
+    state.status = 'parked';
+    return true;
+  }
+  return false;
 }
 
 /**

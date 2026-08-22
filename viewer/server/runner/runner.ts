@@ -290,6 +290,13 @@ export type RunnerDeps = {
    */
   unblockAttempts?: () => boolean;
   /**
+   * May a `human` gate be briefed to the phase's own session to verify and
+   * clear, instead of stopping the run for a person? Absent = no, and that is
+   * the right default: the plan author wrote `human`. See
+   * `Prefs.delegateHumanGates`.
+   */
+  delegateHumanGates?: () => boolean;
+  /**
    * The resource ladder's knobs (Settings ▸ Automation), read live so a change
    * applies to the next wall rather than the next run. Absent = the shipped
    * defaults: an auth or usage wall switches to an account that can pay, a
@@ -3393,13 +3400,29 @@ export class Runner {
      * commands: Service.gateStatus passes no env. */
     const gate = readGateStatus(await this.engine(['--gate-status', String(phase)], { PHASE_EXEC_GATES: '1' }));
     record.gate = gate;
+    // A `human` gate the operator has DELEGATED behaves like an ai-clearable
+    // one: the boot prompt briefs the session to verify each condition against
+    // evidence it can cite and record the clearance, or stop with the condition
+    // it could not verify named. Off unless asked for — see `delegateHumanGates`.
+    // `--gate-status` reports the human family as `manual:` (the *kind* word
+    // `human` comes from `--gate-kind`), so match the same set the classifier
+    // does. "not executed" is excluded: that is a `cmd` gate the read declined
+    // to run, not a person's decision — and the runner passes PHASE_EXEC_GATES=1
+    // precisely so it never sees one.
+    const humanFamily = /^(manual|human|OVERDUE)$/i.test(gate.kind)
+      && !/\bnot executed\b/i.test(gate.detail ?? '');
+    const delegated = humanFamily && this.deps.delegateHumanGates?.() === true;
     if (!gate.clear) {
-      if (gate.kind === 'ai') {
+      if (gate.kind === 'ai' || delegated) {
         // An ai-clearable gate is the session's FIRST task, not a wall: the
         // engine's own boot prompt orders it to verify each condition, do the
         // work to make failing ones true, and record the clearance before
-        // implementing. Booting is exactly how this gate gets cleared.
-        this.record('phase.gate-ai', { gate }, phase);
+        // implementing. Booting is exactly how this gate gets cleared. A
+        // delegated human gate rides the same path under its own journal line,
+        // because "a person's gate a session was asked to verify" is a
+        // different fact from "a gate the plan marked ai-clearable" and an
+        // audit has to be able to tell them apart.
+        this.record(delegated ? 'phase.gate-delegated' : 'phase.gate-ai', { gate }, phase);
       } else {
         // human or auto: nothing this run can do — a person must approve (the
         // phase page's Gate card), or the world must change. `gated`, not
@@ -3679,7 +3702,15 @@ export class Runner {
     }
 
     /* ---- prompt ---- */
-    const engineText = readText(await this.engine(['--boot-prompt', String(phase)]));
+    // `PE_GATE_DELEGATE` swaps the human-gate block for the delegated brief:
+    // verify each condition against evidence you can cite, record the clearance,
+    // or STOP naming the condition you could not verify. Passed only when the
+    // operator asked for it — the default prompt still says a person must clear
+    // the gate, because by default one must.
+    const engineText = readText(await this.engine(
+      ['--boot-prompt', String(phase)],
+      this.deps.delegateHumanGates?.() === true ? { PE_GATE_DELEGATE: '1' } : undefined,
+    ));
     if (!engineText.trim()) {
       await this.release(phase, owner);
       this.halt(`the engine produced no boot prompt for phase ${phase}`, phase, 'plan-unreadable');

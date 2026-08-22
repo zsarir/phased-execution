@@ -745,6 +745,15 @@ export type Prefs = {
    *   when the console comes back.
    * - `autoAccountSwitch`: an auth or usage wall switches to a registered
    *   account with headroom instead of halting.
+   * - `delegateHumanGates`: a `human` gate is briefed to the phase's own
+   *   session to VERIFY and clear, instead of stopping the run for a person.
+   *   **Off by default, and deliberately so** — the plan author wrote `human`,
+   *   and a gate that says "the owner approves the visual result" is not a
+   *   thing a session can judge. What makes delegation safe is not trust: the
+   *   brief requires cited evidence per condition and STOPS with the condition
+   *   named when it has none (`phase-outcome.sh … blocked`). Turn it on for a
+   *   plan whose gates are machine-verifiable in practice; `gate-status.md`
+   *   already records such approvals as `by: ai-session-delegated`.
    * - `convergeEveryMs`: how often the convergence loop re-reads every open
    *   plan even when nothing happened (default 5 min). 0 disables the timer;
    *   boot, change and post-halt passes still run.
@@ -756,6 +765,7 @@ export type Prefs = {
   ladderPerDayUsd?: number;
   unblockAttempts?: boolean;
   staleClaimTakeover?: boolean;
+  delegateHumanGates?: boolean;
   resumeAtBoot?: boolean;
   autoAccountSwitch?: boolean;
   convergeEveryMs?: number;
@@ -820,6 +830,7 @@ const DEFAULT_PREFS: Prefs = {
   autoRecoverByDefault: true, autoContinueRecovery: true, mcpPolicy: 'continue',
   ladderPerPhaseRungs: 3, ladderPerPhaseUsd: 100, ladderPerRunRungs: 10, ladderPerRunUsd: 400, ladderPerDayUsd: 600,
   unblockAttempts: true, staleClaimTakeover: true, resumeAtBoot: true, autoAccountSwitch: true,
+  delegateHumanGates: false,
   convergeEveryMs: 300_000,
   budgetAutoRaisePct: 25, mcpRequireTimeoutMs: 1_800_000,
   ...STALL_DEFAULTS,
@@ -837,7 +848,8 @@ export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
   'attachDefaultSkills' | 'qaByDefault' | 'gitMode' | 'openPrOnComplete' | 'repoGuard'
   | 'autoRecoverByDefault' | 'autoContinueRecovery' | 'mcpPolicy'
   | 'ladderPerPhaseRungs' | 'ladderPerPhaseUsd' | 'ladderPerRunRungs' | 'ladderPerRunUsd' | 'ladderPerDayUsd'
-  | 'unblockAttempts' | 'staleClaimTakeover' | 'resumeAtBoot' | 'autoAccountSwitch' | 'convergeEveryMs'
+  | 'unblockAttempts' | 'staleClaimTakeover' | 'resumeAtBoot' | 'autoAccountSwitch'
+  | 'delegateHumanGates' | 'convergeEveryMs'
   | 'budgetAutoRaisePct' | 'mcpRequireTimeoutMs'
   | 'stallSilentMs' | 'stallSpinTurns' | 'stallStalemateAttempts'> {
   const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback);
@@ -864,6 +876,7 @@ export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
     ladderPerRunUsd: cap(parsed.ladderPerRunUsd, 400),
     ladderPerDayUsd: cap(parsed.ladderPerDayUsd, 600),
     unblockAttempts: bool(parsed.unblockAttempts, true),
+    delegateHumanGates: bool(parsed.delegateHumanGates, false),
     staleClaimTakeover: bool(parsed.staleClaimTakeover, true),
     resumeAtBoot: bool(parsed.resumeAtBoot, true),
     autoAccountSwitch: bool(parsed.autoAccountSwitch, true),

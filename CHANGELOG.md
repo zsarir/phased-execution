@@ -6,7 +6,39 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
-## [Unreleased]
+## [3.1.0] - 2026-08-22
+
+### Added — the autopilot finishes plans it used to hand back
+
+A plan with QA on **deadlocked itself**: finishing a phase writes a `pending` verdict, `_is_verified`
+accepts only `pass`/`waived`, and nothing in the system ever produced one. "A person's to settle" is
+the right word for a decision and the wrong word for a chore nobody scheduled.
+
+- **QA climbs.** `qa-pending` and `qa-failed` became machine situations with real rungs: resume the
+  phase's own session to dispatch the fresh-context QA subagent and record the verdict, or — on a
+  failure — to fix what the report named, re-verify and re-record, escalating to a fresh agent when
+  that session is gone. The independence QA needs comes from the SUBAGENT (SKILL.md §QA), not from
+  the session being a different one, so this is the mechanism the skill already prescribed. A verdict
+  the ladder cannot produce is still a person's — that is what exhaustion and the errand are for.
+- **A QA-held done phase is a candidate the healer can act on.** It is settled as work and unsettled
+  as a blocker; every other done phase is still left alone.
+- **Delegated human gates (opt-in, off by default).** `Settings ▸ Automation ▸ Delegate human gates`
+  briefs a `human` gate to the phase's own session: verify each condition against evidence you can
+  cite, record it as `by: ai-session-delegated`, or STOP naming the condition you could not verify.
+  The safety is the evidence requirement, not trust — a gate approved on a guess is worse than a gate
+  that stopped the run. `gate-status.md` already documented this approver; plans already used it.
+
+### Fixed
+
+- **A rung label belongs to the situation it was climbed for.** Resolving exact-params matches across
+  every table before the loose pass let a paramless rung in an earlier situation answer for another —
+  latent until two situations shared a vehicle, then the Pulse read "Fix what QA found" about a red
+  verification.
+- **The classifier reads QA live.** It parsed the store, which lags a watcher debounce, so a phase
+  whose verdict was `fail` classified as `qa-pending` — the wrong rung and the wrong words on the card.
+- **`tailscale.test.ts` no longer flakes under load.** The probe's 3s timeout is right for a status
+  chip and wrong for a suite that forks a bash fixture per probe (2.2s of the budget on an idle
+  machine); it is now overridable, and the suite pins a generous value. Production keeps three seconds.
 
 ### Fixed — the QA wedge, and the missing fact behind it
 

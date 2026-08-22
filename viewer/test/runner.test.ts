@@ -4473,3 +4473,41 @@ test('park() does not claim the run is parked while its lanes are still editing 
     assert.equal(instance.busy(), false, 'and the loop itself is done');
   } finally { release(); r.cleanup(); }
 });
+
+test('a human gate stops the run — unless the operator delegated it', async () => {
+  // The plan author wrote `human`, and by default that is a wall the run does
+  // not cross: the phase records `gated` and the loop moves on. An operator who
+  // wants a plan to run unattended can delegate the VERIFICATION to the phase's
+  // own session — which `gate-status.md`'s own header already names as a
+  // legitimate approver, and which real plans record as `ai-session-delegated`.
+  const r = repo();
+  r.setGate(1, 'manual: the owner approves the copy');
+  const seen: number[] = [];
+  const { instance } = runner(r, workingSession(r, seen));
+  try {
+    await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going', onlyPhases: [1] });
+    await instance.wait();
+    assert.equal(instance.current()!.phases['1'].status, 'gated', "a human gate is a person's by default");
+    assert.deepEqual(seen, [], 'and nothing was booted past it');
+  } finally { r.cleanup(); }
+
+  // Delegated: the same gate boots the phase, and the journal says which kind of
+  // clearance this was — a delegated human gate is not an ai-clearable one, and
+  // an audit has to be able to tell them apart.
+  const r2 = repo();
+  r2.setGate(1, 'manual: the owner approves the copy');
+  const seen2: number[] = [];
+  const { instance: delegated, events } = runner(r2, workingSession(r2, seen2), '`true`', undefined, {
+    delegateHumanGates: () => true,
+  });
+  try {
+    await delegated.start({ slug: 'demo', root: r2.root, autonomy: 'keep-going', onlyPhases: [1] });
+    await delegated.wait();
+    assert.deepEqual(seen2, [1], 'the session is booted to verify the gate itself');
+    const journal = events
+      .filter((e) => e.event === 'run:journal')
+      .map((e) => (e.data as { event: string }).event);
+    assert.ok(journal.includes('phase.gate-delegated'), `expected a delegation line, got: ${journal.join(',')}`);
+    assert.ok(!journal.includes('phase.gate-ai'), 'a delegated human gate is not an ai gate');
+  } finally { r2.cleanup(); }
+});

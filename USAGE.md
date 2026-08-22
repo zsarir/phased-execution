@@ -12,8 +12,11 @@ the phase's own **Verification commands green** before handing off.
 **QA subagents are opt-in (off by default).** When you ask for QA — a `**QA gate:** on` line in the
 plan's §Session budget, `new-handoff.sh --qa` at a finish, or a plan that already has a
 `test-status.md` — each finished phase is verified by a **fresh-context QA subagent** that reads the
-real diff cold and records `pass | fail | waived`; a `fail` gates every dependent until re-QA'd — or
-until the plan is **closed**, which retires its reports without pretending they passed.
+real diff cold and records `pass | fail | waived`; a `fail` — and a verdict still **`pending`** — gates
+every dependent until re-QA'd. Three ways out: re-QA to `pass`/`waived`, `**QA gate:** off` in the plan's
+§Session budget (the verdicts stay recorded, they stop holding dependents), or **closing** the plan,
+which retires its reports without pretending they passed. The autopilot climbs the first of those by
+itself and asks you only when it runs out.
 `scripts/phase-graph.sh <slug> --qa-mode` tells you which regime a plan is in.
 
 **A plan you will never finish can be closed.** `scripts/close-plan.sh <slug> --reason "…"` marks it

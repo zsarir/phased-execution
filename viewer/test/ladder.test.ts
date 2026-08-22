@@ -12,7 +12,7 @@ import './state-sandbox.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SITUATIONS, SUB_KINDS, situationKey } from '../shared/situation-model.js';
+import { SITUATIONS, SITUATION_ACTOR, SUB_KINDS, situationKey } from '../shared/situation-model.js';
 import {
   DEFAULT_LADDER_CAPS, RUNGS_BY_SITUATION, RUNG_VEHICLES,
   accountRung, errandFor, ladderCaps, nextRung, rungKey, rungsFor, settleRung,
@@ -47,9 +47,18 @@ test('the measured specimens climb the right first rung', () => {
   assert.equal(rungsFor('done-unrecorded')[0].vehicle, 'closeout-own-session');
   assert.equal(rungsFor('verify-red')[0].vehicle, 'resume-own-session');
   assert.equal(rungsFor('verify-red')[1].vehicle, 'fix-agent');
-  // QA is a person's: the autopilot never spawns reviewers on its own.
-  assert.deepEqual(rungsFor('qa-pending'), []);
-  assert.deepEqual(rungsFor('qa-failed'), []);
+  // QA climbs now. It used to be a person's — and a `pending` row that nothing
+  // ever dispatches is not "a person's", it is a deadlock: the engine holds
+  // every dependent behind a verdict no process will ever give. The independence
+  // QA needs comes from the fresh-context SUBAGENT the session dispatches
+  // (SKILL.md §QA), not from the session being a different one, so resuming the
+  // phase's own session and asking it to run that subagent is the mechanism the
+  // skill already prescribes.
+  assert.equal(rungsFor('qa-pending')[0].vehicle, 'resume-own-session');
+  assert.equal(rungsFor('qa-pending')[0].params?.mode, 'qa-verdict');
+  assert.equal(rungsFor('qa-failed')[0].vehicle, 'resume-own-session');
+  assert.equal(rungsFor('qa-failed')[0].params?.mode, 'qa-fix');
+  assert.equal(rungsFor('qa-failed')[1].vehicle, 'fix-agent', 'a fresh agent when the session is gone');
   // A sub-kind without its own table falls back to the id's.
   assert.equal(rungsFor('blocked-declared:nonsense').length, 0, 'blocked-declared itself has no generic rung');
   assert.equal(rungsFor('plan-broken:lint')[0].vehicle, 'plan-repair-script');
@@ -241,10 +250,73 @@ test('the shared helpers say what a climbed rung is called and what comes next',
     { situation: 'work-in-progress', rung: 'resume-own-session', params: { mode: 'continue' } },
   ]);
   assert.equal(next[0].label, 'Board fresh with a resume brief');
-  assert.deepEqual(SHARED_LADDER.untriedRungs('qa-pending', []), []);
+  // QA has a rung now (see the deadlock note above), and once it is climbed the
+  // walk is empty — which is when the errand is written.
+  assert.equal(SHARED_LADDER.untriedRungs('qa-pending', [])[0]?.params?.mode, 'qa-verdict');
+  assert.deepEqual(
+    SHARED_LADDER.untriedRungs('qa-pending', [
+      { situation: 'qa-pending', rung: 'resume-own-session', params: { mode: 'qa-verdict' } },
+    ]),
+    [],
+  );
   // And `nextRung` (caps and all) agrees with the shared walk on what is next.
   const chosen = nextRung({ situation: 'work-in-progress', history: [
     { situation: 'work-in-progress', rung: 'resume-own-session', params: { mode: 'continue' }, at: 'x', outcome: 'failed' },
   ] });
   assert.ok(chosen.ok && chosen.rung.label === 'Board fresh with a resume brief');
+});
+
+test('QA situations are the ladder\'s to climb, and only then a person\'s', () => {
+  // The measured deadlock: a plan with QA on finishes a phase, `new-handoff.sh`
+  // writes `| N | pending | - |`, `_is_verified` accepts only pass|waived, and
+  // NOTHING in the system ever dispatches QA. Six phases were held behind a
+  // verdict no process would ever give, for ever, with no defect recorded
+  // anywhere. "A person's to settle" is the right word for a decision; it is the
+  // wrong word for a chore nobody scheduled.
+  assert.equal(SITUATION_ACTOR['qa-pending'], 'machine');
+  assert.equal(SITUATION_ACTOR['qa-failed'], 'machine');
+
+  // And the errand still exists for when the climb runs out — a verdict the
+  // ladder could not produce is genuinely a person's.
+  for (const key of ['qa-pending', 'qa-failed']) {
+    const errand = errandFor(key, [], 3);
+    assert.match(errand.need, /QA verdict/);
+    assert.equal(errand.phase, 3);
+  }
+});
+
+test('a machine situation always has something to climb', () => {
+  // The invariant the QA gap broke, in the one direction that is actually an
+  // invariant: an actor of `machine` PROMISES the ladder will try something, and
+  // an empty rung list under that promise is a silent dead end — the console
+  // refuses, writes nothing (a machine's exhaustion is not a person's ask), and
+  // the run sits. `qa-pending` was exactly that for months.
+  //
+  // The converse is deliberately NOT asserted: `waiting-external` carries a free
+  // `recheck-watch` rung while remaining a `wait`, which is correct — re-reading
+  // a watch ref spends nothing and settles the wait sooner.
+  for (const id of SITUATIONS) {
+    if (SITUATION_ACTOR[id] !== 'machine') continue;
+    if (rungsFor(id).length) continue;
+    const subs = SUB_KINDS[id] ?? [];
+    assert.ok(
+      subs.length > 0 && subs.some((sub) => rungsFor(`${id}:${sub}`).length > 0),
+      `${id} promises the ladder will act and offers it nothing to climb`,
+    );
+  }
+});
+
+test('a rung label belongs to the situation it was climbed for', () => {
+  // `verify-red` and `qa-failed` both climb `fix-agent`, and only the first
+  // carries params. Resolving the exact-params pass across every table before
+  // the loose one let the paramless one — earlier in the object — answer for
+  // both, so the Pulse read "Fix what QA found" about a red verification.
+  assert.equal(SHARED_LADDER.rungLabel('fix-agent', undefined, 'verify-red'), 'Fix with a stronger new agent');
+  assert.equal(SHARED_LADDER.rungLabel('fix-agent', { escalate: 'model' }, 'verify-red'), 'Fix with a stronger new agent');
+  assert.equal(SHARED_LADDER.rungLabel('fix-agent', undefined, 'qa-failed'), 'Fix what QA found with a new agent');
+  // The same rule for the vehicle two QA situations share with work-in-progress.
+  assert.equal(SHARED_LADDER.rungLabel('resume-own-session', { mode: 'qa-fix' }, 'qa-failed'), 'Fix what QA found, then re-record');
+  assert.equal(SHARED_LADDER.rungLabel('resume-own-session', { mode: 'continue' }, 'work-in-progress'), 'Continue in its own session');
+  // With no situation at all it still beats the raw id.
+  assert.notEqual(SHARED_LADDER.rungLabel('fix-agent'), 'fix agent');
 });

@@ -1616,12 +1616,35 @@ case "$mode" in
               printf 'STOP, report exactly what is missing and what you verified, and hand it to the operator.\n'
               ;;
             human)
-              printf '🧍 GATED phase (human) — STOP: a person must clear this gate before implementation.\n'
-              printf 'Operator steps:\n'
-              printf '%s\n' "$gc_text" | sed 's/^/    /'
-              printf 'Ask the operator to do these steps and approve the gate — Phase Console → plan → phase %s\n' "$p"
-              printf -- '→ Gate card, or: bash %s/gate-approve.sh %s %s --by "<who>" --note "<what was done>"\n' "$SCRIPT_DIR" "$slug" "$p"
-              printf 'Do NOT implement past an unapproved human gate.\n'
+              if [ "${PE_GATE_DELEGATE:-0}" = "1" ]; then
+                # The operator delegated this gate's verification to the session.
+                # `gate-status.md`'s own header already names an AI session that
+                # verified the conditions as a legitimate approver, and plans in
+                # the wild record exactly that (`by: ai-session-delegated`). The
+                # safety is NOT that the session is trusted to judge — it is that
+                # a condition it cannot verify from evidence STOPS it, with the
+                # unverified condition named, rather than being waved through.
+                printf '🤖 GATED phase (human, DELEGATED to you) — verify it yourself before implementing.\n'
+                printf 'The operator has delegated this gate. Conditions, verbatim:\n'
+                printf '%s\n' "$gc_text" | sed 's/^/    /'
+                printf 'For EACH condition: verify it against evidence you can actually read (a command you\n'
+                printf 'run, a file, a URL you fetch, a CI status). Quote that evidence.\n'
+                printf -- '- Every condition verified → record it and continue into the phase:\n'
+                printf -- '    bash %s/gate-approve.sh %s %s --by "ai-session-delegated" --note "<condition: evidence, per condition>"\n' "$SCRIPT_DIR" "$slug" "$p"
+                printf -- '- ANY condition you cannot verify from evidence — a visual judgement nobody has made,\n'
+                printf -- '  a credential you lack, a person'"'"'s sign-off, a preview nobody has looked at — STOP.\n'
+                printf -- '  Do not approve it, do not implement past it, and say exactly which condition and why:\n'
+                printf -- '    bash %s/phase-outcome.sh %s %s blocked --reason "<the condition you could not verify>"\n' "$SCRIPT_DIR" "$slug" "$p"
+                printf 'Never record an approval you cannot cite evidence for. A gate approved on a guess is\n'
+                printf 'worse than a gate that stopped the run.\n'
+              else
+                printf '🧍 GATED phase (human) — STOP: a person must clear this gate before implementation.\n'
+                printf 'Operator steps:\n'
+                printf '%s\n' "$gc_text" | sed 's/^/    /'
+                printf 'Ask the operator to do these steps and approve the gate — Phase Console → plan → phase %s\n' "$p"
+                printf -- '→ Gate card, or: bash %s/gate-approve.sh %s %s --by "<who>" --note "<what was done>"\n' "$SCRIPT_DIR" "$slug" "$p"
+                printf 'Do NOT implement past an unapproved human gate.\n'
+              fi
               ;;
             *)
               gs="$(PHASE_EXEC_GATES=0 DOCS_ROOT="$DOCS_ROOT" "$0" "$slug" --gate-status "$p" 2>/dev/null || true)"
