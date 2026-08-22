@@ -31,7 +31,7 @@ import { cn } from '@/lib/cn';
 import { useNow } from '@/lib/clock';
 import { money } from '@/lib/format';
 import { rungLabel, situationLabelFor } from '@/lib/ladder';
-import { runStatusTitle, runUiState } from '@/lib/status-vocab';
+import { isLiveStatus, runStatusTitle, runUiState } from '@/lib/status-vocab';
 import { RunStrip } from '@/components/charts';
 import { Chip, StatusBadge } from '@/components/ui';
 import { navigate } from '@/app/router';
@@ -66,8 +66,6 @@ export interface PulseWait {
   since?: string;
   watch?: string[];
 }
-
-const LIVE_RUN = new Set(['running', 'waiting', 'pausing', 'stopping', 'frozen', 'queued', 'halting']);
 
 // The vehicle a hook-reported session is, in words. It lives in
 // `features/now/model.ts` beside `otherSessions` (Phase 10) — the Sessions list
@@ -150,7 +148,7 @@ export function convergenceLines(view: ConvergeView): string[] {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function isLiveRun(run: RunState | null | undefined): boolean {
-  return Boolean(run && LIVE_RUN.has(run.status));
+  return Boolean(run && isLiveStatus(run.status));
 }
 
 function record(run: RunState, phase: number): PhaseRecord | undefined {

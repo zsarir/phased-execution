@@ -66,6 +66,19 @@ export function toolTime(ms: number): string {
   return `${Math.round(ms / 60_000)}m`;
 }
 
+/**
+ * `14:07:52` — a wall clock for a log line, in the reader's own zone.
+ *
+ * Deliberately not `relativeTime`: "4 minutes ago" is the right register for a
+ * card that names one moment, and the wrong one for a column of five hundred
+ * lines, where what a reader wants is to line two of them up and see the gap.
+ */
+export function clockTime(ms: number): string {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return '--:--:--';
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
 const UNITS: [number, string][] = [
   [60_000, 'minute'],
   [3_600_000, 'hour'],

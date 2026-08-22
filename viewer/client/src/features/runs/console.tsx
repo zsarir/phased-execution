@@ -24,6 +24,7 @@ import { Button, Input } from '@/components/ui';
 import { onSse } from '@/lib/sse';
 import { cn } from '@/lib/cn';
 import { scrollIntoScroller } from '@/lib/scroll';
+import { clockTime } from '@/lib/format';
 import {
   KIND_LABEL,
   MAX_LINES,
@@ -430,6 +431,18 @@ export function LiveConsole({
                 linked === line.id && 'is-linked',
               )}
             >
+              {/* When it happened. Every folded line already carried `at` — the
+                  live path stamps it, the replay path parses it off the
+                  transcript entry — and nothing had ever rendered it, so a
+                  reader could see the order of two lines but never the gap
+                  between them. */}
+              <time
+                className="live-time"
+                dateTime={new Date(line.at).toISOString()}
+                title={new Date(line.at).toLocaleString()}
+              >
+                {clockTime(line.at)}
+              </time>
               {/* The kind label doubles as the line's own address. A button,
                   not an anchor: following the link would scroll the page to a
                   line already on screen, and what anyone wants here is the URL

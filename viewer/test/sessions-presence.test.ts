@@ -18,7 +18,7 @@ import './state-sandbox.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -146,6 +146,22 @@ async function call(
   await handleApi({ service: svc } as never, req as never, res as never, new URL(`http://127.0.0.1:4123${path}`));
   return { status, payload };
 }
+
+/**
+ * Write an inbox file the way the only thing that really writes one does.
+ *
+ * `phase-outcome.sh` is tmp+`mv` (line 220), and that is not decoration: the
+ * watcher debounces 250 ms per path and then READS, so a plain `writeFileSync`
+ * can be seen at zero length, parsed as junk, and consumed — the declaration
+ * gone before the runner is handed it. macOS coalesces the create and the write
+ * inside one FSEvents window and hides it; Linux inotify does not, which is why
+ * this only ever failed on the ubuntu leg of CI.
+ */
+const writeInbox = (file: string, body: string): void => {
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, body, 'utf8');
+  renameSync(tmp, file);
+};
 
 const poll = async (check: () => boolean, ms = 4_000): Promise<boolean> => {
   const until = Date.now() + ms;
@@ -304,10 +320,10 @@ test('a stale or invalid inbox file is consumed and changes nothing; a live runn
       await settle(svc);
       const file = inboxOutcomeFile(root, 'alpha', 2);
       mkdirSync(join(file, '..'), { recursive: true });
-      writeFileSync(file, JSON.stringify({ version: 1, slug: 'alpha', phase: 2, status: 'waiting-external', watch: [], written_at: '2020-01-01T00:00:00Z' }), 'utf8');
+      writeInbox(file, JSON.stringify({ version: 1, slug: 'alpha', phase: 2, status: 'waiting-external', watch: [], written_at: '2020-01-01T00:00:00Z' }));
       assert.ok(await poll(() => !existsSync(file)), 'consumed');
       assert.equal(latestRun(root, 'alpha'), null, 'a declaration from 2020 is history');
-      writeFileSync(file, 'not json', 'utf8');
+      writeInbox(file, 'not json');
       assert.ok(await poll(() => !existsSync(file)), 'junk consumed too');
       assert.equal(latestRun(root, 'alpha'), null);
       // A live runner: the declaration goes through `declareOutcome`.
@@ -318,7 +334,7 @@ test('a stale or invalid inbox file is consumed and changes nothing; a live runn
         declareOutcome: (phase: number, outcome: unknown, by: string) => { declared.push({ phase, outcome, by }); return 'parked'; },
         noteDocsChanged: () => {},
       });
-      writeFileSync(file, JSON.stringify({ version: 1, slug: 'alpha', phase: 2, status: 'partial', reason: 'budget', watch: [], written_at: new Date().toISOString(), session_id: 's-hand' }), 'utf8');
+      writeInbox(file, JSON.stringify({ version: 1, slug: 'alpha', phase: 2, status: 'partial', reason: 'budget', watch: [], written_at: new Date().toISOString(), session_id: 's-hand' }));
       assert.ok(await poll(() => declared.length === 1), 'handed to the live runner');
       assert.deepEqual(declared[0], { phase: 2, outcome: { version: 1, slug: 'alpha', phase: 2, status: 'partial', reason: 'budget', watch: [], written_at: (declared[0] as { outcome: { written_at: string } }).outcome.written_at, session_id: 's-hand' }, by: 'unsupervised' });
     } finally { svc.close(); }

@@ -37,6 +37,7 @@ import { navigate } from '@/app/router';
 import { TerminalSquare } from 'lucide-react';
 import { RecoveryActions } from '@/components/recovery-actions';
 import { EvidenceLine } from './phase-row';
+import { PhaseGate } from '@/features/plans/gate-card';
 import { RULING_KIND_LABELS, inboxItemId } from '@shared/attention-model.js';
 
 /**
@@ -156,6 +157,13 @@ export function PhaseDrawer({
               A panel that showed four unrelated fields and left the reader to
               infer the diagnosis is what sent people to NDJSON. */}
           <SituationSummary situation={data.situation} evidence={data.evidence} />
+
+          {/* The gate, answerable here. A phase parked on a human gate is the
+              one halt whose fix is a person pressing a button, and until this
+              it was the one halt you had to leave the run page to clear — the
+              errand said "approve it on the plan page" because there was
+              nowhere nearer to say. Renders nothing when there is no gate. */}
+          <PhaseGate slug={slug} phase={phase} />
 
           {/* Claimed versus evidenced. The board says a phase is done; this is
               the four facts that either back it or do not, in the words

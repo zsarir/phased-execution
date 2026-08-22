@@ -270,6 +270,37 @@ test('planner: the same evidence is not healed twice — until something changes
   assert.equal(planConvergence(facts({ runs: [halted], lastNoop: fingerprint, trigger: 'button' })).actions[0].kind, 'heal');
 });
 
+test('planner: clearing a gate is a change — the healer is asked again about a phase a person just unblocked', () => {
+  // The shape this was written for, measured on a real run: a manual gate parks
+  // the phase, the healer finds nothing to climb (only a person CAN clear it),
+  // and the operator then does exactly what the errand asked. Approving writes
+  // `gate-status.md` and moves nothing else this fingerprint reads — same run,
+  // same records, and the board word stays `ready` either way — so the loop
+  // skipped with "nothing has changed" against a gate that was already open,
+  // and the run sat halted for hours.
+  const halted = run(
+    { status: 'halted', halt: { at: '', reason: 'phase 2 is gated', phase: 2, kind: 'no-handoff' } },
+    [{ phase: 2, status: 'parked' }],
+  );
+  const before = planConvergence(facts({ runs: [halted], gateStamp: '111:80' }));
+  assert.equal(before.actions[0].kind, 'heal');
+  const fingerprint = before.actions[0].kind === 'heal' ? before.actions[0].fingerprint : '';
+  assert.match(
+    skipWhy(planConvergence(facts({ runs: [halted], lastNoop: fingerprint, gateStamp: '111:80' }))),
+    /nothing has changed/,
+  );
+  // The approval: same run, same records, same board — a new gate stamp.
+  const approved = planConvergence(facts({ runs: [halted], lastNoop: fingerprint, gateStamp: '222:140' }));
+  assert.equal(approved.actions[0].kind, 'heal', 'an approved gate re-asks the healer');
+  // And a plan with no gate file at all is not a permanent change: null is stable.
+  const noGate = planConvergence(facts({ runs: [halted], gateStamp: null }));
+  const noGatePrint = noGate.actions[0].kind === 'heal' ? noGate.actions[0].fingerprint : '';
+  assert.match(
+    skipWhy(planConvergence(facts({ runs: [halted], lastNoop: noGatePrint, gateStamp: null }))),
+    /nothing has changed/,
+  );
+});
+
 /* ------------------------------------------------------------------ *
  * The executor
  * ------------------------------------------------------------------ */

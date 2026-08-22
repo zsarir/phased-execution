@@ -161,6 +161,37 @@ export function runUiState(status) {
   );
 }
 
+/**
+ * The run statuses that have a LOOP behind them — the client's notion of live.
+ *
+ * Deliberately not the server's `IN_FLIGHT`, and the difference is `queued`: a
+ * queued run holds no child and no lock, which is exactly why the server keeps
+ * it out of its own list, but a loop IS behind it sitting in `admit()`. Left
+ * out, a queued run falls through the status mapping's tail and the fleet calls
+ * it *interrupted* while its plan offers a Start button the server 409s.
+ *
+ * One definition because three surfaces ask the question — the fleet row's
+ * pulse, Now's lanes, and the plan pulse — and they had a copy each. Three lists
+ * that agree today are three lists that disagree the day a status word is added,
+ * and the disagreement shows up as a finished run painted as running on one page
+ * and settled on another.
+ * @type {readonly string[]}
+ */
+export const LIVE_RUN_STATUSES = Object.freeze([
+  'running',
+  'waiting',
+  'pausing',
+  'stopping',
+  'frozen',
+  'queued',
+  'halting',
+]);
+
+/** Is a loop behind this run status? @param {string|null|undefined} status @returns {boolean} */
+export function isLiveStatus(status) {
+  return LIVE_RUN_STATUSES.includes(status ?? '');
+}
+
 /** The UI state of a phase record status word. @param {string|null|undefined} status @returns {UiState} */
 export function phaseUiState(status) {
   return (

@@ -457,7 +457,10 @@ export function NextUp({ departures, plans, allowRun, loading, focused = false }
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [open, setOpen] = useState(false);
 
-  const rankId = (prefs.readyRank ?? 'leverage') as RankId;
+  // Default: the plan you touched last. `leverage` led for a year and is a
+  // strategy — a good one, on a day you have one; "where was I" is the question
+  // an open console is actually asked most often.
+  const rankId = (prefs.readyRank ?? 'momentum') as RankId;
   const visible = useMemo(
     () => rankBy(applyFilters(departures, filters), rankId),
     [departures, filters, rankId],

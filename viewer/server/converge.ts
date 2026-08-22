@@ -102,6 +102,15 @@ export type ConvergeFacts = {
    */
   presence?: (lock: LockView) => 'live' | 'ended' | 'unknown';
   /**
+   * The plan's gate decisions, as a cheap stamp (`gate-status.md`'s mtime and
+   * size). It is in the FACTS because it is in the fingerprint: approving a
+   * manual gate changes neither the run, its records, nor the board word — the
+   * phase reads `ready` before and after — so without this the healer's "found
+   * nothing to climb" latches forever and the person who did exactly what the
+   * errand asked is never answered. Null when the file does not exist yet.
+   */
+  gateStamp?: string | null;
+  /**
    * The fingerprint of the latest run's open records at the last pass that
    * healed nothing. The same evidence yields the same answer, so the healer —
    * and its journal lines — are not run again until something changes.
@@ -226,15 +235,23 @@ export function endedSessionLocks(
  * same verdict, and a verdict of "nothing to climb" need not be re-derived —
  * and re-journalled — every five minutes. Locks are part of it (a holder
  * releasing IS a change); the clock is not.
+ *
+ * `gateStamp` is part of it for the same reason locks are, and it is the one
+ * that was missing: clearing a manual gate changes nothing else this function
+ * reads — not the run, not its records, not the board word — so the healer kept
+ * skipping with "nothing has changed" against a gate a person had just
+ * approved.
  */
-export function evidenceFingerprint(run: RunState, board: Record<number, string>, locks: readonly LockView[]): string {
+export function evidenceFingerprint(
+  run: RunState, board: Record<number, string>, locks: readonly LockView[], gateStamp?: string | null,
+): string {
   const phases = Object.values(run.phases)
     .sort((a, b) => a.phase - b.phase)
     .map((r) => [r.phase, r.status, r.attempts, r.endedAt ?? '', (r.note ?? '').slice(0, 120), board[r.phase] ?? '']);
   const held = locks
     .map((l) => [l.phase, l.owner, l.expired ? 1 : 0, l.leaseUntil ?? 0])
     .sort((a, b) => Number(a[0]) - Number(b[0]));
-  return JSON.stringify([run.id, run.status, run.halt?.at ?? '', run.halt?.reason ?? '', run.resolved?.at ?? '', phases, held]);
+  return JSON.stringify([run.id, run.status, run.halt?.at ?? '', run.halt?.reason ?? '', run.resolved?.at ?? '', phases, held, gateStamp ?? '']);
 }
 
 function resumeErrand(phase: number, at: string, why: 'off' | 'capped', sessionId?: string): Errand {
@@ -401,7 +418,7 @@ export function planConvergence(facts: ConvergeFacts): ConvergePlan {
    * from before `stoppedBy` existed — goes to the healer: classify the open
    * phases, climb one rung, drive it through the runner. Once per evidence. */
   if (run.status === 'halted' || run.status === 'interrupted' || run.status === 'parked' || run.status === 'paused') {
-    const fingerprint = evidenceFingerprint(run, board, facts.locks);
+    const fingerprint = evidenceFingerprint(run, board, facts.locks, facts.gateStamp);
     if (!pressed && facts.lastNoop === fingerprint) {
       return skip(run.id, 'nothing has changed since the last pass found nothing to climb');
     }
@@ -434,6 +451,8 @@ export type ConvergeDeps = {
   /** The board's states, or null when the engine could not read the plan. */
   board: (slug: string) => Promise<Record<number, string> | null>;
   locks: (slug: string) => LockView[];
+  /** `gate-status.md`'s stamp for the plan — see `ConvergeFacts.gateStamp`. */
+  gateStamp?: (slug: string) => string | null;
   prefs: () => { resumeAtBoot?: boolean };
   pidAlive?: (pid: number) => boolean;
   /** The session registry's presence for a lock's session — see `ConvergeFacts.presence`. */
@@ -605,6 +624,7 @@ export async function convergePlan(
     slug, now, trigger, board, runs,
     live: deps.live(),
     locks: deps.locks(slug),
+    gateStamp: deps.gateStamp?.(slug) ?? null,
     prefs: deps.prefs(),
     ...(deps.pidAlive ? { pidAlive: deps.pidAlive } : {}),
     ...(deps.presence ? { presence: deps.presence } : {}),

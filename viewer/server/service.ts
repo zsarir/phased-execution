@@ -10,7 +10,7 @@
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync, watch, type FSWatcher } from 'node:fs';
 
 import { instanceId } from '../shared/instances.mjs';
 import {
@@ -4582,6 +4582,17 @@ export class Service {
         } catch { return null; }
       },
       locks: (slug) => this.allLocks().filter((lock) => lock.slug === slug),
+      // One stat, so that approving a gate is evidence. `gate-approve.sh` and
+      // the Gate card both write this file, and nothing else converge reads
+      // moves when they do — see `ConvergeFacts.gateStamp`.
+      gateStamp: (slug) => {
+        const dir = this.root?.handoffsDir;
+        if (!dir) return null;
+        try {
+          const stat = statSync(join(dir, slug, 'gate-status.md'));
+          return `${stat.mtimeMs}:${stat.size}`;
+        } catch { return null; }
+      },
       prefs: () => ({ resumeAtBoot: this.prefs.resumeAtBoot }),
       presence: (lock) => this.sessions.presenceOfLock(lock),
       heal: (slug) => this.maybeAutoRecover(slug),

@@ -18,9 +18,22 @@
 
 .live-line {
   display: grid;
-  grid-template-columns: 62px 1fr auto;
+  /* `ch` rather than px for the clock: it is exactly eight monospace characters
+     at whatever size the console is rendering, so the column cannot drift out
+     of step with the font the way a magic pixel width does. */
+  grid-template-columns: 8ch 62px 1fr auto;
   gap: 0.5rem;
   padding: 1px 0;
+}
+
+/* The wall clock. Unselectable for the same reason the kind label is: dragging
+   across a line should put the session's words on the clipboard, not a column
+   of times down the left of them. */
+.live-time {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  white-space: nowrap;
 }
 
 .live-k {

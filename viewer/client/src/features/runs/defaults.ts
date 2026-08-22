@@ -29,6 +29,7 @@
  */
 
 import type { Autonomy, McpDegradation, PermissionProfile } from '@/lib/api';
+import { isLiveStatus } from '@/lib/status-vocab';
 
 interface RunDefaults {
   model: string;
@@ -130,19 +131,7 @@ export const AUTONOMY_LABEL: Record<Autonomy, string> = {
  * run fell through the status mapping's tail and the fleet called it **interrupted**,
  * while its plan offered a Start button the server answers with a 409.
  */
-const LIVE_STATUSES = [
-  // `halting` is a drain: sessions are still live and Stop must stay offered.
-  'running',
-  'waiting',
-  'pausing',
-  'stopping',
-  'frozen',
-  'queued',
-  'halting',
-] as const;
-
-export const isLive = (status: string | undefined): boolean =>
-  (LIVE_STATUSES as readonly string[]).includes(status ?? '');
+export const isLive = (status: string | undefined): boolean => isLiveStatus(status);
 
 /** Plans write these as prose; only a known alias is a choice. */
 export function modelAlias(text: string | undefined): string | undefined {

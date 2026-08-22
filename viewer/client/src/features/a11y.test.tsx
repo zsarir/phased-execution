@@ -141,6 +141,80 @@ const INBOX = [
   },
 ];
 
+/**
+ * `PolicyView`, in the shape `lib/api/policy.ts` declares it — not a plausible
+ * one. `PolicyCard` indexes `effective` and `defaults` by list name, so a body
+ * missing either is not an empty page, it is a `TypeError` mid-render.
+ *
+ * Populated on purpose: chips only exist when there are rules, the strike path
+ * only exists when a shipped default is present, and `inert`/`support`/`seen`
+ * each render a section that axe would otherwise never see.
+ */
+const POLICY = {
+  defaults: {
+    deny: ['Bash(rm -rf /)', 'Read(./.env)'],
+    ask: ['Bash(git push:*)', 'WebFetch'],
+    allow: ['Read', 'Glob', 'Grep'],
+  },
+  extra: {
+    deny: [],
+    ask: ['Bash(docker:*)'],
+    allow: ['Bash(npm test:*)'],
+    removed: { deny: [], ask: ['WebFetch'], allow: [] },
+  },
+  plan: null,
+  effective: {
+    deny: ['Bash(rm -rf /)', 'Read(./.env)'],
+    ask: ['Bash(git push:*)', 'Bash(docker:*)'],
+    allow: ['Read', 'Glob', 'Grep', 'Bash(npm test:*)'],
+  },
+  file: '/repo/.claude/settings.json',
+  profiles: [
+    { id: 'trusted', label: 'Trusted' },
+    { id: 'guarded', label: 'Guarded' },
+  ],
+  inert: [{ raw: 'Bash(*)', note: 'a bare wildcard matches nothing the hook honours' }],
+  support: [{ raw: 'Bash(npm test:*)', tool: 'Bash', form: 'prefix', support: 'honoured' }],
+  hookTools: ['Bash', 'Write'],
+  wrappersNotStripped: ['env'],
+  seen: ['Bash', 'Read', 'Write'],
+};
+
+/**
+ * `TailscaleStatus` is a three-way union on `state` (`lib/api/system.ts`,
+ * mirrored by `server/tailscale.ts`) — there is no `available` field anywhere in
+ * it. An unrecognised body falls past both early returns in `Body` and reads
+ * `status.serve`, which is how a fixture becomes a crash.
+ *
+ * `running` is the state worth fixturing: it is the only one that renders the
+ * key/value table, the device list and the command blocks.
+ */
+const TAILSCALE = {
+  state: 'running',
+  tailnet: 'example.ts.net',
+  magicDns: true,
+  magicDnsSuffix: 'example.ts.net',
+  self: {
+    hostName: 'mac',
+    dnsName: 'mac.example.ts.net',
+    ips: ['100.64.0.1'],
+    os: 'macOS',
+    online: true,
+  },
+  peers: [
+    { hostName: 'phone', dnsName: 'phone.example.ts.net', ips: ['100.64.0.2'], os: 'iOS', online: true },
+    {
+      hostName: 'laptop',
+      dnsName: 'laptop.example.ts.net',
+      ips: ['100.64.0.3'],
+      os: 'Linux',
+      online: false,
+      lastSeen: '2026-08-21T09:00:00Z',
+    },
+  ],
+  serve: { active: true, forOurPort: true, url: 'https://mac.example.ts.net' },
+};
+
 /** path → body. A miss is an explicit 404, never an accidental empty object. */
 const ROUTES: [RegExp, unknown][] = [
   [/^\/api\/state/, STATE],
@@ -158,7 +232,7 @@ const ROUTES: [RegExp, unknown][] = [
   [/^\/api\/terminal/, { sessions: [], max: 8 }],
   [/^\/api\/mcp\/catalog/, { entries: [] }],
   [/^\/api\/mcp/, { servers: [], allowMcp: false }],
-  [/^\/api\/policy/, { profiles: [], allow: [], deny: [], ask: [] }],
+  [/^\/api\/policy/, POLICY],
   [/^\/api\/accounts/, { accounts: [], active: null }],
   [/^\/api\/push/, { publicKey: 'k', devices: [], categories: [] }],
   [
@@ -173,7 +247,7 @@ const ROUTES: [RegExp, unknown][] = [
       outOfBand: { configured: false },
     },
   ],
-  [/^\/api\/tailscale/, { available: false }],
+  [/^\/api\/tailscale/, TAILSCALE],
   [/^\/api\/hook/, { installed: false }],
   [/^\/api\/skills/, { skills: [] }],
   [/^\/api\/auth/, { loggedIn: true, checkedAt: '2026-08-22T00:00:00Z' }],

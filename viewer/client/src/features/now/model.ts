@@ -32,6 +32,7 @@
 
 import { STALL_DEFAULTS } from '@shared/attention-model.js';
 import { isClosed } from '@/lib/closure';
+import { isLiveStatus } from '@/lib/status-vocab';
 import type {
   ChildRef,
   ForeignSession,
@@ -279,18 +280,8 @@ function laneRank(lane: NowLane, now: number): number {
 
 /** Whether a run has a loop behind it — `isLive` over the run's own status. */
 export function isLiveRun(run: RunState | null | undefined): boolean {
-  return run != null && LIVE_RUN_STATUSES.has(run.status);
+  return run != null && isLiveStatus(run.status);
 }
-
-const LIVE_RUN_STATUSES = new Set([
-  'running',
-  'waiting',
-  'pausing',
-  'stopping',
-  'frozen',
-  'queued',
-  'halting',
-]);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -535,8 +526,23 @@ export function toDepartures(
  * and which one is right depends on the day. They are deliberately not five
  * sorts of the same list: each leads with a different first key, so the top of
  * the board actually changes.
+ *
+ * `modified` leads, and is the default: on any day with no particular strategy
+ * in mind, the plan you touched last is the one you meant to come back to.
+ * It sorts on `activity`, which the store defines as the newest mtime across
+ * the plan and every one of its handoff artefacts — so it is last modification
+ * in the literal sense, not a proxy for it. There is deliberately no SIXTH
+ * order for that: a second comparator on the same first key would be one sort
+ * wearing two labels, which is the thing this list exists not to do.
  */
 export const RANKS = [
+  {
+    id: 'momentum',
+    label: 'Last modified',
+    hint: 'most recently changed',
+    blurb:
+      'Newest first, by the last change to the plan or any of its handoffs. Where you were working, so the context is still warm — in your head and in the handoff.',
+  },
   {
     id: 'leverage',
     label: 'Leverage',
@@ -554,12 +560,6 @@ export const RANKS = [
     label: 'Quick wins',
     hint: 'smallest first',
     blurb: 'Lightest phases first — what fits in the time you actually have.',
-  },
-  {
-    id: 'momentum',
-    label: 'Momentum',
-    hint: 'most recent plan',
-    blurb: 'Where you were last working. The context is still warm, in your head and in the handoff.',
   },
   {
     id: 'unstick',
