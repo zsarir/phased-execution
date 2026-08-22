@@ -24,6 +24,7 @@
  * table never pushes a phone sideways.
  */
 
+import type { SpendView } from '@/lib/api';
 import { useState } from 'react';
 import { ChevronRight, Radio } from 'lucide-react';
 import {
@@ -73,8 +74,18 @@ const SHOW_LIMIT = 40;
  * other home in the console. Every one of them describes the *filtered* set, so
  * a total can never sit above a list it does not account for.
  */
-export function FleetTiles({ rows }: { rows: RunRow[] }) {
+export function FleetTiles({ rows, spend }: { rows: RunRow[]; spend?: SpendView | undefined }) {
   const totals = fleetTotals(rows);
+  // Settled money is the day cap's own arithmetic: what finished runs cost
+  // plus what the resource ladder spent, against `ladderPerDayUsd`. It is NOT
+  // the sum of the rows on screen — a filtered table would otherwise quietly
+  // report a smaller day — which is exactly why it comes from `/api/spend`
+  // rather than from `fleetTotals`.
+  const today = spend?.today;
+  const settled = today ? today.settledUsd + today.ladderUsd : null;
+  const cap = today?.capUsd ?? null;
+  const over = settled != null && cap != null && cap > 0 && settled >= cap;
+
   return (
     <section aria-label="What the fleet is doing" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       <Tile
@@ -89,7 +100,28 @@ export function FleetTiles({ rows }: { rows: RunRow[] }) {
         state={totals.attention ? 'state-ready' : undefined}
         hint={totals.attention ? 'stopped until someone moves it' : 'nothing is parked'}
       />
-      <Tile label="Spent" value={money(totals.spent)} hint="across the runs shown" />
+      {/* Two different questions, and they were one tile.
+          "Spent" is about the rows in front of you and moves when a filter
+          moves. "Settled today" is about the CAP, comes off `/api/spend`, and
+          is the number that decides whether the next phase may board at all —
+          `nextRung` refuses against it. Conflating them meant the figure that
+          could stop the fleet was never on screen. */}
+      {settled != null ? (
+        <Tile
+          label="Settled today"
+          value={money(settled)}
+          state={over ? 'state-blocked' : undefined}
+          hint={
+            cap == null
+              ? 'no day cap is set'
+              : over
+                ? `over the ${money(cap)} day cap — the ladder will not spend`
+                : `of the ${money(cap)} day cap`
+          }
+        />
+      ) : (
+        <Tile label="Spent" value={money(totals.spent)} hint="across the runs shown" />
+      )}
       <Tile
         label="Time on task"
         value={totals.worked ? duration(totals.worked) : '—'}

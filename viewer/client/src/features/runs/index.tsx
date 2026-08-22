@@ -43,7 +43,16 @@ import { useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Radio } from 'lucide-react';
 import { api, type QueueEntry, type RunState } from '@/lib/api';
-import { keys, useApprovals, useAuth, useConsoleState, usePlans, useQueue, useRuns } from '@/lib/queries';
+import {
+  keys,
+  useApprovals,
+  useAuth,
+  useConsoleState,
+  usePlans,
+  useQueue,
+  useRuns,
+  useSpend,
+} from '@/lib/queries';
 import { usePrefs } from '@/lib/prefs';
 import { relativeTime } from '@/lib/format';
 import {
@@ -106,6 +115,10 @@ export default function RunsView() {
   const allowRun = Boolean(state?.allowRun);
 
   const { data: runs, isPending, error } = useRuns(enabled);
+  // The day cap's own figure, not the sum of the rows on screen — see
+  // `FleetTiles`. Held here so the tiles stay a pure render of what they are
+  // given, which is what lets them be tested without a query client.
+  const { data: spend } = useSpend(enabled);
   const { data: queue } = useApprovals(enabled);
   const { data: auth } = useAuth(enabled);
 
@@ -393,7 +406,7 @@ export default function RunsView() {
 
         {all.length ? (
           <section className="flex flex-col gap-3" aria-label="The fleet">
-            <FleetTiles rows={visible} />
+            <FleetTiles rows={visible} spend={spend} />
             <Card className="p-3">
               <Controls
                 sortId={sortId}

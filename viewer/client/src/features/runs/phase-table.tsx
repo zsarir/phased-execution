@@ -15,7 +15,7 @@
  * `phaseActions`), imported unchanged — the same module `node --test` checks.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Button,
   Card,
@@ -32,12 +32,12 @@ import {
   TR,
   Table,
   TableWrap,
-  toast,
   StatusBadge,
 } from '@/components/ui';
 import {
-  api,
+  type LaneLiveness,
   type PhaseEta,
+  type Ruling,
   type PhaseLock,
   type PhaseRecord,
   type PhaseScope,
@@ -46,13 +46,12 @@ import {
   type RunState,
   type TerminalSession,
 } from '@/lib/api';
-import { countdown, duration, elapsed, money, pad2, relativeTime } from '@/lib/format';
+import { countdown, duration, elapsed, money, pad2 } from '@/lib/format';
 import { DepsCell, LockCell, PhaseDetails, SizeCell } from '@/views/plan/phase-cells';
 import { ForceReleaseButton } from '@/components/release-lock';
 import { useNow } from '@/lib/clock';
-import { useConsoleState, useDiagnosis } from '@/lib/queries';
-import { SituationSummary } from '@/components/situation';
-import { navigate } from '@/app/router';
+import { useConsoleState } from '@/lib/queries';
+import { usePrefs } from '@/lib/prefs';
 import { phaseProgress } from './tiles';
 import { MCP_REASON } from './defaults';
 import { classifyBoardPhase, classifyPhase, liveRecovery } from '@/lib/recovery';
@@ -60,6 +59,8 @@ import { canQa, liveQa } from '@/lib/qa';
 import { QaButton, QaVerdict } from '@/components/qa-launcher';
 import { LaunchDialog } from '@/features/run-setup/launch-dialog';
 import { RecoveryButton } from './status-strip';
+import { PhaseDrawer } from './phase-drawer';
+import { EvidenceLine, LivenessChip, RulingsChip } from './phase-row';
 import { RecoveryActions } from '@/components/recovery-actions';
 import { queueEntryFor, waitingLabel } from './session-panes';
 import { phaseHref } from '@shared/routes.js';
@@ -70,7 +71,7 @@ import {
   mergePhases,
   phaseActions,
 } from '@shared/phase-model.js';
-import { Bot, Gauge, TerminalSquare } from 'lucide-react';
+import { Bot, Gauge } from 'lucide-react';
 
 import { scopeOfRow } from '@shared/scope.js';
 import { ScopeChips } from '@/components/scope-chips';
@@ -145,6 +146,68 @@ export type PhaseRecovery = {
   allowWrites?: boolean;
 };
 
+/**
+ * The five groups a phase can be in, in the order they are worth reading.
+ *
+ * This is NOT `BOARD_ORDER`. The board's order is about the lifecycle; this is
+ * about attention, and the two differ in exactly one way that matters: a
+ * FAILED phase and a phase that needs a person outrank everything, including
+ * the phase that is running. A fifteen-phase plan renders as fifteen rows in
+ * board order, and the two that are asking for something sit wherever their
+ * numbers put them — which on a phone is below the fold.
+ *
+ * `done` is last and collapsed, because a finished phase is the one thing here
+ * nobody is looking for. The collapse is REMEMBERED (`prefs.runPhasesDone`):
+ * a section that re-opens on every navigation is a section being re-collapsed
+ * rather than read. The shipped default is `['done']` (`lib/prefs.ts`).
+ */
+export const PHASE_GROUPS = [
+  {
+    id: 'needs-you',
+    label: 'Needs you',
+    hint: 'A gate, an errand, or a claim only a person can settle.',
+    states: ['stuck'],
+  },
+  {
+    id: 'running',
+    label: 'Running',
+    hint: 'Live lanes, and what is queued behind a scope.',
+    states: ['in-progress'],
+  },
+  { id: 'ready', label: 'Ready', hint: 'Every dependency is done.', states: ['ready'] },
+  { id: 'waiting', label: 'Waiting', hint: 'Blocked on a phase that is not finished.', states: ['waiting'] },
+  { id: 'done', label: 'Done', hint: 'Finished — by this run or any other session.', states: ['done'] },
+] as const;
+
+export type PhaseGroupId = (typeof PHASE_GROUPS)[number]['id'];
+
+/**
+ * Which group a row belongs in.
+ *
+ * Read from the DISPLAYED state, not the board's: a phase this run is working
+ * on right now belongs under Running even while the board still says `ready`,
+ * which is the same rule `displayState` encodes for the chip. A state the
+ * vocabulary does not name falls to `waiting` rather than disappearing — a row
+ * that vanishes because the server learned a new word is the worst outcome
+ * here.
+ */
+export function groupOf(row: MergedPhase): PhaseGroupId {
+  const running = row.record?.status === 'running';
+  const showing = displayState(row.state, { running });
+  const group = PHASE_GROUPS.find((g) => (g.states as readonly string[]).includes(showing));
+  return group?.id ?? 'waiting';
+}
+
+/** The rows, split into the five groups, empty groups dropped. */
+export function groupRows(rows: readonly MergedPhase[]): { id: PhaseGroupId; label: string; hint: string; rows: MergedPhase[] }[] {
+  return PHASE_GROUPS.map((group) => ({
+    id: group.id,
+    label: group.label,
+    hint: group.hint,
+    rows: rows.filter((row) => groupOf(row) === group.id),
+  })).filter((group) => group.rows.length > 0);
+}
+
 export function PhaseTable({
   slug,
   run,
@@ -155,6 +218,8 @@ export function PhaseTable({
   queue,
   scopes,
   phaseEta,
+  liveness,
+  rulings,
 }: {
   slug: string;
   run: RunState | null;
@@ -168,10 +233,22 @@ export function PhaseTable({
   scopes?: PhaseScope[] | undefined;
   /** What each phase was expected to take. Absent on a source with no plan detail. */
   phaseEta?: PhaseEta[] | undefined;
+  /** One entry per live lane (`RunDetail.liveness`). Absent on an older server. */
+  liveness?: LaneLiveness[] | undefined;
+  /** The plan's whole ruling ledger — counted per phase for the row badge. */
+  rulings?: readonly Ruling[] | undefined;
 }) {
   // "Run only this" opens the launch dialog on the row's phase; one dialog for
   // the table, keyed by which phase asked. Before the early return — a hook.
   const [launchPhase, setLaunchPhase] = useState<number | null>(null);
+  const [prefs, setPrefs] = usePrefs();
+  const collapsed = prefs.runPhasesCollapsed;
+
+  const rulingCounts = useMemo(() => {
+    const counts: Record<number, number> = {};
+    for (const ruling of rulings ?? []) counts[ruling.phase] = (counts[ruling.phase] ?? 0) + 1;
+    return counts;
+  }, [rulings]);
 
   if (!planPhases.length) {
     return (
@@ -246,23 +323,60 @@ export function PhaseTable({
                 </TH>
               </TR>
             </THead>
-            <TBody>
-              {rows.map((p) => (
-                <PhaseRows
-                  key={p.phase}
-                  phase={p}
-                  slug={slug}
-                  run={run}
-                  live={live}
-                  allowRun={allowRun}
-                  recovery={recovery}
-                  onRunAlone={setLaunchPhase}
-                  entry={queueEntryFor(queue, slug, p.phase)}
-                  conflicts={scopes?.find((s) => s.phase === p.phase)?.conflicts}
-                  eta={phaseEta?.find((e) => e.phase === p.phase)}
-                />
-              ))}
-            </TBody>
+            {groupRows(rows).map((group) => {
+              const shut = collapsed.includes(group.id);
+              return (
+                <TBody key={group.id}>
+                  <TR>
+                    {/* The section head is a row of the same table, so the
+                        columns stay aligned across every group — a separate
+                        table per group is how a phone ends up with five
+                        different column widths. */}
+                    <TD colSpan={12} className="bg-surface-sunken/60 py-1">
+                      <button
+                        type="button"
+                        aria-expanded={!shut}
+                        className="flex w-full cursor-pointer items-baseline gap-2 text-left"
+                        onClick={() =>
+                          setPrefs({
+                            runPhasesCollapsed: shut
+                              ? collapsed.filter((id) => id !== group.id)
+                              : [...collapsed, group.id],
+                          })
+                        }
+                      >
+                        <span aria-hidden="true" className="font-mono text-2xs text-ink-faint">
+                          {shut ? '▸' : '▾'}
+                        </span>
+                        <strong className="text-2xs">{group.label}</strong>
+                        <span className="font-mono text-2xs text-ink-faint tabular-nums">
+                          {group.rows.length}
+                        </span>
+                        <span className="truncate text-2xs text-ink-faint">{group.hint}</span>
+                      </button>
+                    </TD>
+                  </TR>
+                  {!shut &&
+                    group.rows.map((p) => (
+                      <PhaseRows
+                        key={p.phase}
+                        phase={p}
+                        slug={slug}
+                        run={run}
+                        live={live}
+                        allowRun={allowRun}
+                        recovery={recovery}
+                        onRunAlone={setLaunchPhase}
+                        entry={queueEntryFor(queue, slug, p.phase)}
+                        conflicts={scopes?.find((s) => s.phase === p.phase)?.conflicts}
+                        eta={phaseEta?.find((e) => e.phase === p.phase)}
+                        liveness={liveness?.find((l) => l.phase === p.phase)}
+                        rulings={rulingCounts[p.phase] ?? 0}
+                      />
+                    ))}
+                </TBody>
+              );
+            })}
           </Table>
         </TableWrap>
 
@@ -309,6 +423,8 @@ function PhaseRows({
   entry,
   conflicts,
   eta,
+  liveness,
+  rulings = 0,
 }: {
   phase: MergedPhase;
   slug: string;
@@ -321,6 +437,10 @@ function PhaseRows({
   entry?: QueueEntry | undefined;
   conflicts?: string[] | undefined;
   eta?: PhaseEta | undefined;
+  /** This phase's live lane, when it has one. Absent on an older server. */
+  liveness?: LaneLiveness | undefined;
+  /** How many rulings this phase's sessions recorded. */
+  rulings?: number;
 }) {
   const r = p.record;
   // Gated on the BOARD, never on the run record. Offering to run a phase the
@@ -409,6 +529,14 @@ function PhaseRows({
               }
             />
             <QaVerdict qa={p.qa} />
+            {/* Three facts the client has carried since Phases 4 and 5 and
+                rendered nowhere: whether a `done` claim is backed, what a
+                lane that has not stopped is actually doing, and how many
+                decisions the plan did not make for this phase. Each renders
+                nothing when its fact is absent. */}
+            {p.proof && <EvidenceLine proof={p.proof} />}
+            <LivenessChip liveness={liveness} />
+            <RulingsChip count={rulings} />
           </div>
           {/* "Queued" alone is the same non-answer `pausing` used to be. What
               makes the wait bearable is WHAT it is behind, and that is the one
@@ -686,7 +814,7 @@ function PhaseRows({
               </p>
             ) : null}
             {r?.mcpPark && r.status === 'parked' ? <McpParkNote park={r.mcpPark} /> : null}
-            {can.diagnose && <PhaseDiagnosis slug={slug} phase={p.phase} run={run} />}
+            {can.diagnose && <PhaseDrawer slug={slug} phase={p.phase} run={run} />}
             <details className={cn('group', hasNote && 'mt-1')}>
               <summary className="cursor-pointer text-2xs text-ink-faint hover:text-ink-muted">
                 Everything about phase {p.phase}
@@ -721,226 +849,5 @@ function McpParkNote({ park }: { park: NonNullable<PhaseRecord['mcpPark']> }) {
         ? ` — continues without ${park.degraded.length === 1 ? 'it' : 'them'} at ${due.toLocaleTimeString()} unless the server heals first (an errand is recorded then).`
         : ' — waits for the server to heal; no timeout is set (Settings ▸ Automation).'}
     </p>
-  );
-}
-
-const BLOCKED_ON: Record<string, string> = {
-  board: 'the board — no handoff, or it is not marked complete',
-  verification: 'the verification commands',
-  lint: 'validate.sh',
-};
-
-/**
- * Why this phase is not done, and what can still be done about it.
- *
- * Every fact below was already being written to disk and none of it reached the
- * page: the output of the command that failed, the session's own closing words,
- * the lint summary, whether a handoff exists at all. The run that prompted this
- * halted saying "no handoff was written" while the session had, in its last
- * message, explained exactly why it could not write one — and reading that meant
- * opening NDJSON in a terminal.
- *
- * Fetched when opened rather than with the row: it costs a `git status` and two
- * script runs, and most rows are never opened.
- */
-/**
- * One click: this exact recorded command, in YOUR shell (aliases and all — the
- * rg-is-a-function case is why the runner could not run it), in the phase's
- * own directory, in the integrated terminal. The exit code reflects back onto
- * the phase record the moment the session ends — green settles the phase via
- * the normal re-check, red lands as evidence with its output.
- */
-function VerifyInTerminalButton({ slug, phase, command }: { slug: string; phase: number; command: string }) {
-  const { data: state } = useConsoleState();
-  const [busy, setBusy] = useState(false);
-  const allowed = Boolean(state?.allowTerminal);
-  return (
-    <Button
-      size="sm"
-      variant="ghost"
-      disabled={!allowed || busy}
-      title={
-        allowed
-          ? 'Runs exactly this recorded command in the integrated terminal — your shell, the ' +
-            "phase's own directory. The exit code is written back onto this phase when it ends; " +
-            'if everything reads green, the phase re-checks itself.'
-          : 'The terminal is disabled. Restart the console with --allow-terminal.'
-      }
-      onClick={() => {
-        setBusy(true);
-        void api
-          .runVerifyCommand(slug, phase, command)
-          .then((minted) => navigate(`terminal/${minted.sessionId}`))
-          .catch((error: unknown) => toast((error as Error).message, 'error'))
-          .finally(() => setBusy(false));
-      }}
-    >
-      <TerminalSquare size={12} aria-hidden /> {busy ? 'Opening…' : 'Run in terminal'}
-    </Button>
-  );
-}
-
-function PhaseDiagnosis({
-  slug,
-  phase,
-  run,
-}: {
-  slug: string;
-  phase: number;
-  /** Kind-aware ordering: the halt's kind decides which action leads. */
-  run?: RunState | null;
-}) {
-  const [open, setOpen] = useState(false);
-  const { data, error, isFetching } = useDiagnosis(slug, phase, open);
-
-  const failed = (data?.verification?.ran ?? []).filter((x) => !x.ok);
-  const pre =
-    'mt-1 max-h-56 overflow-auto rounded border border-rule bg-ground px-2 py-1.5 font-mono text-2xs whitespace-pre-wrap';
-
-  return (
-    <details className="mt-1.5" onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary className="cursor-pointer text-2xs">Why is this not done?</summary>
-
-      {error && <div className="mt-1 text-2xs text-blocked">{(error as Error).message}</div>}
-      {!data && !error && isFetching && <div className="mt-1 text-2xs text-ink-faint">Reading the run…</div>}
-
-      {data && (
-        <div className="mt-2 flex flex-col gap-2">
-          {/* What the healer reads first: the situation, why, and the evidence.
-              A panel that showed four unrelated fields and left the reader to
-              infer the diagnosis is what sent people to NDJSON. */}
-          <SituationSummary situation={data.situation} evidence={data.evidence} />
-          <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-2xs">
-            <dt className="text-ink-faint">Blocked on</dt>
-            <dd>{BLOCKED_ON[data.blockedOn ?? ''] ?? 'nothing the runner can name'}</dd>
-            <dt className="text-ink-faint">Board says</dt>
-            <dd>
-              <code className="font-mono">{data.boardState}</code>
-            </dd>
-            {data.verifiedIn && (
-              <>
-                {/* Which directory the commands ran in. A suite that passed in
-                    the wrong one looks exactly like a suite that passed. */}
-                <dt className="text-ink-faint">Verified in</dt>
-                <dd>
-                  <code className="font-mono">{data.verifiedIn}</code>
-                  {data.verifiedIn === '.' ? ' (the repository root)' : ''}
-                </dd>
-              </>
-            )}
-            {data.lock && (
-              <>
-                <dt className="text-ink-faint">Lock</dt>
-                <dd className="text-ink-faint">{data.lock}</dd>
-              </>
-            )}
-            {data.sessionId && (
-              <>
-                <dt className="text-ink-faint">Session</dt>
-                <dd>
-                  <code className="font-mono">{data.sessionId}</code>
-                  {data.resumable ? ' · can be resumed' : ''}
-                </dd>
-              </>
-            )}
-          </dl>
-
-          {data.said && (
-            <div>
-              <div className="text-2xs">
-                <b>The session signed off:</b>
-              </div>
-              <pre className={pre}>{data.said}</pre>
-            </div>
-          )}
-
-          {failed.length > 0 && (
-            <div>
-              <div className="text-2xs">
-                <b>What failed:</b>
-              </div>
-              {failed.map((x, i) => (
-                <div key={i} className="mt-1">
-                  <div className="flex flex-wrap items-center gap-2 text-2xs">
-                    <code className="min-w-0 font-mono">{x.command}</code>
-                    <span className="text-ink-faint">exited {x.code}</span>
-                    {x.via === 'terminal' && (
-                      <Chip title="This result came from you running it in the integrated terminal.">
-                        ran in your terminal
-                      </Chip>
-                    )}
-                    <VerifyInTerminalButton slug={slug} phase={phase} command={x.command} />
-                  </div>
-                  <pre className={pre}>{x.output || '(no output)'}</pre>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {(data.verification?.skipped?.length ?? 0) > 0 && (
-            <div>
-              <div className="text-2xs">
-                <b>Skipped — this machine cannot run them:</b>
-              </div>
-              {data.verification!.skipped!.map((x, i) => (
-                <div key={i} className="mt-1 flex flex-wrap items-center gap-2 text-2xs">
-                  <code className="min-w-0 font-mono">{x.command}</code>
-                  <span className="text-ink-faint">{x.reason}</span>
-                  <VerifyInTerminalButton slug={slug} phase={phase} command={x.command} />
-                </div>
-              ))}
-            </div>
-          )}
-
-          {data.lint && !data.lint.ok && (
-            <div>
-              <div className="text-2xs">
-                <b>validate.sh:</b>
-              </div>
-              <pre className={pre}>{data.lint.summary}</pre>
-            </div>
-          )}
-
-          {data.closeout && (
-            <div className="text-2xs text-ink-faint">
-              A closeout was already attempted {relativeTime(Date.parse(data.closeout.at))} —{' '}
-              {data.closeout.ok ? 'the session ran' : 'it did not complete'}
-              {data.closeout.note ? ` (${data.closeout.note})` : ''}.
-            </div>
-          )}
-
-          {data.workingTree.length > 0 && (
-            <details>
-              <summary className="cursor-pointer text-2xs">
-                {data.workingTree.length} uncommitted path(s)
-              </summary>
-              <pre className={pre}>{data.workingTree.join('\n')}</pre>
-            </details>
-          )}
-
-          {/* Every way forward, from the one shared model — the agent path
-              included, which this panel never offered before. Blurbs render as
-              visible text: this is the read-the-evidence surface. */}
-          <RecoveryActions
-            target={{ slug, phase, ...(run?.id ? { runId: run.id } : {}) }}
-            ctx={{
-              ...(run ? { run } : {}),
-              record: { status: data.status, resumable: data.resumable },
-              ...(data.situation
-                ? {
-                    situation: {
-                      id: data.situation.id,
-                      ...(data.situation.sub ? { sub: data.situation.sub } : {}),
-                    },
-                  }
-                : {}),
-            }}
-            max={3}
-            showBlurbs
-            legend
-          />
-        </div>
-      )}
-    </details>
   );
 }

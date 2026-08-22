@@ -42,6 +42,15 @@
    not the present tense. */
 .live-line.is-replayed .live-t { opacity: 0.72; }
 
+/* The line a `?line=` permalink names. A ruled band rather than a background
+   wash, so it stays legible against every kind colour below — and it survives
+   the reader scrolling away and back, because the hash still says so. */
+.live-line.is-linked {
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  box-shadow: inset 2px 0 0 0 var(--accent);
+  border-radius: 2px;
+}
+
 .live-line.k-tool .live-k,
 .live-line.k-tool .live-t { color: var(--line-progress); }
 

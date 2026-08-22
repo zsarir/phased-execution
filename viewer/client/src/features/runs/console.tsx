@@ -19,10 +19,11 @@
  * `run:state`, which arrive a few times a minute.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button } from '@/components/ui';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Button, Input } from '@/components/ui';
 import { onSse } from '@/lib/sse';
 import { cn } from '@/lib/cn';
+import { scrollIntoScroller } from '@/lib/scroll';
 import {
   KIND_LABEL,
   MAX_LINES,
@@ -212,6 +213,51 @@ export function forPhase(
 /** How close to the bottom still counts as "following the tail". */
 const FOLLOW_SLACK = 40;
 
+/**
+ * The query key a line permalink rides on: `#/plan/x/run?line=<id>`.
+ *
+ * A line's `id` is the fold's own counter for this pane, so a permalink is
+ * stable for as long as the pane holds the line — which is the honest promise.
+ * It is NOT the journal's `seq`: the console is a live buffer, bounded, and a
+ * link that claimed to survive the buffer would be a link that quietly stopped
+ * resolving. `journal.tsx` is where a permanent address lives (`?j=<seq>`).
+ */
+export const LINE_PARAM = 'line';
+
+/** The line a permalink names, or null. Read from the hash, not from state. */
+export function linkedLine(hash: string = window.location.hash): number | null {
+  const query = hash.split('?')[1];
+  if (!query) return null;
+  const raw = new URLSearchParams(query).get(LINE_PARAM);
+  const id = raw == null ? NaN : Number(raw);
+  return Number.isFinite(id) ? id : null;
+}
+
+/** The same address with `?line=<id>` on it — copied, never navigated to. */
+export function lineHref(id: number, hash: string = window.location.hash): string {
+  const [path, query] = hash.replace(/^#/, '').split('?');
+  const params = new URLSearchParams(query ?? '');
+  params.set(LINE_PARAM, String(id));
+  return `#${path}?${params.toString()}`;
+}
+
+/**
+ * Case-insensitive substring match over the line's text AND its kind label.
+ *
+ * Substring rather than a regex on purpose: the thing people type into this box
+ * is a filename or an error fragment, and `.` and `(` are in almost all of them.
+ * A regex box would need escaping rules nobody reads.
+ */
+export function matches(line: ConsoleLine, needle: string): boolean {
+  if (!needle) return true;
+  const q = needle.toLowerCase();
+  return (
+    line.text.toLowerCase().includes(q) ||
+    (KIND_LABEL[line.kind] ?? line.kind).toLowerCase().includes(q) ||
+    Boolean(line.tool && line.tool.toLowerCase().includes(q))
+  );
+}
+
 export function LiveConsole({
   lines,
   onClear,
@@ -231,13 +277,42 @@ export function LiveConsole({
   const box = useRef<HTMLDivElement>(null);
   const [follow, setFollow] = useState(true);
   const [verbose, setVerbose] = useState(false);
+  const [needle, setNeedle] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [linked, setLinked] = useState<number | null>(() => linkedLine());
 
-  const shown = verbose ? lines : lines.filter((line) => !QUIET.has(line.kind));
-  const hidden = lines.length - shown.length;
+  const kept = verbose ? lines : lines.filter((line) => !QUIET.has(line.kind));
+  const shown = useMemo(() => (needle ? kept.filter((line) => matches(line, needle)) : kept), [kept, needle]);
+  const hidden = lines.length - kept.length;
+
+  // Searching STOPS the tail. A filtered view that keeps scrolling to a bottom
+  // the reader is not looking at is the console jumping away mid-read — which
+  // is exactly what they opened the box to stop doing.
+  const following = follow && !needle;
 
   useEffect(() => {
-    if (follow && box.current) box.current.scrollTop = box.current.scrollHeight;
-  }, [shown, follow]);
+    if (following && box.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [shown, following]);
+
+  // A permalink is answered on arrival AND on every hash change, because the
+  // pane does not remount when only the query moves.
+  useEffect(() => {
+    const read = () => setLinked(linkedLine());
+    window.addEventListener('hashchange', read);
+    return () => window.removeEventListener('hashchange', read);
+  }, []);
+
+  // Scroll the named line into view once it is in the buffer. Following is
+  // turned off first: the two would fight, and the link is the newer intent.
+  useEffect(() => {
+    if (linked == null || !box.current) return;
+    const el = box.current.querySelector(`[data-line="${linked}"]`);
+    if (!el) return;
+    setFollow(false);
+    // The console's own box, and nothing above it — `scrollIntoView` would
+    // take the page (and, on a phone, the horizontal scroller) with it.
+    scrollIntoScroller(el);
+  }, [linked, shown]);
 
   return (
     <section className="rounded-lg border border-rule bg-surface-raised">
@@ -257,8 +332,34 @@ export function LiveConsole({
           {actions}
           <span className="font-mono text-2xs text-ink-faint tabular-nums">
             {shown.length}
-            {lines.length === MAX_LINES ? '+' : ''} lines
+            {lines.length === MAX_LINES ? '+' : ''}
+            {needle ? ` of ${kept.length}` : ''} lines
           </span>
+          {searching ? (
+            <Input
+              autoFocus
+              value={needle}
+              aria-label="Search the console"
+              placeholder="Search…"
+              className="h-7 w-36 text-2xs"
+              onChange={(event) => setNeedle(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape') return;
+                setNeedle('');
+                setSearching(false);
+                setFollow(true);
+              }}
+            />
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              title="Filter these lines — Escape clears it and resumes the tail"
+              onClick={() => setSearching(true)}
+            >
+              Search
+            </Button>
+          )}
           {(hidden > 0 || verbose) && (
             <Button
               size="sm"
@@ -273,14 +374,22 @@ export function LiveConsole({
           <Button
             size="sm"
             variant="ghost"
-            aria-pressed={follow}
-            title={follow ? 'Following the tail — scroll up to stop' : 'Jump back to the newest line'}
+            aria-pressed={following}
+            title={
+              needle
+                ? 'Filtered — clear the search to follow the tail again'
+                : following
+                  ? 'Following the tail — scroll up to stop'
+                  : 'Jump back to the newest line'
+            }
             onClick={() => {
+              setNeedle('');
+              setSearching(false);
               setFollow(true);
               if (box.current) box.current.scrollTop = box.current.scrollHeight;
             }}
           >
-            {follow ? 'Following' : 'Follow'}
+            {following ? 'Following' : 'Follow'}
           </Button>
           {onClear && (
             <Button size="sm" variant="ghost" onClick={onClear}>
@@ -297,14 +406,39 @@ export function LiveConsole({
         aria-label={title}
         className="live-body h-[min(380px,50dvh)] overflow-y-auto px-3 py-2 font-mono text-2xs leading-relaxed"
         onScroll={(event) => {
+          if (needle) return;
           const el = event.currentTarget;
           setFollow(el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK);
         }}
       >
         {shown.length ? (
           shown.map((line) => (
-            <div key={line.id} className={cn('live-line', `k-${line.kind}`, line.replayed && 'is-replayed')}>
-              <span className="live-k">{KIND_LABEL[line.kind] ?? line.kind}</span>
+            <div
+              key={line.id}
+              data-line={line.id}
+              className={cn(
+                'live-line group',
+                `k-${line.kind}`,
+                line.replayed && 'is-replayed',
+                linked === line.id && 'is-linked',
+              )}
+            >
+              {/* The kind label doubles as the line's own address. A button,
+                  not an anchor: following the link would scroll the page to a
+                  line already on screen, and what anyone wants here is the URL
+                  on the clipboard to paste into a handoff. */}
+              <button
+                type="button"
+                className="live-k cursor-pointer text-left hover:underline"
+                title="Copy a link to this line"
+                onClick={() => {
+                  const href = new URL(lineHref(line.id), window.location.href).toString();
+                  void navigator.clipboard?.writeText(href);
+                  setLinked(line.id);
+                }}
+              >
+                {KIND_LABEL[line.kind] ?? line.kind}
+              </button>
               <span className="live-t">{line.text}</span>
               {/* The tick is the CLI's own echo coming back. Until it arrives the
                   message has been written to a pipe and nothing more, and that
@@ -323,6 +457,12 @@ export function LiveConsole({
               )}
             </div>
           ))
+        ) : needle ? (
+          <p className="max-w-prose py-6 text-ink-faint">
+            No line here matches <span className="font-semibold text-ink">{needle}</span>. The console holds
+            the last {MAX_LINES} lines of this pane, so a match from earlier in a long phase may have scrolled
+            out of it — the journal below keeps the whole run.
+          </p>
         ) : (
           <p className="max-w-prose py-6 text-ink-faint">
             Nothing to show yet. When a phase runs, everything the session does appears here as it happens —

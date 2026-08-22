@@ -1,18 +1,19 @@
 /**
- * The controls: what to run it as, and the four ways to stop it.
+ * The controls: the four ways to stop a run, and the door to everything else.
  *
- * ## The form is `RunSetup` now
+ * ## The form is `RunSetup`, and it is behind a sheet
  *
  * Every field this card used to declare for itself — model, effort, autonomy,
  * budgets, permissions, branch, skills, MCP, the per-phase matrix — moved into
  * `features/run-setup` in Phase 6, where the launch dialog, the agent launcher
- * and Settings ▸ Automation render the same component. What is left here is
- * what is genuinely the RUN PAGE's: the four verbs, and the account row.
+ * and Settings ▸ Automation render the same component. In Phase 7 it moved
+ * again, off the page and into `settings-sheet.tsx`: a screenful of controls
+ * touched once a run does not belong above the console on a phone. The mode
+ * mapping went with it (no run is `start`, a stopped one `continue`, a live
+ * one `live` — a settings patch, not a launch).
  *
- * The mode follows the run, and that mapping is the card's whole remaining
- * logic: no run yet is `start`, a stopped run is `continue`, a live one is
- * `live` — a settings patch that reaches the next phase to board rather than
- * a launch.
+ * What is left here is what is genuinely pressed WHILE watching: the four
+ * verbs, and the account row.
  *
  * ## Two pauses, deliberately named apart
  *
@@ -46,7 +47,7 @@ import {
 } from '@/components/ui';
 import { api, type AccountView, type PhaseView, type RunState } from '@/lib/api';
 import { keys, useAccounts } from '@/lib/queries';
-import { RunSetup } from '@/features/run-setup/run-setup';
+import { SettingsSheet } from './settings-sheet';
 
 /**
  * Which skills the picker opens on.
@@ -108,14 +109,14 @@ export function Controls({
   const frozen = run?.status === 'frozen' || Boolean(run?.freeze);
   /** A freeze that ran past its threshold left a session to resume, not a fresh start. */
   const checkpointed = Object.values(run?.phases ?? {}).some((p) => p.resumeSessionId);
-  const mode = live ? 'live' : resumable ? 'continue' : 'start';
 
   return (
     <Card>
       <CardHeader className="flex-wrap items-baseline">
-        <CardTitle>
-          {frozen ? 'Frozen' : live ? 'Running' : resumable ? 'Continue this run' : 'Start a run'}
-        </CardTitle>
+        {/* The title says what the run IS; the button below says what pressing
+            it DOES. They used to say the same words in both places, which read
+            as one label rendered twice — and it was: `getByText` found two. */}
+        <CardTitle>{frozen ? 'Frozen' : live ? 'Running' : resumable ? 'Stopped' : 'No run yet'}</CardTitle>
         <span className="max-w-prose text-2xs text-ink-faint">
           {frozen
             ? 'The session is alive and stopped. Nothing has been lost.'
@@ -128,25 +129,36 @@ export function Controls({
       </CardHeader>
 
       <CardBody className="flex flex-col gap-3">
-        <RunSetup
-          mode={mode}
-          context={{ slug, run }}
-          planPhases={planPhases}
-          planSkills={planSkills}
-          planMcp={planMcp}
-          {...(qaMode !== undefined ? { qaMode } : {})}
-          {...(allowWrites !== undefined ? { allowWrites } : {})}
-          blocked={disabled}
-          {...(allowRun ? {} : { blockedReason: 'Controls need --allow-run.' })}
-        />
-
-        {live && (
-          <p className="max-w-prose text-2xs text-ink-faint">
-            Settings apply from the <strong>next</strong> phase. The session already running was started with
-            its model and budget fixed in its own command line, and there is no honest way to change those
-            underneath it.
-          </p>
-        )}
+        {/* The fields are behind `Settings` now.
+            They were open on the page, all of them, above the thing anybody
+            came to read — a screenful of controls on a phone between the
+            status line and the console, for a set of values touched about
+            once a run. What stayed out here is the part that IS pressed while
+            watching: the verbs, and the account row. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <SettingsSheet
+            slug={slug}
+            run={run}
+            live={live}
+            allowRun={allowRun}
+            planPhases={planPhases}
+            planSkills={planSkills}
+            planMcp={planMcp}
+            {...(qaMode !== undefined ? { qaMode } : {})}
+            {...(allowWrites !== undefined ? { allowWrites } : {})}
+            trigger={
+              <Button variant={live ? 'ghost' : 'action'} disabled={!allowRun}>
+                {live ? 'Settings' : resumable ? 'Continue this run' : 'Start a run'}
+              </Button>
+            }
+          />
+          {live && (
+            <span className="max-w-prose text-2xs text-ink-faint">
+              Settings apply from the <strong>next</strong> phase — the session running now was started with
+              its model and budget fixed in its own command line.
+            </span>
+          )}
+        </div>
 
         {live && (
           <div className="flex flex-wrap items-center gap-2">

@@ -57,6 +57,16 @@ export interface Prefs {
   runsOutcome: string;
   /** Fleet: one flat table, or a section per plan. */
   runsGroup: boolean;
+  /**
+   * Which sections of the run page's phase table are collapsed
+   * (`features/runs/phase-table.tsx` `PHASE_GROUPS`).
+   *
+   * Persisted rather than component state for one reason: the run page
+   * remounts on every navigation, and a Done section that re-opens each time
+   * is a section being re-collapsed rather than read. Stored as the collapsed
+   * ids, not the open ones, so a group added later opens by default.
+   */
+  runPhasesCollapsed: string[];
   /** Keep the session console open on the runs page while nothing is running. */
   runsConsole: boolean;
   /**
@@ -110,6 +120,8 @@ const DEFAULTS: Prefs = {
   // and a filter is something the operator turned on.
   runsOutcome: '',
   runsGroup: false,
+  // Only `done` — the one group that is usually the longest and least read.
+  runPhasesCollapsed: ['done'],
   runsConsole: false,
   mapPanZoom: false,
   terminalFontStep: 0,
