@@ -5207,6 +5207,22 @@ export class Service {
         }
         return null;
       },
+      /**
+       * The gate, read LIVE from the engine rather than off the phase record.
+       *
+       * Without this the classifier fell back to `record.gate` — the snapshot
+       * the runner stored the last time it looked, which by definition was
+       * BEFORE the person approved. So a phase parked on a manual gate kept
+       * classifying as `gated-manual` for as long as that record lived, the
+       * ladder kept writing "a person must clear the gate" at somebody who
+       * already had, and the run never moved. The engine is the authority on
+       * gate state everywhere else in this system; it is the authority here too.
+       *
+       * A read that fails still falls back to the record (`collectEvidence`
+       * catches to null): "I could not check" degrades to the last thing we
+       * knew, the same shape the MCP probe uses.
+       */
+      gate: (_slug, phase) => this.gateStatus(slug, phase),
       // The registry hit for the phase's lock holder: a live or ended session it names.
       registry: (_slug, phase) => {
         const l = record ? lockFor(record, phase) : undefined;
