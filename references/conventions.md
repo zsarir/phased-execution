@@ -219,6 +219,13 @@ run scripts from the repo root or set `DOCS_ROOT=/path/to/repo` explicitly when 
   prompt says so; the autopilot's ladder climbs it (`qa-pending` → resume the phase's session and run the
   subagent, `qa-failed` → fix what the report named and re-record) and asks a person only when that runs
   out. A plan that finishes a phase and walks away is a plan that deadlocks itself.
+- **Per phase: `- **QA:** on|off` in the phase's own §Phase section.** The phase's word wins, silence
+  inherits the plan — the same resolution as `- **MCP policy:**`, and for the same reason: a regime
+  is one answer and the more specific statement wins. It governs both halves (an exempt phase is
+  never asked for a verdict, and a verdict recorded against it holds nothing), so it is the right
+  tool for a docs phase, a scaffold, or a ship phase whose real check is the deploy — and for the
+  reverse, singling out the two phases that touch money on a plan that otherwise does not gate.
+  `--qa-mode <N>` reports the resolved regime and which level it came from.
 - **`**QA gate:** off` releases the gate for the whole plan.** Gating follows `--qa-mode`, not the mere
   existence of `test-status.md`: under a waiver the recorded verdicts stay in the table and every surface
   still reports them, they simply stop holding dependents. That is the plan-level exit; re-QA is the

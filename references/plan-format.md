@@ -196,6 +196,15 @@ scripts/close-plan.sh <slug> --reopen                           # → active, fi
      without its server. Anything other than those two words reads as saying nothing, which falls
      through to the plan and then to the run's own setting; only an operator's per-phase choice in
      the console outranks this bullet.
+     Add `- **QA:** off` (or `on`) when THIS phase disagrees with the plan's `**QA gate:**` line.
+     Same shape as the MCP policy above and for the same reason — a regime is one answer and the
+     more specific statement wins — so a plan that gates on QA can exempt the docs phase, the
+     scaffold, or the ship phase whose real check is the deploy, and a plan that does not gate can
+     single out the two phases that touch money. It governs both halves: an exempt phase is never
+     asked for a verdict at finish, and a verdict recorded against it holds nothing. Anything other
+     than those two words reads as saying nothing and inherits the plan.
+     (`scripts/phase-graph.sh <slug> --qa-mode <N>` reports the resolved regime and says whether it
+     came from the phase or the plan.)
    - **Read first:** exact artifacts to load (phase 1: just this plan; later: the prior handoff + this
      plan §Phase N + memory project_<slug>).
    - **Files to create/modify:** concrete paths.

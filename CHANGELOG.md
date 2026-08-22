@@ -6,6 +6,103 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [3.1.1] - 2026-08-22
+
+### Fixed — the last gate between a chosen QA rung and an actual launch
+
+Every layer of the QA climb worked and the launch was still refused. The ladder
+picked the right rung; `preRecoveryGate` — the belt on every spawn — killed it one
+line before the session, answering *"the board had already moved past the halt —
+records reconciled, nothing to launch"* about a plan where nothing had moved past
+anything. Its test for "the board moved past the halt" is `board[phase] ===
+'done'`, which is exactly true of the phase a QA verdict is HOLDING.
+
+- The gate is keyed on the board fact, not the halt's kind. 3.1.0's exemption read
+  `halt.kind === 'plan-deadlocked'`, so it never applied to runs parked by an
+  earlier build — whose halts carry no kind and no phase at all, and which are
+  precisely the runs that need it. Verified against the real wedged run.
+
+### Added — QA on or off for a single phase
+
+`- **QA:** on|off` in a phase's own §Phase section. The phase's word beats the
+plan's `**QA gate:**` line, silence inherits, and anything else reads as silence —
+the same resolution as `- **MCP policy:**`, and for the same reason: a regime is
+one answer and the more specific statement wins.
+
+It governs both halves — an exempt phase is never asked for a verdict at finish,
+and a verdict recorded against it holds nothing — so a plan that gates on QA can
+exempt the docs phase or the ship phase whose real check is the deploy, and a plan
+that does not gate can single out the two phases that touch money.
+`--qa-mode <N>` reports the resolved regime and says which level answered.
+
+### Fixed — found by an adversarial audit of the autonomy pipeline itself
+
+Two of these were in the 3.1.0/3.1.1 work: a fix is not finished until something
+has tried to break it.
+
+- **The QA exemption in `preRecoveryGate` was guarded by a plan-wide fact.**
+  `wedgeCleared` asked "does the BOARD have anything ready or in flight?" to answer
+  "is THIS phase's verdict holding its dependents?" — so on any plan with a parallel
+  branch the exemption evaporated and the gate refused the rung again. It looked
+  right only because the run that exposed the original bug happened to have an
+  empty ready set.
+- **One imperfect QA session pinned convergence for ever.** Every QA rung anchors
+  on a phase the board reads `done`, so a session that ended badly left the run
+  stopped ON a done phase — which `autoResolveRun` read as superseded, stamping
+  `resolved`, which `converge.ts` treats as pinned: boot, timer, change and halt
+  passes all skip the plan from then on. The unattended path terminated permanently
+  on its most likely first stumble. `qaHolds` is now threaded through the resolver,
+  covering both anchors (`halt.phase` and `activePhase`), at no extra engine cost —
+  the board already carries the verdicts on its `blocked:` line.
+- **`- **QA gate:** off` written as a bullet resolved to ON.** The canonical greps
+  were anchored to end-of-line, so a leading list marker missed BOTH rules and
+  execution fell through to "test-status.md exists → on" — handing the operator the
+  opposite of what they wrote. A sharper trap now that per-phase QA is a bullet.
+- **`new-handoff.sh` asked the plan's regime for the phase's row**, so a phase that
+  opted IN on a waived plan was recorded `waived` — a verdict nobody gave, on the
+  one phase the operator singled out for review.
+- **A released gate still produced QA errands.** The classifier admitted any mode
+  that was not `off`, so `waived` — a gate the operator turned off — still
+  classified a done phase as `qa-failed`. One word, matching `Service.qaHolds`.
+- **Gate delegation never reached the classifier.** It reached the runner, so a
+  fresh boarding worked, but a phase already recorded `gated` kept classifying
+  `gated-manual` — actor `person`, no rungs — so delegation did nothing for exactly
+  the phases it gets turned on for.
+- **`delegateHumanGates` could be loaded but never set.** The loader honoured it and
+  `savePreferences` dropped it, so the Settings toggle would have silently done
+  nothing. A new guard walks the loader's keys against the writer's and fails on any
+  such drift.
+- **A settings change now clears convergence's noop latch.** The latch compares
+  evidence; the healer also decides with the ladder caps, the unblock and takeover
+  switches and gate delegation — none of which are evidence. Raising a spent budget
+  changed the one thing that would let the loop act, and the loop kept skipping with
+  "nothing has changed".
+
+### Fixed
+
+- **A handoff the store holds is never reported absent.** `handoffFor` answers the
+  parsed handoff or `undefined` — a `Handoff` has no `exists` field, so
+  `handoff?.exists` was always undefined and EVERY phase with a real handoff
+  derived `{exists: false}`. One API response carried
+  `phase.handoff.status: 'complete'` beside `proof.handoff: 'absent'`, and the
+  phase card told the operator to "re-scan" a file that was present, complete and
+  already parsed.
+- **A rung is not settled while its own session is still running.** The settle block read the run's
+  status the moment `recoverPhase` resolved and treated anything that was not parked-without-halt as
+  a failure — but `running` is not a verdict, it is the absence of one. Observed live: a `qa-fix`
+  rung recorded `failed`, note "the run reads running", while its `claude` process was eight minutes
+  into doing exactly what it was asked. The rung is now left OPEN for evidence to settle later; the
+  cost of the old reading was a lie in the ledger and a premature escalation to the costlier rung.
+- **`reliability.test.ts` no longer flakes under load — diagnosed, not muted.** Two assertions wait
+  on the OPERATING SYSTEM to deliver a filesystem event and silently took the 5s default; under a
+  full parallel suite FSEvents has been measured well past that, which is the ~6s intermittent
+  failure (1s of re-arm plus the default). They now carry their own budget, with the reasoning
+  written down. The product's answer to a watch that stops delivering is the deaf-heartbeat rebuild,
+  which the next test covers — nothing was papered over.
+- **A run reading `halted` with no halt settles to `parked`.** 3.1.0 covered the
+  finished-board case; the contradiction is not only there — a live run read
+  `halted`, `halt: null`, $240 spent, with a phase still in progress.
+
 ## [3.1.0] - 2026-08-22
 
 ### Added — the autopilot finishes plans it used to hand back

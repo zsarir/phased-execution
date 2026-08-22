@@ -535,3 +535,43 @@ test('a cmd gate the read did not EXECUTE is not "a person must clear it"', () =
   } as never);
   assert.equal(real.id, 'gated-manual');
 });
+
+test('a waived plan does not classify a done phase as QA-blocked', () => {
+  // `**QA gate:** off` reports as `waived` and stops gating dependents, but the
+  // classifier admitted any mode that was not `off` — so a done phase carrying a
+  // stale `fail` row still read `qa-failed`, actor `machine`. `qaHolds` correctly
+  // requires `on`, so the phase stays out of the candidate list; the healer's
+  // no-candidate branch then classified the halt's phase anyway and wrote a QA
+  // errand for a plan whose gate the operator had explicitly released.
+  const base = {
+    phase: 1, board: 'done' as const,
+    handoff: { exists: true, status: 'complete' }, lock: null, health: [],
+    work: { did: false, why: '' },
+  };
+  assert.equal(classifySituation({ ...base, qa: { mode: 'waived', result: 'fail' } } as never).id, 'superseded',
+    'a released gate leaves settled work settled');
+  assert.equal(classifySituation({ ...base, qa: { mode: 'waived' } } as never).id, 'superseded');
+  // And a plan that really does gate is untouched.
+  assert.equal(classifySituation({ ...base, qa: { mode: 'on', result: 'fail' } } as never).id, 'qa-failed');
+  assert.equal(classifySituation({ ...base, qa: { mode: 'on' } } as never).id, 'qa-pending');
+});
+
+test('a delegated human gate is the ladder\'s, not a person\'s', () => {
+  // `delegateHumanGates` reaches the RUNNER (a gated phase boots like an `ai`
+  // one) but never reached the classifier — so a phase already recorded `gated`
+  // from before the operator turned delegation on still classified
+  // `gated-manual`, actor `person`, rungs `[]`. The ladder writes the errand at
+  // once and never boards it: delegation silently did nothing for exactly the
+  // phases that were already stuck, which are the ones an operator turns it on
+  // for.
+  const base = {
+    phase: 2, board: 'ready' as const,
+    handoff: { exists: false }, lock: null, qa: null, health: [],
+    work: { did: false, why: '' },
+    gate: { clear: false, kind: 'manual', detail: 'the owner approves the copy' },
+  };
+  assert.equal(classifySituation({ ...base } as never).id, 'gated-manual',
+    'by default a human gate is a person\'s');
+  assert.notEqual(classifySituation({ ...base, gateDelegated: true } as never).id, 'gated-manual',
+    'delegated, it is something the ladder can board');
+});

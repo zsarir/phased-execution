@@ -27,7 +27,8 @@ import { join } from 'node:path';
 
 import {
   reconcileRun, reconcileRecordsAgainstBoard, newRun, phaseRecord, saveRun, loadRun,
-  listRuns, latestRun, runDir, resetForRetry, settleFinishedRun, IN_FLIGHT, CONSOLE_STOPPED_NOTE, type RunState,
+  listRuns, latestRun, runDir, resetForRetry, settleFinishedRun, autoResolveRun,
+  IN_FLIGHT, CONSOLE_STOPPED_NOTE, type RunState,
 } from '../server/runner/state.ts';
 
 function scratchRoot(): { root: string; cleanup: () => void } {
@@ -566,4 +567,58 @@ test('settleFinishedRun: a halt that dissolved stops the run reading halted', ()
   halted.halt = { at: new Date().toISOString(), reason: 'phase 2 did not verify', phase: 2 };
   assert.equal(settleFinishedRun(halted, { 1: 'done', 2: 'ready' }), false);
   assert.equal(halted.status, 'halted');
+});
+
+/* ------------------------------------------------------------------ *
+ * A QA-held phase does not settle the run that stopped on it
+ * ------------------------------------------------------------------ */
+
+test('autoResolveRun: a done phase QA is holding does not read as "nothing is wrong"', () => {
+  // Every QA rung anchors on a phase the board reads `done` — that is the point
+  // of admitting one as a candidate. So when such a rung's session does not end
+  // cleanly, the run halts with a DONE phase attached, and the board resolver
+  // reads exactly that ("the board shows phase 1 done") as superseded. It stamps
+  // `resolved`, which `converge.ts` treats as pinned: boot, timer, change and
+  // halt passes all skip the plan for ever after.
+  //
+  // Net effect before this: one imperfect QA session — a red verification, a
+  // session that refuses, a crash — and the unattended path terminates
+  // permanently, silently, on its most likely first stumble. The whole change
+  // set exists to remove exactly that shape.
+  const held = new Set([1]);
+
+  const stopped = newRun({ slug: 'alpha', root: '/tmp/x' });
+  stopped.status = 'halted';
+  stopped.halt = { at: new Date().toISOString(), reason: 'phase 1 did not verify', phase: 1, kind: 'verify-failed' };
+  assert.equal(autoResolveRun(stopped, { 1: 'done', 2: 'waiting' }, held), false,
+    'QA is still holding phase 1 — the stop is about something real');
+  assert.equal(stopped.resolved, undefined);
+
+  // The same run, once the verdict is cleared, settles as it always did.
+  assert.equal(autoResolveRun(stopped, { 1: 'done', 2: 'waiting' }, new Set()), true);
+  assert.ok(stopped.resolved);
+});
+
+test('autoResolveRun: the guard covers the activePhase anchor too', () => {
+  // `decidingPhases` takes `halt.phase ?? activePhase`, and the common path
+  // through a failed verification nulls the halt (the record reconciles first),
+  // so the anchor that survives is `activePhase`. A guard that only knew about
+  // `halt.phase` would leave the more likely route open.
+  const stopped = newRun({ slug: 'alpha', root: '/tmp/x' });
+  stopped.status = 'halted';
+  stopped.halt = null;
+  stopped.activePhase = 1;
+  assert.equal(autoResolveRun(stopped, { 1: 'done' }, new Set([1])), false);
+  assert.equal(autoResolveRun(stopped, { 1: 'done' }, new Set()), true);
+});
+
+test('autoResolveRun: an unrelated QA hold does not pin a run that really is over', () => {
+  // Narrow on purpose: only a phase this run STOPPED on matters. A verdict
+  // holding some other phase is somebody else's problem, and reading it here
+  // would keep finished runs on the attention surface — the failure this
+  // resolver exists to prevent.
+  const stopped = newRun({ slug: 'alpha', root: '/tmp/x' });
+  stopped.status = 'halted';
+  stopped.halt = { at: new Date().toISOString(), reason: 'phase 1 failed', phase: 1, kind: 'verify-failed' };
+  assert.equal(autoResolveRun(stopped, { 1: 'done', 2: 'done' }, new Set([2])), true);
 });

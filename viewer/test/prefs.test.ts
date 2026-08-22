@@ -221,3 +221,31 @@ test('an automation patch leaves the notify map alone', () => {
     service.close();
   }
 });
+
+test('every automation preference the loader accepts can also be SET', () => {
+  // `sanitiseAutomation` (the loader) and `savePreferences` (the writer) are two
+  // lists of the same keys, and a key added to one and not the other is a
+  // setting that survives a restart but can never be changed from the console.
+  // `delegateHumanGates` shipped exactly that way: honoured on load, silently
+  // dropped from every patch, so the Settings toggle would have done nothing.
+  const loaded = sanitiseAutomation({}) as Record<string, unknown>;
+  const svc = new Service({
+    port: 0, host: '127.0.0.1', open: false, allowWrites: false,
+    scriptsDir: join(SKILL_DIR, 'scripts'), logFile: null,
+  } as never);
+
+  // `notify` is a map with its own merge rule, and `lastRoot`/`recentRoots` are
+  // written by opening a directory, not by a settings patch.
+  const skip = new Set(['notify', 'lastRoot', 'recentRoots', 'theme', 'density', 'sort']);
+  const flipped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(loaded)) {
+    if (skip.has(key)) continue;
+    flipped[key] = typeof value === 'boolean' ? !value
+      : typeof value === 'number' ? value + 1
+        : value;
+  }
+  const after = svc.savePreferences(flipped as never) as unknown as Record<string, unknown>;
+  const ignored = Object.keys(flipped).filter((key) => after[key] !== flipped[key]);
+  assert.deepEqual(ignored, [],
+    `these preferences load but cannot be set — the writer's list has drifted from the loader's:\n  ${ignored.join('\n  ')}`);
+});

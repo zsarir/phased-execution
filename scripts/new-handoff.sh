@@ -105,12 +105,25 @@ fi
 # runs QA (on: dispatch a subagent at finish · waived: record rows, never dispatch ·
 # off: no QA artifact at all — the default). Only a non-off mode creates/updates
 # test-status.md, whose existence is what turns on dependent gating.
-qa_mode="$(bash "$ENGINE" "$slug" --qa-mode 2>/dev/null || echo off)"
+# The PLAN's regime decides whether a QA artifact exists at all (and whether the
+# backfill runs); THIS PHASE's decides the row we are about to write, because the
+# row is the phase's claim about itself. Asking the plan for both meant a phase
+# that opted IN with `- **QA:** on` on a waived plan was recorded `waived` — a
+# verdict nobody gave, on the one phase the operator singled out for review.
+plan_qa_mode="$(bash "$ENGINE" "$slug" --qa-mode 2>/dev/null || echo off)"
+qa_mode="$(bash "$ENGINE" "$slug" --qa-mode "$phase" 2>/dev/null || echo "$plan_qa_mode")"
 if [ "$force_qa" = 1 ]; then
   case "$qa_mode" in off) qa_mode="on (--qa flag)" ;; esac
+  case "$plan_qa_mode" in off) plan_qa_mode="on (--qa flag)" ;; esac
 fi
+# A phase that opts IN needs the artifact even when the plan says nothing — its
+# verdict has to have somewhere to live.
+case "$qa_mode" in on*) case "$plan_qa_mode" in off) plan_qa_mode="on (phase directive)" ;; esac ;; esac
 qa_status="$dir/test-status.md"
-if [ "$qa_mode" != off ]; then
+# Whether a QA artifact exists at all is the PLAN's call (plus a phase opting in
+# above): a phase that exempts itself on a gating plan still needs the table, so
+# its `waived` row can say so where the engine reads it.
+if [ "$plan_qa_mode" != off ]; then
   created_qa=0
   if [ ! -f "$qa_status" ]; then
     {
@@ -142,9 +155,13 @@ if [ "$qa_mode" != off ]; then
     done
   fi
   if ! grep -qE "^\|[[:space:]]*${phase}[[:space:]]*\|" "$qa_status"; then
+    # `off` here is a PHASE that exempted itself (`- **QA:** off`) on a plan that
+    # otherwise gates — the artifact exists because of the plan. Its row is
+    # `waived`, the same word a plan-level waiver writes: no verdict is owed and
+    # none will hold anything. `pending` would be a debt nobody intends to pay.
     case "$qa_mode" in
-      waived*) qa_res="waived" ;;
-      *)       qa_res="pending"; [ "$status" = complete ] || qa_res="-" ;;
+      waived*|off*) qa_res="waived" ;;
+      *)            qa_res="pending"; [ "$status" = complete ] || qa_res="-" ;;
     esac
     printf '| %s | %s | - |\n' "$phase" "$qa_res" >> "$qa_status"
     echo "updated $qa_status"
@@ -178,7 +195,8 @@ prompts_tmp="$(mktemp)"
 {
   if [ "$next_phase" = none ]; then
     printf '## 🏁 Final phase — closeout\n\n'
-    case "$qa_mode" in
+    # The closeout brief is a claim about the PLAN, not about this phase.
+    case "$plan_qa_mode" in
       on*)     printf -- '- Dispatch the fresh **qa-full** QA subagent (this plan runs QA) — brief via `scripts/next-phase-prompt.sh %s none`.\n' "$slug" ;;
       waived*) printf -- '- QA gate waived for this plan — no qa-full subagent; verify yourself.\n' ;;
     esac

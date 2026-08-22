@@ -405,3 +405,26 @@ test('the client imports the SAME evidence model', async () => {
   assert.equal(client.isQaWord, isQaWord);
   assert.ok(Object.isFrozen(VERIFICATION_WORDS));
 });
+
+test('a handoff the store HOLDS is never reported absent', () => {
+  // `handoffFor` returns the parsed `Handoff` or `undefined` — there is no
+  // `exists` field on it, so `handoff?.exists` was always `undefined` and every
+  // phase with a real handoff derived `{exists: false}`. Live consequence, on a
+  // plan whose phase 1 handoff reads `status: complete`: the same API response
+  // carried `phase.handoff.status === 'complete'` AND `proof.handoff ===
+  // 'absent'`, and the phase card said "board: done but the store reads handoff
+  // absent — re-scan" about a file that was present, complete, and parsed.
+  const present = deriveEvidence({
+    phase: 1,
+    board: 'done',
+    handoff: { exists: true, status: 'complete' },
+    qa: { mode: 'off' },
+  });
+  assert.equal(present.handoff, 'complete');
+  assert.ok(!present.why.some((w) => /handoff absent|re-scan/i.test(w)),
+    `a present handoff must not be described as missing: ${present.why.join(' | ')}`);
+
+  // And the genuinely absent case still says so.
+  const missing = deriveEvidence({ phase: 1, board: 'done', handoff: { exists: false }, qa: { mode: 'off' } });
+  assert.equal(missing.handoff, 'absent');
+});

@@ -770,6 +770,22 @@ export class ConvergeScheduler {
    * request for the same plan keeps whichever is due sooner — except that a
    * docs change never shortens the quiet minute after a halt.
    */
+  /**
+   * Forget every remembered "nothing to climb" fingerprint.
+   *
+   * The latch compares EVIDENCE — the run, the board, the locks, the gate
+   * stamp, the QA verdicts — and the healer also decides with things that are
+   * none of those: the ladder caps, the unblock and takeover switches, gate
+   * delegation. An operator who raises a spent budget or turns delegation on has
+   * changed exactly the thing that would let the loop act, and the loop went on
+   * skipping with "nothing has changed since the last pass found nothing to
+   * climb". Clearing costs one redundant pass and is the honest answer to "the
+   * rules just changed".
+   */
+  clearNoops(): void {
+    this.noops.clear();
+  }
+
   request(slug: string, trigger: ConvergeTrigger, delayMs?: number): void {
     if (this.closed) return;
     const delay = Math.max(0, delayMs ?? DEFAULT_DELAY[trigger]);

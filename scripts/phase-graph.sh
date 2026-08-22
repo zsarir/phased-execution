@@ -999,6 +999,55 @@ qa_result() {  # qa_result <phase> → pass|fail|pending|waived|none  (from the 
     END { if (!found) print "none" }
   '
 }
+# A phase's OWN QA directive: `- **QA:** on|off` in its §Phase section.
+#
+# `**QA gate:**` in §Session budget is the whole-plan switch; this is the
+# per-phase one, and it resolves the way every other per-phase directive does
+# (see `mcp_policy`): the phase's own word wins, silence inherits the plan.
+# It exists because "QA this plan" is rarely the truth — a docs phase, a
+# scaffold, a ship phase whose real check is the deploy do not want a reviewer;
+# the two phases that touch money do. Anything that is not exactly `on` or
+# `off` is silence: a typo must inherit, never guess.
+qa_phase_directive() {  # qa_phase_directive <phase> -> on|off|""
+  local line
+  line="$(phase_block "$1" \
+    | grep -iE '^[[:space:]]*[-*][[:space:]]*\*\*QA:?\*\*' \
+    | head -1 || true)"
+  [ -n "$line" ] || { echo ""; return; }
+  line="$(printf '%s' "$line" | sed 's/.*\*\*[Qq][Aa]:\{0,1\}\*\*[[:space:]]*//; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"
+  case "$line" in
+    on)  echo "on" ;;
+    off) echo "off" ;;
+    *)   echo "" ;;
+  esac
+}
+
+# THIS phase's QA regime — on | off | waived — the plan's word with the phase's
+# own overriding it. File-independent: it is a statement of INTENT, which is what
+# a boot prompt needs ("do you owe a verdict when you finish?") and is true
+# before `test-status.md` exists at all.
+qa_mode_for_phase() {  # qa_mode_for_phase <phase> -> on|off|waived
+  case "$(qa_phase_directive "$1")" in
+    on)  echo on;  return ;;
+    off) echo off; return ;;
+  esac
+  case "$(qa_mode)" in
+    on*)     echo on ;;
+    waived*) echo waived ;;
+    *)       echo off ;;
+  esac
+}
+
+# Does a recorded verdict GATE this phase's dependents? That needs both the
+# intent (above) and a table to read — the two are different questions, and
+# conflating them is how a boot prompt stops naming the QA duty on the very
+# phase that is about to create the table.
+qa_gates_phase() {  # qa_gates_phase <phase>
+  [ -f "$qa_status_file" ] || return 1
+  [ "$(qa_mode_for_phase "$1")" = on ] || return 1
+  return 0
+}
+
 _is_verified() {  # done + QA-passed (when gating on); honours the assume-done hook
   # The hook means "treat N as DONE", which is all its name claims and all
   # `--ready-after N` is asked. It used to short-circuit VERIFIED as well, so
@@ -1007,7 +1056,7 @@ _is_verified() {  # done + QA-passed (when gating on); honours the assume-done h
   # is a boot prompt written for a phase the board will refuse to start.
   # `_is_done` honours the hook on its own, so dropping it here is enough.
   _is_done "$1" || return 1
-  [ "$QA_GATING" = 0 ] && return 0
+  qa_gates_phase "$1" || return 0
   case "$(qa_result "$1")" in pass|waived) return 0 ;; *) return 1 ;; esac
 }
 
@@ -1028,10 +1077,19 @@ session_budget_block() {
 }
 qa_mode() {
   local sb; sb="$(session_budget_block)"
-  if printf '%s\n' "$sb" | grep -qiE '^[[:space:]>]*\*\*QA gate:\*\*[[:space:]]*off[[:space:]]*$'; then
+  # A leading list marker is allowed, and so is a trailing note: the greps were
+  # anchored to end-of-line, so `- **QA gate:** off` missed BOTH rules and fell
+  # through to "test-status.md exists -> on" — handing the operator the OPPOSITE
+  # of what they wrote, silently. A bullet is the natural thing to type now that
+  # per-phase QA is one (`- **QA:** off`), so this is the shape to accept.
+  #
+  # Still anchored at the START of the line and still requiring the bold literal,
+  # which is what keeps prose ("we considered turning the QA gate on") from ever
+  # reading as a directive — the reason the anchoring existed in the first place.
+  if printf '%s\n' "$sb" | grep -qiE '^[[:space:]>]*([-*][[:space:]]+)?\*\*QA gate:\*\*[[:space:]]*off([[:space:]]|$)'; then
     echo "waived (plan directive: QA gate: off)"; return
   fi
-  if printf '%s\n' "$sb" | grep -qiE '^[[:space:]>]*\*\*QA gate:\*\*[[:space:]]*on[[:space:]]*$'; then
+  if printf '%s\n' "$sb" | grep -qiE '^[[:space:]>]*([-*][[:space:]]+)?\*\*QA gate:\*\*[[:space:]]*on([[:space:]]|$)'; then
     echo "on (plan directive: QA gate: on)"; return
   fi
   if printf '%s\n' "$sb" | grep -i 'qa gate' | grep -qi 'waiv'; then
@@ -1079,7 +1137,10 @@ missing_deps() {  # missing_deps <phase>
 # the board and holds its whole downstream cone for ever.
 dep_block_reason() {  # dep_block_reason <dep> -> not-done | qa:<verdict>
   _is_done "$1" || { echo "not-done"; return; }
-  echo "qa:$(qa_result "$1")"
+  # Only a phase QA actually gates can be blocked BY qa; a QA-off phase that is
+  # done is simply done, whatever verdict happens to sit in the table.
+  qa_gates_phase "$1" && { echo "qa:$(qa_result "$1")"; return; }
+  echo "not-done"
 }
 
 # `missing_deps`, with the QA-held ones marked so `needs: 1` cannot sit two
@@ -1392,6 +1453,20 @@ case "$mode" in
     # "waived <reason>" | "on <reason>" | "off" — whether phase-finish dispatches
     # a QA subagent (on), records waived rows without dispatching (waived), or
     # skips the QA artifact entirely (off, the default).
+    #
+    # With a phase number, the answer is that PHASE's regime: its own
+    # `- **QA:** on|off` bullet where it has one, the plan's word otherwise. The
+    # reason says which, because "why is this phase not being reviewed" is the
+    # question an operator actually asks.
+    if [ -n "$arg" ]; then
+      case "$arg" in ''|*[!0-9]*) echo "usage: --qa-mode [<phase>]" >&2; exit 2 ;; esac
+      case "$(qa_phase_directive "$arg")" in
+        on)  echo "on (phase directive: QA: on)" ;;
+        off) echo "off (phase directive: QA: off)" ;;
+        *)   qa_mode ;;
+      esac
+      exit 0
+    fi
     qa_mode
     exit 0
     ;;
@@ -1697,8 +1772,8 @@ case "$mode" in
     # this. So `new-handoff.sh ... complete` wrote a `pending` row, nothing ever
     # replaced it, and that phase held its whole downstream cone for ever with
     # no defect recorded anywhere. Named only when QA actually gates.
-    case "$(qa_mode)" in
-      on*)
+    case "$(qa_mode_for_phase "$p")" in
+      on)
         printf '\nThis plan runs QA ON, so the handoff is not the last step: a `complete` handoff\n'
         printf 'writes a `pending` QA row, and a pending row holds every dependent phase exactly\n'
         printf 'as a failure does. Nothing dispatches QA on your behalf. Before you stop, run a\n'
@@ -1773,7 +1848,7 @@ for p in "${PHASES[@]}"; do
   fi
   case "$state" in
     done)        icon="✅"; extra=""
-                 if [ "$QA_GATING" = 1 ] && ! plan_is_closed; then
+                 if qa_gates_phase "$p" && ! plan_is_closed; then
                    case "$(qa_result "$p")" in
                      pass|waived) extra=" · QA:verified" ;;
                      fail)        extra=" · QA:FAILED" ;;

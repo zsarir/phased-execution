@@ -62,7 +62,11 @@ test('a file change reaches the handler', async () => {
     // gives no filename and the watcher reports the directory instead. Asserting
     // on "demo.md" asserted a guarantee that does not exist, and failed roughly
     // one run in three. The service only needs to know which tree moved.
-    const arrived = await until(() => seen.flat().some((p) => p.startsWith(dir.plans)));
+    // 20s, not the 5s default, for the same reason as the re-arm delivery check
+    // below: this waits on the OS, and under a full parallel suite FSEvents has
+    // been measured well past five seconds. The comment above records one flake
+    // already fixed in this assertion; the budget was the other half of it.
+    const arrived = await until(() => seen.flat().some((p) => p.startsWith(dir.plans)), 20_000);
     assert.ok(arrived, `the handler should report the plans tree; got ${JSON.stringify(seen.flat())}`);
   } finally {
     watcher.stop();
@@ -97,9 +101,21 @@ test('a watcher error is survived and re-armed, not thrown', async () => {
     assert.equal(degradedState().healthy, true, 'recovery should clear the degraded badge');
 
     // And the rebuilt watch must actually deliver, not merely exist.
+    //
+    // Given a budget of its own rather than the 5s default: this waits on the
+    // OPERATING SYSTEM to deliver a filesystem event, and under a full parallel
+    // suite — dozens of temp directories, several spawned consoles — FSEvents
+    // has been measured well past five seconds. That produced the whole test
+    // failing at ~6s (1s of re-arm plus the 5s default), on this assertion,
+    // intermittently and only under load. The re-arm assertion above already
+    // takes 8s explicitly for the same reason; this one silently did not.
+    //
+    // Not a product weakness being papered over: the watcher's answer to a
+    // watch that has stopped delivering is the deaf-heartbeat rebuild, and that
+    // is what the very next test covers.
     seen.length = 0;
     writeFileSync(join(dir.plans, 'after-rearm.md'), '# x\n');
-    assert.ok(await until(() => seen.some((p) => p.includes('after-rearm.md'))),
+    assert.ok(await until(() => seen.some((p) => p.includes('after-rearm.md')), 20_000),
       'the re-armed watch should deliver events');
   } finally {
     watcher.stop();

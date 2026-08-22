@@ -128,6 +128,19 @@ export type PhaseEvidence = {
   declared: { status: string; reason?: string; watch?: string[]; writtenAt?: string } | null;
   /** The gate as the engine answers it (`--gate-status`): kind `clear|manual|ai|blocked|OVERDUE|…`. */
   gate: { clear: boolean; kind: string; detail?: string } | null;
+  /**
+   * Has the operator delegated human gates on this console
+   * (`Prefs.delegateHumanGates`)? A delegated gate is not a person's to clear:
+   * the boot prompt briefs the session to verify each condition against evidence
+   * it can cite, so the phase is boardable and the ladder owns it.
+   *
+   * The pref reached the RUNNER (a gated phase boots like an `ai` one) and not
+   * the classifier, so a phase already recorded `gated` before delegation was
+   * switched on kept classifying `gated-manual` — actor `person`, no rungs, an
+   * errand at once. Delegation silently did nothing for exactly the phases that
+   * were already stuck, which are the ones it gets turned on for.
+   */
+  gateDelegated?: boolean;
   mcp: { unreachable: string[]; policy?: string } | null;
   health: Array<{ kind: string; severity: string; phase?: number; detail?: string }>;
   /** A live-session registry hit for this phase (Phase 5); null until then. */
@@ -150,6 +163,8 @@ export type EvidenceDeps = {
   lock?: (slug: string, phase: number) => Promise<LockEvidence | null> | LockEvidence | null;
   qa?: (slug: string, phase: number) => Promise<PhaseEvidence['qa']> | PhaseEvidence['qa'];
   health?: (slug: string) => Promise<PhaseEvidence['health']> | PhaseEvidence['health'];
+  /** `Prefs.delegateHumanGates` — see `PhaseEvidence.gateDelegated`. */
+  gateDelegated?: () => boolean;
   gate?: (slug: string, phase: number) => Promise<PhaseEvidence['gate']> | PhaseEvidence['gate'];
   registry?: (slug: string, phase: number) => PhaseEvidence['registry'];
   auth?: () => Promise<PhaseEvidence['auth']> | PhaseEvidence['auth'];
@@ -280,6 +295,7 @@ export async function collectEvidence(
     work,
     declared: deps.declared?.(slug, phase) ?? null,
     gate: gate ?? (record?.gate ? { clear: record.gate.clear, kind: record.gate.kind, detail: record.gate.detail } : null),
+    ...(deps.gateDelegated?.() === true ? { gateDelegated: true } : {}),
     mcp: record?.mcpDegraded?.length
       ? { unreachable: record.mcpDegraded.map((d) => d.id) }
       : null,
@@ -413,7 +429,13 @@ export function classifySituation(e: PhaseEvidence): Situation {
 
   /* 1–2. QA verdicts on a phase the board reads done, then superseded. */
   if (e.board === 'done') {
-    if (e.qa && e.qa.mode && e.qa.mode !== 'off') {
+    // `on`, not "anything but off". `waived` is a gate the operator RELEASED —
+    // the verdicts stay recorded and reported, they simply stop holding
+    // dependents — so a done phase under a waiver is settled work like any
+    // other. Admitting it here made the healer write a QA errand for a plan
+    // whose gate had been explicitly turned off. Same predicate as
+    // `Service.qaHolds`, because there is one question here, not two.
+    if (e.qa && e.qa.mode === 'on') {
       if (e.qa.result === 'fail') {
         return situation('qa-failed', ['the board reads done', `QA is ${e.qa.mode} and the recorded verdict is fail`]);
       }
@@ -474,7 +496,8 @@ export function classifySituation(e: PhaseEvidence): Situation {
    * through is safe because nothing is boarded on this verdict — the runner
    * re-reads the gate for real before it spawns anything. */
   const gateUnevaluated = /\bnot executed\b/i.test(e.gate?.detail ?? '');
-  if (e.gate && !e.gate.clear && !gateUnevaluated && /^(manual|human|OVERDUE)$/i.test(e.gate.kind)) {
+  const gateIsAPersons = !e.gateDelegated;
+  if (gateIsAPersons && e.gate && !e.gate.clear && !gateUnevaluated && /^(manual|human|OVERDUE)$/i.test(e.gate.kind)) {
     return situation('gated-manual', [`the gate is ${e.gate.kind}: ${e.gate.detail ?? ''}`.trim()]);
   }
   // The record's snapshot may only speak when the LIVE read could not run, or
@@ -484,7 +507,7 @@ export function classifySituation(e: PhaseEvidence): Situation {
   // `gated-manual`, for ever. That is the exact invariant CLAUDE.md pins ("the
   // engine is the authority on gate state, including for the healer"); the
   // fallback had quietly grown back around it.
-  if (!e.gate?.clear && !gateUnevaluated
+  if (gateIsAPersons && !e.gate?.clear && !gateUnevaluated
     && rec?.status === 'gated' && rec.gate && !rec.gate.clear
     && !/\bnot executed\b/i.test(rec.gate.detail ?? '')
     && /^(manual|human|OVERDUE)$/i.test(rec.gate.kind)) {

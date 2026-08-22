@@ -1055,3 +1055,326 @@ test('a QA rung hands the session real commands, never placeholders', async () =
     }
   } finally { s.cleanup(); }
 });
+
+test('a phase whose handoff is on disk reports it as present, not absent', async () => {
+  // `handoffFor` answers the parsed handoff or `undefined`; a `Handoff` carries
+  // no `exists` field, so `handoff?.exists` was always undefined and EVERY phase
+  // with a real handoff derived `{exists: false}`. Live on a real plan: one API
+  // response carrying `phase.handoff.status: 'complete'` beside
+  // `proof.handoff: 'absent'`, and a phase card telling the operator to "re-scan"
+  // a file that was present, complete and already parsed. Two call sites share
+  // the predicate, so this asserts through the SERVICE — `evidence-model.js` was
+  // always right about what it was handed.
+  const s = scratch();
+  try {
+    qaWedgedRun(s.root);            // writes a real phase-01 handoff, status: complete
+    const svc = service(s.root);    // opened after, so the store's first scan sees it
+    const detail = await svc.detail('alpha');
+    const phase1 = detail?.phases.find((p) => p.phase === 1);
+    assert.ok(phase1, 'phase 1 must be in the detail');
+    assert.equal(phase1!.handoff?.status, 'complete', 'the premise: the store parsed it');
+    assert.equal(phase1!.proof?.handoff, 'complete', 'and the evidence must agree with the store');
+    assert.ok(
+      !(phase1!.proof?.why ?? []).some((w) => /handoff absent|re-scan/i.test(w)),
+      `no "re-scan" about a file that is right there: ${(phase1!.proof?.why ?? []).join(' | ')}`,
+    );
+  } finally { s.cleanup(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * The last gate between a chosen QA rung and an actual launch
+ * ------------------------------------------------------------------ */
+
+test('preRecoveryGate: a done phase whose QA holds the plan is NOT superseded', async () => {
+  // `preRecoveryGate` is the belt on every launch: it re-reads the board and
+  // stands down when the board has moved past the halt. Its test for that is
+  // `board[phase] === 'done'` — which is exactly true of the phase a QA verdict
+  // is holding, and exactly the wrong conclusion about it. So the ladder chose
+  // the right rung, and the gate refused it one line before the spawn:
+  // "the board had already moved past the halt — records reconciled, nothing to
+  // launch", on a plan where nothing had moved past anything.
+  //
+  // Keyed on the BOARD FACT, not on the halt's kind: the run that exposed this
+  // was parked by an older build, so its halt carries no `kind` and no `phase`
+  // at all, and any fix that reads the halt leaves every existing run wedged.
+  const s = scratch();
+  try {
+    qaWedgedRun(s.root);
+    const svc = service(s.root);
+    const gate = (svc as unknown as {
+      preRecoveryGate: (slug: string, state: RunState, phase: number) => Promise<string>;
+    }).preRecoveryGate.bind(svc);
+
+    const state = loadRun(s.root, 'alpha', (await svc.runFor('alpha'))!.id)!;
+    // An OLD-style halt: no kind, no phase — the shape on disk right now.
+    state.halt = { at: new Date().toISOString(), reason: 'nothing is ready to run: 6 phase(s) are still waiting.' };
+    saveRun(state);
+
+    assert.equal(await gate('alpha', state, 1), 'proceed',
+      'a phase the QA gate is holding has not been overtaken by anything');
+  } finally { s.cleanup(); }
+});
+
+test('preRecoveryGate: a genuinely finished phase is still superseded', async () => {
+  // The guard's real job, unchanged: a phase the board finished and QA passed is
+  // done, and launching anything for it would be spending on settled work.
+  const s = scratch();
+  try {
+    mkdirSync(join(s.root, 'docs', 'handoffs', 'alpha'), { recursive: true });
+    writeFileSync(
+      join(s.root, 'docs', 'handoffs', 'alpha', 'phase-01-schema.md'),
+      '---\nplan: docs/plans/alpha.md\nphase: 1\ntitle: schema\nstatus: complete\n---\n# done\n', 'utf8',
+    );
+    writeFileSync(
+      join(s.root, 'docs', 'handoffs', 'alpha', 'test-status.md'),
+      '# QA\n\n## QA status\n\n| Phase | Result | Report |\n|--:|--|--|\n| 1 | pass | reports/phase-01-qa.md |\n', 'utf8',
+    );
+    const svc = service(s.root);
+    const gate = (svc as unknown as {
+      preRecoveryGate: (slug: string, state: RunState, phase: number) => Promise<string>;
+    }).preRecoveryGate.bind(svc);
+
+    const state = newRun({ slug: 'alpha', root: s.root, autoRecover: true });
+    state.status = 'parked';
+    phaseRecord(state, 1).status = 'failed';
+    state.halt = { at: new Date().toISOString(), reason: 'phase 1 failed', phase: 1, kind: 'verify-failed' };
+    saveRun(state);
+
+    assert.equal(await gate('alpha', state, 1), 'superseded',
+      'finished work is finished — this is what the guard exists for');
+  } finally { s.cleanup(); }
+});
+
+test('a run parked by an OLDER build still gets its QA wedge climbed', async () => {
+  // End to end, on the shape that is actually on disk: a halt with no kind and
+  // no phase, both records `done`, a recorded QA fail. Every earlier layer was
+  // right — the candidate list admits phase 1, the ladder picks `qa-fix` — and
+  // the launch was refused by the gate above. This is the assertion that would
+  // have caught it.
+  const s = scratch();
+  try {
+    qaWedgedRun(s.root);
+    const svc = service(s.root);
+    stubMint(svc);
+    const state = loadRun(s.root, 'alpha', (await svc.runFor('alpha'))!.id)!;
+    state.halt = { at: new Date().toISOString(), reason: 'nothing is ready to run: 6 phase(s) are still waiting.' };
+    state.phases['1'].sessionId = 'sess-p1';
+    state.phases['1'].resumeSessionId = 'sess-p1';
+    saveRun(state);
+
+    let resumed: { phase?: number; mode?: string; instruction?: string } | null = null;
+    const pooled = svc.runnerFor('alpha') as unknown as {
+      recover: (o: { phase?: number; mode?: string; instruction?: string }) => Promise<unknown>;
+    };
+    pooled.recover = async (o) => { resumed = o; return state; };
+
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.equal(result.launched, true, `expected a launch, got: ${result.reason}`);
+    assert.equal(result.phase, 1);
+    assert.equal(result.situation, 'qa-failed');
+
+    // The launch is fire-and-forget by design (the healer answers at once and
+    // the session runs on), so wait for the drive rather than racing it.
+    const deadline = Date.now() + 5_000;
+    while (!resumed && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(resumed?.phase, 1, 'and it really drove the phase holding the plan');
+    assert.equal(resumed?.mode, 'resume');
+    assert.match(resumed?.instruction ?? '', /qa-record\.sh alpha 1/);
+  } finally { s.cleanup(); }
+});
+
+/* ------------------------------------------------------------------ *
+ * Per-phase QA: `- **QA:** on|off` in a phase's own section
+ * ------------------------------------------------------------------ */
+
+/** A plan that gates on QA, with phase 2 opting out for itself. */
+function perPhaseQaPlan(root: string): void {
+  writeFileSync(join(root, 'docs', 'plans', 'alpha.md'), `---
+slug: alpha
+created: 2026-08-22
+status: active
+phases: 3
+---
+
+# alpha
+
+## Phase graph
+
+| Phase | Title | Depends on | Parallel-safe with | Repos | Exit criteria |
+|------:|-------|-----------|--------------------|-------|---------------|
+| 1 | schema | — | — | app | it works |
+| 2 | docs   | — | — | app | it reads |
+| 3 | ship   | 2 | — | app | it ships |
+
+## Session budget
+
+**QA gate:** on
+
+## Phases
+
+### Phase 1 — schema
+- **Size:** S
+
+### Phase 2 — docs
+- **Size:** S
+- **QA:** off
+
+### Phase 3 — ship
+- **Size:** S
+`, 'utf8');
+}
+
+test('the console reads a phase\'s own QA regime, not just the plan\'s', async () => {
+  const s = scratch();
+  try {
+    perPhaseQaPlan(s.root);
+    const svc = service(s.root);
+    assert.equal((await svc.qaMode('alpha')).mode, 'on', 'the plan gates');
+    assert.equal((await svc.qaMode('alpha', 1)).mode, 'on', 'a silent phase inherits it');
+    assert.equal((await svc.qaMode('alpha', 2)).mode, 'off', 'and a phase may exempt itself');
+    assert.match((await svc.qaMode('alpha', 2)).reason ?? '', /phase directive/,
+      'the reason says WHERE the answer came from — "why is this not being reviewed" is the real question');
+  } finally { s.cleanup(); }
+});
+
+test('a QA-exempt phase is never treated as QA-held by the healer', async () => {
+  // `qaHolds` decides whether a board-`done` phase is admitted to the candidate
+  // list as a blocker. A phase the plan exempts is done work, not a blocker —
+  // admitting it would have the ladder resume a session to produce a verdict
+  // nothing is waiting for.
+  const s = scratch();
+  try {
+    perPhaseQaPlan(s.root);
+    mkdirSync(join(s.root, 'docs', 'handoffs', 'alpha'), { recursive: true });
+    writeFileSync(
+      join(s.root, 'docs', 'handoffs', 'alpha', 'test-status.md'),
+      '# QA\n\n## QA status\n\n| Phase | Result | Report |\n|--:|--|--|\n| 1 | fail | - |\n| 2 | fail | - |\n',
+      'utf8',
+    );
+    const svc = service(s.root);
+    const holds = (svc as unknown as {
+      qaHolds: (slug: string, phase: number) => Promise<boolean>;
+    }).qaHolds.bind(svc);
+
+    assert.equal(await holds('alpha', 1), true, 'phase 1 gates and its verdict is red');
+    assert.equal(await holds('alpha', 2), false, 'phase 2 exempted itself — its row governs nothing');
+  } finally { s.cleanup(); }
+});
+
+test('a rung is not settled while its own session is still running', async () => {
+  // Observed on a live run: the `qa-fix` rung recorded `outcome: 'failed'`, note
+  // "the run reads running", while its `claude` process was eight minutes into
+  // doing exactly what it was asked. The settle block reads the run's status the
+  // moment `recoverPhase` resolves and treats anything that is not
+  // parked-without-halt as a failure — but `running` is not a verdict, it is the
+  // absence of one, and a run that is still going has not failed at anything.
+  //
+  // The cost is a lie in the ledger and a premature escalation: the next climb
+  // reads rung 1 as spent and reaches for the more expensive rung 2.
+  const s = scratch();
+  try {
+    qaWedgedRun(s.root);
+    const svc = service(s.root);
+    stubMint(svc);
+    const state = loadRun(s.root, 'alpha', (await svc.runFor('alpha'))!.id)!;
+    state.halt = { at: new Date().toISOString(), reason: 'nothing is ready to run.' };
+    state.phases['1'].sessionId = 'sess-p1';
+    state.phases['1'].resumeSessionId = 'sess-p1';
+    saveRun(state);
+
+    // The recovery resolves, but the run is still being driven — exactly the
+    // shape that produced the false verdict.
+    const pooled = svc.runnerFor('alpha') as unknown as {
+      recover: (o: unknown) => Promise<unknown>; current: () => unknown;
+    };
+    // What the real one does: by the time `recoverPhase` resolves, the drive
+    // loop owns the run and it reads `running`. The settle block prefers the
+    // pooled runner's own `current()` over a load, so that is what is faked —
+    // a `loadRun` would reclaim a `running` record whose pid is not alive and
+    // report `interrupted`, which is a different story.
+    // The run as it really is on disk (rung and all), with the one field that
+    // matters overridden — a plain copy of the pre-climb `state` would carry no
+    // rung, and the settle would find nothing to settle, which is a green test
+    // that proves nothing.
+    const asRunning = () => {
+      const live = loadRun(s.root, 'alpha', state.id);
+      return live ? { ...live, status: 'running' as const } : null;
+    };
+    pooled.recover = async () => asRunning();
+    pooled.current = () => asRunning();
+
+    const result = await svc.maybeAutoRecover('alpha');
+    assert.equal(result.launched, true);
+
+    const deadline = Date.now() + 4_000;
+    let rung: { outcome?: string } | undefined;
+    while (Date.now() < deadline) {
+      rung = loadRun(s.root, 'alpha', state.id)?.recoveries?.['1']?.rungs?.[0];
+      if (rung?.outcome && rung.outcome !== 'running') break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.notEqual(rung?.outcome, 'failed',
+      `a rung whose run is still driving has not failed: ${JSON.stringify(rung)}`);
+  } finally { s.cleanup(); }
+});
+
+test('a QA-held phase is exempt from "superseded" even when other phases are ready', async () => {
+  // The exemption was guarded by `wedgeCleared` — "does the BOARD have anything
+  // ready or in flight?" — which is a plan-wide fact answering a per-phase
+  // question. Whether some unrelated chain has work says nothing about whether
+  // THIS phase's verdict is holding its own dependents, and on any plan with a
+  // parallel branch the exemption silently evaporated: the ladder picked the QA
+  // rung and the gate refused it again, exactly as before the fix.
+  //
+  // It only looked right because the specimen that exposed the bug happened to
+  // have an empty ready set.
+  const s = scratch();
+  try {
+    // A plan with a parallel branch: 1 -> 2, and an independent 3. Phase 1's
+    // verdict holds 2 while 3 sits ready — the ordinary shape of any real plan,
+    // and the one the guard silently failed on.
+    writeFileSync(join(s.root, 'docs', 'plans', 'alpha.md'), `---
+slug: alpha
+created: 2026-08-22
+status: active
+phases: 3
+---
+
+# alpha
+
+## Phase graph
+
+| Phase | Title | Depends on | Parallel-safe with | Repos | Exit criteria |
+|------:|-------|-----------|--------------------|-------|---------------|
+| 1 | schema   | — | — | app | it works |
+| 2 | after it | 1 | — | app | it still works |
+| 3 | elsewhere| — | — | app | it ships |
+
+## Session budget
+
+**QA gate:** on
+
+## Phases
+
+### Phase 1 — schema
+- **Size:** S
+
+### Phase 2 — after it
+- **Size:** S
+
+### Phase 3 — elsewhere
+- **Size:** S
+`, 'utf8');
+    qaWedgedRun(s.root);
+    const svc = service(s.root);
+    const board = await svc.boardStates('alpha');
+    assert.ok(Object.values(board).includes('ready'), `the premise: something else is ready — ${JSON.stringify(board)}`);
+
+    const gate = (svc as unknown as {
+      preRecoveryGate: (slug: string, state: RunState, phase: number) => Promise<string>;
+    }).preRecoveryGate.bind(svc);
+    const state = loadRun(s.root, 'alpha', (await svc.runFor('alpha'))!.id)!;
+    assert.equal(await gate('alpha', state, 1), 'proceed',
+      'a verdict holding this phase\'s dependents is not settled by other work being ready');
+  } finally { s.cleanup(); }
+});

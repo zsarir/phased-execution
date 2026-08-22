@@ -1422,13 +1422,31 @@ export function reconcileRecordsAgainstBoard(
  * Returns whether anything changed, so callers only write when there is
  * something to write.
  */
-export function autoResolveRun(state: RunState, board: Record<number, string>): boolean {
+export function autoResolveRun(
+  state: RunState, board: Record<number, string>, qaHeld: ReadonlySet<number> = new Set(),
+): boolean {
   if (state.resolved || state.reopenedAt) return false;
   if (!RESOLVABLE.includes(state.status)) return false;
 
   const phases = decidingPhases(state);
   if (!phases.length) return false;
   if (!phases.every((phase) => board[phase] === 'done')) return false;
+  // `board[phase] === 'done'` is not "nothing is wrong" when a QA verdict is
+  // still holding that phase's dependents.
+  //
+  // Every QA rung anchors on a phase the board reads done — that is the point of
+  // admitting one as a candidate — so a rung whose session does not end cleanly
+  // leaves the run stopped ON a done phase, and this resolver read exactly that
+  // as superseded. Stamping `resolved` is what `converge.ts` treats as pinned:
+  // boot, timer, change and halt passes all skip the plan for ever after. One
+  // imperfect QA session and the unattended path terminated permanently, on its
+  // most likely first stumble — the shape this whole change set exists to remove.
+  //
+  // Narrow deliberately: only a phase this run STOPPED on counts (both anchors,
+  // `halt.phase` and `activePhase`, since the common failed-verification route
+  // nulls the halt). A verdict holding some unrelated phase must not keep a
+  // finished run on the attention surface.
+  if (phases.some((phase) => qaHeld.has(phase))) return false;
 
   state.resolved = {
     at: new Date().toISOString(),
@@ -1519,6 +1537,13 @@ export function slugsNeedingBoard(runs: readonly RunState[]): string[] {
  */
 export function resolveRunsAgainst(
   runs: readonly RunState[], boards: ReadonlyMap<string, Record<number, string>>,
+  /**
+   * Per slug, the phases whose QA verdict is holding their dependents. A run
+   * that stopped on one of those has NOT been overtaken by anything — see
+   * `autoResolveRun`. Absent for a slug means "no hold", which is the same
+   * fail-safe direction an unreadable board takes.
+   */
+  qaHeld: ReadonlyMap<string, ReadonlySet<number>> = new Map(),
 ): RunState[] {
   const changed: RunState[] = [];
   for (const run of runs) {
@@ -1531,7 +1556,7 @@ export function resolveRunsAgainst(
     const records = RESOLVABLE.includes(run.status) && !run.reopenedAt
       ? reconcileRecordsAgainstBoard(run, board)
       : { changed: false, closed: [] };
-    const resolved = autoResolveRun(run, board);
+    const resolved = autoResolveRun(run, board, qaHeld.get(run.slug));
     // Last, and independent of the two above: both of those annotate a run that
     // is over without ever moving it off a status the UI paints `needs-you`, and
     // `autoResolveRun` returns early for one already resolved — so nothing

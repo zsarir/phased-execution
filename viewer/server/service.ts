@@ -2819,11 +2819,23 @@ export class Service {
       readMemoryBlock(await run(this.engineOpts(), 'phase-graph.sh', [slug, '--memory-block'], { slug, revision: record.revision })));
   }
 
-  async qaMode(slug: string): Promise<QaMode> {
+  /**
+   * The QA regime — for the PLAN, or for one phase of it.
+   *
+   * With a phase, the engine answers that phase's own `- **QA:** on|off` bullet
+   * where it has one and the plan's word otherwise, and says which in the
+   * reason. Cached per phase for the same revision, because every candidate
+   * classification asks and the answer only moves when the plan file does.
+   */
+  async qaMode(slug: string, phase?: number): Promise<QaMode> {
     const record = this.store?.get(slug);
     if (!record?.plan?.phased) return { mode: 'off' };
-    return this.cached(this.qaModes, slug, record.revision, async () =>
-      readQaMode(await run(this.engineOpts(), 'phase-graph.sh', [slug, '--qa-mode'], { slug, revision: record.revision })));
+    const key = phase == null ? slug : `${slug}#${phase}`;
+    const args = phase == null
+      ? [slug, '--qa-mode']
+      : [slug, '--qa-mode', String(phase)];
+    return this.cached(this.qaModes, key, record.revision, async () =>
+      readQaMode(await run(this.engineOpts(), 'phase-graph.sh', args, { slug, revision: record.revision })));
   }
 
   async lint(slug: string): Promise<LintResult | null> {
@@ -3079,7 +3091,14 @@ export class Service {
         // `handoffFor` answers undefined for a phase with no handoff file at
         // all, which is most of a young plan — the missing `?.` here crashed
         // every plan detail that had one.
-        handoff: handoff?.exists
+        // `handoffFor` answers the parsed handoff or `undefined` — there is no
+        // `exists` field on a `Handoff`, so `handoff?.exists` was ALWAYS
+        // undefined and every phase with a real handoff derived `{exists:
+        // false}`. The same API response then carried `phase.handoff.status:
+        // 'complete'` beside `proof.handoff: 'absent'`, and the phase card said
+        // "board: done but the store reads handoff absent — re-scan" about a
+        // file that was present, complete and parsed. Holding it IS existing.
+        handoff: handoff
           ? { exists: true, status: handoff.status, ...(handoff.outstanding ? { outstanding: handoff.outstanding } : {}) }
           : { exists: false },
         ...(rec?.verification ? { verification: rec.verification as never } : {}),
@@ -3814,13 +3833,26 @@ export class Service {
     if (!slugs.length) return runs;
 
     const boards = new Map<string, Record<number, string>>();
+    // Per slug, the phases whose QA verdict is holding their dependents. Free:
+    // the engine already reports it on `--memory-block`'s `blocked:` line (and
+    // that line honours a per-phase `- **QA:** off`, so an exempt phase never
+    // appears here), which the board read below has already parsed.
+    const qaHeld = new Map<string, ReadonlySet<number>>();
     for (const slug of slugs) {
       // An engine failure leaves the slug out of the map, so its runs keep
       // their cards. Uncertainty must not resolve anything.
-      try { boards.set(slug, (await this.board(slug)).states); } catch { /* keep the card */ }
+      try {
+        const board = await this.board(slug);
+        boards.set(slug, board.states);
+        const held = Object.entries(board.qa ?? {})
+          .filter(([, verdict]) => verdict !== 'pass' && verdict !== 'waived')
+          .map(([phase]) => Number(phase))
+          .filter(Number.isFinite);
+        if (held.length) qaHeld.set(slug, new Set(held));
+      } catch { /* keep the card */ }
     }
 
-    for (const state of resolveRunsAgainst(runs, boards)) {
+    for (const state of resolveRunsAgainst(runs, boards, qaHeld)) {
       // Same contract as `settle()`: the correction sticks, but a read must not
       // fail because the disk did.
       try { saveRun(state); } catch { /* the annotation is worth less than the read */ }
@@ -5193,8 +5225,10 @@ export class Service {
         phase,
         board: board[phase],
         handoff: (() => {
+          // Same predicate, same reason as the one in `detail` above: the store
+          // returning a handoff is what "it exists" means.
           const h = handoffFor(this.store?.get(slug), phase);
-          return h?.exists
+          return h
             ? { exists: true, status: h.status, ...(h.outstanding ? { outstanding: h.outstanding } : {}) }
             : { exists: false };
         })(),
@@ -5267,6 +5301,10 @@ export class Service {
        * knew, the same shape the MCP probe uses.
        */
       gate: (_slug, phase) => this.gateStatus(slug, phase),
+      // The same pref the runner reads at boarding. Without it the classifier
+      // called a delegated gate a person's, so the ladder wrote an errand for a
+      // phase the runner would happily have booted.
+      gateDelegated: () => this.prefs.delegateHumanGates === true,
       // The registry hit for the phase's lock holder: a live or ended session it names.
       registry: (_slug, phase) => {
         const l = record ? lockFor(record, phase) : undefined;
@@ -5281,7 +5319,7 @@ export class Service {
         return d ? { status: d.status, ...(d.reason ? { reason: d.reason } : {}), ...(d.watch ? { watch: d.watch } : {}), ...(d.writtenAt ? { writtenAt: d.writtenAt } : {}) } : null;
       },
       qa: async (_slug, phase) => {
-        const mode = await this.qaMode(slug).catch((): QaMode => ({ mode: 'off' }));
+        const mode = await this.qaMode(slug, phase).catch((): QaMode => ({ mode: 'off' }));
         if (mode.mode === 'off') return { mode: 'off' };
         // Live, not the store's parse: classifying a phase whose verdict is
         // `fail` as `qa-pending` sends the ladder up the wrong rung (dispatch a
@@ -5351,7 +5389,10 @@ export class Service {
 
   private async qaHolds(slug: string, phase: number): Promise<boolean> {
     try {
-      if ((await this.qaMode(slug)).mode !== 'on') return false;
+      // THIS phase's regime, not the plan's: a phase that exempted itself is
+      // finished work, and admitting it as a blocker would have the ladder
+      // resume a session to produce a verdict nothing is waiting for.
+      if ((await this.qaMode(slug, phase)).mode !== 'on') return false;
       const verdict = await this.qaVerdict(slug, phase);
       return verdict !== 'pass' && verdict !== 'waived';
     } catch { return false; }
@@ -5777,15 +5818,28 @@ export class Service {
         try { saveRun(state); } catch { /* a failed write must not block the verdict */ }
         this.emit('run:state', { state });
       }
-      // A `plan-deadlocked` halt is anchored on a phase the board reads DONE on
-      // purpose: the blocker IS a settled phase whose QA verdict holds its
-      // dependents. Reading that as "the board moved past the halt" retracted
-      // the one halt that was still completely true, and stood down the card
-      // that named it. It is superseded only when the wedge itself is gone —
-      // which the board says plainly, by having work to do again.
-      const wedgeAnchor = state.halt?.kind === 'plan-deadlocked' && state.halt.phase === phase;
-      const wedgeCleared = Object.values(board).some((word) => word === 'ready' || word === 'in-progress');
-      if (wedgeAnchor && !wedgeCleared) return 'proceed';
+      // "The board moved past the halt" is tested by `board[phase] === 'done'`,
+      // which is exactly true of a phase a QA verdict is HOLDING — and exactly
+      // the wrong conclusion about it. That phase is settled as work and
+      // unsettled as a blocker: the engine keeps every dependent behind it, and
+      // the ladder has a rung for it. The gate refused that rung one line before
+      // the spawn, answering "the board had already moved past the halt —
+      // records reconciled, nothing to launch" about a plan where nothing had
+      // moved past anything.
+      //
+      // Keyed on the BOARD FACT, deliberately, and NOT on the halt's kind: the
+      // run that exposed this was parked by an earlier build, so its halt
+      // carries no `kind` and no `phase` at all. A fix that reads the halt
+      // leaves every run parked before it shipped wedged for ever — and those
+      // are precisely the runs that need it.
+      // No `wedgeCleared` term. It asked "does the BOARD have anything ready or
+      // in flight?" — a plan-wide fact answering a per-phase question. Whether
+      // some unrelated chain has work says nothing about whether THIS phase's
+      // verdict is holding its own dependents, so on any plan with a parallel
+      // branch the exemption silently evaporated and the gate refused the rung
+      // again. It only ever looked right because the run that exposed the bug
+      // happened to have an empty ready set.
+      if (board[phase] === 'done' && await this.qaHolds(slug, phase)) return 'proceed';
       if (result.closed.includes(phase) || board[phase] === 'done') {
         const now = new Date().toISOString();
         const slot = ((state.recoveries ??= {})[String(phase)] ??= { attempts: 0, lastAt: now });
@@ -6396,6 +6450,22 @@ export class Service {
             settleRung(afterSlot, 'no-defect', undefined, 'the session declared an external wait');
             saveRun(after);
             this.armLimitResume(slug, after);
+          } else if (IN_FLIGHT.includes(after.status) || this.liveRunner(slug)) {
+            // Still driving. `running` is not a verdict — it is the ABSENCE of
+            // one — and a run that is still going has not failed at anything.
+            // This branch settled it `failed` the moment `recoverPhase`
+            // resolved, which on a recovery that hands off to the drive loop is
+            // while its own `claude` process is minutes into doing exactly what
+            // it was asked. Observed live: a `qa-fix` rung recorded
+            // "the run reads running" as a failure at eight minutes in.
+            //
+            // The rung is left OPEN. It is settled by evidence later — the next
+            // climb's `settleRung(... record.status === 'done' ...)` in
+            // `maybeAutoRecover`, or the drive loop's own settle when the lane
+            // ends — which is the only honest reading of an outcome that has not
+            // happened yet. The cost of the old behaviour was a lie in the
+            // ledger and a premature escalation to the more expensive rung.
+            log.info('run.rung-still-driving', { slug, phase, status: after.status });
           } else {
             settleRung(afterSlot, 'failed', undefined, `the run reads ${after.status}${after.halt ? ` — ${after.halt.reason.slice(0, 120)}` : ''}`);
             saveRun(after);
@@ -7812,6 +7882,7 @@ export class Service {
     if (positive(patch.stallSpinTurns)) picked.stallSpinTurns = patch.stallSpinTurns;
     if (positive(patch.stallStalemateAttempts)) picked.stallStalemateAttempts = patch.stallStalemateAttempts;
     if (typeof patch.unblockAttempts === 'boolean') picked.unblockAttempts = patch.unblockAttempts;
+    if (typeof patch.delegateHumanGates === 'boolean') picked.delegateHumanGates = patch.delegateHumanGates;
     if (typeof patch.staleClaimTakeover === 'boolean') picked.staleClaimTakeover = patch.staleClaimTakeover;
     if (typeof patch.resumeAtBoot === 'boolean') picked.resumeAtBoot = patch.resumeAtBoot;
     if (typeof patch.autoAccountSwitch === 'boolean') picked.autoAccountSwitch = patch.autoAccountSwitch;
@@ -7825,6 +7896,15 @@ export class Service {
       : sanitiseCategories({ ...this.prefs.notify, ...patch.notify });
     this.prefs = { ...this.prefs, ...picked, notify };
     savePrefs(this.prefs);
+    // The healer decides with these — the ladder caps, the unblock and takeover
+    // switches, gate delegation — and none of them are in the convergence
+    // fingerprint, which reads the run, the board, the locks, the gate stamp and
+    // the QA verdicts. So an operator who raised a spent budget or turned
+    // delegation on changed exactly the thing that would let the loop act, and
+    // the loop went on skipping with "nothing has changed since the last pass
+    // found nothing to climb". Clearing the latch is the whole fix: the next
+    // sweep asks again.
+    if (Object.keys(picked).length) this.converger.clearNoops();
     return this.prefs;
   }
 

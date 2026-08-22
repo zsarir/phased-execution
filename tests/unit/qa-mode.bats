@@ -153,3 +153,48 @@ write_qa_row() {  # write_qa_row <slug> <phase> <result>
   run pg diamond --ready
   [ "$output" = "" ]
 }
+
+# --- the directive must survive being written as a bullet --------------------
+# `qa_mode`'s canonical greps were anchored so tightly that a leading `-` list
+# marker missed BOTH the off and the on rule — and execution then fell through
+# to "test-status.md exists -> on". So an operator who wrote `- **QA gate:** off`
+# got the OPPOSITE of what they wrote, silently. That trap got sharper the moment
+# per-phase QA shipped as a bullet (`- **QA:** off`), because a bullet is now the
+# natural thing to type.
+
+@test "QA gate off is honoured when written as a list item" {
+  setup_docs diamond diamond
+  printf '\n## Session budget\n\n- **QA gate:** off\n' >> "$DOCS_ROOT/docs/plans/diamond.md"
+  write_handoff diamond 1 root complete
+  write_qa_row diamond 1 fail
+  run pg diamond --qa-mode
+  assert_contains "$output" "waived"
+  run pg diamond --ready
+  [ "$output" = "2 3" ]
+}
+
+@test "QA gate on is honoured when written as a list item" {
+  setup_docs diamond diamond
+  printf '\n## Session budget\n\n- **QA gate:** on\n' >> "$DOCS_ROOT/docs/plans/diamond.md"
+  run pg diamond --qa-mode
+  assert_contains "$output" "on"
+  assert_contains "$output" "plan directive"
+}
+
+@test "a trailing note after the directive does not hide it" {
+  setup_docs diamond diamond
+  printf '\n## Session budget\n\n**QA gate:** off (the suites are the bar here)\n' >> "$DOCS_ROOT/docs/plans/diamond.md"
+  run pg diamond --qa-mode
+  assert_contains "$output" "waived"
+}
+
+@test "prose that merely mentions the words still does not flip the gate" {
+  setup_docs diamond diamond
+  printf '\n## Session budget\n\nWe considered whether to turn the QA gate on for this plan.\n' \
+    >> "$DOCS_ROOT/docs/plans/diamond.md"
+  write_qa_row diamond 1 pass
+  run pg diamond --qa-mode
+  # test-status.md exists, so legacy back-compat says on — but from the FILE,
+  # not from prose being mistaken for a directive.
+  assert_contains "$output" "test-status.md exists"
+}

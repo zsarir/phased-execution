@@ -469,7 +469,9 @@ The load-bearing rules a session must not get wrong; full rationale in `referenc
   simply stop holding dependents); or **closing the plan** (`close-plan.sh`), which retires the report
   without a re-QA because a closed plan claims nothing about progress, and reopening restores the gate
   untouched. Anything that CREATES `test-status.md` backfills already-complete phases as `waived`, so
-  turning QA on mid-plan never retroactively un-verifies finished work. (conventions §QA gating)
+  turning QA on mid-plan never retroactively un-verifies finished work. **One phase can opt out (or
+  in) on its own** with `- **QA:** off|on` in its §Phase section — the phase's word beats the plan's,
+  silence inherits, and `--qa-mode <N>` reports which level answered. (conventions §QA gating)
 - **Gates are categorized; approval is the one door.** An `ai` gate is the fresh session's FIRST task —
   verify each condition, do the work to make failing ones true, record it (`gate-approve.sh`), then
   implement; a `manual` (human) gate stops everything until a person does the numbered steps and approves
