@@ -4,6 +4,10 @@
  * The derivations are pure and tested as data; the render test pins what an
  * operator actually reads off the panel: which phase, in what vehicle, for
  * how long, and what is parked waiting on the world.
+ *
+ * ⚠️ `pulseRuns` and `otherSessions` moved to `features/now/model.ts` in Phase
+ * 8, with `#/pulse`; their cases live in `features/now/model.test.ts`. What is
+ * left here is the per-plan PANEL, which is the plan page's (Phase 9 owns it).
  */
 
 import { render, screen } from '@testing-library/react';
@@ -19,7 +23,6 @@ import {
   pulseWaits,
 } from './pulse';
 import type { ConvergeView, ForeignSession } from '@/lib/api';
-import { otherSessions, pulseRuns } from '@/views/pulse';
 import type { RunState } from '@/lib/api';
 
 function run(over: Partial<RunState> = {}): RunState {
@@ -170,19 +173,6 @@ describe('PlanPulse', () => {
   });
 });
 
-describe('pulseRuns', () => {
-  it('keeps the newest run per plan, live plans first, and forgets old stopped ones', () => {
-    const fresh = new Date().toISOString();
-    const stale = new Date(Date.now() - 48 * 3_600_000).toISOString();
-    const rows = pulseRuns([
-      run({ id: 'a-old', slug: 'alpha', status: 'finished', updatedAt: stale }),
-      run({ id: 'b', slug: 'beta', status: 'finished', updatedAt: fresh }),
-      run({ id: 'c', slug: 'gamma', status: 'running', updatedAt: fresh }),
-    ]);
-    expect(rows.map((r) => r.slug)).toEqual(['gamma', 'beta']);
-  });
-});
-
 describe('isLiveRun', () => {
   it('counts the states with a process behind them, nothing else', () => {
     expect(isLiveRun(run({ status: 'running' }))).toBe(true);
@@ -269,44 +259,6 @@ describe('PlanPulse — a hand-run session beside the lanes', () => {
     expect(screen.getByTestId('foreign-lane').textContent).toContain('probably');
     rerender(<PlanPulse slug="demo" run={state} foreign={[]} />);
     expect(container.querySelector('section')).toBeNull();
-  });
-});
-
-describe('otherSessions', () => {
-  it('lists live sessions no plan row draws (no plan, or a plan without a run) and what ended within the hour; live first', () => {
-    const now = Date.now();
-    const rows = [
-      run({
-        slug: 'demo',
-        children: { '4': { pid: 1, phase: 4, sessionId: 'own-4', startedAt: '' } },
-      } as never),
-    ];
-    const sessions: ForeignSession[] = [
-      foreign({ sessionId: 'drawn', plan: { slug: 'demo', phase: 3, strong: true } }),
-      foreign({ sessionId: 'own-4', plan: { slug: 'demo', phase: 4, strong: true } }),
-      foreign({ sessionId: 'no-plan', plan: undefined }),
-      foreign({ sessionId: 'other-plan', plan: { slug: 'beta', phase: 1, strong: true } }),
-      foreign({
-        sessionId: 'just-left',
-        presence: 'ended',
-        endedAt: new Date(now - 5 * 60_000).toISOString(),
-        lastSeen: new Date(now - 5 * 60_000).toISOString(),
-      }),
-      foreign({
-        sessionId: 'long-gone',
-        presence: 'ended',
-        endedAt: new Date(now - 3 * 60 * 60_000).toISOString(),
-      }),
-      foreign({ sessionId: 'unknown', presence: 'unknown' }),
-    ];
-    const ids = otherSessions(sessions, rows, now).map((s) => s.sessionId);
-    expect(ids.slice(0, 2).sort()).toEqual(['no-plan', 'other-plan']);
-    expect(ids[2]).toBe('just-left');
-    expect(ids).not.toContain('drawn');
-    expect(ids).not.toContain('own-4');
-    expect(ids).not.toContain('long-gone');
-    expect(ids).not.toContain('unknown');
-    expect(otherSessions(undefined, rows, now)).toEqual([]);
   });
 });
 

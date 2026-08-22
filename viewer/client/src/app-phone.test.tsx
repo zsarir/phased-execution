@@ -66,7 +66,10 @@ function mount() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  window.location.hash = '#/ready';
+  // The home page itself, not a redirect into it: `#/ready` became one in
+  // Phase 8, and a shell test that starts mid-navigation is a shell test with
+  // an extra render nobody asked for.
+  window.location.hash = '#/now';
   state.mockResolvedValue(READY_STATE);
 });
 

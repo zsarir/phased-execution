@@ -1,15 +1,21 @@
 /**
- * The bell drawer.
+ * The bell drawer — two panels.
  *
- * The inbox was a tab on a page until 3.0, so these are its cases, moved: the
- * store exists because a phone asleep and no tab open used to mean the event had
- * simply never happened, and every row has to say not only what was announced
- * but *what became of it* — a silent delivery failure being exactly the thing
- * that is invisible otherwise.
+ * The announcements were a tab on a page until 3.0, so those are its cases,
+ * moved: the store exists because a phone asleep and no tab open used to mean
+ * the event had simply never happened, and every row has to say not only what
+ * was announced but *what became of it* — a silent delivery failure being
+ * exactly the thing that is invisible otherwise.
  *
  * What the move added is the open state. The drawer is `?bell=1` on whatever
  * route you are on, which is what lets `#/notifications` retire into it without
  * breaking a link, and what keeps the page you were reading underneath.
+ *
+ * Phase 8 added the second panel — the same `GET /api/inbox` rows Now leads
+ * with, rendered by the same component. The default is Needs you, because the
+ * bell carries a count and the count is of things still waiting; the
+ * announcements panel is `?panel=announcements`, which is exactly what
+ * `#/notifications` redirects to.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -20,16 +26,17 @@ import { parseHash, type Route } from '@/app/routes';
 import { queryClientConfig } from '@/lib/queries';
 import { NotificationsDrawer, deliverySummary, groupByDay } from './drawer';
 
-const { notifications, markRead } = vi.hoisted(() => ({
+const { notifications, markRead, inbox } = vi.hoisted(() => ({
   notifications: vi.fn(),
   markRead: vi.fn(),
+  inbox: vi.fn(),
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
   return {
     ...actual,
-    api: { ...actual.api, notifications, markNotificationsRead: markRead },
+    api: { ...actual.api, notifications, markNotificationsRead: markRead, inbox },
   };
 });
 
@@ -58,6 +65,27 @@ const record = (over: Record<string, unknown> = {}) => ({
 
 const route = (hash: string): Route => parseHash(hash) as Route;
 
+/** One inbox row, in the shape `server/inbox.ts` mints. */
+const item = (over: Record<string, unknown> = {}) => ({
+  id: 'errand:demo:4::verify-red',
+  kind: 'errand',
+  severity: 'needs-you',
+  slug: 'demo',
+  phase: 4,
+  title: 'demo — phase 4 needs you',
+  need: 'The SSH key the session named.',
+  how: 'Provide it where the handoff says, then recover.',
+  since: new Date().toISOString(),
+  href: '#/plan/demo/run',
+  actions: [
+    { verb: 'recover', label: 'Recover & continue', endpoint: '/api/run/demo/recover', method: 'POST' },
+  ],
+  ...over,
+});
+
+/** The announcements panel is no longer the default — name it. */
+const ANNOUNCEMENTS = '#/now?bell=1&panel=announcements';
+
 function mount(hash = '#/now?bell=1') {
   const onNavigate = vi.fn();
   const client = new QueryClient({
@@ -78,6 +106,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   notifications.mockResolvedValue(EMPTY);
   markRead.mockResolvedValue({ changed: 1, unread: 0 });
+  inbox.mockResolvedValue({ items: [], generatedAt: new Date().toISOString() });
 });
 
 describe('the open state is the URL', () => {
@@ -85,8 +114,9 @@ describe('the open state is the URL', () => {
     mount('#/now');
     expect(screen.queryByRole('dialog')).toBeNull();
     // And asks the server for nothing: a closed drawer has no business holding
-    // a paged query open.
+    // a paged query open — of EITHER panel.
     expect(notifications).not.toHaveBeenCalled();
+    expect(inbox).not.toHaveBeenCalled();
   });
 
   it('opens on ?bell= from any page, and closing leaves that page behind', async () => {
@@ -100,7 +130,7 @@ describe('the open state is the URL', () => {
 
 describe('what the drawer says about a delivery', () => {
   it('says nothing can reach you when no device and no command are set', async () => {
-    mount();
+    mount(ANNOUNCEMENTS);
     expect(await screen.findByText(/Nothing can reach you out of band yet/i)).toBeTruthy();
   });
 
@@ -115,7 +145,7 @@ describe('what the drawer says about a delivery', () => {
       ],
       devices: 1,
     });
-    mount();
+    mount(ANNOUNCEMENTS);
 
     const link = await screen.findByRole('link', { name: /Permission needed/ });
     // Never assembled here — `routeFor` on the server builds it, `toHash`
@@ -141,13 +171,13 @@ describe('what the drawer says about a delivery', () => {
       devices: 0,
       outOfBand: { configured: true },
     });
-    mount();
+    mount(ANNOUNCEMENTS);
     expect(await screen.findByText('no device')).toBeTruthy();
   });
 
   it('marks a row read on the way to what it is about', async () => {
     notifications.mockResolvedValue({ ...EMPTY, items: [record()], total: 1, unread: 1, devices: 1 });
-    const { onNavigate } = mount();
+    const { onNavigate } = mount(ANNOUNCEMENTS);
 
     fireEvent.click(await screen.findByRole('link', { name: /Permission needed/ }));
     await waitFor(() => expect(markRead).toHaveBeenCalledWith(['n1']));
@@ -158,9 +188,50 @@ describe('what the drawer says about a delivery', () => {
 
   it('offers Mark all read only when something is unread', async () => {
     notifications.mockResolvedValue({ ...EMPTY, items: [record({ read: true })], total: 1, devices: 1 });
-    mount();
+    mount(ANNOUNCEMENTS);
     const button = await screen.findByRole('button', { name: 'Mark all read' });
     expect(button).toBeDisabled();
+  });
+});
+
+describe('the needs-you panel — the SAME rows Now leads with', () => {
+  it('is the default panel, and it renders the inbox rather than the announcements', async () => {
+    inbox.mockResolvedValue({ items: [item()], generatedAt: '' });
+    mount();
+    expect(await screen.findByText('demo — phase 4 needs you')).toBeTruthy();
+    // The row carries the server's own remedy, with the server's own label.
+    expect(screen.getByRole('button', { name: /Recover & continue/ })).toBeTruthy();
+    // And the announcements query is not held open while its panel is closed.
+    expect(notifications).not.toHaveBeenCalled();
+  });
+
+  it('switching panels is a navigation, so the address says which half is open', async () => {
+    const { onNavigate } = mount();
+    fireEvent.click(await screen.findByRole('button', { name: /Announcements/ }));
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(ANNOUNCEMENTS));
+  });
+
+  it('an action whose capability is off is offered, disabled, never hidden', async () => {
+    inbox.mockResolvedValue({
+      items: [
+        item({
+          actions: [
+            {
+              verb: 'recover',
+              label: 'Recover & continue',
+              endpoint: '/api/run/demo/recover',
+              method: 'POST',
+              flag: 'run',
+            },
+          ],
+        }),
+      ],
+      generatedAt: '',
+    });
+    mount();
+    const button = await screen.findByRole('button', { name: /Recover & continue/ });
+    expect(button).toBeDisabled();
+    expect(button.getAttribute('title')).toContain('--allow-run');
   });
 });
 

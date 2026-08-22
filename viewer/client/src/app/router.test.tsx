@@ -82,8 +82,16 @@ describe('the aliases', () => {
     // Both halves of a guide address survive.
     expect(redirectTarget(route('#/guide/mobile?card=tailscale'))).toBe('#/now?help=mobile&card=tailscale');
     expect(redirectTarget(route('#/stats?plan=alpha'))).toBe('insights?plan=alpha');
-    // The announcements are the drawer now.
-    expect(redirectTarget(route('#/notifications'))).toBe('#/now?bell=1');
+    // The announcements are ONE PANEL of the drawer now, and the redirect names
+    // it: this address always meant the log of what was said, never the list of
+    // what is still waiting, and letting the drawer's own default decide would
+    // have quietly changed what the old link opens.
+    expect(redirectTarget(route('#/notifications'))).toBe('#/now?bell=1&panel=announcements');
+    // Phase 8: the departures board and the Pulse are two SECTIONS of Now, so
+    // each keeps its meaning in `?focus=` rather than landing on the top of a
+    // page that answers four questions.
+    expect(redirectTarget(route('#/ready'))).toBe('#/now?focus=next');
+    expect(redirectTarget(route('#/pulse'))).toBe('#/now?focus=lanes');
   });
 
   it('leaves the notification SETTINGS page alone — only the bare head retired', () => {
@@ -93,9 +101,10 @@ describe('the aliases', () => {
   });
 
   it('does not redirect a page whose new home has not been built', () => {
-    // Now absorbs these in Phase 8, Settings grows an MCP section in Phase 11.
-    // Until then a redirect would be a broken link with extra steps.
-    for (const hash of ['#/ready', '#/pulse', '#/mcp']) {
+    // Settings grows an MCP section in Phase 11. Until then a redirect would be
+    // a broken link with extra steps — which is the rule `#/ready` and
+    // `#/pulse` waited on until Phase 8 built the sections that answer them.
+    for (const hash of ['#/mcp']) {
       expect(redirectTarget(route(hash)), hash).toBeNull();
     }
   });

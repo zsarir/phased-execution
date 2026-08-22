@@ -608,7 +608,9 @@ describe('the alerts page', () => {
 
     expect(await screen.findByRole('heading', { name: 'Alerts' })).toBeTruthy();
     const link = screen.getByRole('link', { name: /open the announcements/i });
-    expect(link.getAttribute('href')).toBe('#/now?bell=1');
+    // The panel is named: the drawer opens on Needs you by default, and this
+    // link is about the announcements.
+    expect(link.getAttribute('href')).toBe('#/now?bell=1&panel=announcements');
     // No inbox on this page any more — not a row, not a tab.
     expect(screen.queryByRole('tab', { name: 'Inbox' })).toBeNull();
   });
