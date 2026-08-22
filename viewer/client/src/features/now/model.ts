@@ -30,6 +30,7 @@
  *     about the best next move is the defect that made having both a mistake.
  */
 
+import { STALL_DEFAULTS } from '@shared/attention-model.js';
 import { isClosed } from '@/lib/closure';
 import type {
   ChildRef,
@@ -175,7 +176,11 @@ const LANE_STATUSES = new Set([
  * The record's copy is what the server itself falls back to; the row draws it
  * through `Heartbeat`, which reports silence rather than pretending to a pulse.
  */
-export function nowLanes(runs: readonly RunState[], details: Map<string, PlanDetail> = new Map()): NowLane[] {
+export function nowLanes(
+  runs: readonly RunState[],
+  details: Map<string, PlanDetail> = new Map(),
+  now = Date.now(),
+): NowLane[] {
   const out: NowLane[] = [];
 
   for (const run of runs) {
@@ -219,20 +224,30 @@ export function nowLanes(runs: readonly RunState[], details: Map<string, PlanDet
     }
   }
 
-  return out.sort(laneOrder);
+  return out.sort((a, b) => laneOrder(a, b, now));
 }
 
 /**
  * Worst first, then oldest.
  *
- * A stalled lane outranks a healthy one however long the healthy one has been
- * going: the whole reason to look at this list is to find the one that is not
- * working. Within a rank the oldest leads, for the same reason `sortInbox`
- * puts the oldest ask first — the newest thing is the one you already know
- * about.
+ * A lane that is not moving outranks a healthy one however long the healthy
+ * one has been going: the whole reason to look at this list is to find the one
+ * that is not working. Within a rank the oldest leads, for the same reason
+ * `sortInbox` puts the oldest ask first — the newest thing is the one you
+ * already know about.
+ *
+ * ⚠️ **"Not moving" is TWO facts, and reading only the first is the defect
+ * this comment exists for.** `liveness.stall` is the runner's own record,
+ * written by a 60-second ticker; `liveness.lastOutputAt` is the raw clock the
+ * row's heartbeat draws from. Seen live on the Phase 8 tour: a lane silent for
+ * 34 minutes with no `stall` record yet sat BELOW a healthy one, while the
+ * heartbeat beside it read `silent 34:29` and the inbox above it carried a
+ * stall row about that very phase — three surfaces on one screen, two saying
+ * "this one" and the ordering saying "not especially". The CLOCK decides the
+ * order; the record only supplies the badge's word.
  */
-export function laneOrder(a: NowLane, b: NowLane): number {
-  const rank = laneRank(a) - laneRank(b);
+export function laneOrder(a: NowLane, b: NowLane, now = Date.now()): number {
+  const rank = laneRank(a, now) - laneRank(b, now);
   if (rank !== 0) return rank;
   const at = Date.parse(a.startedAt ?? '');
   const bt = Date.parse(b.startedAt ?? '');
@@ -242,8 +257,21 @@ export function laneOrder(a: NowLane, b: NowLane): number {
   return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
 }
 
-function laneRank(lane: NowLane): number {
-  if (lane.liveness?.stall) return 0;
+/**
+ * Silent past the runner's own floor, by the lane's own clock.
+ *
+ * `STALL_DEFAULTS.stallSilentMs` — the same constant the detector uses and the
+ * same one the row's `Heartbeat` stops pulsing at, so the order, the dot and
+ * the push notification cannot disagree about when silence begins.
+ */
+export function laneSilent(lane: NowLane, now = Date.now()): boolean {
+  if (lane.status !== 'running') return false;
+  const last = Date.parse(lane.liveness?.lastOutputAt ?? '');
+  return Number.isFinite(last) && now - last >= STALL_DEFAULTS.stallSilentMs;
+}
+
+function laneRank(lane: NowLane, now: number): number {
+  if (lane.liveness?.stall || laneSilent(lane, now)) return 0;
   if (lane.frozen) return 1;
   if (lane.status === 'running' || lane.status === 'verifying') return 2;
   return 3;

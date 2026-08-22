@@ -69,11 +69,14 @@ describe('a lane row', () => {
   it('says "no ETA" rather than computing one — the estimate is the server’s', () => {
     mount();
     expect(screen.getByText('no ETA')).toBeTruthy();
-    // With one, it is shown verbatim: the label is the server's own words.
+    // With one, it is shown VERBATIM — the label is the server's own words and
+    // already carries its hedge. Prefixing a second one printed `~~45 min` on
+    // the live page, which reads as a typo rather than as an estimate.
     mount({
-      lanes: [lane({ eta: { phase: 4, weight: 40_000, estMs: 3_600_000, basis: 'plan', label: '1h' } })],
+      lanes: [lane({ eta: { phase: 4, weight: 40_000, estMs: 3_600_000, basis: 'plan', label: '~1 h' } })],
     });
-    expect(screen.getAllByText('~1h').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('~1 h').length).toBeGreaterThan(0);
+    expect(screen.queryByText('~~1 h')).toBeNull();
   });
 
   it('stops the heartbeat pulsing once the silence passes the stall floor', () => {

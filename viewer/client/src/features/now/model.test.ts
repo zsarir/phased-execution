@@ -28,6 +28,7 @@ import {
   inboxCounts,
   isClaimed,
   isLiveRun,
+  laneSilent,
   load,
   needsYouCount,
   nowLanes,
@@ -216,6 +217,41 @@ describe('which lanes are running now', () => {
     ]);
     // The whole reason to look at this list is to find the one not working.
     expect(lanes.map((l) => l.phase)).toEqual([4, 2]);
+  });
+
+  it('ranks a lane the CLOCK calls silent as badly as one the runner recorded', () => {
+    // Seen live: the runner's 60-second ticker had not written a `stall` for a
+    // lane silent for 34 minutes, so the ordering called it an ordinary running
+    // lane while the heartbeat beside it and the inbox above it both said
+    // otherwise. The clock is what decides the order.
+    const now = Date.UTC(2026, 7, 20, 10, 0);
+    const lanes = nowLanes(
+      [
+        run({
+          phases: {
+            '2': record({ phase: 2, startedAt: '2026-08-20T06:00:00.000Z' }) as never,
+            '4': record({
+              phase: 4,
+              startedAt: '2026-08-20T09:00:00.000Z',
+              liveness: {
+                phase: 4,
+                // 34 minutes, and no `stall` record at all.
+                lastOutputAt: '2026-08-20T09:26:00.000Z',
+                turnsSinceLastTool: 0,
+                commitsSinceStart: 0,
+                treeDirty: false,
+              },
+            }) as never,
+          },
+        }),
+      ],
+      new Map(),
+      now,
+    );
+    expect(lanes.map((l) => l.phase)).toEqual([4, 2]);
+    expect(laneSilent(lanes[0], now)).toBe(true);
+    // And a lane that IS talking is not dragged up with it.
+    expect(laneSilent(lanes[1], now)).toBe(false);
   });
 
   it('orders equals oldest first, and a lane with no clock last', () => {

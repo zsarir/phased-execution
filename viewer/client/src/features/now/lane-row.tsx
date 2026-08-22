@@ -114,7 +114,10 @@ export function LaneRow({
               mono
               title={`The server's estimate for a phase this size, from a ${lane.eta.basis} rate reading. A range, never a promise.`}
             >
-              ~{lane.eta.label}
+              {/* `PhaseEta.label` carries its own hedge — it arrives as `~45 min`.
+                  Prefixing a second one printed `~~45 min` on the live page,
+                  which reads as a typo rather than as an estimate. */}
+              {lane.eta.label}
             </Badge>
           ) : (
             <span className="text-2xs text-ink-faint" title="No estimate: this plan has no rate reading yet.">

@@ -229,7 +229,10 @@ export function NextDeparture({ d, allowRun }: { d: Departure; allowRun: boolean
               {d.branch && (
                 <span className="flex min-w-0 items-center gap-1">
                   <GitBranch size={11} aria-hidden />
-                  <span className="truncate">{d.branch}</span>
+                  {/* A plan's Branch line is PROSE on disk — the live board
+                      showed one as ``pe/x` in each code repo, plus one **draft
+                      PR per repo**`, asterisks and backticks and all. */}
+                  <span className="truncate">{plainText(d.branch)}</span>
                 </span>
               )}
               {d.skills.length > 0 && <span>skills: {d.skills.join(', ')}</span>}
@@ -478,10 +481,14 @@ export function NextUp({ departures, plans, allowRun, loading, focused = false }
             listbox, and a select sizes to its widest option — which is the
             423px-inside-390px overflow Phase 6 measured. The board's own
             controls used the same shape below the shell breakpoint. */}
+        {/* NOT `shrink-0`, and `ml-auto` only where there is room to push
+            against: five chips plus `shrink-0` measured 386px inside a 390px
+            main and pushed it 8px wide. They wrap onto their own line on a
+            phone instead. */}
         <div
           role="group"
           aria-label="Order the board by"
-          className="ml-auto flex shrink-0 flex-wrap items-center gap-1"
+          className="flex min-w-0 flex-wrap items-center gap-1 sm:ml-auto"
         >
           {RANKS.map((option) => (
             <Button
