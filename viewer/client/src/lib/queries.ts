@@ -114,6 +114,21 @@ export const keys = {
   rulings: (slug: string) => ['rulings', slug] as const,
   /** Money, instance-wide: today against the day cap, per run, and the 7-day series. */
   spend: () => ['spend'] as const,
+  /**
+   * The unified attention inbox — everything that needs a person.
+   *
+   * A prefix with the `all` flag under it, so the Now section (open items) and
+   * the bell drawer's "including acknowledged" view are two cache entries that
+   * ONE `keys.inbox()` invalidation refreshes together. Answering a card on a
+   * phone has to take the row off the laptop, and the two surfaces are usually
+   * both mounted.
+   *
+   * Deliberately NOT `keys.notifications()`: that is the LOG of what the
+   * console announced, and this is the list of what is still waiting. They
+   * were one word apart and two different questions, which is how the badge
+   * ended up counting the wrong one.
+   */
+  inbox: (all?: boolean) => (all == null ? (['inbox'] as const) : (['inbox', all] as const)),
   auth: () => ['auth'] as const,
   accounts: () => ['accounts'] as const,
   mcp: () => ['mcp'] as const,
@@ -268,13 +283,13 @@ export const EVENT_EFFECTS: Record<SseEvent, Effect> = {
   'notification:read': { invalidate: [keys.notifications()], patch: patchUnread },
   'notification:cleared': { invalidate: [keys.notifications()], patch: patchUnread },
 
-  /* ---- the unified work inbox (Phase 4 emits it; declared here) ----
-     Approvals and the notification inbox are the two surfaces its rows are
-     assembled from today, so both are invalidated. When `/api/inbox` lands it
-     gets its own key and this gains it — the point of declaring the event now
-     is that the shell's badge cannot go stale the day the server starts
-     emitting. */
-  inbox: { invalidate: [keys.approvals(), keys.notifications()] },
+  /* ---- the unified work inbox ----
+     `Service.emit()` debounces this one, so it arrives when something a person
+     is waiting on actually changed. All three keys move together because a
+     single fact reaches the operator through all three surfaces: the inbox
+     rows, the approval cards the run page still draws, and the badge that
+     `/api/state` feeds. */
+  inbox: { invalidate: [keys.inbox(), keys.approvals(), keys.notifications()] },
 
   /* ---- sessions ----
      The list rides on the event, so this is a cache write rather than a
@@ -819,6 +834,30 @@ export function useSpend(enabled = true) {
 }
 
 /**
+ * Everything that needs a person, in one list.
+ *
+ * `all` includes what has been acknowledged — the drawer's "show everything"
+ * view. Acknowledgement is an annotation and never a resolution, so an acked
+ * row is still a row; it is only hidden by default.
+ *
+ * `placeholderData` because the SSE `inbox` event invalidates this whenever
+ * anything moves, and a list that blanked to a skeleton every time a run
+ * emitted a phase would be unreadable exactly while there is something to
+ * read. `retry: false`: a console whose server predates the endpoint answers
+ * 404 and will keep answering 404 — the section says so instead of asking
+ * again at somebody.
+ */
+export function useAttentionInbox(all = false, enabled = true) {
+  return useQuery({
+    queryKey: keys.inbox(all),
+    queryFn: () => api.inbox(all),
+    enabled,
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
+/**
  * Whether the CLI is signed in.
  *
  * A signed-out session does not look like a failure: it reports success, uses
@@ -951,10 +990,15 @@ export interface ShellCounts {
    * How many things are waiting on a PERSON — Now's badge, and the only count
    * that wears the accent hue.
    *
-   * Pending approvals today. Phase 4 builds `/api/inbox` — one deduped list of
-   * approvals, errands, gates and sign-ins — and this becomes its length; the
-   * name is `needsYou` rather than `approvals` precisely so that widening what
-   * it counts does not mean renaming the badge on every surface that reads it.
+   * The unified inbox's length, minus its `fyi` rows: a ruling worth reading
+   * and a lock nobody is queued behind are real items and neither is a person
+   * being waited on. The name was `needsYou` rather than `approvals` from the
+   * first day precisely so widening what it counts did not mean renaming the
+   * badge on every surface that reads it — and this is that widening.
+   *
+   * Falls back to the pending approvals when no inbox is passed (a server too
+   * old for `/api/inbox`, or a test that hands neither), which is exactly what
+   * this counted before.
    */
   needsYou: number;
   /** Every live session, of either kind — the Sessions destination's badge. */
@@ -986,6 +1030,11 @@ export function shellCounts(
   // the operator already said no to it, and nagging about a thing they turned
   // off is how a badge becomes something people stop reading.
   mcp?: readonly { enabled: boolean; status: string; toolsChanged?: unknown }[],
+  // The unified inbox, when the server has one. `undefined` — an older server,
+  // or a still-loading first paint — falls back to the approvals count rather
+  // than to zero: a badge that reads 0 while a session is parked on a
+  // permission card is worse than one that under-counts.
+  inbox?: readonly { severity: string }[],
 ): ShellCounts {
   const list = plans ?? [];
   const live = (sessions ?? []).filter((session) => !session.exited);
@@ -1002,7 +1051,9 @@ export function shellCounts(
     ready: list.reduce((n, p) => n + (isClosed(p) ? 0 : (p.ready?.length ?? 0)), 0),
     approvals: (approvals ?? []).filter((a) => a.status === 'pending').length,
     unread,
-    needsYou: (approvals ?? []).filter((a) => a.status === 'pending').length,
+    needsYou: inbox
+      ? inbox.filter((item) => item.severity !== 'fyi').length
+      : (approvals ?? []).filter((a) => a.status === 'pending').length,
     sessions: live.length,
     agentSessions: live.filter((session) => session.kind === 'claude').length,
     terminalSessions: live.filter((session) => (session.kind ?? 'shell') === 'shell').length,

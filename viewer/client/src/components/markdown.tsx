@@ -118,7 +118,9 @@ export function MarkdownInline({ text, className }: MarkdownProps) {
  * Markdown with the emphasis characters removed instead of interpreted — for the
  * places a goal or an exit criterion has to fit one line of a table cell, where
  * `**bold**` reads as literal asterisks and a real `<strong>` reads as shouting.
+ *
+ * It LIVES in `@/lib/plain-text` and is re-exported here so that every caller
+ * that only wants text can import it without dragging `marked` into its chunk —
+ * which is the whole Now page. Existing importers are unchanged.
  */
-export function plainText(markdown: string | undefined): string {
-  return (markdown ?? '').replace(/[*`_]/g, '').replace(/\s+/g, ' ').trim();
-}
+export { plainText } from '@/lib/plain-text';

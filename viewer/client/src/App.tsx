@@ -6,6 +6,7 @@ import { onSse, useSseStatus } from '@/lib/sse';
 import { useConsoleStopped } from '@/lib/shutdown';
 import {
   shellCounts,
+  useAttentionInbox,
   useApprovals,
   useConsoleState,
   useLiveData,
@@ -125,8 +126,21 @@ export function App() {
   // rather than something the Sessions page knows while you are on it.
   const { data: sessions } = useSessions(state);
   const { data: mcp } = useMcp();
+  // The badge's own source since Phase 8: one deduped list of everything that
+  // needs a person, rather than the approvals count standing in for it. Held
+  // at the SHELL because the number is on the rail and the tab bar, which are
+  // on screen whatever page you are on — and because the bell drawer renders
+  // the same rows over any of them.
+  const { data: inbox } = useAttentionInbox(false, Boolean(state) && state?.autopilot !== false);
 
-  const counts = shellCounts(plans, approvals, state?.unread ?? 0, sessions?.sessions, mcp?.servers);
+  const counts = shellCounts(
+    plans,
+    approvals,
+    state?.unread ?? 0,
+    sessions?.sessions,
+    mcp?.servers,
+    inbox?.items,
+  );
 
   // The queries are invalidated by the stream, not by a timer, so nothing
   // retries on its own once this one has failed. Coming back onto a network is

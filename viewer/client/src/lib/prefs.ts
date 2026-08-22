@@ -47,10 +47,26 @@ export interface Prefs {
   plansLayout: 'board' | 'table';
   /** Plan list: one flat list, or sectioned by status or by repo. */
   plansGroup: 'none' | 'status' | 'repo';
-  /** How the ready board is ordered — see `views/ready/model.ts` `RANKS`. */
+  /** How Next up is ordered — see `features/now/model.ts` `RANKS`. */
   readyRank: string;
-  /** Ready board: one flat queue, or grouped under each plan. */
+  /**
+   * Ready board: one flat queue, or grouped under each plan.
+   *
+   * ⚠️ Read by nothing since Phase 8 absorbed `#/ready` into Now, whose Next up
+   * section has one shape. Kept rather than deleted: `setPrefs()` writes the
+   * whole object, so every browser that has ever changed a preference already
+   * carries this key, and removing it from `Prefs` would not remove it from
+   * their storage — it would only stop TypeScript describing what is there.
+   */
   readyGroup: boolean;
+  /**
+   * Now's inbox shows acknowledged rows too.
+   *
+   * Persisted rather than component state because Now remounts on every
+   * navigation, and an operator who turned acknowledged rows on to look for
+   * one would have to turn them on again after every click.
+   */
+  nowShowAcked: boolean;
   /** How the fleet is ordered — see `views/runs/model.ts` `SORTS`. */
   runsSort: string;
   /** Which outcome the fleet is filtered to; empty is every outcome. */
@@ -112,6 +128,9 @@ const DEFAULTS: Prefs = {
   plansLayout: 'board',
   plansGroup: 'none',
   readyRank: 'leverage',
+  // Off: acknowledged is "seen, not cleared", and a list that shows everything
+  // by default is a list where acknowledging changes nothing.
+  nowShowAcked: false,
   // Grouped by PLAN by default: operators think "which plan boards next", not
   // in individual phases across plans (the flat board remains one toggle away).
   readyGroup: true,
