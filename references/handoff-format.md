@@ -124,7 +124,8 @@ Each fenced boot prompt is copy-pasted verbatim into a fresh session. Per ready 
     `all` ⇒ exclusive; disjoint ⇒ parallel. (Handoff/lock commits in the docs repo are NOT part of
     your scope — pull --rebase and retry up to 3 times if one races.)
 
-    Then build the pP.task* list and implement Phase P to its exit criteria.
+    Then build the pP.task* list — as a REAL task list, through the task tool …
+    Then implement Phase P to its exit criteria.
 
     When done, the deliverable is the HANDOFF — the board reads status: from it, and a
     phase with no handoff does not exist to the board. Scaffold it with:

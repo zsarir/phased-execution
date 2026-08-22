@@ -1549,7 +1549,12 @@ case "$mode" in
     printf '`all` ⇒ exclusive; disjoint ⇒ parallel. (Handoff/lock commits in the docs repo are NOT\n'
     printf 'part of your scope — if a commit or pull races another session, pull --rebase and retry\n'
     printf 'up to 3 times; git'\''s own index.lock is the serialization there.)\n'
-    printf '\nThen build the p%s.task* list and implement Phase %s to its exit criteria.\n' "$p" "$p"
+    printf '\nThen build the p%s.task* list — as a REAL task list, through the task tool\n' "$p"
+    printf '(TodoWrite, or TaskCreate/TaskUpdate), not as prose and not as an edit to the plan.\n'
+    printf 'Phase Console renders that list live as "What it is doing", and it is the only way\n'
+    printf 'anyone watching an unattended session can see what it thinks it is doing; a session\n'
+    printf 'that never writes one shows them an empty panel for hours. Keep it current as you go.\n'
+    printf 'Then implement Phase %s to its exit criteria.\n' "$p"
     pad="$(printf '%02d' "$p")"
     printf '\nWhen done, the deliverable is the HANDOFF — the board reads `status:` from it, and a\n'
     printf 'phase with no handoff does not exist to the board. Scaffold it with:\n'
