@@ -80,7 +80,16 @@ export const accountsApi = {
     post<{ ok: boolean; reason?: string; run?: RunState | null }>(`/api/run/${q(slug)}/switch-account`, {
       accountId,
     }),
-  /** "I signed in over there — look again." Re-reads one account's identity. */
+  /**
+   * "I signed in over there — look again." Re-reads an account's identity AND
+   * awaits a fresh usage poll, so the answer is the new numbers rather than
+   * the ones the press was meant to replace.
+   *
+   * With no id it re-reads EVERY account and answers with all of them — the
+   * one press a panel offers.
+   */
   accountRefresh: (accountId?: string) =>
-    post<{ account: AccountView }>('/api/accounts/refresh', { accountId }),
+    post<{ account?: AccountView; accounts?: AccountView[] }>('/api/accounts/refresh', {
+      ...(accountId ? { accountId } : {}),
+    }),
 };

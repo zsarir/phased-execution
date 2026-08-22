@@ -1,13 +1,16 @@
 /**
  * "QA this phase" — the button's three states, and the recorded verdict.
  *
- * The dialog itself moved into `components/launch-dialog.tsx`, where every AI
- * launch now shares one field matrix (model, effort, permissions, skills, the
- * attach-defaults toggle) seeded from the Automation preferences. What stays
- * here is what is QA-specific and public: the `QaTarget` shape callers build,
- * the three-state button, and the verdict chip. `QaDialog` remains exported as
- * a thin wrapper so nothing that renders it — tests included — has to know the
- * dialog was unified.
+ * The dialog itself is `LaunchDialog` over `RunSetup` in `qa` mode, where
+ * every AI launch shares one field matrix (model, effort, permissions, skills,
+ * the attach-defaults toggle) seeded from the Automation preferences. What
+ * stays here is what is QA-specific and public: the `QaTarget` shape callers
+ * build, the three-state button, and the verdict chip.
+ *
+ * The `QaDialog` wrapper is gone (Phase 6): it existed to spare callers from
+ * knowing the dialog had been unified, and it had exactly one caller left —
+ * this file — plus its own test. A wrapper whose only job is to hide a
+ * consolidation is a place for the two to drift.
  */
 
 import { useState } from 'react';
@@ -18,24 +21,6 @@ import { isVerdict } from '@/lib/qa';
 import { LaunchDialog, type QaTarget } from '@/components/launch-dialog';
 
 export type { QaTarget } from '@/components/launch-dialog';
-
-export function QaDialog({
-  target,
-  allowWrites,
-  onClose,
-}: {
-  target: QaTarget;
-  /** Activation writes `test-status.md`, so it is gated separately from minting. */
-  allowWrites?: boolean;
-  onClose: () => void;
-}) {
-  return (
-    <LaunchDialog
-      request={{ kind: 'qa', target, ...(allowWrites !== undefined ? { allowWrites } : {}) }}
-      onClose={onClose}
-    />
-  );
-}
 
 /**
  * Start a review, or go to the one already running.
@@ -87,7 +72,12 @@ export function QaButton({
       >
         <ShieldCheck size={13} aria-hidden /> {label}
       </Button>
-      {open && <QaDialog target={target} allowWrites={allowWrites} onClose={() => setOpen(false)} />}
+      {open && (
+        <LaunchDialog
+          request={{ kind: 'qa', target, ...(allowWrites !== undefined ? { allowWrites } : {}) }}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </>
   );
 }

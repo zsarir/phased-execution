@@ -1032,6 +1032,14 @@ export async function handleApi(
         const refusal = guardCsrf(req);
         if (refusal) { json(res, 403, { error: refusal }); return true; }
         const body = await readBody(req);
+        // No id means EVERY account. The panels ask that way — one press to
+        // re-read the whole picture is the question an operator actually has,
+        // and asking per-account in a loop is how a five-account console
+        // spends its courtesy budget on a rate limit.
+        if (body.accountId === undefined || body.accountId === null || body.accountId === '') {
+          json(res, 200, { accounts: await service.refreshAllAccounts() });
+          return true;
+        }
         const id = typeof body.accountId === 'string' && ACCOUNT_ID_RE.test(body.accountId)
           ? body.accountId : DEFAULT_ACCOUNT_ID;
         const view = await service.refreshAccount(id);

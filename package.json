@@ -50,6 +50,7 @@
     "viewer/shared/ladder-model.js",
     "viewer/shared/attention-model.js",
     "viewer/shared/evidence-model.js",
+    "viewer/shared/run-settings.js",
     "viewer/scripts/check-stamp.mjs",
     "viewer/client/dist/",
     "viewer/deploy/"

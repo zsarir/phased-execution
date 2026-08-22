@@ -151,7 +151,6 @@ export function PhaseTable({
   planPhases,
   live,
   allowRun,
-  onAct,
   recovery,
   queue,
   scopes,
@@ -162,7 +161,6 @@ export function PhaseTable({
   planPhases: PhaseView[];
   live: boolean;
   allowRun: boolean;
-  onAct: (label: string, fn: () => Promise<unknown>) => Promise<void>;
   recovery?: PhaseRecovery;
   /** The admission queue, for the phases of this plan that are in it. */
   queue?: QueueEntry[] | undefined;
@@ -257,7 +255,6 @@ export function PhaseTable({
                   run={run}
                   live={live}
                   allowRun={allowRun}
-                  onAct={onAct}
                   recovery={recovery}
                   onRunAlone={setLaunchPhase}
                   entry={queueEntryFor(queue, slug, p.phase)}
@@ -307,7 +304,6 @@ function PhaseRows({
   run,
   live,
   allowRun,
-  onAct,
   recovery,
   onRunAlone,
   entry,
@@ -319,7 +315,6 @@ function PhaseRows({
   run: RunState | null;
   live: boolean;
   allowRun: boolean;
-  onAct: (label: string, fn: () => Promise<unknown>) => Promise<void>;
   recovery?: PhaseRecovery;
   /** Opens the launch dialog scoped to this phase. */
   onRunAlone: (phase: number) => void;
@@ -546,28 +541,28 @@ function PhaseRows({
                 nothing to fix — done elsewhere
               </span>
             )}
-            {/* Disabled, not hidden. A button that vanishes when a phase is
-                claimed teaches nothing about why nothing can be started — the
-                whole complaint that put a Lock column on this table. It stays
-                in place, greyed, and says who holds it. */}
-            {(can.retry || (blockedRetry && allowRun)) && (
-              <Button
-                size="sm"
-                disabled={!can.retry}
-                title={
-                  can.retry
-                    ? "Clears this phase's failure and CONTINUES the run from here — a session starts, under normal admission."
-                    : heldTitle
-                }
-                onClick={() => void onAct('retry', () => api.runRetry(slug, p.phase))}
-              >
-                Retry
-              </Button>
-            )}
-            {can.skip && (
-              <Button size="sm" onClick={() => void onAct('skip', () => api.runSkip(slug, p.phase))}>
-                Skip
-              </Button>
+            {/* Every remedy on this row comes from the ONE renderer. It used to
+                hand-roll Retry and Skip beside a diagnosis panel that offered
+                the same two under different words, disabled by different rules
+                — which is how a claimed phase could show a live Retry here and
+                a greyed one there. `recoveryActionsFor` decides; the lock is
+                passed in so the model can disable-with-reason rather than hide,
+                the rule this table's Lock column exists for. */}
+            {(can.retry || can.skip || (blockedRetry && allowRun)) && (
+              <RecoveryActions
+                target={{ slug, phase: p.phase, ...(run?.id ? { runId: run.id } : {}) }}
+                ctx={{
+                  boardState: p.state,
+                  ...(run ? { run } : {}),
+                  // `resumable` here means "there is a checkpointed session to
+                  // pick up", which on a RECORD is exactly `resumeSessionId`.
+                  ...(r ? { record: { status: r.status, resumable: Boolean(r.resumeSessionId) } } : {}),
+                  ...(can.heldBy
+                    ? { lock: { holder: can.heldBy.owner, expired: Boolean(can.heldBy.expired) } }
+                    : {}),
+                }}
+                max={2}
+              />
             )}
             {(can.runAlone || blockedRunAlone) && (
               <Button

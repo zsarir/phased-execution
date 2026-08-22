@@ -39,8 +39,23 @@ import { RestartButton } from './restart';
 import { ShutdownButton } from './shutdown';
 import { LauncherCard } from './launcher';
 import { TailscaleCard } from './tailscale';
+import { MODELS as FALLBACK_MODELS } from '../run/defaults';
 
-const MODELS = ['', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-haiku-4-5'];
+/**
+ * The model lineup, from the server's own `offeredModels()` — the same list
+ * the launch form shows, falling back to this build's copy against an older
+ * server. This card used to carry a fourth hardcoded list of full ids
+ * (`claude-opus-5`, …), which missed every `[1m]` variant and would have gone
+ * stale the day the lineup moved; `single-source.test.ts` now refuses a fifth.
+ *
+ * A value already STORED is always offered, even when the current lineup does
+ * not name it: dropping it would silently re-point the preference at "each
+ * plan's own target" without saying so.
+ */
+function modelOptions(offered: readonly string[] | undefined, stored: string): string[] {
+  const list = offered?.length ? [...offered] : [...FALLBACK_MODELS];
+  return ['', ...list, ...(stored && !list.includes(stored) ? [stored] : [])];
+}
 
 const THEMES: [Theme, string][] = [
   ['system', 'Auto'],
@@ -292,7 +307,7 @@ export default function SettingsView() {
                 onChange={(event) => setPrefs({ model: event.target.value })}
                 className="min-h-(--tap-min) rounded border border-rule bg-ground px-2 text-sm text-ink"
               >
-                {MODELS.map((model) => (
+                {modelOptions(state.models, prefs.model).map((model) => (
                   <option key={model} value={model}>
                     {model || "each plan's own target"}
                   </option>

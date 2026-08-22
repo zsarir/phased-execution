@@ -141,19 +141,13 @@ export function NextSteps({
   planPhases,
   run,
   live,
-  allowRun,
   authFailure,
-  busy,
-  onRetry,
 }: {
   slug: string;
   planPhases: readonly PhaseView[];
   run: RunState | null;
   live: boolean;
-  allowRun: boolean;
   authFailure: boolean;
-  busy?: string | null | undefined;
-  onRetry: (phase: number) => void;
 }) {
   if (live) return null;
   const rows = nextStepRows(slug, planPhases, run);
@@ -178,7 +172,7 @@ export function NextSteps({
               </div>
               <p className="max-w-prose text-2xs text-ink-muted">{row.why}</p>
               <div className="flex flex-wrap items-center gap-1.5">
-                {(row.record || row.stuck) && (
+                {(row.record || row.stuck || row.retry === 'rechecks-gate') && (
                   <RecoveryActions
                     target={{ slug, phase: row.phase, ...(run?.id ? { runId: run.id } : {}) }}
                     ctx={
@@ -188,20 +182,19 @@ export function NextSteps({
                             record: row.record,
                             ...(authFailure ? { authFailure: true } : {}),
                           }
-                        : { boardState: 'stuck' }
+                        : row.stuck
+                          ? { boardState: 'stuck' }
+                          : // A gated row used to carry its own "Retry (re-checks
+                            // the gate)" button, which called `runRetry` — the
+                            // wrong verb under a misleading name, and the last
+                            // remedy rendered outside the shared model. A gate is
+                            // re-CHECKED: the synthetic record is what lets the
+                            // model say so, and Re-check leads because it starts
+                            // no session and costs nothing.
+                            { boardState: 'gated', record: { status: 'gated' } }
                     }
                     max={2}
                   />
-                )}
-                {row.retry === 'rechecks-gate' && (
-                  <Button
-                    size="sm"
-                    disabled={!allowRun || busy === 'retry'}
-                    title="Re-checks the gate and continues if it now holds — confirm the condition first; nothing here bypasses a gate."
-                    onClick={() => onRetry(row.phase)}
-                  >
-                    Retry (re-checks the gate)
-                  </Button>
                 )}
                 {row.readMore && (
                   <Button size="sm" variant="ghost" asChild>

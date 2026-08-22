@@ -14,6 +14,12 @@ import { TooltipProvider } from '@/components/ui';
 import type { PhaseView, RunState } from '@/lib/api';
 import { NextSteps, nextStepRows } from './next-steps';
 
+const { runRecheck } = vi.hoisted(() => ({ runRecheck: vi.fn() }));
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>();
+  return { ...actual, api: { ...actual.api, runRecheck } };
+});
+
 const phase = (over: Partial<PhaseView>): PhaseView =>
   ({
     phase: 1,
@@ -195,7 +201,7 @@ describe('NextSteps', () => {
   }
 
   it('renders a stuck phase with Repair the plan with a new agent, and a gated one with its confirmation chip', () => {
-    const onRetry = vi.fn();
+    runRecheck.mockResolvedValue({});
     mount(
       <NextSteps
         slug="demo"
@@ -217,9 +223,7 @@ describe('NextSteps', () => {
         ]}
         run={null}
         live={false}
-        allowRun
         authFailure={false}
-        onRetry={onRetry}
       />,
     );
 
@@ -234,8 +238,11 @@ describe('NextSteps', () => {
 
     expect(screen.getByText(/confirm the window/)).toBeInTheDocument();
     expect(screen.getByText(/needs your confirmation/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Retry \(re-checks the gate\)/i }));
-    expect(onRetry).toHaveBeenCalledWith(2);
+    // The gated row's own Retry button is gone: every remedy is rendered by
+    // `RecoveryActions` now, and a gate is RE-CHECKED rather than retried —
+    // which is also the verb the server has always had for it.
+    fireEvent.click(screen.getByRole('button', { name: /Re-check/i }));
+    expect(runRecheck).toHaveBeenCalledWith('demo', 2);
   });
 
   it('renders nothing while the run is live — the tabs are the truth then', () => {
@@ -245,9 +252,7 @@ describe('NextSteps', () => {
         planPhases={[phase({ phase: 5, state: 'stuck' })]}
         run={null}
         live
-        allowRun
         authFailure={false}
-        onRetry={() => {}}
       />,
     );
     expect(container).toBeEmptyDOMElement();

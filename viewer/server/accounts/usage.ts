@@ -102,10 +102,29 @@ export class UsagePoller {
     this.failures.delete(accountId);
   }
 
-  /** Ask now — a run just started, a login just completed. */
+  /** Ask now — a run just started, a login just completed. Fire and forget. */
   kick(accountId: string): void {
     if (this.stopped) return;
     this.schedule(accountId, 0);
+  }
+
+  /**
+   * Ask now and WAIT for the answer.
+   *
+   * `kick` schedules a poll and returns immediately, which is right for the
+   * places that only want the numbers to be fresh soon. It is wrong for a
+   * Refresh BUTTON: the handler kicked, read the cache the poll had not
+   * replaced yet, and answered with the same figures it was asked to replace —
+   * so the button appeared to do nothing, forever. This is the awaiting
+   * version, and it is what every operator-facing refresh calls.
+   *
+   * Single-flight is inherited from `poll`, so two people pressing at once
+   * share one request rather than racing the courtesy budget.
+   */
+  async refresh(accountId: string): Promise<AccountUsage | undefined> {
+    if (this.stopped) return this.cache.get(accountId);
+    await this.poll(accountId);
+    return this.cache.get(accountId);
   }
 
   stop(): void {

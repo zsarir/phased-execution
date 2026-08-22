@@ -1,5 +1,6 @@
 /**
- * Per-phase model, effort and skills.
+ * Per-phase overrides — what ONE phase runs as, when the run's answer is wrong
+ * for it.
  *
  * Three things can decide what a phase runs as, and this table says which did.
  * The plan's own `**Model:**` / `**Effort:**` bullets have been in the format
@@ -7,20 +8,29 @@
  * Opus quietly ran on whatever the run defaulted to. Here they show as the
  * *inherited* value, and choosing something overrules them for this run only —
  * per field, so setting a model does not discard an effort the plan asked for.
+ *
+ * Moved here from `views/run/phase-matrix.tsx` in Phase 6: this is a part of
+ * RunSetup, not of the run page, and every mode that configures a whole run
+ * renders it. Two overrides the server has always accepted joined it in the
+ * same move — `tools` and `permissionMode` (`PhaseOptions`, filtered by
+ * `phaseOptions()` in the route) — which the matrix had simply never offered,
+ * so a plan could name a phase's tool list and no surface could set one.
  */
 
 import { useState } from 'react';
 import { Chip, TBody, TD, TH, THead, TR, Table, TableWrap } from '@/components/ui';
-import { EFFORTS, MODELS, effortAlias, modelAlias } from './defaults';
-import { SkillPicker } from './skill-picker';
-import { McpPicker } from './mcp-picker';
+import { EFFORTS, effortAlias, modelAlias } from '@/views/run/defaults';
+import { SkillPicker } from '@/views/run/skill-picker';
+import { McpPicker } from '@/views/run/mcp-picker';
+import { PERMISSION_CHOICES, SESSION_PERMISSIONS } from './modes';
 import type { McpServerView, PhaseOptions, PhaseView, SkillInfo } from '@/lib/api';
 
-export function PhaseMatrix({
+export function PerPhase({
   planPhases,
   overrides,
   runModel,
   runEffort,
+  models,
   skills,
   runSkills = [],
   servers = [],
@@ -32,6 +42,8 @@ export function PhaseMatrix({
   overrides: Record<string, PhaseOptions>;
   runModel: string;
   runEffort: string;
+  /** The model names to offer — the server's own list, via RunSetup. */
+  models: readonly string[];
   skills: SkillInfo[];
   /** What the run gives every phase — what the Skip box turns off for one. */
   runSkills?: string[];
@@ -44,8 +56,9 @@ export function PhaseMatrix({
 }) {
   const [skillsFor, setSkillsFor] = useState<number | null>(null);
   const [mcpFor, setMcpFor] = useState<number | null>(null);
-  // Phase, Title, Model, Effort, plus whichever optional columns render.
-  const columns = 4 + (skills.length ? 1 : 0) + (servers.length ? 1 : 0);
+  const [moreFor, setMoreFor] = useState<number | null>(null);
+  // Phase, Title, Model, Effort, More, plus whichever optional columns render.
+  const columns = 5 + (skills.length ? 1 : 0) + (servers.length ? 1 : 0);
   if (!planPhases.length) return null;
 
   const set = (phase: number, key: keyof PhaseOptions, value: string | string[] | boolean) => {
@@ -87,6 +100,7 @@ export function PhaseMatrix({
                 <TH scope="col">Effort</TH>
                 {skills.length > 0 && <TH scope="col">Skills</TH>}
                 {servers.length > 0 && <TH scope="col">MCP</TH>}
+                <TH scope="col">More</TH>
               </TR>
             </THead>
             <TBody>
@@ -117,7 +131,7 @@ export function PhaseMatrix({
                         className="h-7 w-28 rounded border border-rule bg-ground px-1 text-2xs disabled:opacity-50"
                       >
                         <option value="">{inheritModel}</option>
-                        {MODELS.map((m) => (
+                        {models.map((m) => (
                           <option key={m} value={m}>
                             {m}
                           </option>
@@ -211,6 +225,18 @@ export function PhaseMatrix({
                         </div>
                       </TD>
                     )}
+                    <TD>
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        aria-expanded={moreFor === p.phase}
+                        onClick={() => setMoreFor(moreFor === p.phase ? null : p.phase)}
+                        className="rounded border border-rule px-1.5 py-0.5 text-2xs disabled:opacity-50"
+                        title="Permission mode and tool list for this phase alone."
+                      >
+                        {own.permissionMode || own.tools?.length ? 'set' : 'add'}
+                      </button>
+                    </TD>
                   </TR>,
                   skillsFor === p.phase ? (
                     <TR key={`${p.phase}-skills`}>
@@ -254,6 +280,59 @@ export function PhaseMatrix({
                             <option value="require">park the phase</option>
                           </select>
                         </label>
+                      </TD>
+                    </TR>
+                  ) : null,
+                  moreFor === p.phase ? (
+                    <TR key={`${p.phase}-more`}>
+                      <TD colSpan={columns}>
+                        <div className="flex flex-col gap-2">
+                          <label className="flex flex-wrap items-center gap-2 text-2xs">
+                            <span className="text-ink-faint">Permission mode for phase {p.phase} only</span>
+                            <select
+                              value={own.permissionMode ?? ''}
+                              disabled={disabled}
+                              onChange={(e) => set(p.phase, 'permissionMode', e.target.value)}
+                              className="rounded border border-rule bg-ground px-1.5 py-0.5 text-2xs text-ink"
+                            >
+                              <option value="">inherit (the run&rsquo;s profile)</option>
+                              {SESSION_PERMISSIONS.map((choice) => (
+                                <option key={choice} value={choice}>
+                                  {PERMISSION_CHOICES[choice]}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="flex flex-col gap-1 text-2xs">
+                            <span className="text-ink-faint">
+                              Tools for phase {p.phase} only — comma separated, empty inherits
+                            </span>
+                            <input
+                              type="text"
+                              value={(own.tools ?? []).join(', ')}
+                              disabled={disabled}
+                              placeholder="Read, Edit, Bash"
+                              aria-label={`Tools for phase ${p.phase}`}
+                              onChange={(e) =>
+                                set(
+                                  p.phase,
+                                  'tools',
+                                  e.target.value
+                                    .split(',')
+                                    .map((name) => name.trim())
+                                    .filter(Boolean),
+                                )
+                              }
+                              className="max-w-md rounded border border-rule bg-ground px-1.5 py-1 text-2xs text-ink"
+                            />
+                            <span className="text-ink-faint">
+                              The CLI&rsquo;s <code className="font-mono">--tools</code> list. Naming any
+                              turns every other tool OFF for this phase, so a phase told only
+                              &ldquo;Read&rdquo; cannot write — useful for a review, and a way to strand a
+                              build phase.
+                            </span>
+                          </label>
+                        </div>
                       </TD>
                     </TR>
                   ) : null,

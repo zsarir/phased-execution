@@ -24,6 +24,7 @@ import { useEffect, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { keys, useConsoleState } from '@/lib/queries';
 import { api, ladderPrefs, LADDER_PREF_DEFAULTS } from '@/lib/api';
+import { STALL_DEFAULTS } from '@shared/attention-model.js';
 import { Button, Card, CardBody, CardHeader, CardTitle, Skeleton, toast } from '@/components/ui';
 
 /** Minutes ⇄ milliseconds for the two interval knobs; 0 stays 0 ("off" / "forever"). */
@@ -128,6 +129,17 @@ export function LadderCard() {
   if (isPending && !state) return <Skeleton className="h-64" />;
 
   const prefs = ladderPrefs(state);
+  // Same `?? shipped` rule as `ladderPrefs`, for the three keys the stall
+  // detector reads. A console whose config predates them reads the defaults
+  // rather than zero, which would mean "never notice".
+  const stored = state?.prefs ?? {};
+  const positive = (value: unknown, fallback: number): number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
+  const stall = {
+    stallSilentMs: positive(stored.stallSilentMs, STALL_DEFAULTS.stallSilentMs),
+    stallSpinTurns: positive(stored.stallSpinTurns, STALL_DEFAULTS.stallSpinTurns),
+    stallStalemateAttempts: positive(stored.stallStalemateAttempts, STALL_DEFAULTS.stallStalemateAttempts),
+  };
   const busy = save.isPending;
   const row = 'flex flex-wrap items-center justify-between gap-2';
   const onOff = (value: boolean, key: string) => (
@@ -232,6 +244,44 @@ export function LadderCard() {
           zero="0 never raises — a spent budget halts with an errand at once."
           disabled={busy}
           onSave={num('budgetAutoRaisePct')}
+        />
+
+        {/* Phase 5 gave the console a way to notice a lane that has stopped
+            being work. These are its three thresholds — and they are
+            thresholds, not policy: crossing one announces and journals it, and
+            what happens next is still a person's press. */}
+        <h3 className="mt-1 text-2xs font-medium uppercase tracking-[0.14em] text-ink-faint">
+          When a lane stops being work
+        </h3>
+        <NumberField
+          id="stall-silent"
+          label="Call a lane silent after"
+          value={minutes(stall.stallSilentMs)}
+          unit="min"
+          hint={`No output at all for this long, suppressed while a phase is verifying (shipped: ${minutes(STALL_DEFAULTS.stallSilentMs)} min).`}
+          zero="0 never calls a lane silent."
+          disabled={busy}
+          onSave={(v) => save.mutate({ stallSilentMs: v * 60_000 })}
+        />
+        <NumberField
+          id="stall-spin"
+          label="Call it spinning after"
+          value={stall.stallSpinTurns}
+          unit="turns"
+          hint={`Consecutive assistant turns with no tool call in any of them — thinking, not doing (shipped: ${STALL_DEFAULTS.stallSpinTurns}).`}
+          zero="0 never calls a lane spinning."
+          disabled={busy}
+          onSave={num('stallSpinTurns')}
+        />
+        <NumberField
+          id="stall-stalemate"
+          label="Call it a stalemate after"
+          value={stall.stallStalemateAttempts}
+          unit="attempts"
+          hint={`Attempts in a row that committed nothing and left a clean tree — re-running has stopped being a remedy (shipped: ${STALL_DEFAULTS.stallStalemateAttempts}).`}
+          zero="0 never calls a stalemate."
+          disabled={busy}
+          onSave={num('stallStalemateAttempts')}
         />
 
         <h3 className="mt-1 text-2xs font-medium uppercase tracking-[0.14em] text-ink-faint">

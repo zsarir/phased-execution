@@ -398,6 +398,22 @@ export class Accounts {
   }
 
   /** Last-known meters for one account, straight from the poller's cache. */
+  /**
+   * Re-read one account's meters and answer with what came back.
+   *
+   * The awaiting counterpart to the `poller.kick` calls above: those are
+   * side-effects of something else happening, this is somebody asking.
+   */
+  async refreshUsage(accountId: string | undefined): Promise<AccountUsage | undefined> {
+    return this.poller.refresh(accountId ?? DEFAULT_ACCOUNT_ID);
+  }
+
+  /** Every account at once, in parallel — the "Refresh all" the panels offer. */
+  async refreshAllUsage(): Promise<void> {
+    const ids = [DEFAULT_ACCOUNT_ID, ...this.store.stored().map((meta) => meta.id)];
+    await Promise.all([...new Set(ids)].map((id) => this.poller.refresh(id)));
+  }
+
   usageFor(accountId: string | undefined): AccountUsage | undefined {
     return this.poller.snapshot(accountId ?? DEFAULT_ACCOUNT_ID);
   }

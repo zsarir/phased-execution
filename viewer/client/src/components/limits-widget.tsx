@@ -24,6 +24,7 @@ import type { AccountView, UsageBucket } from '@/lib/api';
 import { countdown, relativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { Button, Chip, Dialog, DialogContent, Empty, toast } from '@/components/ui';
+import { RefreshMeters } from '@/components/refresh-meters';
 
 /** Human names for the endpoint's bucket keys; unknown keys stay readable. */
 export function bucketLabel(bucket: string): string {
@@ -243,12 +244,21 @@ export function LimitsOverview({ accounts }: { accounts: AccountView[] | undefin
     return (
       <div className="flex flex-col gap-4">
         <Empty title="No accounts to meter yet" />
+        <RefreshMeters />
         <UsageAlerts />
       </div>
     );
   }
   return (
     <div className="flex flex-col gap-4">
+      {/* The numbers below are polled on a courtesy budget — up to ten minutes
+          old on an idle account. One press re-reads every one of them. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-2xs text-ink-faint">
+          Polled on a budget: ~90s while a session is running, ten minutes when idle.
+        </span>
+        <RefreshMeters />
+      </div>
       {accounts.map((account) => {
         const buckets = Object.entries(account.usage?.buckets ?? {});
         const fetched = account.usage?.fetchedAt ? Date.parse(account.usage.fetchedAt) : undefined;
@@ -266,6 +276,7 @@ export function LimitsOverview({ accounts }: { accounts: AccountView[] | undefin
               {fetched !== undefined ? (
                 <span className="text-2xs text-ink-faint">as of {relativeTime(fetched)}</span>
               ) : null}
+              <RefreshMeters accountId={account.id} variant="ghost" className="ml-auto" />
             </header>
             {account.usage?.unsupported ? (
               <p className="text-xs text-ink-muted">

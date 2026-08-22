@@ -4299,8 +4299,17 @@ export class Runner {
           this.deps.onAccountLimited?.(state.accountId, window, disposition.at, disposition.reason);
           this.deps.scheduler?.throttle(disposition.at.getTime(), state.accountId ?? 'default');
 
+          // The SAME rule as the long-window wall below, and it has to be the
+          // same one: `switch` always moves; under `wait` — the stored default,
+          // and the policy a run started by anything but the launch form gets —
+          // `autoAccountSwitch` (on by default) moves it rather than sleeping
+          // on a clock while another registered account sits idle; `pause`
+          // keeps its word. These two sites used to disagree, so whether a wall
+          // auto-switched depended on which of them happened to notice it.
           const policy = state.onLimit ?? 'wait';
-          if (policy === 'switch' && this.trySwitchAccount(phase, record, disposition.reason, currentModel)) {
+          const wantSwitch =
+            policy === 'switch' || (policy === 'wait' && this.deps.autoAccountSwitch?.() !== false);
+          if (wantSwitch && this.trySwitchAccount(phase, record, disposition.reason, currentModel)) {
             // Continue NOW, on the account that can pay — same session when
             // its transcript came along, a fresh boot prompt when it did not.
             resume = record.sessionId && this.transcriptFollows(record) ? record.sessionId : undefined;

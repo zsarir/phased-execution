@@ -35,14 +35,7 @@
 
 import { useCallback, useState } from 'react';
 import { Empty, Spinner, Tabs, TabsContent, TabsList, TabsTrigger, toast } from '@/components/ui';
-import {
-  api,
-  automationPrefs,
-  type PhaseEta,
-  type PlanDetail,
-  type QueueEntry,
-  type RunState,
-} from '@/lib/api';
+import { api, type PhaseEta, type PlanDetail, type QueueEntry, type RunState } from '@/lib/api';
 import {
   useAccounts,
   useApprovals,
@@ -52,7 +45,6 @@ import {
   useRun,
   useRunScopes,
   useSessions,
-  useSkills,
 } from '@/lib/queries';
 import { keys } from '@/lib/queries';
 import { useNow } from '@/lib/clock';
@@ -99,7 +91,6 @@ export function RunView({ detail }: { detail: PlanDetail }) {
   const { data: detailRun, isPending } = useRun(slug, enabled);
   const { data: queue } = useApprovals(enabled);
   const { data: auth } = useAuth(enabled);
-  const { data: skills } = useSkills(enabled);
 
   const [busy, setBusy] = useState('');
 
@@ -253,16 +244,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
 
       {/* Every stopped phase's cause in its own words, with the action that
           moves it — a status word alone was a dead end (reported twice). */}
-      <NextSteps
-        slug={slug}
-        planPhases={planPhases}
-        run={run}
-        live={live}
-        allowRun={allowRun}
-        authFailure={authFailure}
-        busy={busy}
-        onRetry={(phase) => void act('retry', () => api.runRetry(slug, phase))}
-      />
+      <NextSteps slug={slug} planPhases={planPhases} run={run} live={live} authFailure={authFailure} />
 
       <Controls
         slug={slug}
@@ -273,9 +255,6 @@ export function RunView({ detail }: { detail: PlanDetail }) {
         planPhases={planPhases}
         planSkills={planSkills}
         planMcp={planMcp}
-        skills={skills ?? []}
-        defaultSkills={state?.defaultSkills ?? []}
-        automation={automationPrefs(state)}
         qaMode={detail.summary.qaMode}
         allowWrites={Boolean(state?.allowWrites)}
         onAct={act}
@@ -290,7 +269,6 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           planPhases={planPhases}
           live={live}
           allowRun={allowRun}
-          onAct={act}
           queue={admission?.entries}
           scopes={scopes?.scopes}
           phaseEta={detail.eta?.perPhase}

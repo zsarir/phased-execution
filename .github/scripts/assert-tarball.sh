@@ -46,6 +46,7 @@ for p in \
   "viewer/shared/ladder-model.js" \
   "viewer/shared/attention-model.js" \
   "viewer/shared/evidence-model.js" \
+  "viewer/shared/run-settings.js" \
   "viewer/server/inbox.ts" \
   "viewer/server/analysis/spend.ts" \
   "viewer/server/runner/models.ts" \

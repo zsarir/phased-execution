@@ -20,21 +20,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Sparkles } from 'lucide-react';
 import { api, type TerminalState } from '@/lib/api';
 import { usePhone } from '@/lib/media';
-import { keys, useConsoleState, useSkills } from '@/lib/queries';
+import { keys, useConsoleState } from '@/lib/queries';
 import { estimateTerminalSize } from '@/lib/terminal';
 import { navigate } from '@/app/router';
-import {
-  Button,
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogFooter,
-  toast,
-  type ButtonProps,
-} from '@/components/ui';
-import { SkillPicker } from '../run/skill-picker';
-import { DEFAULTS, EFFORTS, EFFORT_NOTE, MODELS } from '../run/defaults';
-import { field } from '@/components/ui/field';
+import { Button, Dialog, DialogClose, DialogContent, toast, type ButtonProps } from '@/components/ui';
+import { RunSetup } from '@/features/run-setup/run-setup';
 
 /**
  * Gated on the AGENT capability, deliberately not on `allowWrites`: the
@@ -70,43 +60,25 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
   const phone = usePhone();
   const { data: state } = useConsoleState();
   const rootOpen = Boolean(state?.root?.path);
-  const { data: skills } = useSkills(rootOpen);
   const [brief, setBrief] = useState('');
-  const [model, setModel] = useState<string>(DEFAULTS.model);
-  const [effort, setEffort] = useState<string>(DEFAULTS.effort);
-  const [chosen, setChosen] = useState<string[]>([]);
-  // Derives from the Automation preference until the operator says otherwise —
-  // `/api/state` arrives after the first render, so a one-shot seed would miss
-  // it. The ticket has no attach flag; ticked means the names ride in `skills`.
-  const defaultSkills = state?.defaultSkills ?? [];
-  const [attachChoice, setAttachChoice] = useState<boolean | null>(null);
-  const attach =
-    attachChoice ?? ((state?.prefs?.attachDefaultSkills ?? false) === true && defaultSkills.length > 0);
-  const [busy, setBusy] = useState(false);
 
-  async function start() {
-    setBusy(true);
+  // The fields are `RunSetup` in `plan` mode; what stays here is the brief,
+  // and the ticket — which carries an `intent` and a `brief` no run door has.
+  async function start(body: Record<string, unknown>) {
     try {
       const ticket = await api.agentTicket({
+        ...body,
         intent: 'plan',
         brief: brief.trim(),
-        model,
-        effort,
         // The size the pane will settle on — the CLI lays its first screen
         // out for the window it is actually in (the pane corrects on open).
         ...estimateTerminalSize(phone),
-        // No `permissionMode`: the omission IS the choice. The server defaults
-        // a plan intent to plan mode (`agent.ts` — the phase list is the
-        // decision), and the select this form used to offer was the one hole
-        // left in that rule: `auto`/`acceptEdits` here launched an authoring
-        // session that could write a plan nobody had approved. A session for
-        // ANY other purpose belongs in the launcher, which still offers every
-        // mode.
-        ...(() => {
-          const merged = [...new Set([...(attach ? defaultSkills : []), ...chosen])];
-          return merged.length ? { skills: merged } : {};
-        })(),
-      });
+        // No `permissionMode`, by construction: `plan` mode does not offer one.
+        // The server defaults a plan intent to plan mode (`agent.ts` — the
+        // phase list is the decision), and the select this form used to have
+        // was the one hole left in that rule. A session for ANY other purpose
+        // belongs in the launcher, which still offers every mode.
+      } as never);
       // Same two rules as every session the console opens: seed the list from
       // the ticket so the next render is right, and `void` the invalidation.
       if (ticket.session) {
@@ -119,7 +91,6 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
       navigate(`agent/${ticket.sessionId}`);
     } catch (error) {
       toast((error as Error).message, 'error');
-      setBusy(false);
     }
   }
 
@@ -152,91 +123,46 @@ export function NewPlanWizard({ onClose }: { onClose: () => void }) {
             />
           </label>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-2xs uppercase tracking-wide text-ink-faint">Model</span>
-              <select className={field} value={model} onChange={(event) => setModel(event.target.value)}>
-                <option value="">default — this machine’s</option>
-                {MODELS.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-2xs uppercase tracking-wide text-ink-faint">Effort</span>
-              <select className={field} value={effort} onChange={(event) => setEffort(event.target.value)}>
-                {EFFORTS.map((level) => (
-                  <option key={level} value={level}>
-                    {EFFORT_NOTE[level] ?? level}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="flex flex-col gap-1 text-sm">
-              <span className="text-2xs uppercase tracking-wide text-ink-faint">Permissions</span>
-              {/* Not a select. A plan-authoring session starts in plan mode,
-                  always — any other mode here could write a plan nobody
-                  approved. Generic sessions with mode choices live in the
-                  launcher. */}
-              <div
-                className={`${field} flex items-center text-ink-muted`}
-                title="Plan-authoring sessions always start in plan mode: the session explores and presents the plan for approval before anything is written."
-              >
-                plan mode — fixed for authoring
-              </div>
-            </div>
+          {/* Stated where the select used to be, and still not a control.
+              `plan` mode offers no Permissions field at all (`modes.ts`), so
+              there is genuinely nothing here to change — but a form that simply
+              omitted the row would read as one that forgot it. */}
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span className="text-2xs uppercase tracking-wide text-ink-faint">Permissions</span>
+            <span
+              className="text-ink-muted"
+              title="Plan-authoring sessions always start in plan mode: the session explores and presents the plan for approval before anything is written."
+            >
+              plan mode — fixed for authoring
+            </span>
           </div>
 
           <p className="text-2xs text-ink-faint">
             The session explores and presents the plan first — it writes docs/plans/&lt;slug&gt;.md only after
             you approve it in the terminal (⇧Tab inside the session cycles modes for the steps AFTER
-            approval).
+            approval). Any other mode here could write a plan nobody approved, so this form does not offer
+            one.
           </p>
 
-          {rootOpen && defaultSkills.length > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-              <span className="min-w-0">
-                <span className="text-ink">Attach default skills</span>
-                <span className="mt-0.5 block text-2xs text-ink-faint">
-                  This machine's list:{' '}
-                  {defaultSkills.map((s) => (
-                    <code key={s} className="mr-1">
-                      {s}
-                    </code>
-                  ))}
-                </span>
-              </span>
-              <Button size="sm" aria-pressed={attach} onClick={() => setAttachChoice(!attach)}>
-                {attach ? 'Attached' : 'Off'}
-              </Button>
-            </div>
-          )}
-
-          {rootOpen ? (
-            <SkillPicker
-              skills={skills ?? []}
-              chosen={chosen}
-              defaultSkills={defaultSkills}
-              onChange={setChosen}
-              label="Extra skills for the authoring session"
-            />
-          ) : (
+          {!rootOpen && (
             <p className="text-sm text-ink-faint">
               Open a source directory first — the plan is written into its docs/plans/.
             </p>
           )}
-        </div>
 
-        <DialogFooter className="items-center justify-between">
-          <DialogClose asChild>
-            <Button variant="ghost">Cancel</Button>
-          </DialogClose>
-          <Button variant="action" disabled={busy || !brief.trim() || !rootOpen} onClick={() => void start()}>
-            <Sparkles size={14} aria-hidden /> Start authoring
-          </Button>
-        </DialogFooter>
+          <RunSetup
+            mode="plan"
+            skillsEnabled={rootOpen}
+            blocked={!brief.trim() || !rootOpen}
+            blockedReason={rootOpen ? 'Write the brief first — it is what the session is given.' : undefined}
+            onLaunch={(body: Record<string, unknown>) => start(body)}
+            cancel={
+              <DialogClose asChild>
+                <Button variant="ghost">Cancel</Button>
+              </DialogClose>
+            }
+          />
+        </div>
       </DialogContent>
     </Dialog>
   );

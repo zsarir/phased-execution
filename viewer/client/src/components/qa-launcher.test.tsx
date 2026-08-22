@@ -20,7 +20,8 @@
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
-import { QaDialog, QaButton, QaVerdict } from './qa-launcher';
+import { QaButton, QaVerdict } from './qa-launcher';
+import { LaunchDialog } from './launch-dialog';
 import { canQa, isVerdict, liveQa, qaKey } from '@/lib/qa';
 
 vi.mock('@/lib/queries', async (original) => ({
@@ -68,14 +69,14 @@ describe('turning QA on for the plan', () => {
   const off = { ...target, qaMode: 'off' };
 
   it('is offered, ticked, when the plan has QA off and the console may write', () => {
-    mount(<QaDialog target={off} allowWrites onClose={() => {}} />);
+    mount(<LaunchDialog request={{ kind: 'qa', target: off, allowWrites: true }} onClose={() => {}} />);
     const box = screen.getByRole('checkbox');
     expect(box).not.toBeDisabled();
     expect((box as HTMLInputElement).checked).toBe(true);
   });
 
   it('names the missing flag rather than failing on submit', () => {
-    mount(<QaDialog target={off} allowWrites={false} onClose={() => {}} />);
+    mount(<LaunchDialog request={{ kind: 'qa', target: off, allowWrites: false }} onClose={() => {}} />);
     const box = screen.getByRole('checkbox') as HTMLInputElement;
     expect(box).toBeDisabled();
     expect(box.checked).toBe(false);
@@ -85,15 +86,27 @@ describe('turning QA on for the plan', () => {
   });
 
   it('is not asked about at all when the plan already runs QA', () => {
-    mount(<QaDialog target={{ ...target, qaMode: 'on' }} allowWrites onClose={() => {}} />);
+    mount(
+      <LaunchDialog
+        request={{ kind: 'qa', target: { ...target, qaMode: 'on' }, allowWrites: true }}
+        onClose={() => {}}
+      />,
+    );
     expect(screen.queryByRole('checkbox')).toBeNull();
   });
 
   it('warns that a recorded verdict is being re-judged, not overwritten', () => {
     mount(
-      <QaDialog
-        target={{ ...target, qaMode: 'on', qa: { result: 'fail', report: 'reports/phase-02-qa.md' } }}
-        allowWrites
+      <LaunchDialog
+        request={{
+          kind: 'qa',
+          target: {
+            ...target,
+            qaMode: 'on',
+            qa: { result: 'fail', report: 'reports/phase-02-qa.md' },
+          },
+          allowWrites: true,
+        }}
         onClose={() => {}}
       />,
     );

@@ -155,6 +155,16 @@ export interface ConsoleState {
    */
   defaultSkills?: string[];
   /**
+   * Every model this console will START a phase on, strongest first — the
+   * server's own `offeredModels()`, read from `scripts/models.env`.
+   *
+   * Optional like everything else here: an older server cannot say, and the
+   * form falls back to its build's copy rather than offering nothing. Offering
+   * and ACCEPTING are different questions — the door still takes any spelling
+   * `models.env` knows, including ones absent from this list.
+   */
+  models?: string[];
+  /**
    * `--remote` / `--remote-user`. Optional like everything else here: a new
    * client can be talking to a server started before these existed, and a
    * missing answer must read as "this server cannot say", never as "none".
@@ -223,6 +233,14 @@ export interface ConsoleState {
     budgetAutoRaisePct?: number;
     /** How long a `require` MCP park waits for the server before continuing without it (0 = forever). */
     mcpRequireTimeoutMs?: number;
+    /**
+     * When a live lane stops being work (`shared/attention-model.js`
+     * `STALL_DEFAULTS`, Phase 5). Thresholds, not policy: crossing one
+     * announces and journals, it never acts.
+     */
+    stallSilentMs?: number;
+    stallSpinTurns?: number;
+    stallStalemateAttempts?: number;
     [key: string]: unknown;
   };
   [key: string]: unknown;

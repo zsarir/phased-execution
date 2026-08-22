@@ -68,6 +68,7 @@ import {
   type AskResult, type RecoverMode, type RunSettingsPatch, type StartOptions,
 } from './runner/runner.ts';
 import { Scheduler, type LockView } from './runner/scheduler.ts';
+import { offeredModels } from './runner/models.ts';
 import {
   continueMcpParkedRecord, mcpParkDueAt, DEFAULT_MCP_REQUIRE_TIMEOUT_MS, type McpContinueResult,
 } from './runner/mcp-park.ts';
@@ -3436,6 +3437,10 @@ export class Service {
       // say where they came from. Not what any existing run has — that is on
       // the run.
       defaultSkills: this.flags.defaultSkills,
+      // The model lineup, from the one file that defines it. The client used
+      // to carry its own copy of this list, which is a second source of truth
+      // for a vocabulary the server 400s on — so the form now asks.
+      models: offeredModels(),
       sizing: this.sizing,
       generation: this.generation,
       repo: this.repo,
@@ -6647,12 +6652,31 @@ export class Service {
   }
 
   /** A profile the operator signed in outside the exit hook — re-read it. */
+  /**
+   * Re-read one account — its login state AND its meters — and answer with
+   * what came back.
+   *
+   * It used to `kick` the poller and then read the cache, which the poll had
+   * not replaced yet: the button answered 200 with the same numbers it was
+   * pressed to replace, so refreshing appeared to do nothing at all. The fix
+   * is to AWAIT the poll (`accounts.refreshUsage`) before building the view.
+   */
   async refreshAccount(id: string): Promise<AccountView | undefined> {
     const meta = this.accounts.meta(id);
     if (!meta) return undefined;
-    if (meta.kind === 'profile') return this.accounts.completeLogin(id);
+    // A profile re-probes its login first — a signed-out profile has no
+    // credential to ask the usage endpoint with, and saying "signed out" is
+    // more useful than a meter that failed for an unexplained reason.
+    if (meta.kind === 'profile') await this.accounts.completeLogin(id);
+    await this.accounts.refreshUsage(id);
     const views = await this.accounts.list();
     return views.find((v) => v.id === id);
+  }
+
+  /** Every account at once — what a panel's "Refresh" asks for. */
+  async refreshAllAccounts(): Promise<AccountView[]> {
+    await this.accounts.refreshAllUsage();
+    return this.accounts.list();
   }
 
   /* ---- the desktop launcher ---- */
