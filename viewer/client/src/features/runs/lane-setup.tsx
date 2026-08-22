@@ -33,7 +33,6 @@
  */
 
 import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -45,8 +44,8 @@ import {
   CardTitle,
   toast,
 } from '@/components/ui';
-import { api, type AccountView, type PhaseView, type RunState } from '@/lib/api';
-import { keys, useAccounts } from '@/lib/queries';
+import { api, type PhaseView, type RunState } from '@/lib/api';
+import { SwitchAccountRow } from '@/components/switch-account';
 import { SettingsSheet } from './settings-sheet';
 
 /**
@@ -266,126 +265,6 @@ export function Controls({
         <SwitchAccountRow slug={slug} run={run} disabled={disabled} />
       </CardBody>
     </Card>
-  );
-}
-
-/** How an account reads in a picker: name, email, plan, and its 5-hour meter. */
-function accountOptionLabel(account: AccountView, current: string): string {
-  const name = account.builtIn
-    ? (account.name ?? 'machine login')
-    : (account.name ?? account.email ?? account.id);
-  const email = !account.builtIn || account.name ? account.email : undefined;
-  const five = account.usage?.buckets.five_hour?.utilization;
-  return [
-    name,
-    email && email !== name ? `(${email})` : null,
-    account.plan ? `· ${account.plan}` : null,
-    typeof five === 'number' ? `· 5h ${Math.round(five)}%` : null,
-    account.id === current ? '· current' : null,
-  ]
-    .filter(Boolean)
-    .join(' ');
-}
-
-/**
- * Which account this run spends, and the verb to move it NOW. Not a settings
- * field: settings say what the NEXT phase uses; this checkpoints a live
- * session (SIGTERM, session id kept) and re-attempts under the other login
- * without waiting for anything.
- *
- * EVERY account is listed, the current one marked — the old options-minus-
- * current select read as "the console only knows one account" on a machine
- * with two, which is precisely the question this row exists to answer.
- */
-export function SwitchAccountRow({
-  slug,
-  run,
-  disabled,
-}: {
-  slug: string;
-  run: RunState | null | undefined;
-  disabled: boolean;
-}) {
-  const client = useQueryClient();
-  const { data: accountsState } = useAccounts();
-  const accounts = accountsState?.accounts ?? [];
-  const current = run?.accountId ?? 'default';
-  const [choice, setChoice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  if (!run || (accounts.length < 2 && !accountsState?.allowAccounts)) return null;
-
-  const currentView = accounts.find((account) => account.id === current);
-  const currentLabel = currentView
-    ? accountOptionLabel(currentView, '').replace(/ · current$/, '')
-    : current === 'default'
-      ? 'machine login'
-      : current;
-
-  if (accounts.length < 2) {
-    return (
-      <div className="flex flex-wrap items-center gap-2 border-t border-rule pt-3">
-        <span className="text-2xs uppercase tracking-wide text-ink-faint">
-          Account: <span className="normal-case text-ink-muted">{currentLabel}</span>
-        </span>
-        <a href="#/settings" className="text-2xs text-ink-faint underline hover:text-action">
-          Add another account in Settings to switch mid-run
-        </a>
-      </div>
-    );
-  }
-
-  // Truthful by construction: the select shows where the run IS until a choice
-  // is made, and survives the run switching underneath it.
-  const value = choice ?? current;
-  return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-rule pt-3">
-      <span className="text-2xs uppercase tracking-wide text-ink-faint">
-        Account: <span className="normal-case text-ink-muted">{currentLabel}</span>
-      </span>
-      <select
-        className="h-8 [@media(hover:none)]:min-h-(--tap-min) max-w-72 rounded border border-rule bg-ground px-2 text-xs disabled:opacity-50"
-        value={value}
-        disabled={disabled || busy}
-        onChange={(event) => setChoice(event.target.value)}
-        aria-label="Account for this run"
-      >
-        <option value="auto">auto — most headroom</option>
-        {accounts.map((account) => (
-          <option key={account.id} value={account.id}>
-            {accountOptionLabel(account, current)}
-          </option>
-        ))}
-      </select>
-      <Button
-        size="sm"
-        disabled={disabled || busy || value === current}
-        title={
-          value === current
-            ? 'The run is already on this account — pick another, or auto.'
-            : 'A live session is checkpointed (its session id kept) and re-attempted under the chosen account right away.'
-        }
-        onClick={() => {
-          setBusy(true);
-          api
-            .runSwitchAccount(slug, value)
-            .then((outcome) => {
-              toast(
-                outcome.ok
-                  ? 'Switched — the next session runs under the other account.'
-                  : (outcome.reason ?? 'Could not switch.'),
-                outcome.ok ? 'ok' : 'warn',
-              );
-              if (outcome.ok) setChoice(null);
-              void client.invalidateQueries({ queryKey: keys.runs() });
-              void client.invalidateQueries({ queryKey: keys.run(slug) });
-            })
-            .catch((error: Error) => toast(String(error.message ?? error), 'error'))
-            .finally(() => setBusy(false));
-        }}
-      >
-        Switch account
-      </Button>
-    </div>
   );
 }
 

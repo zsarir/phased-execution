@@ -253,6 +253,16 @@ describe('the payloads', () => {
     );
   });
 
+  it('a repair ticket carries `auto` — the door resolves it against the meters', () => {
+    // Stripping `auto` here meant a repair launched on the machine login, which
+    // on the day you reach for auto is usually the account that just hit the
+    // wall. `default` is still an omission: that IS the machine login, said
+    // plainly, and the server should not have to validate a word for it.
+    expect(buildTicket('recovery', values({ accountId: 'auto' }), { slug: 'a' }, []).accountId).toBe('auto');
+    expect(buildTicket('recovery', values({ accountId: 'work' }), { slug: 'a' }, []).accountId).toBe('work');
+    expect('accountId' in buildTicket('recovery', values(), { slug: 'a' }, [])).toBe(false);
+  });
+
   it('a plan-authoring ticket carries no permission mode at all', () => {
     // The omission IS the choice: the server defaults a plan intent to plan
     // mode, and a mode chosen here could write a plan nobody approved.

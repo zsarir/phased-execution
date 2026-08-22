@@ -55,6 +55,90 @@ function Meter({ pct, className }: { pct: number; className?: string }) {
   );
 }
 
+/**
+ * An account's buckets in a stable, readable order: the session window first
+ * (it moves fastest and is the one that stops a run mid-phase), then the
+ * all-model week, then each per-model week by name.
+ *
+ * Bucket names are DATA, not schema — `seven_day_opus` today, whatever ships
+ * next — so this sorts what it is given rather than listing what it expects.
+ */
+function orderedBuckets(account: AccountView): { key: string; bucket: UsageBucket }[] {
+  const rank = (key: string): number =>
+    key === 'five_hour' ? 0 : key === 'seven_day' ? 1 : key.startsWith('seven_day') ? 2 : 3;
+  return Object.entries(account.usage?.buckets ?? {})
+    .map(([key, bucket]) => ({ key, bucket }))
+    .sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key));
+}
+
+/**
+ * Every account, every window, as one small picture.
+ *
+ * The chrome used to show a single number — the worst 5-hour figure across all
+ * accounts — which answers "am I near a wall" and nothing else. It could not
+ * say WHICH login was near it, nor that the other one was empty, nor that a
+ * weekly window was the real constraint. On a machine with two accounts that is
+ * the difference between "stop working" and "switch account", and the widget
+ * was silent about it.
+ *
+ * One column per bucket, grouped per account, filled from the bottom and toned
+ * on the same 80/95 thresholds the server announces at. It stays legible at
+ * this size because it is not asking to be read precisely: it is asking to be
+ * GLANCED at, and the exact numbers are one press away.
+ */
+function AccountBars({ accounts, height = 14 }: { accounts: AccountView[]; height?: number }) {
+  return (
+    <span className="flex items-end gap-1.5">
+      {accounts.map((account) => {
+        const buckets = orderedBuckets(account);
+        if (!buckets.length) return null;
+        const label = accountName(account);
+        return (
+          <span
+            key={account.id}
+            className="flex items-end gap-px"
+            role="img"
+            aria-label={`${label}: ${buckets
+              .map((b) => `${bucketLabel(b.key)} ${Math.round(b.bucket.utilization)}%`)
+              .join(', ')}`}
+          >
+            {buckets.map(({ key, bucket }) => {
+              const pct = Math.max(0, Math.min(100, bucket.utilization));
+              return (
+                <span
+                  key={key}
+                  className="relative w-[3px] shrink-0 overflow-hidden rounded-[1px] bg-track"
+                  style={{ height }}
+                >
+                  <span
+                    className={cn('absolute inset-x-0 bottom-0 block', tone(pct))}
+                    // A window at 0% still shows a hairline: an empty bar and a
+                    // missing bar look identical, and they mean opposite things.
+                    style={{ height: `${Math.max(pct, 4)}%` }}
+                  />
+                </span>
+              );
+            })}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/** Every account and bucket as one line of text — the title behind the picture. */
+function usageTitle(accounts: AccountView[]): string {
+  return accounts
+    .map((account) => {
+      const buckets = orderedBuckets(account);
+      if (!buckets.length) return `${accountName(account)}: no usage data yet`;
+      return `${accountName(account)} — ${buckets
+        .map((b) => `${bucketLabel(b.key)} ${Math.round(b.bucket.utilization)}%`)
+        .join(' · ')}`;
+    })
+    .join('\n');
+}
+
 /** The worst weekly bucket — all-models and each per-model one compete. */
 function worstWeekly(account: AccountView | undefined): { key: string; bucket: UsageBucket } | null {
   const buckets = account?.usage?.buckets ?? {};
@@ -121,6 +205,8 @@ export function LimitsWidget({ variant }: { variant: 'header' | 'rail' | 'phone'
     (!five && accounts?.some((a) => a.usage?.error || a.usage?.unsupported)),
   );
 
+  // Every account that actually reports a window — what the bars draw.
+  const metered = (accounts ?? []).filter((account) => orderedBuckets(account).length > 0);
   const fiveTitle = five && several ? `5-hour — ${accountName(five.account)}` : '5-hour window';
   const weeklyTitle =
     weekly && several
@@ -140,8 +226,7 @@ export function LimitsWidget({ variant }: { variant: 'header' | 'rail' | 'phone'
         onClick={() => setOpen(true)}
         aria-label="Claude usage limits"
         title={[
-          five ? `${fiveTitle} at ${Math.round(five.bucket.utilization)}%` : 'No usage data yet',
-          weekly ? `${weeklyTitle} at ${Math.round(weekly.bucket.utilization)}%` : null,
+          metered.length ? usageTitle(metered) : 'No usage data yet',
           stale ? 'These figures could not be refreshed and may be old.' : null,
         ]
           .filter(Boolean)
@@ -151,10 +236,15 @@ export function LimitsWidget({ variant }: { variant: 'header' | 'rail' | 'phone'
         <Gauge size={14} className="shrink-0" aria-hidden />
         {five ? (
           <>
+            {/* The number is still the worst 5-hour figure — the one that
+                stops a run soonest — and the bars behind it say whose, and
+                which window, without a click. */}
             <span className="tnum">{Math.round(five.bucket.utilization)}%</span>
-            <span className="hidden w-14 lg:block">
-              <Meter pct={five.bucket.utilization} />
-            </span>
+            {metered.length > 0 && (
+              <span className="hidden sm:flex">
+                <AccountBars accounts={metered} />
+              </span>
+            )}
           </>
         ) : (
           <span className="text-ink-faint">no data</span>
@@ -165,12 +255,13 @@ export function LimitsWidget({ variant }: { variant: 'header' | 'rail' | 'phone'
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="flex min-h-(--tap-min) items-center gap-1 px-2 text-xs text-ink-muted"
+        className="flex min-h-(--tap-min) items-center gap-1.5 px-2 text-xs text-ink-muted"
         aria-label="Claude usage limits"
-        title={fiveTitle}
+        title={metered.length ? usageTitle(metered) : fiveTitle}
       >
         <Gauge size={16} aria-hidden />
-        {five ? <span>{Math.round(five.bucket.utilization)}%</span> : null}
+        {five ? <span className="tnum">{Math.round(five.bucket.utilization)}%</span> : null}
+        {metered.length > 0 && <AccountBars accounts={metered} height={12} />}
       </button>
     ) : variant === 'sheet' ? (
       <button
@@ -181,8 +272,9 @@ export function LimitsWidget({ variant }: { variant: 'header' | 'rail' | 'phone'
         <span className="flex items-center gap-2">
           <Gauge size={16} aria-hidden /> Usage limits
         </span>
-        <span className="text-xs text-ink-muted">
+        <span className="flex items-center gap-2 text-xs text-ink-muted">
           {five ? `5h ${Math.round(five.bucket.utilization)}%` : 'no data'}
+          {metered.length > 0 && <AccountBars accounts={metered} height={12} />}
         </span>
       </button>
     ) : (
@@ -210,6 +302,22 @@ export function LimitsWidget({ variant }: { variant: 'header' | 'rail' | 'phone'
         ) : (
           <span className="text-2xs text-ink-faint">no data yet</span>
         )}
+        {/* Per account, when there IS more than one: the two bars above are the
+            worst window anywhere, which is the right alarm and the wrong map.
+            This says whose window that was, and whether the other login has
+            room — the question the alarm makes you ask. */}
+        {several && metered.length > 0 ? (
+          <span className="flex flex-col gap-0.5 pt-1">
+            {metered.map((account) => (
+              <span key={account.id} className="flex items-center gap-1.5">
+                <span className="max-w-16 truncate text-2xs text-ink-faint" title={accountName(account)}>
+                  {accountName(account)}
+                </span>
+                <AccountBars accounts={[account]} height={10} />
+              </span>
+            ))}
+          </span>
+        ) : null}
         {weekly ? (
           <span
             className="flex items-center gap-1.5"

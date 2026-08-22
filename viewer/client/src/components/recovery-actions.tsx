@@ -32,6 +32,7 @@ import {
 } from '@/lib/recovery';
 import { runRecoverVerb, type RunRecoverVerb } from '@/lib/run-recover';
 import { cn } from '@/lib/cn';
+import { SwitchAccountRow } from '@/components/switch-account';
 
 /** What a surface knows; everything optional — the model tolerates absence. */
 export type RecoveryCtx = {
@@ -44,6 +45,8 @@ export type RecoveryCtx = {
   } | null;
   run?: {
     status: string;
+    /** Which account it spends — what the account row shows and moves. */
+    accountId?: string;
     halt?: { reason?: string; kind?: string; phase?: number } | null;
     resolved?: unknown;
     /** The ladder's bookkeeping per phase — rungs climbed, the errand left. */
@@ -89,6 +92,7 @@ export function RecoveryActions({
   max = 2,
   legend = false,
   showBlurbs = false,
+  account = false,
   perform,
   className,
 }: {
@@ -97,6 +101,16 @@ export function RecoveryActions({
   ctx: RecoveryCtx;
   /** How many non-overflow actions render inline; the rest fold into "More ways forward". */
   max?: number;
+  /**
+   * Offer the account this repair will spend.
+   *
+   * Opt-in because this component is embedded on ten surfaces and most of them
+   * are a row of buttons in a table cell, where a select would be noise. It
+   * belongs where a repair is the headline — the run page and the phase drawer
+   * — because every verb below except "repair with a new agent" fires straight
+   * away on the run's stored account, with no dialog to change it in.
+   */
+  account?: boolean;
   /** Show the two-mechanism legend when both AI families are on offer. */
   legend?: boolean;
   /** Render every blurb as visible text (the diagnosis panel) instead of tooltip-only. */
@@ -229,6 +243,8 @@ export function RecoveryActions({
             renderButton(action, index === 0 && action.group === 'primary' ? 'action' : 'default'),
           )}
         </div>
+
+        {account && <SwitchAccountRow slug={target.slug} run={ctx.run ?? null} disabled={false} />}
 
         {resumeOpen && (
           <div className="flex flex-wrap items-end gap-2">

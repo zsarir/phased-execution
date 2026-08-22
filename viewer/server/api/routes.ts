@@ -841,8 +841,19 @@ export async function handleApi(
           // The account, resolved HERE like the briefings above: the browser
           // names an id, the id is checked against the registry, and only the
           // environment the accounts module answers travels onto the spec.
-          const accountId = accountChoice(body.accountId, service);
-          const account = accountId && accountId !== 'auto'
+          //
+          // `auto` resolves against the meters exactly as `startRun` does, and
+          // for the same reason: a recovery or a review is a session that
+          // spends a window, so "the one with headroom" has to mean something
+          // here too. It used to fall through to `undefined` — the machine
+          // login — which is the WORST answer on the day you reach for auto,
+          // because the machine login is usually the account you just spent.
+          const chosen = accountChoice(body.accountId, service);
+          const accountId = chosen === 'auto'
+            ? service.accounts.pickAccount(null, typeof body.model === 'string' ? body.model : undefined)
+              ?? undefined
+            : chosen;
+          const account = accountId
             ? { id: accountId, env: toStringEnv(await service.accounts.envFor(accountId)) }
             : undefined;
 

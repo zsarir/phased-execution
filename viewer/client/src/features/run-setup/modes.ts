@@ -305,7 +305,11 @@ export function buildTicket(
   if (values.model) body.model = values.model;
   if (values.effort) body.effort = values.effort;
   if (mode === 'qa') body.permissionProfile = values.permissionProfile;
-  if (values.accountId !== 'default' && values.accountId !== 'auto') body.accountId = values.accountId;
+  // `auto` travels: the ticket door resolves it against the meters the same way
+  // a run start does. Stripping it here meant picking "auto" on a repair ran
+  // the session on the machine login — silently, and usually on the account
+  // that had just hit the wall.
+  if (values.accountId !== 'default') body.accountId = values.accountId;
   if (skills.length) body.skills = skills;
   return body;
 }

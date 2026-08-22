@@ -17,10 +17,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { queryClientConfig } from '@/lib/queries';
-import { LimitsOverview } from './limits-widget';
+import { LimitsOverview, LimitsWidget } from './limits-widget';
 
 const savePrefs = vi.fn(async (_patch: Record<string, unknown>) => ({}));
 let notify: Record<string, boolean> = {};
+let registered: unknown[] = [];
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -29,6 +30,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     api: {
       ...actual.api,
       state: vi.fn(async () => ({ prefs: { notify } })),
+      accounts: vi.fn(async () => ({ accounts: registered, allowAccounts: true })),
       savePrefs: (patch: Record<string, unknown>) => savePrefs(patch),
     },
   };
@@ -46,6 +48,60 @@ function renderOverview(accounts?: Parameters<typeof LimitsOverview>[0]['account
 beforeEach(() => {
   savePrefs.mockClear();
   notify = {};
+  registered = [];
+});
+
+/**
+ * The chrome answers for EVERY account and EVERY window.
+ *
+ * It used to render one number — the worst 5-hour figure anywhere — which
+ * cannot say which login is near its wall, nor that the other one is empty,
+ * nor that a weekly window is the real constraint. On a machine with two
+ * accounts that is the difference between "stop working" and "switch account".
+ */
+describe('the usage indicator', () => {
+  const account = (id: string, buckets: Record<string, number>) => ({
+    id,
+    kind: id === 'default' ? 'default' : 'profile',
+    builtIn: id === 'default',
+    name: id,
+    usage: {
+      buckets: Object.fromEntries(
+        Object.entries(buckets).map(([key, utilization]) => [key, { utilization, resetsAt: null }]),
+      ),
+    },
+  });
+
+  it('draws a bar per window for every account, per-model windows included', async () => {
+    registered = [
+      account('default', { five_hour: 94, seven_day: 52 }),
+      account('info', { five_hour: 0, seven_day: 65, seven_day_fable: 30 }),
+    ];
+    const client = new QueryClient(queryClientConfig);
+    render(
+      <QueryClientProvider client={client}>
+        <LimitsWidget variant="header" />
+      </QueryClientProvider>,
+    );
+    // One labelled group per account, naming each window it reports — so a
+    // window that ships tomorrow is drawn tomorrow, by key.
+    expect(await screen.findByLabelText('default: 5-hour session 94%, Weekly (all models) 52%')).toBeTruthy();
+    expect(
+      await screen.findByLabelText('info: 5-hour session 0%, Weekly (all models) 65%, Weekly (Fable) 30%'),
+    ).toBeTruthy();
+  });
+
+  it('an account reporting nothing draws nothing, and does not hide the others', async () => {
+    registered = [account('default', {}), account('info', { five_hour: 12 })];
+    const client = new QueryClient(queryClientConfig);
+    render(
+      <QueryClientProvider client={client}>
+        <LimitsWidget variant="header" />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByLabelText('info: 5-hour session 12%')).toBeTruthy();
+    expect(screen.queryByLabelText(/^default:/)).toBeNull();
+  });
 });
 
 describe('usage alerts', () => {

@@ -299,6 +299,7 @@ export function PhaseDrawer({
             max={3}
             showBlurbs
             legend
+            account
           />
         </div>
       )}

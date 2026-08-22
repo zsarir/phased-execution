@@ -237,7 +237,7 @@ export function RunView({ detail }: { detail: PlanDetail }) {
           board, stand down what it settled, recover or continue what is real.
           The phase-level offers live on the halt banner and each row. */}
       {run && !live && !run.resolved && ['halted', 'interrupted', 'parked'].includes(run.status) && (
-        <RecoveryActions target={{ slug, runId: run.id }} ctx={{ run }} max={2} legend />
+        <RecoveryActions target={{ slug, runId: run.id }} ctx={{ run }} max={2} legend account />
       )}
 
       {/* Every stopped phase's cause in its own words, with the action that

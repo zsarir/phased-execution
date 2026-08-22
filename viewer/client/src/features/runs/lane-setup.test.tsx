@@ -29,7 +29,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
-import { SwitchAccountRow } from './lane-setup';
+import { SwitchAccountRow } from '@/components/switch-account';
 
 const RUN = { id: 'r1', slug: 'demo', status: 'running' } as unknown as RunState;
 
