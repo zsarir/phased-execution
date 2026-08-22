@@ -53,8 +53,9 @@ import { loadGateVocab, gateKindOf, type GateVocab, type GateKind } from './anal
 import { rungsToday, spendSummary, type SpendRunView, type SpendView } from './analysis/spend.ts';
 import {
   buildInbox, inboxIds, pruneAcks, readAcks, removeAck, writeAck,
-  INBOX_ACKS_DIR, type InboxFacts, type InboxView,
+  INBOX_ACKS_DIR, type InboxAck, type InboxFacts, type InboxView,
 } from './inbox.ts';
+import { STALL_SIGNAL_META, inboxItemId, parseInboxItemId } from '../shared/attention-model.js';
 import { deriveEvidence } from '../shared/evidence-model.js';
 import {
   planStats, portfolio, etaSamples, etaFrom, rateFor, phaseEtaFor, healthIssues, isClosedStatus, splitRepos,
@@ -85,6 +86,8 @@ import {
 import { environmentReport, type EnvIssue } from './env-doctor.ts';
 import { Terminals, type SessionEvent, type SessionInfo, type SessionKind } from './terminal.ts';
 import { Journal } from './runner/journal.ts';
+import type { LaneLiveness } from './runner/liveness.ts';
+import { appendAck as appendRulingAck, ingestRulings, readRulings, rulingsFile, type Ruling } from './runner/rulings.ts';
 import {
   autoResolveRun, childrenOf, latestRun, listRuns, loadRun, newRun, phaseRecord, pidAlive,
   reconcileRecordsAgainstBoard, resetForRetry, resolveRunsAgainst, saveRun,
@@ -446,6 +449,15 @@ export type PhaseDiagnosis = {
    * phase's own "done" is backed by anything that ran. Never named `done`.
    */
   proof: EvidenceView;
+  /**
+   * What sessions DECIDED on this phase (`runner/rulings.ts`), oldest first.
+   *
+   * On the diagnosis rather than only on the run because this is the panel
+   * somebody opens when a phase did not go the way the plan said it would, and
+   * "the session read the instruction the other way, and here is why" is the
+   * answer more often than anything the verification output holds.
+   */
+  rulings: Ruling[];
 };
 
 /**
@@ -763,6 +775,17 @@ export class Service {
    * genuinely new ask — a later `at` — is a new notification.
    */
   private notifiedErrand = new Set<string>();
+  /**
+   * Stall episodes already announced, keyed `runId:phase:signal:attempt`.
+   *
+   * The attempt is in the key on purpose. One episode is one card: a lane that
+   * stays silent for an hour ticks sixty times and is announced once, because
+   * the runner only journals a transition and this only fires on what the
+   * runner journalled. But the SAME phase going silent again on its next
+   * attempt is a different fact — the first one ended, something re-boarded
+   * it, and it has stopped again — and an operator needs to hear that.
+   */
+  private notifiedStall = new Set<string>();
   /** Debounce behind `nudgeInbox` — see the note there. */
   private inboxTimer: ReturnType<typeof setTimeout> | null = null;
   /** Which phases were ready last time, so "became ready" means became. */
@@ -1350,6 +1373,13 @@ export class Service {
       autoAccountSwitch: () => this.prefs.autoAccountSwitch !== false,
       budgetAutoRaisePct: () => this.prefs.budgetAutoRaisePct ?? 25,
       mcpRequireTimeoutMs: () => this.prefs.mcpRequireTimeoutMs ?? DEFAULT_MCP_REQUIRE_TIMEOUT_MS,
+      // Read on every evaluation, not captured at construction: a number
+      // changed in Settings ▸ Automation applies to the lane already running.
+      stallThresholds: () => ({
+        stallSilentMs: this.prefs.stallSilentMs,
+        stallSpinTurns: this.prefs.stallSpinTurns,
+        stallStalemateAttempts: this.prefs.stallStalemateAttempts,
+      }),
       onMcpRequireTimeout: (state, phase, result) => this.announceMcpTimeout(state, phase, result),
       // The preflight probe, under the RUN's account env. Signed out, the
       // refusal names the account and the exact command that fixes it —
@@ -1818,7 +1848,7 @@ export class Service {
 
     this.prefs = rememberRoot(this.prefs, check.path);
     this.watcher.start([check.plansDir, check.handoffsDir]);
-    this.armOutcomeInbox(check.path);
+    this.armSessionInbox(check.path);
     void this.refreshRepoInfo();
     void this.warm();
     // The convergence loop: the boot pass once the queued re-adoption is done (a
@@ -1984,7 +2014,7 @@ export class Service {
     this.mcpRequireTimers.clear();
     this.converger.close();
     this.watcher.stop();
-    this.disarmOutcomeInbox();
+    this.disarmSessionInbox();
     this.sessions.close();
     // Nothing is admitted after this point, and every pending admission is
     // rejected rather than left holding a promise nobody will settle.
@@ -2287,6 +2317,7 @@ export class Service {
       this.announceErrand(data);
       return;
     }
+    if (event === 'run:liveness') { this.announceStall(data); return; }
     if (event !== 'run:run') return;
 
     const state = (data as { state?: RunState } | undefined)?.state;
@@ -2438,6 +2469,47 @@ export class Service {
       // makes the operator open the console to learn what to do.
       ...(errand.how ? { detail: `${errand.how}${title ? ` — ${title}` : ''}`.slice(0, 400) } : {}),
       tag: tagFor('needs-you', slug, phase),
+    }, { slug, phase, ...(runId ? { runId } : {}) });
+  }
+
+  /**
+   * A lane that is still running and has stopped being work.
+   *
+   * Deliberately NOT urgent (`push/catalogue.ts`): nothing is blocked on the
+   * operator and the run has not stopped — this is the money question, not the
+   * permission question, and a card that buzzed a wrist for it would be turned
+   * off inside a week, taking the signal with it.
+   *
+   * Fires only on a transition, because the runner only emits a stall on one:
+   * the ticker evaluates every lane every minute and journals nothing when the
+   * answer has not changed. The dedupe here is the belt — a console restarted
+   * mid-episode has an empty map and will say it once more, which is right.
+   */
+  private announceStall(data: unknown): void {
+    const event = data as {
+      slug?: string; runId?: string; phase?: number; attempt?: number;
+      stall?: { signal?: string; detail?: string } | null;
+    } | undefined;
+    const { slug, runId, phase, stall } = event ?? {};
+    if (!slug || typeof phase !== 'number' || !stall?.signal) return;
+
+    const key = `${runId ?? ''}:${phase}:${stall.signal}:${event?.attempt ?? 0}`;
+    if (this.notifiedStall.has(key)) return;
+    this.notifiedStall.add(key);
+    // The same bound the errand set keeps, for the same reason: a set that only
+    // ever grows is a leak in a console that runs for weeks.
+    if (this.notifiedStall.size > 500) {
+      const oldest = this.notifiedStall.values().next().value;
+      if (oldest) this.notifiedStall.delete(oldest);
+    }
+
+    const meta = STALL_SIGNAL_META[stall.signal as keyof typeof STALL_SIGNAL_META];
+    const title = this.store?.get(slug)?.plan?.phases[phase]?.title;
+    this.announce('stalled', {
+      title: `${slug} · phase ${phase} — ${meta?.label.toLowerCase() ?? stall.signal}`,
+      body: stall.detail ?? meta?.blurb ?? 'the session has stopped producing work',
+      ...(title ? { detail: title.slice(0, 200) } : {}),
+      tag: tagFor('stalled', slug, phase, stall.signal),
     }, { slug, phase, ...(runId ? { runId } : {}) });
   }
 
@@ -3630,6 +3702,74 @@ export class Service {
     return state ? (await this.resolveAgainstBoard([state]))[0] : null;
   }
 
+  /**
+   * What every in-flight lane of this plan looks like right now.
+   *
+   * A live runner answers from its own lanes; without one, the records' own
+   * snapshots are the honest fallback — stale by construction, and labelled as
+   * such by the status they sit beside. Answering with nothing instead would
+   * make a lane a console restart killed indistinguishable from a phase that
+   * never started, which is the one thing this feature exists to prevent.
+   */
+  runLiveness(slug: string, state: RunState | null): LaneLiveness[] {
+    const live = this.liveRunner(slug);
+    if (live) return live.liveness();
+    return Object.values(state?.phases ?? {})
+      .filter((record) => record.liveness && PHASE_IN_FLIGHT.includes(record.status))
+      .map((record) => record.liveness!)
+      .sort((a, b) => a.phase - b.phase);
+  }
+
+  /**
+   * The plan's whole ruling ledger, oldest first.
+   *
+   * Read from the FILE rather than from a run, so it answers before any run
+   * exists and keeps answering after every run of the plan has been deleted: a
+   * decision made in phase 3 is still the reason phase 9 looks the way it does.
+   */
+  runRulings(slug: string): Ruling[] {
+    if (!this.root?.ok) return [];
+    return readRulings(rulingsFile(this.root.path, slug));
+  }
+
+  /**
+   * Fold what the ledger holds into the plan's run, and journal what is new.
+   *
+   * With the plan's runner live it is the runner's act, for the same reason
+   * every other write to a live run is: two writers on one checkpoint is how a
+   * run file loses a phase. Without one, the newest run on disk takes it —
+   * and if there is no run at all, the ledger simply stands on its own, which
+   * is the common case for a plan somebody is driving by hand.
+   */
+  private ingestRulingsFor(slug: string): void {
+    if (!this.root?.ok) return;
+    const ledger = this.runRulings(slug);
+    if (!ledger.length) return;
+    const live = this.liveRunner(slug);
+    if (live) {
+      if (live.ingestRulings(ledger)) this.emit('run:rulings', { slug });
+      return;
+    }
+    const state = latestRun(this.root.path, slug, this.liveRunIds());
+    if (!state) return;
+    const mine = ledger.filter((ruling) => !state.createdAt || ruling.at >= state.createdAt);
+    const { rulings, added } = ingestRulings(state.rulings, mine);
+    if (!added.length) return;
+    state.rulings = rulings;
+    const journal = new Journal(this.root.path, slug, state.id);
+    for (const ruling of added) {
+      journal.append('phase.ruling', {
+        id: ruling.id, kind: ruling.kind, what: ruling.what,
+        ...(ruling.why ? { why: ruling.why } : {}),
+        ...(ruling.costIfWrong ? { costIfWrong: ruling.costIfWrong } : {}),
+        ...(ruling.sessionId ? { sessionId: ruling.sessionId } : {}),
+        at: ruling.at, by: 'unsupervised',
+      }, ruling.phase);
+    }
+    saveRun(state);
+    this.emit('run:rulings', { slug });
+  }
+
   async runsFor(slug: string): Promise<RunState[]> {
     if (!this.root) return [];
     return this.resolveAgainstBoard(listRuns(this.root.path, slug, this.liveRunId()));
@@ -4562,16 +4702,27 @@ export class Service {
   }
 
   /**
-   * Watch `runs/<instance>/` for `<slug>/outcomes/phase-NN.json` — what
-   * `phase-outcome.sh` writes when no runner injected `PE_OUTCOME_FILE`, i.e.
-   * a session nobody here spawned. What landed while the console was away is
-   * read first; the watcher (recursive, debounced per file) takes it from there.
+   * Watch `runs/<instance>/` for the two things a session writes there itself.
+   *
+   *   - `<slug>/outcomes/phase-NN.json` — what `phase-outcome.sh` writes when
+   *     no runner injected `PE_OUTCOME_FILE`, i.e. a session nobody here
+   *     spawned. Read once, acted on, consumed;
+   *   - `<slug>/rulings.ndjson` — the append-only ledger of what sessions
+   *     DECIDED. Never consumed; re-read whole and deduped by ruling id, which
+   *     is what makes "ingests once" a property rather than a claim about how
+   *     often a watcher fires.
+   *
+   * One recursive watcher for both, because it is the same directory and a
+   * second one would double the fd cost to answer the same events. What landed
+   * while the console was away is read first; the watcher (debounced per file)
+   * takes it from there.
    */
-  private armOutcomeInbox(root: string): void {
-    this.disarmOutcomeInbox();
+  private armSessionInbox(root: string): void {
+    this.disarmSessionInbox();
     const dir = join(STATE_DIR, 'runs', instanceId(root));
     try { mkdirSync(dir, { recursive: true }); } catch { return; }
     for (const slug of this.store?.list().map((r) => r.slug) ?? []) {
+      try { this.ingestRulingsFor(slug); } catch (error) { log.warn('rulings.boot-ingest', { slug, error }); }
       let names: string[] = [];
       try { names = readdirSync(outcomeInboxDir(root, slug)); } catch { continue; }
       for (const name of names) this.ingestOutcomeFile(slug, join(outcomeInboxDir(root, slug), name));
@@ -4579,6 +4730,20 @@ export class Service {
     try {
       this.outcomeWatcher = watch(dir, { recursive: true }, (_event, filename) => {
         const name = String(filename ?? '');
+        const ruling = /^([^/]+)\/rulings\.ndjson$/.exec(name);
+        if (ruling) {
+          const key = name;
+          const prev = this.outcomeTimers.get(key);
+          if (prev) clearTimeout(prev);
+          const timer = setTimeout(() => {
+            this.outcomeTimers.delete(key);
+            try { this.ingestRulingsFor(ruling[1]); }
+            catch (error) { log.warn('rulings.ingest-failed', { slug: ruling[1], error }); }
+          }, OUTCOME_INBOX_DEBOUNCE_MS);
+          timer.unref?.();
+          this.outcomeTimers.set(key, timer);
+          return;
+        }
         const m = /^([^/]+)\/outcomes\/(phase-\d{2,}\.json)$/.exec(name);
         if (!m) return;
         const key = `${m[1]}/${m[2]}`;
@@ -4604,7 +4769,7 @@ export class Service {
     }
   }
 
-  private disarmOutcomeInbox(): void {
+  private disarmSessionInbox(): void {
     for (const timer of this.outcomeTimers.values()) clearTimeout(timer);
     this.outcomeTimers.clear();
     try { this.outcomeWatcher?.close(); } catch { /* gone */ }
@@ -4983,6 +5148,10 @@ export class Service {
           runId: run.id,
         },
       }),
+      // The whole plan's ledger, filtered to this phase — not the run's own
+      // slice. A phase re-run three runs later is still answering the ruling
+      // its first attempt made.
+      rulings: this.runRulings(slug).filter((ruling) => ruling.phase === phase),
     };
   }
 
@@ -6980,6 +7149,14 @@ export class Service {
       })), [] as unknown[]),
     ]);
 
+    // The ruling ledgers, and the plans Insights already calls stalled. The
+    // portfolio is cached per generation and `attention` has just built every
+    // plan's context anyway, so this costs the pure computation and not a
+    // second pass over the store.
+    const rulings = await ok('rulings', () => this.store?.list().flatMap((record) =>
+      (this.isClosedPlan(record.slug) ? [] : this.runRulings(record.slug))) ?? [], [] as Ruling[]);
+    const stalledPlans = await ok('stalled-plans', async () => (await this.portfolio()).stalled, []);
+
     const locks = await ok('locks', () => this.allLocks(), [] as LockView[]);
     const lockPresence: Record<string, 'live' | 'ended' | 'unknown'> = {};
     for (const lock of locks) {
@@ -6998,7 +7175,14 @@ export class Service {
         allowTerminal: this.flags.allowTerminal, allowAgent: this.flags.allowAgent,
         allowAccounts: this.flags.allowAccounts, allowMcp: this.flags.allowMcp,
       },
-      acks: readAcks(INBOX_ACKS_DIR),
+      rulings,
+      stalledPlans,
+      // Two ack stores, one map. The ledger's acks are the durable half — they
+      // travel with the plan and survive a console reinstall — and this
+      // instance's acks file is the local half, which is where every other
+      // kind's ack lives and which wins on a conflict because it is the one a
+      // person just wrote.
+      acks: { ...Service.rulingAcksOf(rulings), ...readAcks(INBOX_ACKS_DIR) },
     } as unknown as InboxFacts;
 
     const now = Date.now();
@@ -7011,10 +7195,37 @@ export class Service {
     return view;
   }
 
+  /**
+   * The ledger's own acknowledgements, keyed by the inbox id they belong to.
+   *
+   * Minted here with `inboxItemId` and never re-derived on the client, so the
+   * two halves of the ack story cannot disagree about what an item is called.
+   */
+  private static rulingAcksOf(rulings: readonly Ruling[]): Record<string, InboxAck> {
+    const out: Record<string, InboxAck> = {};
+    for (const ruling of rulings) {
+      if (!ruling.ack) continue;
+      out[inboxItemId({ kind: 'ruling', slug: ruling.slug, phase: ruling.phase, subject: ruling.id })] = ruling.ack;
+    }
+    return out;
+  }
+
   /** Annotate an inbox item as seen. Never resolution — the ask still stands. */
   ackInbox(id: string, by?: string): boolean {
-    try { writeAck(INBOX_ACKS_DIR, id, by); this.emit('inbox', { at: new Date().toISOString() }); return true; }
-    catch (error) { log.warn('inbox.ack-failed', { id, error }); return false; }
+    try {
+      writeAck(INBOX_ACKS_DIR, id, by);
+      // A RULING's acknowledgement belongs in the ledger too, as a further
+      // appended line. The acks file is this instance's state and the ledger
+      // is the plan's record: an ack that lived only in the first would vanish
+      // with a reinstall, and `GET /api/run/:slug/rulings` — which reads the
+      // file and not the acks — would keep showing the row as unseen.
+      const parsed = parseInboxItemId(id);
+      if (parsed?.kind === 'ruling' && parsed.slug && parsed.subject && this.root?.ok) {
+        appendRulingAck(rulingsFile(this.root.path, parsed.slug), parsed.subject, by);
+      }
+      this.emit('inbox', { at: new Date().toISOString() });
+      return true;
+    } catch (error) { log.warn('inbox.ack-failed', { id, error }); return false; }
   }
 
   /** Undo an annotation. */
@@ -7319,6 +7530,13 @@ export class Service {
     if (cap(patch.convergeEveryMs)) picked.convergeEveryMs = patch.convergeEveryMs;
     if (cap(patch.budgetAutoRaisePct)) picked.budgetAutoRaisePct = patch.budgetAutoRaisePct;
     if (cap(patch.mcpRequireTimeoutMs)) picked.mcpRequireTimeoutMs = patch.mcpRequireTimeoutMs;
+    // Strictly positive, matching `sanitiseAutomation`: a zero threshold would
+    // stall-flag every lane on its first tick, which is not a setting anybody
+    // means.
+    const positive = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0;
+    if (positive(patch.stallSilentMs)) picked.stallSilentMs = patch.stallSilentMs;
+    if (positive(patch.stallSpinTurns)) picked.stallSpinTurns = patch.stallSpinTurns;
+    if (positive(patch.stallStalemateAttempts)) picked.stallStalemateAttempts = patch.stallStalemateAttempts;
     if (typeof patch.unblockAttempts === 'boolean') picked.unblockAttempts = patch.unblockAttempts;
     if (typeof patch.staleClaimTakeover === 'boolean') picked.staleClaimTakeover = patch.staleClaimTakeover;
     if (typeof patch.resumeAtBoot === 'boolean') picked.resumeAtBoot = patch.resumeAtBoot;

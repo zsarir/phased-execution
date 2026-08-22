@@ -37,9 +37,15 @@ import {
   INBOX_KIND_LABELS,
   INBOX_SEVERITIES,
   SEVERITY_UI,
+  RULING_KINDS,
+  RULING_KIND_LABELS,
+  STALL_DEFAULTS,
   STALL_KINDS,
   STALL_META,
+  STALL_SIGNALS,
+  STALL_SIGNAL_META,
   inboxItemId,
+  parseInboxItemId,
   sortInbox,
 } from '../shared/attention-model.js';
 import { UI_STATES, isUiState } from '../shared/status-vocab.js';
@@ -355,4 +361,78 @@ test('stall is a declared kind of the inbox, and nothing produces one yet', () =
     inboxItemId({ kind: 'stall', slug: 'alpha', phase: 4, runId: 'r-1', subject: 'session-silent' }),
     'stall:alpha:4:r-1:session-silent',
   );
+});
+
+/* ------------------------------------------------------------------ *
+ * 5. The two vocabularies Phase 5 fills, and the id read backwards
+ * ------------------------------------------------------------------ */
+
+test('the stall SIGNALS are a different list from the stall KINDS, on purpose', () => {
+  // Two vocabularies, two sources of evidence. `STALL_KINDS` is what an INBOX
+  // row is about — computed on read, from timestamps on disk, mostly about
+  // phases with no session at all. `STALL_SIGNALS` is what the RUNNER sees on
+  // a lane that is still alive, from the event stream it is already reading.
+  // Conflating them is how a detector ends up firing on a plan nobody is
+  // running.
+  assert.deepEqual([...STALL_SIGNALS], ['stalemate', 'silent', 'spinning']);
+  for (const signal of STALL_SIGNALS) {
+    assert.ok(!(STALL_KINDS as readonly string[]).includes(signal), `${signal} is a signal, not a kind`);
+  }
+  // The bridge is exactly one pair: a lane whose signal is `silent` is what
+  // eventually raises the `session-silent` row, at that row's longer clock.
+  assert.ok(STALL_KINDS.includes('session-silent'));
+  assert.ok(STALL_META['session-silent'].afterMs > STALL_DEFAULTS.stallSilentMs,
+    'the inbox floor must be longer than the detector, or the row arrives before the notification');
+});
+
+test('every signal has words and a severity from the one severity vocabulary', () => {
+  assert.deepEqual(Object.keys(STALL_SIGNAL_META).sort(), [...STALL_SIGNALS].sort());
+  for (const signal of STALL_SIGNALS) {
+    const meta = STALL_SIGNAL_META[signal];
+    assert.ok(meta.label && meta.blurb, `${signal} needs words`);
+    assert.ok(INBOX_SEVERITIES.includes(meta.severity), `${signal} paints with a real severity`);
+    // The threshold lives in STALL_DEFAULTS under the key named here and
+    // nowhere else — the `sizing.env` rule: a detector that fires at twenty
+    // minutes while the card says half an hour is unreproducible.
+    assert.ok(meta.pref in STALL_DEFAULTS, `${signal} names a preference that exists: ${meta.pref}`);
+  }
+  assert.deepEqual(
+    Object.keys(STALL_DEFAULTS).sort(),
+    STALL_SIGNALS.map((s) => STALL_SIGNAL_META[s].pref).sort(),
+    'one knob per signal, and no knob without one',
+  );
+});
+
+test('every ruling kind has a label, and the default is the weakest of them', () => {
+  assert.deepEqual([...RULING_KINDS], ['ambiguity', 'deviation', 'deferral']);
+  assert.deepEqual(Object.keys(RULING_KIND_LABELS).sort(), [...RULING_KINDS].sort());
+  // `phase-outcome.sh` defaults an unnamed --kind to the first: a session that
+  // simply chose between two readings has not deviated from anything, and
+  // recording it as one would put a disagreement in the ledger that never was.
+  assert.equal(RULING_KINDS[0], 'ambiguity');
+});
+
+test('parseInboxItemId is inboxItemId read backwards, and nothing else', () => {
+  // It exists for exactly one caller — the ack route, which has an id and has
+  // to know whether it names a ruling and which one, so the ack can be
+  // appended to that plan's ledger too.
+  const round = (subject: Parameters<typeof inboxItemId>[0]) =>
+    parseInboxItemId(inboxItemId(subject));
+
+  assert.deepEqual(round({ kind: 'ruling', slug: 'demo', phase: 4, subject: 'abc123' }), {
+    kind: 'ruling', slug: 'demo', phase: 4, runId: '', subject: 'abc123',
+  });
+  // The escaping survives in both directions: a slug that contains the
+  // separator, and one that contains the escape.
+  assert.deepEqual(round({ kind: 'ruling', slug: 'a:b%c', phase: 2, runId: 'r:1', subject: 's%3Ax' }), {
+    kind: 'ruling', slug: 'a:b%c', phase: 2, runId: 'r:1', subject: 's%3Ax',
+  });
+  // The deliberate collapse holds: phase 0 is "no phase" going in, and stays
+  // "no phase" coming back.
+  assert.equal(round({ kind: 'errand', slug: 'demo', phase: 0, subject: 'x' })!.phase, null);
+  // And anything that is not a five-part id is not a ruling, rather than an
+  // exception on a route that took it off an HTTP body.
+  for (const junk of ['', 'nonsense', 'a:b:c', 'a:b:c:d:e:f']) {
+    assert.equal(parseInboxItemId(junk), null, `${junk} must not parse`);
+  }
 });

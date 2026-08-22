@@ -297,13 +297,198 @@ test('every kind Phase 4 produces is produced, and exactly as often as there are
   }
 });
 
-test('stall and ruling are declared and produced by nobody', () => {
-  // Phase 5 writes both detectors. They are in the vocabulary from the first
-  // day so landing them changes no type, no route and no stored ack — but
-  // until then, nothing may quietly start emitting one.
+test('stall and ruling are raised from their own facts and from nothing else', () => {
+  // Every other kind is derived from facts this fixture already carries, so a
+  // stall row that appeared here would be one derived from a run merely being
+  // stopped — which is a halt, and has its own card.
   const { items } = buildInbox(facts(), NOW);
   assert.equal(items.filter((i) => i.kind === 'stall').length, 0);
   assert.equal(items.filter((i) => i.kind === 'ruling').length, 0);
+});
+
+/* ------------------------------------------------------------------ *
+ * stall — nominally in flight, and not moving
+ * ------------------------------------------------------------------ */
+
+const ago = (ms: number) => new Date(NOW - ms).toISOString();
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+
+/** A live run whose phases are each stuck in one of the five ways. */
+function stallFacts(over: Partial<InboxFacts> = {}): InboxFacts {
+  return {
+    runs: [{
+      id: 'run-s',
+      slug: 'demo',
+      status: 'running',
+      phases: {
+        // Silent past the half-hour floor, with a call still open.
+        1: {
+          phase: 1, status: 'running',
+          liveness: { lastOutputAt: ago(40 * MIN), turnsSinceLastTool: 3, openTool: { name: 'Bash', since: ago(41 * MIN) } },
+          stall: { signal: 'silent', since: ago(40 * MIN), detail: 'no output for 40 min' },
+        },
+        // Silent for ten minutes: the runner has noticed and announced, but
+        // the inbox floor is thirty and a person owes nothing yet.
+        2: {
+          phase: 2, status: 'running',
+          liveness: { lastOutputAt: ago(10 * MIN), turnsSinceLastTool: 0 },
+          stall: { signal: 'silent', since: ago(10 * MIN), detail: 'no output for 10 min' },
+        },
+        3: { phase: 3, status: 'queued', lockWaitSince: ago(70 * MIN) },
+        4: { phase: 4, status: 'waiting', parkedUntil: ago(20 * MIN), parkReason: 'the image build' },
+        // Parked and not yet due: waiting is not stalling.
+        5: { phase: 5, status: 'waiting', parkedUntil: new Date(NOW + HOUR).toISOString() },
+        6: { phase: 6, status: 'verifying', verifyingSince: ago(25 * MIN) },
+        // Verifying, but only for a moment — a build is silent and fine.
+        7: { phase: 7, status: 'verifying', verifyingSince: ago(2 * MIN) },
+      },
+    }],
+    plans: [{ slug: 'demo', updatedAt: ago(9 * 24 * HOUR) }, { slug: 'shelved', closed: true, updatedAt: ago(30 * 24 * HOUR) }],
+    stalledPlans: [
+      { slug: 'demo', days: 9, ready: [4, 5] },
+      // A closed plan reports no progress, so it cannot be idle either.
+      { slug: 'shelved', days: 30, ready: [1] },
+    ],
+    flags: { allowWrites: true, allowRun: true },
+    acks: {},
+    ...over,
+  };
+}
+
+const stallKinds = (items: readonly InboxItem[]) =>
+  items.filter((i) => i.kind === 'stall').map((i) => i.id.split(':').at(-1));
+
+test('each of the five stalls is raised from its own clock, and only past it', () => {
+  const { items } = buildInbox(stallFacts(), NOW);
+  assert.deepEqual(stallKinds(items).sort(), [
+    'park-overdue', 'plan-idle', 'queued-behind-lock', 'session-silent', 'verify-hanging',
+  ]);
+  // One row per stuck phase, and the ones under their floor are not rows:
+  // phase 2 is silent but only for ten minutes, phase 5 is parked and not due,
+  // phase 7 has been verifying for two minutes.
+  const stalls = items.filter((i) => i.kind === 'stall');
+  assert.deepEqual(stalls.map((i) => i.phase).filter(Boolean).sort(), [1, 3, 4, 6]);
+});
+
+test('the inbox floor is longer than the detector, deliberately', () => {
+  // The runner notices silence at ten minutes and announces once, because a
+  // notification is cheap and dismissable. The inbox is a list of things a
+  // person still owes an answer to, and half an hour is where "it is thinking"
+  // stops being the likely explanation. Phase 2 is the case that proves it.
+  const { items } = buildInbox(stallFacts(), NOW);
+  const silent = items.filter((i) => i.kind === 'stall' && i.id.endsWith('session-silent'));
+  assert.deepEqual(silent.map((i) => i.phase), [1]);
+  assert.match(silent[0].need, /produced nothing for 40 min/);
+  assert.match(silent[0].need, /oldest open tool call is Bash|Bash/);
+  // The clock is when the silence BEGAN, so an ack goes stale exactly when the
+  // silence restarts and not on the next poll.
+  assert.equal(silent[0].since, ago(40 * MIN));
+});
+
+test('a stalled session carries the three verbs that answer one', () => {
+  const { items } = buildInbox(stallFacts(), NOW);
+  const silent = items.find((i) => i.kind === 'stall' && i.id.endsWith('session-silent'))!;
+  assert.deepEqual(silent.actions.map((a) => a.verb), ['steer', 'freeze', 'stop']);
+  for (const action of silent.actions) {
+    assert.equal(action.method, 'POST');
+    assert.match(action.endpoint, /^\/api\/run\/demo\//);
+    assert.equal((action.body as { phase: number }).phase, 1, 'every one of them names the lane, not the run');
+  }
+  // The nudge is canned rather than a compose box: the row is read on a phone
+  // at the top of an inbox, and the useful thing to say is the same sentence
+  // every time.
+  const steer = silent.actions[0].body as { instruction: string };
+  assert.match(steer.instruction, /phase-outcome\.sh/);
+});
+
+test('a stall with no live session carries the verb that answers IT', () => {
+  const { items } = buildInbox(stallFacts(), NOW);
+  const verbs = (suffix: string) =>
+    items.find((i) => i.kind === 'stall' && i.id.endsWith(suffix))!.actions.map((a) => a.verb);
+  // Four of the five have no session to steer: a lock nothing is releasing, a
+  // park nothing resumed, a plan nobody has opened, a check that will not end.
+  assert.deepEqual(verbs('queued-behind-lock'), ['release', 'stop']);
+  assert.deepEqual(verbs('park-overdue'), ['recover']);
+  assert.deepEqual(verbs('verify-hanging'), ['stop']);
+  assert.deepEqual(verbs('plan-idle'), []);
+});
+
+test('a closed plan is never idle, because a closed plan claims nothing', () => {
+  const { items } = buildInbox(stallFacts(), NOW);
+  const idle = items.filter((i) => i.kind === 'stall' && i.id.endsWith('plan-idle'));
+  assert.deepEqual(idle.map((i) => i.slug), ['demo']);
+  assert.match(idle[0].title, /9 days idle/);
+  // Read from the Insights computation, not re-derived: two definitions of
+  // "idle for seven days" would drift the first time one learned about a new
+  // kind of activity.
+  assert.match(idle[0].need, /phases 4, 5 are startable/);
+});
+
+test('a stopped run does not raise stall rows off the liveness its lane left behind', () => {
+  // `record.liveness` is persisted so a killed lane can still say what it was
+  // doing. It is stale by construction, and a halted run reading "silent for
+  // three hours" would be an ask nobody can answer.
+  const base = stallFacts();
+  const stopped = buildInbox({
+    ...base,
+    runs: [{ ...base.runs![0], status: 'halted' }],
+    stalledPlans: [],
+  }, NOW);
+  assert.deepEqual(stallKinds(stopped.items).sort(), ['park-overdue'],
+    'only the park survives — a phase can be parked while its run is not running');
+});
+
+/* ------------------------------------------------------------------ *
+ * ruling — a decision worth remembering
+ * ------------------------------------------------------------------ */
+
+const RULING = {
+  id: 'abc123', slug: 'demo', phase: 4, kind: 'deviation',
+  what: 'kept the old field', why: 'a reader predating it still exists',
+  costIfWrong: 'one dead branch', at: ago(2 * 24 * HOUR),
+};
+
+test('a recent ruling is an fyi row keyed on the ruling itself', () => {
+  const { items } = buildInbox({ rulings: [RULING], acks: {} }, NOW);
+  assert.equal(items.length, 1);
+  const [row] = items;
+  assert.equal(row.kind, 'ruling');
+  assert.equal(row.severity, 'fyi', 'nothing is waiting — the session already acted on it');
+  assert.equal(row.id, inboxItemId({ kind: 'ruling', slug: 'demo', phase: 4, subject: 'abc123' }));
+  assert.match(row.title, /Deviation/);
+  assert.equal(row.need, 'kept the old field');
+  assert.match(row.how, /a reader predating it still exists/);
+  assert.match(row.how, /one dead branch/);
+  assert.equal(row.since, RULING.at);
+  assert.deepEqual(row.actions, [], 'seeing it IS the interaction');
+});
+
+test('a ruling older than the window is history, not an ask', () => {
+  const old = { ...RULING, id: 'old1', at: ago(20 * 24 * HOUR) };
+  const { items } = buildInbox({ rulings: [RULING, old], acks: {} }, NOW);
+  assert.deepEqual(items.map((i) => i.need), ['kept the old field']);
+});
+
+test('one busy plan cannot own the list', () => {
+  const many = Array.from({ length: 40 }, (_, i) => ({
+    ...RULING, id: `r${i}`, what: `decision ${i}`, at: new Date(NOW - i * MIN).toISOString(),
+  }));
+  const { items } = buildInbox({ rulings: many, acks: {} }, NOW);
+  assert.equal(items.length, 20);
+  // The NEWEST twenty are the ones kept — an older ruling that still matters
+  // has been read by now. (The list then arrives in `sortInbox` order, which
+  // is oldest-first within a severity, so this is a claim about the SET.)
+  const kept = new Set(items.map((i) => i.need));
+  assert.ok(kept.has('decision 0') && kept.has('decision 19'));
+  assert.ok(!kept.has('decision 20') && !kept.has('decision 39'));
+});
+
+test('a closed plan raises no rulings, like every other progress claim', () => {
+  const { items } = buildInbox(
+    { rulings: [RULING], plans: [{ slug: 'demo', closed: true }], acks: {} }, NOW,
+  );
+  assert.deepEqual(items, []);
 });
 
 test('the asks the fixture must NOT raise are not raised', () => {
@@ -555,7 +740,11 @@ test('every href the builder can emit lands on a head the client registers', () 
   const { items } = buildInbox(facts(), NOW, { all: true });
   assert.ok(items.length > 10, 'the fact set must actually exercise every builder');
 
-  for (const item of items) {
+  // The two kinds the base fixture deliberately does not carry facts for.
+  const more = buildInbox({ ...stallFacts(), rulings: [RULING] }, NOW, { all: true }).items;
+  assert.ok(more.some((i) => i.kind === 'stall') && more.some((i) => i.kind === 'ruling'));
+
+  for (const item of [...items, ...more]) {
     const { segments } = parseHash(toHash(item.href));
     assert.ok(isRouteHead(segments[0]), `${item.id} → ${item.href} — '${segments[0]}' is not in ROUTE_HEADS`);
     assert.ok(!item.href.includes('undefined'), `${item.id} leaked an undefined into ${item.href}`);

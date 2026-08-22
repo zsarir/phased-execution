@@ -10,6 +10,9 @@ load ../helpers/test_helper
 setup() {
   export PE_NOW="2026-08-10T21:10:03Z"
   export PE_OUTCOME_FILE="$BATS_TEST_TMPDIR/outcome.json"
+  # The ruling ledger the runner would inject. Append-only, unlike the outcome
+  # file, which is written whole and consumed.
+  export PE_RULINGS_FILE="$BATS_TEST_TMPDIR/rulings.ndjson"
   # The session line is written only when a session id is known; this suite
   # may itself run inside a Claude session that exports one.
   unset PE_SESSION_ID CLAUDE_CODE_SESSION_ID
@@ -25,6 +28,15 @@ inbox_dir() { # <slug>
   local id
   id="$(printf '%s' "$DOCS_ROOT" | shasum -a 256 | cut -c1-8)-$(basename "$DOCS_ROOT")"
   printf '%s/phase-console/runs/%s/%s/outcomes' "$XDG_STATE_HOME" "$id" "$1"
+}
+
+# The rulings ledger sits beside outcomes/: it is per PLAN, not per phase and
+# not per run. Built from the id rather than from `inbox_dir`/.. — `..` only
+# resolves through a directory that exists, and outcomes/ need not.
+ledger_file() { # <slug>
+  local id
+  id="$(printf '%s' "$DOCS_ROOT" | shasum -a 256 | cut -c1-8)-$(basename "$DOCS_ROOT")"
+  printf '%s/phase-console/runs/%s/%s/rulings.ndjson' "$XDG_STATE_HOME" "$id" "$1"
 }
 
 @test "outcome: waiting-external writes the exact JSON, atomically" {
@@ -168,4 +180,92 @@ inbox_dir() { # <slug>
   # The wait flags still belong to waiting-external only.
   run pe_outcome demo 5 partial --wait-minutes 10
   [ "$status" -eq 2 ]
+}
+
+# ---- rulings: what a session DECIDED, not how it ended ---------------------
+
+@test "ruling: writes ONE exact NDJSON line, and the next one appends" {
+  run pe_outcome demo 5 ruling --kind deviation --what "kept the old field" \
+    --why "a reader predating it still exists" --cost-if-wrong "one dead branch"
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "ruling recorded: demo phase 5 (deviation)"
+  expected='{"version":1,"type":"ruling","slug":"demo","phase":5,"kind":"deviation","what":"kept the old field","why":"a reader predating it still exists","cost_if_wrong":"one dead branch","at":"2026-08-10T21:10:03Z"}'
+  [ "$(cat "$PE_RULINGS_FILE")" = "$expected" ]
+
+  PE_NOW="2026-08-10T22:00:00Z" run pe_outcome demo 6 ruling --what "left the sub-case to phase 9"
+  [ "$status" -eq 0 ]
+  # Appended, not replaced: two lines, the first untouched.
+  [ "$(wc -l < "$PE_RULINGS_FILE" | tr -d ' ')" = "2" ]
+  [ "$(head -1 "$PE_RULINGS_FILE")" = "$expected" ]
+  second='{"version":1,"type":"ruling","slug":"demo","phase":6,"kind":"ambiguity","what":"left the sub-case to phase 9","at":"2026-08-10T22:00:00Z"}'
+  [ "$(tail -1 "$PE_RULINGS_FILE")" = "$second" ]
+}
+
+@test "ruling: --kind defaults to ambiguity and an unknown kind exits 2 without writing" {
+  run pe_outcome demo 5 ruling --what "a choice"
+  [ "$status" -eq 0 ]
+  assert_contains "$(cat "$PE_RULINGS_FILE")" '"kind":"ambiguity"'
+
+  rm -f "$PE_RULINGS_FILE"
+  run pe_outcome demo 5 ruling --kind opinion --what "a choice"
+  [ "$status" -eq 2 ]
+  assert_contains "$output" "invalid --kind: opinion"
+  [ ! -f "$PE_RULINGS_FILE" ]
+}
+
+@test "ruling: newlines, quotes and backslashes are sanitised into ONE json line" {
+  what="$(printf 'chose "A"\nover B\\C')"
+  run pe_outcome demo 5 ruling --what "$what"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$PE_RULINGS_FILE" | tr -d ' ')" = "1" ]
+  assert_contains "$(cat "$PE_RULINGS_FILE")" '"what":"chose \"A\" over B\\C"'
+}
+
+@test "ruling: --what is required, and the outcome flags are refused rather than ignored" {
+  run pe_outcome demo 5 ruling
+  [ "$status" -eq 2 ]
+  assert_contains "$output" "--what is required"
+
+  run pe_outcome demo 5 ruling --what x --watch "gh:a#run/1"
+  [ "$status" -eq 2 ]
+  assert_contains "$output" "belong to an outcome status"
+
+  run pe_outcome demo 5 ruling --what x --wait-minutes 30
+  [ "$status" -eq 2 ]
+  assert_contains "$output" "belong to an outcome status"
+
+  # ...and the other way round: a ruling flag on a real status is an error too.
+  run pe_outcome demo 5 complete --what x
+  [ "$status" -eq 2 ]
+  assert_contains "$output" "only make sense with ruling"
+  [ ! -f "$PE_RULINGS_FILE" ]
+}
+
+@test "ruling: the session id rides along, sanitised, and is omitted when unknown" {
+  PE_SESSION_ID='we"ird id' run pe_outcome demo 5 ruling --what x
+  [ "$status" -eq 0 ]
+  assert_contains "$(cat "$PE_RULINGS_FILE")" '"session_id":"weirdid"'
+  rm -f "$PE_RULINGS_FILE"
+  run pe_outcome demo 5 ruling --what x
+  refute_contains "$(cat "$PE_RULINGS_FILE")" 'session_id'
+}
+
+@test "ruling: without PE_RULINGS_FILE the line goes to this root's ledger AND to stdout, exit stays 0" {
+  unset PE_RULINGS_FILE
+  run pe_outcome demo 5 ruling --what "a choice"
+  [ "$status" -eq 0 ]
+  assert_contains "$output" '"type":"ruling"'
+  assert_contains "$output" 'PE_RULINGS_FILE is not set'
+  f="$(ledger_file demo)"
+  [ -f "$f" ]
+  assert_contains "$(cat "$f")" '"what":"a choice"'
+}
+
+@test "ruling: an unwritable state home still prints the line and exits 0" {
+  unset PE_RULINGS_FILE
+  export XDG_STATE_HOME="/dev/null/nowhere"
+  run pe_outcome demo 5 ruling --what "a choice"
+  [ "$status" -eq 0 ]
+  assert_contains "$output" '"what":"a choice"'
+  assert_contains "$output" 'could not be written'
 }

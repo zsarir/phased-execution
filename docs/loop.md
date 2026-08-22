@@ -259,6 +259,72 @@ never spawns reviewers on its own); **destructive or irreversible acts** and **p
 release — the deny list holds them on every profile); and anything `unknown`. Everything else it decides,
 within the caps, and journals.
 
+## Liveness — is the lane that is nominally working actually working?
+
+The loop above answers "why did this phase STOP". It has never answered "is this phase, which has not
+stopped, doing anything" — and from every surface the console had, three quite different lanes looked
+identical: one wedged on a `Bash` call waiting for a prompt nobody would type, one producing eleven
+turns of prose because the file it needed was not there, and one about to commit. All three read
+`running`, with a spinner, at four cents a minute.
+
+Every live lane now carries `{lastOutputAt, lastToolUseAt, turnsSinceLastTool, commitsSinceStart,
+treeDirty, openTool?, stall?}` on `GET /api/run/:slug` (`liveness[]`) and on its own phase record, and
+a 60-second `unref` ticker evaluates three signals against it:
+
+| signal | when | what it means |
+|---|---|---|
+| `stalemate` | `stallStalemateAttempts` attempts in a row ended with nothing committed and a clean tree | re-running has stopped being a remedy |
+| `silent` | no output at all for `stallSilentMs`; names the tool call open longest | still spending, producing nothing |
+| `spinning` | `stallSpinTurns` turns in a row with no tool call | talking rather than working |
+
+Worst-first: a lane that is both spinning and now silent reports `silent`, the newer and harder fact.
+**A phase inside its own §Verification is exempt** — the session has exited and the commands own the
+next several minutes, so a real test suite would otherwise raise a card on every phase of every plan.
+A subagent's turns are not the phase's: a delegating phase sits with its own conversation stopped
+while an `Explore` agent works, and counting that as activity would hide exactly the stretch worth
+asking about.
+
+One episode is one card. The ticker journals only transitions (`phase.stall` when a signal starts,
+`phase.liveness` when it clears), emits `run:liveness`, and announces once under the **`stalled`**
+push category — **on by default and deliberately not urgent**: nothing is blocked on the operator and
+the run has not stopped. It is the money question, not the permission question, and a card that
+buzzed a wrist for it would be muted within a week.
+
+**v1 is display, notification and manual verbs — not a ladder situation.** The inbox row for a silent
+lane carries `steer` (a canned nudge), `freeze` and `stop {phase}`, and the operator decides. Making
+`stalled` a situation with rungs of its own is the v2 path, and it is deliberately not taken yet: the
+ladder's one hard promise is never the same rung twice per situation per phase, and a signal that can
+re-fire on every attempt of a long phase needs its false-positive rate measured on real runs before it
+is allowed to spend money.
+
+The inbox's own five stall rows (`shared/attention-model.js` `STALL_KINDS`) are a longer-clocked
+superset, computed on read: `session-silent` (30 min — the runner notices at ten and announces, the
+inbox asks a person at thirty), `queued-behind-lock` (1 h, half the runner's own lock-wait cap),
+`park-overdue` (10 min past a park's own `parkedUntil` — the arming failed, not the waiting),
+`plan-idle` (7 d, read from the Insights computation rather than re-derived) and `verify-hanging`
+(15 min — the runtime half of lint F16).
+
+## Rulings — what a session decided
+
+The outcome protocol is about endings. A **ruling** is about the judgement calls a session makes on
+the way, which nobody else can reconstruct:
+
+```bash
+bash scripts/phase-outcome.sh <slug> <N> ruling --kind ambiguity|deviation|deferral \
+  --what "<what you decided>" --why "<why>" [--cost-if-wrong "<what it costs if this was wrong>"]
+```
+
+One appended NDJSON line to `$PE_RULINGS_FILE` — the runner injects it — or, unsupervised, to
+`runs/<instance>/<slug>/rulings.ndjson` beside the outcomes inbox. The console's watcher folds new
+lines into the run (`run.rulings`), journals each as `phase.ruling`, serves the whole ledger at
+`GET /api/run/:slug/rulings`, puts this phase's on the diagnosis, and raises an `fyi` inbox row per
+recent one. Acknowledging appends a further line rather than editing the file, so a reader never
+races a live session.
+
+**Nothing acts on a ruling** — it does not park a phase, climb the ladder or change what runs next,
+and declaring one is never a substitute for declaring an outcome. That is the point: it costs one
+line, so a session in doubt records it instead of hoping the handoff paragraph survives the skim.
+
 ## The journal, by name
 
 | line | who | when |
@@ -273,6 +339,8 @@ within the caps, and journals.
 | `run.account-switched` · `phase.account-switch` · `run.waiting` · `phase.model-window-wait` · `phase.model-window-retry` · `run.budget-raised` · `phase.mcp-require-timeout` · `phase.pr-session` | runner | the resource walls |
 | `phase.outcome {status, reason, resumeAfter, watch, by?}` · `phase.outcome-ignored` · `phase.outcome-partial` · `run.start {by:'unsupervised'}` | runner, service | outcomes, a hand session's included |
 | `run.plan-recover {step}` | service | Recover & continue's three steps |
+| `phase.stall {signal, since, detail, attempt}` · `phase.liveness {cleared, turnsSinceLastTool, commitsSinceStart, treeDirty}` | runner | a stall episode opened / cleared — once each, never per tick |
+| `phase.ruling {id, kind, what, why?, costIfWrong?, sessionId?, at}` | runner, service | a decision a session recorded |
 
 ## The knobs (Settings ▸ Automation, `POST /api/prefs`, `server/config.ts`)
 
@@ -290,16 +358,21 @@ within the caps, and journals.
 | `autoAccountSwitch` | on | switch accounts at an auth or a far usage wall |
 | `budgetAutoRaisePct` | 25 | the one budget raise (0 = never) |
 | `mcpRequireTimeoutMs` | 1 800 000 | a `require` park's clock (0 = wait forever) |
+| `stallSilentMs` | 600 000 | no output at all for this long is `silent` (suppressed while verifying) |
+| `stallSpinTurns` | 6 | this many turns with no tool call is `spinning` |
+| `stallStalemateAttempts` | 3 | this many attempts that changed nothing is `stalemate` |
 | `mcpPolicy`, `gitMode`, `openPrOnComplete`, `repoGuard`, `attachDefaultSkills`, `qaByDefault` | — | the launch defaults ([controls.md](controls.md)) |
 
 ## Where it lives
 
-`viewer/shared/{situation-model,ladder-model,recovery-model}.js` (the vocabularies, imported by
-identity) · `viewer/server/runner/{situation,ladder,runner,scheduler,spawn,outcome}.ts` ·
+`viewer/shared/{situation-model,ladder-model,recovery-model,attention-model}.js` (the vocabularies,
+imported by identity) ·
+`viewer/server/runner/{situation,ladder,runner,scheduler,spawn,outcome,liveness,rulings}.ts` ·
 `viewer/server/{converge,service,hooks-install}.ts` · `viewer/server/sessions/registry.ts` ·
 `scripts/{session-hook,instance,phase-lock,phase-outcome}.sh` · the client's
 `components/{errand,recovery-actions,pulse}.tsx`, `views/dashboard/now.tsx`,
 `views/settings/{automation,ladder,hooks}.tsx` · tests: `viewer/test/{situation,ladder,converge,
-auto-recovery,sessions-*,hooks-install}.test.ts` and `tests/unit/{session-hook,lock,outcome}.bats`.
+auto-recovery,sessions-*,hooks-install,liveness,rulings}.test.ts` and
+`tests/unit/{session-hook,lock,outcome}.bats`.
 
 ---

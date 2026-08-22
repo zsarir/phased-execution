@@ -44,6 +44,11 @@ import {
   failureContext, resumeBrief, resumeInstruction, unblockBrief, type BriefFacts,
 } from './failure-context.ts';
 import {
+  applyEvent, evaluateStall, livenessOf, newLaneSignals, stallThresholds,
+  type LaneLiveness, type LaneSignals, type StallThresholds,
+} from './liveness.ts';
+import { ingestRulings, rulingsFile, type Ruling } from './rulings.ts';
+import {
   classifySituation, collectEvidence, parseLockStatus, situation as situationOf, workEvidence,
   type EvidenceDeps, type PhaseEvidence, type Situation,
 } from './situation.ts';
@@ -329,6 +334,12 @@ export type RunnerDeps = {
   /** Minimum park window override — tests only; defaults to one minute. */
   waitFloorMs?: number;
   now?: () => Date;
+  /**
+   * The console's stall thresholds (`config.ts` prefs), read fresh on every
+   * evaluation so a number changed in Settings applies to the lane already
+   * running rather than to the next run. Absent means the shipped defaults.
+   */
+  stallThresholds?: () => Partial<StallThresholds> | undefined;
 };
 
 export type StartOptions = {
@@ -559,6 +570,13 @@ function unattendedDirective(scriptsDir: string, slug: string, phase: number): s
     '  write the handoff `in-progress`, then declare it so the supervisor RESUMES you instead of',
     '  reading a failed phase:',
     `      bash ${scriptsDir}/phase-outcome.sh ${slug} ${phase} partial --reason <budget|context|other>`,
+    '- Made a judgement call the plan did not make for you — read an ambiguous instruction one way,',
+    '  departed from what the plan said, or deliberately left something for later? RECORD IT. It costs',
+    '  one line, nothing acts on it, and it is the thing the next session most needs and handoffs most',
+    '  often omit:',
+    `      bash ${scriptsDir}/phase-outcome.sh ${slug} ${phase} ruling --kind ambiguity|deviation|deferral \\`,
+    '        --what "<what you decided>" --why "<why>" [--cost-if-wrong "<what it costs if this was wrong>"]',
+    '  It is not an outcome and it never ends your turn; declare the outcome as well.',
     '- Never end the turn silently waiting. Declare an outcome or finish the closeout.',
     '  Ending your turn with words like "waiting for the build" and NO declared outcome',
     '  reads as a FAILED phase and stops the run.',
@@ -752,7 +770,26 @@ type Lane = {
   leaseTimer: NodeJS.Timeout | null;
   /** A refresh is in flight — see `refreshLease` for why overlap is refused. */
   leaseBusy?: boolean;
+  /**
+   * What the stream has said about this lane so far (`runner/liveness.ts`).
+   * Folded in `onStream`, read by the 60-second ticker, and thrown away with
+   * the lane — the durable half is `record.liveness` / `record.stall`.
+   */
+  signals: LaneSignals;
+  /**
+   * When the tree was last asked about (ms). `git status` and `git log` are
+   * two subprocesses per scope directory, and the question they answer — has
+   * this phase produced anything at all — does not change per turn, so it is
+   * asked on a much slower cadence than the tick.
+   */
+  gitAt?: number;
 };
+
+/** How often the liveness ticker evaluates every live lane. */
+const LIVENESS_TICK_MS = 60_000;
+
+/** How often that tick is allowed to spend subprocesses on the working tree. */
+const LIVENESS_GIT_EVERY_MS = 5 * 60_000;
 
 export class Runner {
   private deps: RunnerDeps;
@@ -768,6 +805,8 @@ export class Runner {
    * `state.activePhase` and `state.freeze` are all derived from it.
    */
   private lanes = new Map<number, Lane>();
+  /** The 60-second liveness ticker; armed with the first lane, retired with the last. */
+  private livenessTimer: NodeJS.Timeout | null = null;
   private childPid: number | null = null;
   /** The live session, while there is one — what `/btw` talks to. */
   private handle: SpawnHandle | null = null;
@@ -868,6 +907,50 @@ export class Runner {
 
   /** The phases with a live session right now. */
   livePhases(): number[] { return [...this.lanes.keys()].sort((a, b) => a - b); }
+
+  /**
+   * Every live lane's liveness, computed NOW rather than read off the last
+   * tick.
+   *
+   * The record's own `liveness` is at most a minute old, which is right for a
+   * checkpoint and wrong for a page that just asked. A caller with no runner
+   * falls back to the records; a caller with one gets the current answer.
+   */
+  liveness(): LaneLiveness[] {
+    return [...this.lanes.values()]
+      .map((lane) => livenessOf(lane.phase, lane.signals))
+      .sort((a, b) => a.phase - b.phase);
+  }
+
+  /**
+   * Fold a freshly-read ruling ledger into this run, journalling each new one.
+   *
+   * Scoped to rulings written since this run STARTED. The ledger is per plan
+   * and outlives every run — a plan on its fourth run would otherwise ingest
+   * three runs' worth of history the first time the watcher fired, and journal
+   * every line of it. `GET /api/run/:slug/rulings` reads the whole file, so
+   * nothing is hidden; this is the run's own slice.
+   */
+  ingestRulings(ledger: readonly Ruling[]): number {
+    const state = this.state;
+    if (!state) return 0;
+    const mine = ledger.filter((ruling) => !state.createdAt || ruling.at >= state.createdAt);
+    const { rulings, added } = ingestRulings(state.rulings, mine);
+    if (!added.length) return 0;
+    state.rulings = rulings;
+    for (const ruling of added) {
+      this.record('phase.ruling', {
+        id: ruling.id, kind: ruling.kind, what: ruling.what,
+        ...(ruling.why ? { why: ruling.why } : {}),
+        ...(ruling.costIfWrong ? { costIfWrong: ruling.costIfWrong } : {}),
+        ...(ruling.sessionId ? { sessionId: ruling.sessionId } : {}),
+        at: ruling.at,
+      }, ruling.phase);
+    }
+    this.persist();
+    this.emit('rulings', { added: added.length });
+    return added.length;
+  }
 
   /**
    * The lane a control is aimed at: the one named, or the mirror.
@@ -1369,8 +1452,13 @@ export class Runner {
     const lane: Lane = {
       phase: options.phase, pid: null, handle: null, grant,
       frozen: null, freezeTimer: null, stopped: null, checkpointed: false, checkpointNote: null, leaseTimer: null,
+      // No `idleAttempts` carry-over: a recovery is not another attempt at the
+      // phase, and counting it as one would let three recoveries — each of
+      // which may legitimately change nothing — declare a stalemate.
+      signals: newLaneSignals(this.now().getTime()),
     };
     this.lanes.set(options.phase, lane);
+    this.armLivenessTicker();
     // A recovery session holds the phase lock exactly as a phase session does,
     // and can run just as long — the keepalive applies equally.
     this.armLeaseTimer(lane, autopilotOwner(state.id));
@@ -1388,7 +1476,7 @@ export class Runner {
         if (said) { this.halt(said, options.phase, 'recovery-failed'); return; }
       }
 
-      const ok = await this.confirm(options.phase);
+      const ok = await this.confirmed(options.phase);
       if (!ok) return; // confirm() halted (or re-halted) and said why
 
       // Success — and only success — retires the stop this recovery was
@@ -1791,6 +1879,11 @@ export class Runner {
           PE_OWNER: autopilotOwner(state.id),
           PE_SCOPE: formatScope(this.lanes.get(phase)?.grant?.scope ?? await this.scopeFor(phase)),
           PE_OUTCOME_FILE: this.outcomePath(phase),
+          // Where a decision goes. Separate from the outcome file on purpose:
+          // an outcome is read once and consumed, a ruling is appended and
+          // kept, and a session must be able to record the second without
+          // touching the first.
+          PE_RULINGS_FILE: rulingsFile(this.state!.root, this.state!.slug),
         }),
         signal: this.abort?.signal,
         // The same wiring `attempt` uses, and for the same reason: `state.child`
@@ -3172,6 +3265,7 @@ export class Runner {
       // Whatever is left is not running any more, whichever way the loop left.
       for (const lane of this.lanes.values()) this.clearFreezeTimer(lane);
       this.lanes.clear();
+      this.disarmLivenessTicker();
       this.syncMirror();
       state.child = null;
       delete state.children;
@@ -3293,8 +3387,13 @@ export class Runner {
     // place to undo all of it.
     const lane: Lane = {
       phase, pid: null, handle: null, grant, frozen: null, freezeTimer: null, stopped: null, checkpointed: false, checkpointNote: null, leaseTimer: null,
+      // The stalemate counter is the phase's, not the lane's: three attempts
+      // that changed nothing is a claim about the phase, and each of those
+      // attempts had a lane of its own.
+      signals: newLaneSignals(this.now().getTime(), { idleAttempts: record.idleAttempts }),
     };
     this.lanes.set(phase, lane);
+    this.armLivenessTicker();
 
     try {
       return await this.runPhaseAdmitted(phase, board, lane);
@@ -3678,7 +3777,7 @@ export class Runner {
      * twelve hours — was unlocked and read `ready` to every other session that
      * looked. Closeout needs it held too: it resumes the session that owns it. */
     try {
-      return await this.confirm(phase);
+      return await this.confirmed(phase);
     } finally {
       await this.release(phase, owner);
     }
@@ -3771,6 +3870,11 @@ export class Runner {
           PE_OWNER: autopilotOwner(state.id),
           PE_SCOPE: formatScope(await this.scopeFor(phase)),
           PE_OUTCOME_FILE: this.outcomePath(phase),
+          // Where a decision goes. Separate from the outcome file on purpose:
+          // an outcome is read once and consumed, a ruling is appended and
+          // kept, and a session must be able to record the second without
+          // touching the first.
+          PE_RULINGS_FILE: rulingsFile(this.state!.root, this.state!.slug),
         }),
         signal: this.abort?.signal,
         onPid: (pid) => {
@@ -4066,6 +4170,11 @@ export class Runner {
           // the machine-readable record the runner reads on exit instead of
           // guessing from prose.
           PE_OUTCOME_FILE: this.outcomePath(phase),
+          // Where a decision goes. Separate from the outcome file on purpose:
+          // an outcome is read once and consumed, a ruling is appended and
+          // kept, and a session must be able to record the second without
+          // touching the first.
+          PE_RULINGS_FILE: rulingsFile(this.state!.root, this.state!.slug),
         }),
         signal: this.abort?.signal,
         onPid: (pid) => {
@@ -4110,6 +4219,11 @@ export class Runner {
         // the failure means re-running it and watching.
         said: outcome.resultText.replace(/\s+/g, ' ').slice(0, 1_200),
       }, phase);
+
+      // Did this attempt change anything? The answer is the `stalemate`
+      // counter, and this is the one moment it can be asked: the session has
+      // exited and nothing has re-boarded yet.
+      await this.settleIdleAttempt(phase, lane);
 
       // A checkpoint ended this child on purpose. The phase record is already
       // `pending` with a session to resume, and reading exit 143 as a crash
@@ -4337,6 +4451,58 @@ export class Runner {
   }
 
   /**
+   * Score the attempt that just ended, and re-evaluate the lane.
+   *
+   * `stalemate` is the one signal that cannot be seen from the stream: an
+   * attempt that produces nothing looks, second by second, exactly like an
+   * attempt that is about to. It is only knowable at the end, and only by
+   * asking the tree — which is why the counter lives on the RECORD (it spans
+   * attempts, each with its own lane) and why the window is `attemptStartedAt`
+   * rather than the phase's first start: once attempt 1 has committed
+   * anything, a window anchored at the phase start would call every later
+   * attempt productive whatever it did.
+   *
+   * "I could not read the tree" is not "nothing happened". An unreadable
+   * working tree leaves the counter exactly where it was — three attempts
+   * against a repository the console cannot see is a console problem, and
+   * announcing it as a stalemate would send a person to look at the wrong
+   * thing.
+   */
+  private async settleIdleAttempt(phase: number, lane: Lane): Promise<void> {
+    const record = phaseRecord(this.state!, phase);
+    const work = await workEvidence(
+      (args) => this.gitOrNull(args),
+      record.attemptStartedAt ?? record.startedAt ?? null,
+      await this.scopeDirs(phase),
+    ).catch(() => null);
+    if (!work || work.did === null) return;
+    record.idleAttempts = work.did ? 0 : (record.idleAttempts ?? 0) + 1;
+    lane.signals.idleAttempts = record.idleAttempts;
+    // `dirty` has no time component, so this reading is as good as the
+    // ticker's. `commitsSinceStart` deliberately is NOT taken from here — it
+    // counts from the phase's start and this call counted from the attempt's.
+    lane.signals.treeDirty = (work.dirty ?? 0) > 0;
+    await this.evaluateLane(lane, stallThresholds(this.deps.stallThresholds?.()), this.now().getTime());
+  }
+
+  /**
+   * `confirm`, with the verifying clock retired however it returns.
+   *
+   * A wrapper rather than a `try/finally` inside `confirm` itself: that method
+   * returns from a dozen places across several hundred lines, and a clock left
+   * set by one of them would suppress the stall detector for the rest of the
+   * run.
+   */
+  private async confirmed(phase: number): Promise<boolean> {
+    const record = phaseRecord(this.state!, phase);
+    try {
+      return await this.confirm(phase);
+    } finally {
+      delete record.verifyingSince;
+    }
+  }
+
+  /**
    * The three independent checks. All must agree before a phase counts as done.
    * Nothing here asks the session what happened.
    */
@@ -4344,6 +4510,12 @@ export class Runner {
     const state = this.state!;
     const record = phaseRecord(state, phase);
     record.status = 'verifying';
+    // Two readers, one clock. The live detector suppresses every stall signal
+    // while this is set, because the session has exited and the §Verification
+    // commands own the next several minutes; the inbox's `verify-hanging` row
+    // measures the wait from it. `confirmed` is the only writer, and it clears
+    // it however this returns.
+    record.verifyingSince = this.now().toISOString();
     this.emit('phase', { phase, status: 'verifying' });
 
     /* The session's declared outcome, read once and journalled. The board
@@ -5204,6 +5376,11 @@ export class Runner {
           PE_OWNER: autopilotOwner(state.id),
           PE_SCOPE: formatScope(this.lanes.get(phase)?.grant?.scope ?? await this.scopeFor(phase)),
           PE_OUTCOME_FILE: this.outcomePath(phase),
+          // Where a decision goes. Separate from the outcome file on purpose:
+          // an outcome is read once and consumed, a ruling is appended and
+          // kept, and a session must be able to record the second without
+          // touching the first.
+          PE_RULINGS_FILE: rulingsFile(this.state!.root, this.state!.slug),
         }),
         signal: this.abort?.signal,
         // As in `attempt` and `resumeWithInstruction`: a closeout is a live
@@ -5986,6 +6163,128 @@ export class Runner {
 
   private now(): Date { return this.deps.now?.() ?? new Date(); }
 
+  /* ---------------------------------------------------------------- *
+   * Liveness: is the lane that is nominally working actually working?
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Start the ticker if it is not already running.
+   *
+   * Armed by lane creation and retired by the first tick that finds no lanes,
+   * rather than by the drive loop's own lifecycle — because a recovery session
+   * gets a lane without one, and because a runner that halts mid-phase leaves
+   * its `finally` blocks to unwind at their own pace. Self-limiting: at most
+   * one idle tick is ever paid for.
+   *
+   * `unref` so it is never what keeps the process alive. A console shutting
+   * down must not wait a minute for a heartbeat.
+   */
+  private armLivenessTicker(): void {
+    if (this.livenessTimer) return;
+    this.livenessTimer = setInterval(() => { void this.tickLiveness(); }, LIVENESS_TICK_MS);
+    this.livenessTimer.unref?.();
+  }
+
+  private disarmLivenessTicker(): void {
+    if (!this.livenessTimer) return;
+    clearInterval(this.livenessTimer);
+    this.livenessTimer = null;
+  }
+
+  /**
+   * Evaluate every live lane once.
+   *
+   * Public because the ticker is the only thing that calls it in production
+   * and a test must be able to call it instead: the whole point of
+   * `liveness.ts` being pure is that the interesting behaviour — an episode
+   * opening, an episode clearing, an episode not re-announcing itself — is
+   * driven by a fake clock plus explicit ticks rather than by waiting a
+   * minute per assertion.
+   *
+   * Never throws: a `git` that will not run, a journal that will not write and
+   * a listener that throws are all worth less than the run.
+   */
+  async tickLiveness(): Promise<void> {
+    if (!this.lanes.size) { this.disarmLivenessTicker(); return; }
+    const state = this.state;
+    if (!state) return;
+    const thresholds = stallThresholds(this.deps.stallThresholds?.());
+    const now = this.now().getTime();
+    let changed = false;
+    for (const lane of [...this.lanes.values()]) {
+      try {
+        changed = await this.evaluateLane(lane, thresholds, now) || changed;
+      } catch (error) {
+        log.warn('runner.liveness', { phase: lane.phase, error: (error as Error)?.message ?? String(error) });
+      }
+    }
+    if (changed) this.persist();
+  }
+
+  /**
+   * One lane: refresh what is cheap, refresh what is not on its own cadence,
+   * decide, and journal only the transitions.
+   *
+   * Returns whether the checkpoint is worth rewriting — the liveness snapshot
+   * itself moves every tick and is not, on its own, a reason to fsync a run
+   * file once a minute per lane.
+   */
+  private async evaluateLane(lane: Lane, thresholds: StallThresholds, now: number): Promise<boolean> {
+    const state = this.state!;
+    const record = phaseRecord(state, lane.phase);
+
+    // The suppression that keeps this feature from crying wolf on every plan
+    // with a real test suite: while the phase's own §Verification is running
+    // the session has exited and nothing will be produced until the commands
+    // finish, which is exactly what `silent` looks like.
+    lane.signals.verifying = record.status === 'verifying' || Boolean(record.verifyingSince);
+
+    if (lane.gitAt === undefined || now - lane.gitAt >= LIVENESS_GIT_EVERY_MS) {
+      lane.gitAt = now;
+      const work = await workEvidence(
+        (args) => this.gitOrNull(args), record.startedAt ?? null, await this.scopeDirs(lane.phase),
+      ).catch(() => null);
+      if (work) {
+        lane.signals.commitsSinceStart = work.commits ?? 0;
+        lane.signals.treeDirty = (work.dirty ?? 0) > 0;
+      }
+    }
+
+    const before = lane.signals.stall;
+    const after = evaluateStall(lane.signals, thresholds, now);
+    lane.signals.stall = after;
+    record.liveness = livenessOf(lane.phase, lane.signals);
+
+    // Only TRANSITIONS are news. A lane that was fine and is still fine is the
+    // overwhelmingly common tick and must cost nothing but the snapshot above;
+    // a signal that is simply still true is one episode, one journal line and
+    // one announcement — the dedupe on the announcing side is keyed the same
+    // way, so a console restart mid-episode is the only thing that can say it
+    // twice, and saying it once more after a restart is right.
+    if (!after && !before) return false;
+    if (after && before?.signal === after.signal) return false;
+
+    if (after) {
+      record.stall = after;
+      this.record('phase.stall', { ...after, attempt: record.attempts ?? 0 }, lane.phase);
+    } else {
+      delete record.stall;
+      this.record('phase.liveness', {
+        cleared: before?.signal ?? null,
+        turnsSinceLastTool: lane.signals.turnsSinceLastTool,
+        commitsSinceStart: lane.signals.commitsSinceStart,
+        treeDirty: lane.signals.treeDirty,
+      }, lane.phase);
+    }
+    this.emit('liveness', {
+      phase: lane.phase,
+      liveness: record.liveness,
+      stall: after ?? null,
+      attempt: record.attempts ?? 0,
+    });
+    return true;
+  }
+
   private engine(args: string[], env?: Record<string, string>) {
     const state = this.state!;
     // No cache key on purpose. The board is read moments after a child wrote a
@@ -6025,6 +6324,11 @@ export class Runner {
   }
 
   private onStream(phase: number, event: StreamEvent): void {
+    // Liveness first and unconditionally: every event is evidence the session
+    // is alive, including the ones nothing below cares about.
+    const lane = this.lanes.get(phase);
+    if (lane) applyEvent(lane.signals, event, this.now().getTime());
+
     if (event.kind === 'retry') this.record('phase.api-retry', { ...event }, phase);
 
     // Which attached servers this phase actually reached for. Counted here

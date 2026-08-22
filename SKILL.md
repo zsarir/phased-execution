@@ -236,6 +236,17 @@ Pick the mode that matches the situation and announce it ("Using phased-executio
    (See `references/conventions.md` and memory `feedback_phase_task_list_reset`.)
 4. Implement the phase to its exit criteria. Offload high-token exploration/verification to `Agent`
    subagents (they return summaries; the tokens never enter your session) — see Guardrails.
+   **Record a ruling whenever the plan did not decide something for you.** A judgement call —
+   an instruction that admitted two readings, a departure from what the plan said, something in
+   scope you deliberately left — is the thing the next session most needs and the thing a handoff
+   most often omits, because at the time it felt obvious:
+   ```
+   bash scripts/phase-outcome.sh <slug> <N> ruling --kind ambiguity|deviation|deferral \
+     --what "<what you decided>" --why "<why>" [--cost-if-wrong "<what it costs if this was wrong>"]
+   ```
+   One appended NDJSON line, and **nothing acts on it** — it is not an outcome, it does not park the
+   phase and it never ends your turn, which is exactly what makes it safe to record whenever you are
+   in doubt. It costs a line and it buys a reader. `references/conventions.md` §Rulings.
 
 ### Mode 3 — `phase-finish` (phase is done)
 
@@ -263,7 +274,9 @@ checklist is what makes it unmissable: **never hand off a phase whose verificati
    console-declared run branch — that prompt then owns the branch discipline. **Verify with `git log -1` —
    never copy a sha from memory; the environment may have auto-committed.**
 3. **Handoff:** `bash ~/.claude/skills/phased-execution/scripts/new-handoff.sh <slug> <N> <title>`, then
-   fill the frontmatter and body (see `references/handoff-format.md`). The script auto-fills `depends_on` +
+   fill the frontmatter and body (see `references/handoff-format.md`) — and put every ruling you
+   recorded into **Key decisions / gotchas**, since the handoff is what a person reads and the ledger
+   is what the console reads. The script auto-fills `depends_on` +
    `blocks` from the graph and **auto-generates the `## ▶ Start next phase(s)` section with one boot prompt
    per phase this phase unblocks** — review it, don't rewrite it. (It reads the just-finished phase as done,
    so the prompts are correct even before you commit the handoff.) Writing the handoff every phase keeps it
@@ -397,6 +410,12 @@ Scripts resolve the superproject root automatically when run from inside a submo
   idempotent writer for `test-status.md` (the QA gate). The QA subagent calls it when QA is enabled; never
   hand-edit the table. (Recording a row also *activates* gating — it's a QA-on trigger.) See
   `references/qa-method.md`.
+- `scripts/phase-outcome.sh <slug> <N> <complete|waiting-external|blocked|needs-human|partial>` — the
+  session→runner channel: ONE atomic JSON file at `$PE_OUTCOME_FILE`, read once and consumed. Its second
+  shape, **`… <N> ruling --what … [--why …] [--kind ambiguity|deviation|deferral] [--cost-if-wrong …]`**,
+  appends one NDJSON line to the plan's ruling ledger (`$PE_RULINGS_FILE`, else
+  `runs/<instance>/<slug>/rulings.ndjson`) — what a session DECIDED, as opposed to how it ended.
+  A ruling is never an outcome: nothing acts on it, and declaring one does not declare the other.
 - `scripts/gate-approve.sh <slug> <N> [--by WHO] [--note TEXT] [--revoke]` — record (or revoke) a gate
   clearance in `docs/handoffs/<slug>/gate-status.md` — the approval `--gate-status` honours for **every**
   gate kind. Written by the console's Gate card, by an AI session that verified an `ai` gate's conditions,
@@ -431,6 +450,9 @@ The load-bearing rules a session must not get wrong; full rationale in `referenc
   it. (conventions §Branches)
 - **The handoff is the contract.** If a fresh session can't start cold from it, fix the handoff; link to the
   plan, never re-list the roadmap. (conventions §Memory, §Docs layout)
+- **Record the decisions the plan did not make for you** — `phase-outcome.sh <slug> <N> ruling …`, one
+  line per judgement call, nothing acts on it. The handoff carries the same words for a person.
+  (conventions §Rulings)
 - **`phase-graph.sh` is the truth for done/ready/next** — never infer from phase numbers or a remembered
   cursor; "finished" means the board shows **every** phase `done`. (conventions §Status source of truth)
 - **One session per phase — check scope, then claim the lock** before building (`conflicts` then `claim

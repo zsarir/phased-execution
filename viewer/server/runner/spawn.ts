@@ -223,6 +223,26 @@ export type StreamEvent =
     status?: string;
     activeForm?: string;
   }
+  /**
+   * One assistant turn of the PHASE's own conversation, and how many tool
+   * calls it carried.
+   *
+   * The stream already says everything a turn contains; what it never said is
+   * that a turn happened at all. That is the difference between "this session
+   * is working" and "this session is talking": six turns in a row carrying
+   * `tools: 0` is a session reasoning in circles, and no other event in this
+   * union can be counted to discover it (`text` is coalesced, `partial` is a
+   * delta, `result` fires once per turn but only after stdin work, and a turn
+   * that calls three tools emits three `tool` events).
+   *
+   * Deliberately NOT emitted for a subagent's turns. A delegating phase spends
+   * whole minutes with its own conversation stopped while an `Explore` agent
+   * works, and counting the subagent's turns as the phase's would make the
+   * lane look busy at exactly the moment it is worth asking whether the
+   * delegation is coming back. `runner/liveness.ts` counts these; a subagent's
+   * own output still arrives as `subagent`.
+   */
+  | { kind: 'step'; tools: number }
   | { kind: 'hook'; name: string; event: string; outcome?: string }
   /**
    * A message the operator sent into a running session. Emitted twice for one
@@ -824,6 +844,17 @@ export const spawnClaude: SpawnFn = (request) => new Promise<SpawnOutcome>((reso
           const task = taskOp(item.name, id, input);
           if (task) emit(task);
         }
+      }
+      // The turn itself, last: everything it contained has been emitted, so a
+      // listener that counts steps and reacts to tools sees them in the order
+      // they happened. A subagent's turn is not the phase's — see `step`.
+      if (!parent) {
+        emit({
+          kind: 'step',
+          tools: (content?.content ?? []).filter(
+            (block) => (block as { type?: string }).type === 'tool_use',
+          ).length,
+        });
       }
       return;
     }

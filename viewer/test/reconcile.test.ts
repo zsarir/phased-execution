@@ -416,6 +416,10 @@ test('resetForRetry is the single reset: it clears what the last boarding conclu
     mcpDegraded: [{ id: 'github', reason: 'needs-auth' }], lockWaitSince: '2026-08-21T09:00:00Z', lockBackoffMs: 8000,
     boardingHint: { situation: 'verify-red', rung: 'resume-own-session', brief: 'continue', at: '2026-08-21T10:01:00Z' },
     verification: { ok: false, reason: 'red', ran: [], notRun: [] },
+    stall: { signal: 'silent', since: '2026-08-21T09:40:00Z', detail: 'no output for 20 min' },
+    idleAttempts: 2,
+    verifyingSince: '2026-08-21T09:55:00Z',
+    liveness: { phase: 3, lastOutputAt: '2026-08-21T09:40:00Z', turnsSinceLastTool: 4, commitsSinceStart: 0, treeDirty: false },
   });
   resetForRetry(record);
   assert.equal(record.status, 'pending');
@@ -427,11 +431,20 @@ test('resetForRetry is the single reset: it clears what the last boarding conclu
   assert.equal(record.lockWaitSince, undefined, 'Retry means the lock wait starts over');
   assert.equal(record.lockBackoffMs, undefined);
   assert.equal(record.boardingHint, undefined, 'an operator\'s Retry is a fresh boot by definition');
+  // The stall episode belongs to the attempt being given up on: kept, it would
+  // re-announce on the next tick of a lane that has not had time to do
+  // anything, with a clock reading from before the Retry.
+  assert.equal(record.stall, undefined);
+  assert.equal(record.idleAttempts, undefined, 'a Retry is not the fourth idle attempt');
+  assert.equal(record.verifyingSince, undefined);
   // History stays: it is what the next brief and the ladder read.
   assert.equal(record.attempts, 2);
   assert.equal(record.costUsd, 4.5);
   assert.equal(record.sessionId, 'sess-3');
   assert.ok(record.verification);
+  // The last liveness snapshot is history too — it is how a killed lane can
+  // still say what it was doing when the console went away.
+  assert.ok(record.liveness);
 });
 
 test('a crashed run is stamped as the system\'s stop; a stop or pause the operator had asked for stays theirs', () => {

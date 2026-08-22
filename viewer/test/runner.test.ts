@@ -32,7 +32,7 @@ const { nextModel, fallbackChain } = await import('../server/runner/errors.ts');
 const { listRuns, loadRun, newRun, saveRun, journalFile, phaseRecord } = await import('../server/runner/state.ts');
 const { Journal } = await import('../server/runner/journal.ts');
 const { Scheduler } = await import('../server/runner/scheduler.ts');
-import type { SpawnFn, SpawnOutcome, SpawnRequest } from '../server/runner/spawn.ts';
+import type { SpawnFn, SpawnOutcome, SpawnRequest, StreamEvent } from '../server/runner/spawn.ts';
 
 /* ------------------------------------------------------------------ *
  * A repo with stub scripts
@@ -1620,6 +1620,227 @@ function realChildSession(r: Repo, onPid: (pid: number) => void, finishes = true
   return { spawn, inSession, release: () => release(), pid: () => child?.pid ?? 0 };
 }
 
+/* ------------------------------------------------------------------ *
+ * Liveness: is the lane that is nominally working actually working?
+ * ------------------------------------------------------------------ */
+
+/**
+ * A session held open with its event sink captured, so the ticker can be
+ * driven against a live lane. The clock is the runner's own `deps.now`, so
+ * ten minutes of silence costs a test nothing.
+ */
+function streamingSession(r: Repo, markDone = true) {
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const inSession = new Promise<void>((resolve) => { entered = resolve; });
+  let sink: ((event: StreamEvent) => void) | undefined;
+  const spawn: SpawnFn = async (request: SpawnRequest) => {
+    sink = request.onEvent;
+    entered();
+    await held;
+    if (markDone) r.markDone(Number(/BOOT phase (\d+)/.exec(request.prompt)![1]));
+    return ok();
+  };
+  return {
+    spawn, inSession,
+    release: () => release(),
+    say: (event: StreamEvent) => sink?.(event),
+  };
+}
+
+/**
+ * A `repo()` that is also a real git checkout, because "did this attempt change
+ * anything" is a question only the tree can answer.
+ *
+ * The base commit is dated years ago so it can never fall inside an attempt's
+ * own `--since` window, and the stub's own scratch directories are ignored so
+ * a session marking its phase done does not read as work on disk.
+ */
+function gitRepo(): Repo {
+  const r = repo();
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z',
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e',
+  };
+  execFileSync('git', ['init', '-q'], { cwd: r.root, env });
+  writeFileSync(join(r.root, '.gitignore'), 'scripts/\n.stub/\n');
+  execFileSync('git', ['add', '-A'], { cwd: r.root, env });
+  execFileSync('git', ['commit', '-qm', 'base'], { cwd: r.root, env });
+  return r;
+}
+
+/** A fake clock the test winds by hand, shaped as `RunnerDeps.now`. */
+function fakeClock(from = '2026-08-22T10:00:00Z') {
+  const state = { at: Date.parse(from) };
+  return {
+    now: () => new Date(state.at),
+    wind: (ms: number) => { state.at += ms; },
+  };
+}
+
+const livenessEvents = (events: { event: string; data: Record<string, unknown> }[]) =>
+  events.filter((e) => e.event === 'run:liveness')
+    .map((e) => e.data as { phase: number; stall: { signal?: string; detail?: string } | null });
+
+test('a lane that goes quiet is reported ONCE, and clears the moment it speaks again', async () => {
+  const r = repo();
+  const held = streamingSession(r);
+  const clock = fakeClock();
+  const { instance, events } = runner(r, held.spawn, '`true`', undefined, { now: clock.now });
+  const state = await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+  held.say({ kind: 'tool', id: 'toolu_a', name: 'Bash', summary: 'npm test -- --run' });
+
+  // One minute in. The floor is ten, and a lane that is merely thinking is not
+  // a card — this is the assertion that keeps the feature from crying wolf.
+  clock.wind(60_000);
+  await instance.tickLiveness();
+  assert.deepEqual(livenessEvents(events), []);
+
+  clock.wind(10 * 60_000);
+  await instance.tickLiveness();
+  const first = livenessEvents(events);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].phase, 1);
+  assert.equal(first[0].stall?.signal, 'silent');
+  // The call open longest is usually the whole answer.
+  assert.match(String(first[0].stall?.detail), /oldest open tool call is Bash/);
+
+  // Five minutes more of the same silence. One episode, one card: the ticker
+  // runs every minute and a signal that is still true is not news.
+  clock.wind(5 * 60_000);
+  await instance.tickLiveness();
+  assert.equal(livenessEvents(events).length, 1, 'a still-true signal must not re-announce');
+
+  // ...and then it comes back.
+  held.say({ kind: 'tool-result', id: 'toolu_a', ok: true, detail: '40 tests passed' });
+  await instance.tickLiveness();
+  const after = livenessEvents(events);
+  assert.equal(after.length, 2);
+  assert.equal(after[1].stall, null, 'clearing is an event too — the card has to come down');
+
+  held.release();
+  await instance.wait();
+
+  const journal = readFileSync(journalFile(r.root, 'demo', state.id), 'utf8');
+  assert.equal((journal.match(/"phase\.stall"/g) ?? []).length, 1, 'one line per episode, not per tick');
+  assert.match(journal, /"phase\.liveness"/);
+  r.cleanup();
+});
+
+test('six turns without a tool call is spinning, and the count is in the words', async () => {
+  const r = repo();
+  const held = streamingSession(r);
+  const clock = fakeClock();
+  const { instance, events } = runner(r, held.spawn, '`true`', undefined, { now: clock.now });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+
+  for (let i = 0; i < 5; i++) { clock.wind(1_000); held.say({ kind: 'step', tools: 0 }); }
+  await instance.tickLiveness();
+  assert.deepEqual(livenessEvents(events), [], 'five is under the threshold, and the threshold is the threshold');
+
+  clock.wind(1_000);
+  held.say({ kind: 'step', tools: 0 });
+  await instance.tickLiveness();
+  const stall = livenessEvents(events)[0]?.stall;
+  assert.equal(stall?.signal, 'spinning');
+  assert.match(String(stall?.detail), /6 turns with no tool call/);
+
+  // A turn that actually calls something ends it.
+  clock.wind(1_000);
+  held.say({ kind: 'step', tools: 2 });
+  await instance.tickLiveness();
+  assert.equal(livenessEvents(events).at(-1)?.stall, null);
+
+  held.release();
+  await instance.wait();
+  r.cleanup();
+});
+
+test('a phase inside its own §Verification is exempt — a build is silent and fine', async () => {
+  const r = repo();
+  const held = streamingSession(r);
+  const clock = fakeClock();
+  const { instance, events } = runner(r, held.spawn, '`true`', undefined, { now: clock.now });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+
+  // The stretch where the session has exited and `npm test` owns the next
+  // twelve minutes. Without this exemption every plan with a real suite would
+  // raise a card on every phase.
+  phaseRecord(instance.current()!, 1).verifyingSince = clock.now().toISOString();
+  clock.wind(30 * 60_000);
+  await instance.tickLiveness();
+  assert.deepEqual(livenessEvents(events), []);
+
+  // And the moment the commands are done, the same silence is a card again.
+  delete phaseRecord(instance.current()!, 1).verifyingSince;
+  await instance.tickLiveness();
+  assert.equal(livenessEvents(events)[0]?.stall?.signal, 'silent');
+
+  held.release();
+  await instance.wait();
+  r.cleanup();
+});
+
+test('an attempt that changed nothing counts up; at the threshold the lane is a stalemate', async () => {
+  const r = gitRepo();
+  const held = streamingSession(r);
+  const clock = fakeClock();
+  const { instance } = runner(r, held.spawn, '`true`', undefined, { now: clock.now });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+  // Two earlier attempts of this phase already ended having changed nothing.
+  phaseRecord(instance.current()!, 1).idleAttempts = 2;
+  held.release();
+  await instance.wait();
+
+  const record = instance.current()!.phases['1'];
+  assert.equal(record.idleAttempts, 3, 'a clean tree and no commits is an attempt that did nothing');
+  assert.equal(record.stall?.signal, 'stalemate');
+  assert.match(String(record.stall?.detail), /3 attempts in a row/);
+  r.cleanup();
+});
+
+test('an attempt that left work on disk resets the counter, whatever the board says', async () => {
+  const r = gitRepo();
+  const held = streamingSession(r);
+  const clock = fakeClock();
+  const { instance } = runner(r, held.spawn, '`true`', undefined, { now: clock.now });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+  phaseRecord(instance.current()!, 1).idleAttempts = 2;
+  // The session did something, even though it has not committed it.
+  writeFileSync(join(r.root, 'work.txt'), 'half a feature\n');
+  held.release();
+  await instance.wait();
+
+  assert.equal(instance.current()!.phases['1'].idleAttempts, 0);
+  assert.equal(instance.current()!.phases['1'].stall, undefined);
+  r.cleanup();
+});
+
+test('a tree the console cannot read is never evidence of a stalemate', async () => {
+  // "I could not check" and "nothing happened" are different facts, and three
+  // attempts against a repository the console cannot see is a console problem.
+  // `repo()` is not a git checkout, so `workEvidence` answers `null` here.
+  const r = repo();
+  const held = streamingSession(r);
+  const clock = fakeClock();
+  const { instance } = runner(r, held.spawn, '`true`', undefined, { now: clock.now });
+  await instance.start({ slug: 'demo', root: r.root, autonomy: 'keep-going' });
+  await held.inSession;
+  phaseRecord(instance.current()!, 1).idleAttempts = 2;
+  held.release();
+  await instance.wait();
+
+  assert.equal(instance.current()!.phases['1'].idleAttempts, 2, 'the counter stays exactly where it was');
+  r.cleanup();
+});
+
 /** What `ps` says about a process: `T` is stopped, `S`/`R` are running. */
 function procState(pid: number): string {
   try {
@@ -1903,9 +2124,12 @@ function call(
     // Null is the ordinary answer: no phase of this plan has finished, so
     // there is nothing to estimate from.
     runEta: async () => null,
-    // Sync, and given the run the route already read — the payload's three
-    // figures have to be about one run, so the route reads it once.
+    // Sync, and given the run the route already read — the payload's figures
+    // have to be about one run, so the route reads it once.
     runPhaseEta: () => [],
+    // Same rule: a lane's liveness and the run it belongs to are one moment.
+    runLiveness: () => [],
+    runRulings: () => [],
     allRuns: async () => [{ id: 'r1' }],
     runJournal: () => [{ seq: 1, event: 'run.start' }],
     markNotificationsRead: (...args: unknown[]) => {
@@ -2229,8 +2453,15 @@ test('reading a run needs no flag — only changing one does', async () => {
   // The estimate rides on this response rather than having an endpoint of its
   // own, so that it and the board it rests on are answered from one read.
   assert.ok('eta' in (one.payload as Record<string, unknown>));
+  // Per live lane: the answer to "is this lane working", beside the run it is
+  // about rather than one request later.
+  assert.ok('liveness' in (one.payload as Record<string, unknown>));
   const journal = await call('/api/run/demo/journal');
   assert.equal(journal.status, 200);
+  // The plan's whole ruling ledger, which answers even for a plan with no run.
+  const rulings = await call('/api/run/demo/rulings');
+  assert.equal(rulings.status, 200);
+  assert.deepEqual((rulings.payload as { rulings: unknown[] }).rulings, []);
 });
 
 test('dismissing a run card names the run, and refuses without one', async () => {
@@ -2680,7 +2911,7 @@ test('a stuck phase is named as blocked-by-its-handoff, never "waiting on a gate
 
 test('continuing a run resets the failure streak, and says so in the journal', async () => {
   const r = repo();
-  const held = heldSession(r);
+  const held = streamingSession(r);
   const { instance } = runner(r, held.spawn);
   const stored = newRun({ slug: 'demo', root: r.root });
   stored.status = 'halted';

@@ -19,6 +19,7 @@ import {
   listInstances, preferredPort, readProjectFile, registerInstance, reservedPorts,
   stateHome, unitName,
 } from '../shared/instances.mjs';
+import { STALL_DEFAULTS } from '../shared/attention-model.js';
 import { sanitiseCategories, type CategoryId } from './push/catalogue.ts';
 // Type-only, and it must stay that way: `runner/state.ts` imports `STATE_DIR`
 // from here at runtime, so a value import would close the cycle. Node erases
@@ -773,6 +774,24 @@ export type Prefs = {
   budgetAutoRaisePct?: number;
   mcpRequireTimeoutMs?: number;
   /**
+   * When a lane that is still alive stops being work (`runner/liveness.ts`).
+   *
+   * - `stallSilentMs`: no output at all for this long is `silent` (default
+   *   10 min). Suppressed while the phase is inside its own §Verification.
+   * - `stallSpinTurns`: this many consecutive turns with no tool call in any
+   *   of them is `spinning` (default 6).
+   * - `stallStalemateAttempts`: this many attempts in a row that committed
+   *   nothing and left a clean tree is `stalemate` (default 3).
+   *
+   * Detection only — v1 announces and offers verbs, and deliberately does not
+   * climb the ladder (`docs/loop.md`). The shipped numbers live in
+   * `shared/attention-model.js` `STALL_DEFAULTS`, imported rather than
+   * repeated, so the card, the Settings row and the detector agree.
+   */
+  stallSilentMs?: number;
+  stallSpinTurns?: number;
+  stallStalemateAttempts?: number;
+  /**
    * Which categories the console is allowed to announce **at all** — the switch
    * an operator actually means when they turn a notification off.
    *
@@ -803,6 +822,7 @@ const DEFAULT_PREFS: Prefs = {
   unblockAttempts: true, staleClaimTakeover: true, resumeAtBoot: true, autoAccountSwitch: true,
   convergeEveryMs: 300_000,
   budgetAutoRaisePct: 25, mcpRequireTimeoutMs: 1_800_000,
+  ...STALL_DEFAULTS,
   notify: sanitiseCategories(undefined),
 };
 
@@ -818,13 +838,17 @@ export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
   | 'autoRecoverByDefault' | 'autoContinueRecovery' | 'mcpPolicy'
   | 'ladderPerPhaseRungs' | 'ladderPerPhaseUsd' | 'ladderPerRunRungs' | 'ladderPerRunUsd' | 'ladderPerDayUsd'
   | 'unblockAttempts' | 'staleClaimTakeover' | 'resumeAtBoot' | 'autoAccountSwitch' | 'convergeEveryMs'
-  | 'budgetAutoRaisePct' | 'mcpRequireTimeoutMs'> {
+  | 'budgetAutoRaisePct' | 'mcpRequireTimeoutMs'
+  | 'stallSilentMs' | 'stallSpinTurns' | 'stallStalemateAttempts'> {
   const bool = (value: unknown, fallback: boolean): boolean => (typeof value === 'boolean' ? value : fallback);
   // A cap is a finite, non-negative number or it is the default — a string,
   // a negative or NaN in config.json must never turn the ladder unbounded
   // (or, the other way, into a zero that parks every phase on an errand).
   const cap = (value: unknown, fallback: number): number =>
     (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback);
+  // The same rule with the zero excluded — see the stall thresholds below.
+  const positive = (value: unknown, fallback: number): number =>
+    (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback);
   return {
     attachDefaultSkills: bool(parsed.attachDefaultSkills, false),
     qaByDefault: bool(parsed.qaByDefault, false),
@@ -846,6 +870,13 @@ export function sanitiseAutomation(parsed: Partial<Prefs>): Pick<Prefs,
     convergeEveryMs: cap(parsed.convergeEveryMs, 300_000),
     budgetAutoRaisePct: cap(parsed.budgetAutoRaisePct, 25),
     mcpRequireTimeoutMs: cap(parsed.mcpRequireTimeoutMs, 1_800_000),
+    // A stall threshold of zero would fire on every lane on its first tick, so
+    // these take `positive` rather than `cap`: unlike a ladder cap, there is no
+    // meaning to give a zero here, and the shipped number is the honest answer
+    // to a config.json that asks for one.
+    stallSilentMs: positive(parsed.stallSilentMs, STALL_DEFAULTS.stallSilentMs),
+    stallSpinTurns: positive(parsed.stallSpinTurns, STALL_DEFAULTS.stallSpinTurns),
+    stallStalemateAttempts: positive(parsed.stallStalemateAttempts, STALL_DEFAULTS.stallStalemateAttempts),
   };
 }
 

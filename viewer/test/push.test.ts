@@ -296,6 +296,9 @@ test('the noisy categories are off and the blocking ones are on', () => {
   assert.equal(defaults.finished, true);
   assert.equal(defaults.changed, false, 'a file-level firehose must be opt-in');
   assert.equal(defaults.ready, false);
+  // A lane that is still spending and has stopped producing work is worth
+  // hearing about by default: it is the money question, and it is rare.
+  assert.equal(defaults.stalled, true);
 });
 
 test('only what blocks a run is marked urgent', () => {
@@ -304,6 +307,10 @@ test('only what blocks a run is marked urgent', () => {
   // stopped and nothing further happens until a person acts. `parked` and
   // `finished` do not — a run asleep until a usage window reopens moves again
   // on its own, and a finished one is not waiting for anybody.
+  // `stalled` is the newest candidate and deliberately fails the same test:
+  // nothing is blocked on the operator and the run has not stopped, so a card
+  // that buzzed a wrist for it would be turned off inside a week — taking the
+  // signal with it.
   assert.deepEqual(urgent.sort(), ['approval', 'halted', 'needs-you'],
     'urgency is reserved for "nothing proceeds without you" — widening it is how a channel gets muted');
 });

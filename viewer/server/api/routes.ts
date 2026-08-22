@@ -1460,6 +1460,14 @@ export async function handleApi(
           json(res, 200, { scopes: service.phaseScopes(slug) });
           return true;
         }
+        // What this plan's sessions DECIDED, oldest first. Read from the
+        // ledger file rather than from a run, so it answers for a plan nobody
+        // has ever started a run on — which is every plan somebody is driving
+        // by hand.
+        if (verb === 'rulings') {
+          json(res, 200, { rulings: service.runRulings(slug) });
+          return true;
+        }
         // `eta` rides along rather than getting an endpoint of its own: it is
         // derived from exactly this run plus the plan's board, and a second
         // request could be answered against a board that had moved on.
@@ -1471,6 +1479,12 @@ export async function handleApi(
           history: await service.runsFor(slug),
           eta: await service.runEta(slug),
           phaseEta: service.runPhaseEta(slug, current),
+          // Per live lane: last output, last tool call, turns since one,
+          // commits and tree state, the call open longest, and the stall
+          // episode if it is in one. Rides along for the same reason `eta`
+          // does — a second request could be answered against a different
+          // moment, and "is this lane working" is a question about one.
+          liveness: service.runLiveness(slug, current),
         });
         return true;
       }

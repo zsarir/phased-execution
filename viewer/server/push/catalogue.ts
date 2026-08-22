@@ -17,8 +17,8 @@
  */
 
 export type CategoryId =
-  | 'approval' | 'needs-you' | 'halted' | 'parked' | 'phase' | 'finished' | 'ready' | 'changed'
-  | 'session' | 'health' | 'limits' | 'usage-climbing';
+  | 'approval' | 'needs-you' | 'halted' | 'parked' | 'stalled' | 'phase' | 'finished' | 'ready'
+  | 'changed' | 'session' | 'health' | 'limits' | 'usage-climbing';
 
 export type Category = {
   id: CategoryId;
@@ -61,6 +61,16 @@ export const CATEGORIES: readonly Category[] = [
     label: 'Run parked or waiting',
     detail: 'Every remaining phase needs a person, or the run is asleep until a usage window '
       + 'reopens. Not an error — it just will not move on its own.',
+    byDefault: true,
+    urgent: false,
+  },
+  {
+    id: 'stalled',
+    label: 'Nothing is happening',
+    detail: 'A session is still running and still spending, and it has stopped producing work — '
+      + 'silent for ten minutes, six turns without touching a tool, or three attempts that changed '
+      + 'nothing. Not urgent: it is not blocked on you, and the run has not stopped. It is the '
+      + 'money question rather than the permission question.',
     byDefault: true,
     urgent: false,
   },
@@ -226,6 +236,9 @@ export function routeFor(category: CategoryId, context: RouteContext = {}): stri
     case 'needs-you':
     case 'halted':
     case 'parked':
+    // A stall is about one lane of one run, and the run page is where the lane,
+    // its tail and the verbs that answer it (steer, freeze, stop) all live.
+    case 'stalled':
     case 'finished':
       return slug ? `/#/plan/${slug}/run` : '/#/runs';
     case 'phase':

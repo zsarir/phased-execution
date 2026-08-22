@@ -256,6 +256,44 @@ session's job); an unclear **human/auto** gate holds the phase as `gated` until 
 Gate card's approve can continue the parked run in the same action. Never batch past a gate of any
 kind.
 
+## Rulings — the decisions the plan did not make for you
+
+A phase session makes judgement calls the plan could not: an instruction that admitted two readings,
+a departure from what the plan said, a sub-case deliberately left for later. Every one of those is a
+decision the next session will hit again, and every one of them lands — when it lands at all — in a
+paragraph of a handoff that the next session skims, because at the time it felt obvious.
+
+**Record it as it happens:**
+
+```bash
+bash scripts/phase-outcome.sh <slug> <N> ruling --kind ambiguity|deviation|deferral   --what "<what you decided>" --why "<why>" [--cost-if-wrong "<what it costs if this was wrong>"]
+```
+
+One appended NDJSON line, to `$PE_RULINGS_FILE` (the runner injects it) or, unsupervised, to
+`runs/<instance>/<slug>/rulings.ndjson` beside the outcomes inbox. Phase Console ingests it into the
+run, journals it as `phase.ruling`, and shows it on the run page, the phase diagnosis and the inbox
+as an `fyi` row. The three kinds:
+
+- **`ambiguity`** — the plan admitted two readings and you picked one. The reader needs to know a
+  choice was made at all. **The default** when `--kind` is absent: it is the weakest of the three,
+  and guessing `deviation` for a session that merely chose would record a disagreement that never
+  happened.
+- **`deviation`** — the plan said one thing and you did another, with a reason. The reader needs to
+  know the plan and the tree now disagree.
+- **`deferral`** — something in scope was deliberately left. The reader needs it on a list, not in
+  prose.
+
+**A ruling is not an outcome and never becomes one.** The outcome protocol says how a session ENDED
+and the runner acts on it; **nothing acts on a ruling** — it does not park a phase, does not climb
+the ladder, does not change what runs next, and does not end your turn. That is precisely what makes
+it safe to record whenever you are in doubt: it costs one line and it buys a reader. Declaring a
+ruling is never a substitute for declaring an outcome; do both.
+
+The ledger is per PLAN and append-only, so a decision made in phase 3 is still there explaining
+phase 9 two runs later, and an acknowledgement is a further appended line rather than an edit.
+Put the same decisions in the handoff's **Key decisions / gotchas** in words: the ledger is what the
+console reads, the handoff is what a person reads.
+
 ## Docs layout & repo split
 - **Work-state lives in the project repo** under `docs/` (its `.gitignore` tracks only `/docs/`):
   `plans/<slug>.md` and `handoffs/<slug>/{INDEX.md, phase-NN-*.md, reports/phase-NN-qa.md, test-status.md,

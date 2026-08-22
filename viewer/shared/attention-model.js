@@ -273,6 +273,48 @@ export function inboxItemId(item) {
   ].join(':');
 }
 
+/**
+ * The inverse of `inboxItemId`, for the ONE caller that needs it: the ack
+ * route, which has an id and has to know whether it names a ruling (and which
+ * one) so the acknowledgement can be appended to that plan's ledger as well as
+ * to the acks file.
+ *
+ * It lives here rather than in the route because it is the same rule read
+ * backwards, and a second implementation of the escaping would break silently
+ * the day `escapePart` changed. It is deliberately NOT a way to reconstruct an
+ * item: an id names a subject, and a subject is not an ask.
+ *
+ * Returns null for anything that is not a five-part id, so a garbage parameter
+ * off an HTTP body degrades to "not a ruling" rather than to an exception.
+ *
+ * @param {string} id
+ * @returns {{ kind: string, slug: string, phase: number|null, runId: string, subject: string }|null}
+ */
+export function parseInboxItemId(id) {
+  const parts = String(id ?? '').split(':');
+  if (parts.length !== 5) return null;
+  const [kind, slug, phase, runId, subject] = parts.map(unescapePart);
+  if (!kind) return null;
+  const n = Number(phase);
+  return {
+    kind,
+    slug,
+    phase: phase && Number.isInteger(n) && n > 0 ? n : null,
+    runId,
+    subject,
+  };
+}
+
+/**
+ * Undo `escapePart`. The order matters and is the reverse of the escape's: the
+ * separator first, then the escape character, so `%253A` comes back as the
+ * literal `%3A` it was rather than as a colon.
+ * @param {string} value
+ */
+function unescapePart(value) {
+  return value.replace(/%3A/g, ':').replace(/%25/g, '%');
+}
+
 /* ------------------------------------------------------------------ *
  * Order
  * ------------------------------------------------------------------ */
@@ -442,4 +484,147 @@ export const STALL_META = Object.freeze({
     afterMs: 15 * MINUTE,
     severity: 'needs-you',
   }),
+});
+
+/* ------------------------------------------------------------------ *
+ * Stall SIGNALS — what the runner sees on a lane that is still alive
+ * ------------------------------------------------------------------ */
+
+/**
+ * @typedef {'stalemate'|'silent'|'spinning'} StallSignal
+ */
+
+/**
+ * The three ways a LIVE lane stops being work.
+ *
+ * Not the same list as `STALL_KINDS` above, and deliberately so — the two
+ * answer different questions from different evidence:
+ *
+ *   - `STALL_KINDS` is what an INBOX row is about. It is computed on read,
+ *     from timestamps on disk, and it covers things no lane can see: a park
+ *     whose resume never fired, a plan nobody has touched in a week, a lock a
+ *     lane has been queued behind for an hour. Most of them describe a phase
+ *     with no session at all;
+ *   - `STALL_SIGNALS` is what the RUNNER sees while a session is running,
+ *     from the event stream it is already reading. It has one clock per
+ *     signal, a preference each, and it fires at most once per episode.
+ *
+ * The bridge between them is one signal and one kind: a lane whose signal is
+ * `silent` is what eventually raises the `session-silent` row, at that row's
+ * own (longer) clock. Everything else in either list stands alone.
+ *
+ * Worst-first, the `UI_STATES` / `INBOX_SEVERITIES` convention — index is
+ * rank, and `evaluateStall` returns the first that holds:
+ *
+ *   - `stalemate` — the strongest claim, and the only one settled at an
+ *     attempt's END rather than during it: N attempts in a row have finished
+ *     with nothing committed and a clean tree. Nothing is happening AND
+ *     re-running has stopped helping;
+ *   - `silent`    — the lane has produced nothing at all for `stallSilentMs`
+ *     and is still spending. It outranks `spinning` because it is the newer,
+ *     harder fact: a session that was turning and then went quiet has stopped
+ *     doing even that;
+ *   - `spinning`  — turns are going by with no tool call in any of them. The
+ *     session is talking, not working.
+ *
+ * @type {readonly StallSignal[]}
+ */
+export const STALL_SIGNALS = Object.freeze(/** @type {const} */ (['stalemate', 'silent', 'spinning']));
+
+/**
+ * What each signal is called, what it means, and which preference sets its
+ * threshold — the `STALL_META` shape, minus a clock this file can state: two
+ * of the three thresholds are counts rather than durations, so the number
+ * lives in `STALL_DEFAULTS` under the key named here and nowhere else.
+ *
+ * `severity` is the inbox severity a row raised for this signal carries.
+ *
+ * @type {Readonly<Record<StallSignal, { label: string, blurb: string, pref: string, severity: InboxSeverity }>>}
+ */
+export const STALL_SIGNAL_META = Object.freeze({
+  stalemate: Object.freeze({
+    label: 'Stalemate',
+    blurb:
+      'Three attempts in a row ended with nothing committed and a clean tree. Re-running has stopped being a remedy; the phase needs a different instruction, not another try.',
+    pref: 'stallStalemateAttempts',
+    severity: 'needs-you',
+  }),
+  silent: Object.freeze({
+    label: 'Session silent',
+    blurb:
+      'The session has produced no output for ten minutes and is still spending. Suppressed while the phase is inside its own §Verification — a build is silent and fine — and it names the tool call that has been open longest, which is usually the answer.',
+    pref: 'stallSilentMs',
+    severity: 'needs-you',
+  }),
+  spinning: Object.freeze({
+    label: 'Spinning',
+    blurb:
+      'Six turns have gone by without a single tool call. The session is talking rather than working — usually a phase whose next step is not actually available to it.',
+    pref: 'stallSpinTurns',
+    severity: 'needs-you',
+  }),
+});
+
+/**
+ * The shipped thresholds, keyed by the preference name that overrides each.
+ *
+ * One source, the `sizing.env` rule: `config.ts` seeds `DEFAULT_PREFS` from
+ * here, `runner/liveness.ts` falls back to it when a caller hands it nothing,
+ * and Settings ▸ Automation renders the same numbers. A detector that fires at
+ * twenty minutes while the card says half an hour is a bug report nobody can
+ * reproduce — and it is the reason `STALL_META`'s clocks live in this file
+ * too.
+ *
+ * @type {Readonly<{ stallSilentMs: number, stallSpinTurns: number, stallStalemateAttempts: number }>}
+ */
+export const STALL_DEFAULTS = Object.freeze({
+  /** No output at all for this long — ten minutes. */
+  stallSilentMs: 10 * MINUTE,
+  /** This many consecutive assistant turns with no tool call in any of them. */
+  stallSpinTurns: 6,
+  /** This many consecutive attempts that committed nothing and left a clean tree. */
+  stallStalemateAttempts: 3,
+});
+
+/* ------------------------------------------------------------------ *
+ * Rulings — a decision worth remembering
+ * ------------------------------------------------------------------ */
+
+/**
+ * @typedef {'ambiguity'|'deviation'|'deferral'} RulingKind
+ */
+
+/**
+ * What kind of decision a session is recording.
+ *
+ * A ruling is NOT an outcome and never becomes one: the outcome protocol
+ * (`scripts/phase-outcome.sh <slug> <N> <status>`) says how a session ENDED
+ * and the runner acts on it; a ruling says what a session DECIDED along the
+ * way and nothing acts on it at all. That is the whole point — a decision the
+ * plan did not make for you is the thing the next session most needs and the
+ * thing a handoff most often omits, because at the time it felt obvious.
+ *
+ * Three kinds, because the three need different things from a reader:
+ *
+ *   - `ambiguity` — the plan admitted two readings and the session picked one.
+ *     The reader needs to know a choice was made at all;
+ *   - `deviation` — the plan said one thing and the session did another, with
+ *     a reason. The reader needs to know the plan and the tree disagree;
+ *   - `deferral`  — something in scope was deliberately left. The reader needs
+ *     it on a list, not in prose.
+ *
+ * `ambiguity` is the default when a session names no kind: it is the weakest
+ * claim of the three, and guessing `deviation` for a session that simply chose
+ * between two readings would put a disagreement in the record that never
+ * happened.
+ *
+ * @type {readonly RulingKind[]}
+ */
+export const RULING_KINDS = Object.freeze(/** @type {const} */ (['ambiguity', 'deviation', 'deferral']));
+
+/** @type {Readonly<Record<RulingKind, string>>} */
+export const RULING_KIND_LABELS = Object.freeze({
+  ambiguity: 'Ambiguity',
+  deviation: 'Deviation',
+  deferral: 'Deferral',
 });

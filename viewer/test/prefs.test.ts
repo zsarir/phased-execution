@@ -22,6 +22,7 @@ process.env.XDG_CONFIG_HOME = CONFIG_HOME;
 process.env.PHASE_CONSOLE_LOG = '';
 
 const { loadPrefs, sanitiseAutomation, SKILL_DIR } = await import('../server/config.ts');
+const { STALL_DEFAULTS } = await import('../shared/attention-model.js');
 const { Service } = await import('../server/service.ts');
 
 const CONFIG_FILE = join(CONFIG_HOME, 'phase-console', 'config.json');
@@ -84,6 +85,7 @@ test('sanitiseAutomation is the single coercion table', () => {
     unblockAttempts: true, staleClaimTakeover: true, resumeAtBoot: true, autoAccountSwitch: true,
     convergeEveryMs: 300_000,
     budgetAutoRaisePct: 25, mcpRequireTimeoutMs: 1_800_000,
+    stallSilentMs: 600_000, stallSpinTurns: 6, stallStalemateAttempts: 3,
   });
   // Ladder caps: a finite non-negative number or the default — a string, a
   // negative or NaN must never make the ladder unbounded (or zero).
@@ -104,6 +106,22 @@ test('sanitiseAutomation is the single coercion table', () => {
   // The recovery automation defaults are ON, and a typo cannot turn them off.
   assert.equal(sanitiseAutomation({ autoRecoverByDefault: 'no' } as never).autoRecoverByDefault, true);
   assert.equal(sanitiseAutomation({ autoContinueRecovery: false }).autoContinueRecovery, false);
+  // The three stall thresholds take `positive`, not `cap`: unlike a ladder cap
+  // there is no meaning to give a zero here — it would flag every lane on its
+  // first tick — so zero and every other unusable value take the shipped one.
+  assert.equal(sanitiseAutomation({ stallSilentMs: 90_000 }).stallSilentMs, 90_000);
+  assert.equal(sanitiseAutomation({ stallSilentMs: 0 }).stallSilentMs, 600_000, 'zero is not "off", it is nonsense');
+  assert.equal(sanitiseAutomation({ stallSpinTurns: -3 }).stallSpinTurns, 6);
+  assert.equal(sanitiseAutomation({ stallStalemateAttempts: '4' } as never).stallStalemateAttempts, 3);
+  // ...and the shipped numbers are the shared ones, not a second copy.
+  assert.deepEqual(
+    {
+      stallSilentMs: sanitiseAutomation({}).stallSilentMs,
+      stallSpinTurns: sanitiseAutomation({}).stallSpinTurns,
+      stallStalemateAttempts: sanitiseAutomation({}).stallStalemateAttempts,
+    },
+    { ...STALL_DEFAULTS },
+  );
 });
 
 test('only the exact word require can make an MCP server able to stop a plan', () => {

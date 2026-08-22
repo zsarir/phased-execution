@@ -155,6 +155,28 @@ waits with the soonest clock (`waitUntil`) — restart-safe: a console reboot re
 a usage-window sleep. Caps make the wait honest: 4 waits and 8 hours parked per phase, then a
 `waiting-external-timeout` halt naming the watch refs.
 
+**Rulings — what a session decided.** The same script's second shape,
+`phase-outcome.sh <slug> <N> ruling --what … [--why …] [--kind ambiguity|deviation|deferral]
+[--cost-if-wrong …]`, appends one NDJSON line to `$PE_RULINGS_FILE` (unsupervised:
+`runs/<instance>/<slug>/rulings.ndjson`). A ruling is not an outcome and nothing acts on one — it
+does not park a phase, climb the ladder or end a turn — which is what makes it safe to record every
+judgement call the plan did not make for you. The console ingests the ledger into the run
+(`run.rulings`, journal `phase.ruling`), serves it at `GET /api/run/:slug/rulings`, puts the phase's
+own on its diagnosis, and raises one `fyi` inbox row per recent one; acknowledging appends a further
+line rather than editing a file a live session may still be writing to.
+
+**Liveness — is the lane actually working?** A wedged `Bash` call, a session reasoning in circles and
+a session about to commit all read `running` with a spinner. Every live lane now exposes
+`{lastOutputAt, lastToolUseAt, turnsSinceLastTool, commitsSinceStart, treeDirty, openTool?, stall?}`
+on `GET /api/run/:slug`, and a 60-second ticker raises one of three signals against it: `silent` (no
+output for `stallSilentMs`, naming the call open longest), `spinning` (`stallSpinTurns` turns with no
+tool call) and `stalemate` (`stallStalemateAttempts` attempts that committed nothing and left a clean
+tree). A phase inside its own §Verification is exempt — a build is silent and fine. One episode is
+one card: only transitions are journalled (`phase.stall` / `phase.liveness`) and announced, under the
+**`stalled`** category, on by default and deliberately not urgent. v1 is display, notification and
+manual verbs (nudge, freeze, stop the lane); making it a ladder situation is the v2 path
+([docs/loop.md](../docs/loop.md)).
+
 **The ladder in the loop.** `interrupted` and `failed` records are not terminal any more. At the top
 of every drive tick, after reconcile, the runner **classifies** each of them — and each phase whose
 handoff exists but is not complete — against the board, the handoff, the lock and the working tree

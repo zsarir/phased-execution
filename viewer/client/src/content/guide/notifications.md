@@ -12,7 +12,7 @@ A category that is off leaves no trace anywhere. Worth stating, because the obvi
 silencing only the buzz — leaves the badge climbing and the inbox filling, which is how people end up
 ignoring the inbox entirely.
 
-## The twelve categories
+## The thirteen categories
 
 | Category | Tells you | Default |
 |---|---|---|
@@ -20,6 +20,7 @@ ignoring the inbox entirely.
 | **A phase needs you** | A phase stopped at a check no automation may sign off. Not failed, not finished — waiting. | On, urgent |
 | **Run halted** | A run stopped on something that must not be automated past, or was interrupted with nothing driving it. | On, urgent |
 | **Run parked or waiting** | Every remaining phase needs a person, or a usage window has to reopen. | On |
+| **Nothing is happening** | A session is still running and still spending but has stopped producing work — silent for ten minutes, six turns without a tool call, or three attempts that changed nothing. | On |
 | **Phase finished or failed** | Each phase as it lands, with what it cost. | On |
 | **Plan finished** | A run reached the end of its plan. | On |
 | **A session ended** | An agent session or terminal finished while you were not watching, or exited with an error. | On |
@@ -33,6 +34,12 @@ The last three are off by default because they are early warnings or firehoses r
 A channel that always buzzes is a channel you turn off, and the notification it was hiding goes with
 it. The wall itself — and everything a run does about one — still announces under **Usage limits**,
 so muting the climb never mutes the crash.
+
+**Nothing is happening** is deliberately not urgent. Nothing is blocked on you and the run has not
+stopped — it is the money question, not the permission question, and a card that buzzes a wrist for it
+would be turned off within a week. The console names which of the three signals it saw and offers the
+three verbs that answer one (steer the session, freeze it where it stands, stop that lane); it does not
+act by itself. A phase inside its own §Verification is exempt, because a build is silent and fine.
 
 **Urgent** is reserved for *nothing proceeds without you*. Those three may interrupt a focus mode and
 buzz a wrist.

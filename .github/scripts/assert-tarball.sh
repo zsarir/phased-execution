@@ -49,6 +49,8 @@ for p in \
   "viewer/server/inbox.ts" \
   "viewer/server/analysis/spend.ts" \
   "viewer/server/runner/models.ts" \
+  "viewer/server/runner/liveness.ts" \
+  "viewer/server/runner/rulings.ts" \
   "scripts/models.env" \
   "viewer/scripts/check-stamp.mjs" \
   "viewer/run" \

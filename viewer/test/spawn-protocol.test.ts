@@ -553,6 +553,45 @@ test('a tool call and its result are joined by id, and timed', async () => {
   b.cleanup();
 });
 
+test("every turn of the phase's own conversation is a step, and a subagent's never is", async () => {
+  // The stream already said everything a turn CONTAINS; what it never said is
+  // that a turn happened at all — and counting turns is the only way to see a
+  // session reasoning in circles. `tool` events cannot be counted for it (one
+  // turn calling three tools emits three) and `result` fires per turn only
+  // after the stdin dance.
+  const b = bench();
+  const events: StreamEvent[] = [];
+  await spawnClaude({
+    prompt: 'BOOT phase 1', cwd: b.dir, env: { ...b.env, PC_STUB_TOOLS: '1' },
+    onEvent: (event) => events.push(event),
+  });
+
+  const steps = events.filter((e) => e.kind === 'step') as { tools: number }[];
+  // Two turns of the phase's own: the one that called six tools, and the one
+  // that only spoke. The subagent's turn — parented to `toolu_task`, and one
+  // tool call of its own — is deliberately NOT among them: a delegating phase
+  // sits with its own conversation stopped while the agent works, and counting
+  // that as activity would hide exactly the stretch worth asking about.
+  assert.deepEqual(steps.map((s) => s.tools), [6, 0]);
+
+  // ...and the step for a turn arrives AFTER what that turn contained, so a
+  // listener that counts steps and reacts to tools sees them in order.
+  const firstStep = events.findIndex((e) => e.kind === 'step');
+  const bashCall = events.findIndex((e) => e.kind === 'tool' && e.id === 'toolu_bash');
+  assert.ok(bashCall >= 0 && bashCall < firstStep, 'the turn is reported once its contents have been');
+  b.cleanup();
+});
+
+test('a session that only talks still reports its turn, with no tools in it', async () => {
+  const b = bench();
+  const events: StreamEvent[] = [];
+  await spawnClaude({
+    prompt: 'BOOT phase 1', cwd: b.dir, env: b.env, onEvent: (event) => events.push(event),
+  });
+  assert.deepEqual((events.filter((e) => e.kind === 'step') as { tools: number }[]).map((s) => s.tools), [0]);
+  b.cleanup();
+});
+
 test('a Task names the agent it hands to, and its subagent\'s failures stay its own', async () => {
   const b = bench();
   const events: StreamEvent[] = [];

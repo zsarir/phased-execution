@@ -21,6 +21,10 @@ import { join } from 'node:path';
 import { instanceId } from '../../shared/instances.mjs';
 import { STATE_DIR } from '../config.ts';
 import type { PermissionProfile } from './approvals.ts';
+// Type-only, so nothing is imported at runtime and the pair that would
+// otherwise be a cycle (`rulings.ts` needs `runDir` from here) never forms one.
+import type { LaneLiveness, StallState } from './liveness.ts';
+import type { Ruling } from './rulings.ts';
 
 export type RunStatus =
   /** The loop is driving phases. */
@@ -361,6 +365,47 @@ export type PhaseRecord = {
    * next classification, which always re-reads the evidence.
    */
   situation?: { key: string; at: string; why?: string[] };
+  /**
+   * What this phase's lane looked like when it was last measured
+   * (`runner/liveness.ts`) — the last output, the last tool call, the turns
+   * since one, whether the tree has anything in it, and the call that has been
+   * open longest.
+   *
+   * Persisted rather than kept only in the runner's memory, because the
+   * question it answers outlives the lane: a console restarted while a phase
+   * was silent still has to be able to say the phase was silent, and the inbox
+   * — which is computed on read, from disk, with no runner necessarily alive —
+   * has nowhere else to read it from. Stale by construction once the lane is
+   * gone; every reader pairs it with the record's own status.
+   */
+  liveness?: LaneLiveness;
+  /**
+   * The stall episode in progress, when there is one. Written when a signal
+   * first holds and DELETED when it clears — its presence is the episode, so
+   * `phase.stall` is journalled once per episode rather than once per tick.
+   *
+   * Cleared by `resetForRetry`: an operator pressing Retry is asking for a
+   * fresh boot, and a stall inherited from the attempt they gave up on would
+   * announce itself again the moment the new one started.
+   */
+  stall?: StallState;
+  /**
+   * How many attempts of THIS phase in a row ended with nothing committed and
+   * a clean tree — the `stalemate` counter. Reset by any attempt that produced
+   * work, and by `resetForRetry`.
+   */
+  idleAttempts?: number;
+  /**
+   * When the runner started running this phase's own §Verification (ISO), and
+   * absent the rest of the time.
+   *
+   * Two readers, one fact: the live detector suppresses every stall signal
+   * while it is set (a build is silent and fine), and the inbox's
+   * `verify-hanging` row measures from it — the runtime half of lint F16,
+   * which warns at plan time about a §Verification that waits on a clock the
+   * session does not control.
+   */
+  verifyingSince?: string;
 };
 
 /**
@@ -849,6 +894,18 @@ export type RunState = {
    * launch dialog, seeded by the `autoRecoverByDefault` pref.
    */
   autoRecover?: { attempts: number };
+  /**
+   * Decisions this plan's sessions recorded while this run drove it
+   * (`runner/rulings.ts`), newest last and bounded.
+   *
+   * A COPY of what the append-only ledger holds, not the ledger itself: the
+   * file at `runs/<instance>/<slug>/rulings.ndjson` is per PLAN and outlives
+   * every run, and `GET /api/run/:slug/rulings` reads it directly so it can
+   * answer before a run exists. This is the run's own slice, so the timeline
+   * and the journal can show a ruling beside the attempt it was made during
+   * without going back to disk.
+   */
+  rulings?: Ruling[];
   phases: Record<string, PhaseRecord>;
 };
 
@@ -1036,6 +1093,12 @@ export function resetForRetry(record: PhaseRecord): void {
   delete record.boardingHint;
   record.lockWaitSince = undefined;
   delete record.lockBackoffMs;
+  // The stall episode belongs to the attempt being given up on. Kept, it would
+  // re-announce itself on the next tick of a lane that has not had time to do
+  // anything yet, and its clock would read from before the Retry.
+  delete record.stall;
+  delete record.idleAttempts;
+  delete record.verifyingSince;
 }
 
 /**

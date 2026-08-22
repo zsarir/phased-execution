@@ -92,7 +92,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { inboxItemId, sortInbox } from '../shared/attention-model.js';
+import { RULING_KIND_LABELS, STALL_META, inboxItemId, sortInbox } from '../shared/attention-model.js';
 import { phaseHref, planHref, toHash } from '../shared/routes.js';
 import { parseSituationKey, situationLabel } from '../shared/situation-model.js';
 import { INSTANCE_STATE_DIR } from './config.ts';
@@ -195,12 +195,41 @@ export type InboxErrand = {
  * declaring it locally means a test can hand-build one in six lines instead of
  * forty, which is the whole point of the pure/performer split.
  */
+/**
+ * One phase's run record, narrowed to what a stall row is decided from.
+ *
+ * Every clock here is a timestamp the runner already writes for its own
+ * reasons — `liveness.lastOutputAt` from the stream, `lockWaitSince` from
+ * admission, `parkedUntil` from the outcome protocol, `verifyingSince` from
+ * the confirm pass. A stall is not a new fact; it is the observation that one
+ * of those has stopped moving.
+ */
+export type InboxRunPhase = {
+  phase: number;
+  /** `PhaseStatus`. */
+  status?: string;
+  /** `runner/liveness.ts` `LaneLiveness`, narrowed. */
+  liveness?: {
+    lastOutputAt?: string;
+    turnsSinceLastTool?: number;
+    openTool?: { name?: string; since?: string };
+  };
+  /** The live signal, when the runner has one. */
+  stall?: { signal?: string; since?: string; detail?: string };
+  lockWaitSince?: string;
+  parkedUntil?: string;
+  parkReason?: string;
+  verifyingSince?: string;
+};
+
 export type InboxRun = {
   id: string;
   slug: string;
   /** `RunStatus`. */
   status: string;
   updatedAt?: string;
+  /** Keyed by phase number as a string, as `RunState.phases` is. */
+  phases?: Readonly<Record<string, InboxRunPhase | undefined>>;
   activePhase?: number | null;
   /** `RunResolution | null` — truthy means someone (or the board) closed it. */
   resolved?: unknown;
@@ -387,6 +416,24 @@ export type InboxFacts = {
     allowAccounts?: boolean;
     allowMcp?: boolean;
   };
+  /**
+   * The plans `server/analysis/stats.ts` already calls stalled: open, with
+   * ready phases, untouched for a week.
+   *
+   * Read rather than re-derived, deliberately. Two computations of "idle for
+   * seven days" would disagree the first time one of them learned about a new
+   * kind of activity, and the Insights page's list is the one an operator has
+   * already seen.
+   */
+  stalledPlans?: readonly { slug: string; days: number; ready: readonly number[] }[];
+  /**
+   * The plans' ruling ledgers (`runner/rulings.ts`), any order. Only the
+   * recent ones raise a row — see `rulingDrafts`.
+   */
+  rulings?: readonly {
+    id: string; slug: string; phase: number; kind: string; what: string;
+    why?: string; costIfWrong?: string; at: string;
+  }[];
   /** The acks file, keyed by `InboxItem.id`. `readAcks()` below reads it. */
   acks?: Readonly<Record<string, InboxAck>>;
   /**
@@ -1083,6 +1130,315 @@ function lockDrafts(facts: InboxFacts): Draft[] {
 }
 
 /* ------------------------------------------------------------------ *
+ * stall — nominally in flight, and not moving
+ * ------------------------------------------------------------------ */
+
+/**
+ * The three verbs that answer a session which has stopped being work.
+ *
+ * `steer` sends a canned nudge rather than opening a compose box: the row is
+ * read on a phone at the top of an inbox, and the useful thing to say to a
+ * session that has produced nothing for half an hour is the same sentence
+ * every time. Anything more specific is a conversation, and the run page is
+ * where conversations happen.
+ */
+function stallActions(slug: string, phase: number, allowRun: boolean | undefined): InboxAction[] {
+  return [
+    {
+      verb: 'steer',
+      label: 'Nudge the session',
+      endpoint: runVerb(slug, 'steer'),
+      method: 'POST',
+      body: {
+        phase,
+        instruction:
+          'You have produced nothing for a while. Say in one line what you are waiting on, then either '
+          + 'continue or declare an outcome with scripts/phase-outcome.sh. If a tool call is hung, abandon '
+          + 'it and take another route.',
+      },
+      ...gatedBy('run', allowRun),
+    },
+    {
+      verb: 'freeze',
+      label: 'Freeze it where it stands',
+      endpoint: runVerb(slug, 'freeze'),
+      method: 'POST',
+      body: { phase },
+      ...gatedBy('run', allowRun),
+    },
+    {
+      verb: 'stop',
+      label: `Stop phase ${phase}`,
+      endpoint: runVerb(slug, 'stop'),
+      method: 'POST',
+      body: { phase },
+      ...gatedBy('run', allowRun),
+    },
+  ];
+}
+
+/** Whole minutes or whole hours, whichever reads as a sentence. */
+function agoText(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 90) return `${Math.max(1, minutes)} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} h`;
+  return `${Math.round(hours / 24)} d`;
+}
+
+/**
+ * The five ways something is nominally in flight and not moving.
+ *
+ * The clocks are `STALL_META`'s and are longer than the runner's own detector
+ * (`shared/attention-model.js` `STALL_DEFAULTS`), deliberately: the runner
+ * notices at ten minutes and announces once, because a notification is cheap
+ * and dismissable; the inbox is a list of things a person still owes an
+ * answer to, and half an hour is where "it is thinking" stops being the likely
+ * explanation.
+ *
+ * Four of the five have no live session at all — a lock nothing is releasing,
+ * a park nothing resumed, a plan nobody has opened, a §Verification that will
+ * not finish — so each carries the verb that actually answers IT rather than
+ * the three that answer a running session.
+ */
+function stallDrafts(facts: InboxFacts, now: number): Draft[] {
+  const out: Draft[] = [];
+  const flags = facts.flags ?? {};
+  const after = (kind: keyof typeof STALL_META): number => STALL_META[kind].afterMs;
+  const older = (at: string | undefined, ms: number): number | null => {
+    if (!at) return null;
+    const started = Date.parse(at);
+    if (!Number.isFinite(started)) return null;
+    return now - started >= ms ? started : null;
+  };
+
+  for (const run of facts.runs ?? []) {
+    if (run.resolved || run.status === 'finished') continue;
+    const live = isLiveStatus(run.status);
+    for (const record of Object.values(run.phases ?? {})) {
+      if (!record || !positivePhase(record.phase)) continue;
+      const phase = record.phase;
+      const common = { slug: run.slug, phase, runId: run.id, href: phaseHref(run.slug, phase) };
+
+      // 1. Silent. The runner's own signal is the trigger and its `since` is
+      //    the clock, so the row and the push cannot disagree about when the
+      //    silence began; the longer floor is applied here.
+      const silentSince = live && record.status === 'running'
+        ? older(record.stall?.signal === 'silent' ? record.stall.since : record.liveness?.lastOutputAt,
+          after('session-silent'))
+        : null;
+      if (silentSince !== null) {
+        const open = record.liveness?.openTool?.name;
+        out.push({
+          kind: 'stall',
+          severity: STALL_META['session-silent'].severity,
+          subject: 'session-silent',
+          ...common,
+          title: `${run.slug} phase ${phase} — silent for ${agoText(now - silentSince)}`,
+          need: `The session is still running and still spending, and it has produced nothing for ${agoText(now - silentSince)}.`
+            + (open ? ` Its oldest open tool call is ${open}.` : ''),
+          how: 'Nudge it, freeze it where it stands, or stop this lane. Nothing else is blocked on it — '
+            + 'the rest of the run carries on either way.',
+          since: new Date(silentSince).toISOString(),
+          actions: stallActions(run.slug, phase, flags.allowRun),
+        });
+      }
+
+      // 2. Queued behind somebody else's lock. Half the runner's own two-hour
+      //    cap: past that the wait becomes a halt with a card of its own, so
+      //    this one has to arrive while it is still a queue.
+      const queuedSince = live ? older(record.lockWaitSince, after('queued-behind-lock')) : null;
+      if (queuedSince !== null) {
+        out.push({
+          kind: 'stall',
+          severity: STALL_META['queued-behind-lock'].severity,
+          subject: 'queued-behind-lock',
+          ...common,
+          title: `${run.slug} phase ${phase} — queued behind a lock for ${agoText(now - queuedSince)}`,
+          need: "This lane has been waiting on another owner's phase lock. It is not failing; it is in a queue.",
+          how: 'Release the lock if the session that took it is gone, or stop this lane and let the run '
+            + 'spend its parallelism somewhere else.',
+          since: new Date(queuedSince).toISOString(),
+          actions: [
+            {
+              verb: 'release',
+              label: 'Release the lock',
+              endpoint: '/api/locks/release',
+              method: 'POST',
+              body: { slug: run.slug, phase },
+              ...gatedBy('writes', flags.allowWrites),
+            },
+            {
+              verb: 'stop',
+              label: `Stop phase ${phase}`,
+              endpoint: runVerb(run.slug, 'stop'),
+              method: 'POST',
+              body: { phase },
+              ...gatedBy('run', flags.allowRun),
+            },
+          ],
+        });
+      }
+
+      // 3. A park whose resume never fired. The waiting was fine; the ARMING
+      //    is what failed, which is why the remedy is Recover and not patience.
+      const overdue = record.status === 'waiting'
+        ? older(record.parkedUntil, after('park-overdue'))
+        : null;
+      if (overdue !== null) {
+        out.push({
+          kind: 'stall',
+          severity: STALL_META['park-overdue'].severity,
+          subject: 'park-overdue',
+          ...common,
+          title: `${run.slug} phase ${phase} — ${agoText(now - overdue)} past its own resume time`,
+          need: `This phase parked until ${new Date(overdue).toLocaleString()} and nothing resumed it.`
+            + (record.parkReason ? ` It said it was waiting on: ${record.parkReason}` : ''),
+          how: 'Recover & continue re-reads the board and re-arms the resume. If the external work it '
+            + 'was waiting on is genuinely still going, the phase re-files its wait by itself.',
+          since: new Date(overdue).toISOString(),
+          actions: [
+            {
+              verb: 'recover',
+              label: 'Recover & continue',
+              endpoint: runVerb(run.slug, 'recover'),
+              method: 'POST',
+              body: { runId: run.id },
+              ...gatedBy('run', flags.allowRun),
+            },
+          ],
+        });
+      }
+
+      // 5. A §Verification that will not finish — the runtime half of lint
+      //    F16, which warns at plan time about a check waiting on a clock the
+      //    session does not control. Runnable, unfinishable.
+      // Gated on the RUN being live, like `silent` and `queued-behind-lock`
+      // and unlike `park-overdue`: a halted run's record can still read
+      // `verifying` — that is what it was doing when it stopped — and a card
+      // saying a check has been running for three hours when nothing is
+      // running is an ask nobody can answer. A park, by contrast, belongs to a
+      // run that is legitimately not running.
+      const hanging = live && record.status === 'verifying'
+        ? older(record.verifyingSince, after('verify-hanging'))
+        : null;
+      if (hanging !== null) {
+        out.push({
+          kind: 'stall',
+          severity: STALL_META['verify-hanging'].severity,
+          subject: 'verify-hanging',
+          ...common,
+          title: `${run.slug} phase ${phase} — verifying for ${agoText(now - hanging)}`,
+          need: 'A §Verification command has been running for longer than any check should take. '
+            + 'Usually one that waits on an external clock — a `gh run watch`, a `--watch` flag, a long sleep.',
+          how: 'Stop this lane, then split the wait out of §Verification behind a Gate-check so the phase '
+            + 'can finish and the wait can be declared (F16 warns about this at plan time).',
+          since: new Date(hanging).toISOString(),
+          actions: [
+            {
+              verb: 'stop',
+              label: `Stop phase ${phase}`,
+              endpoint: runVerb(run.slug, 'stop'),
+              method: 'POST',
+              body: { phase },
+              ...gatedBy('run', flags.allowRun),
+            },
+          ],
+        });
+      }
+    }
+  }
+
+  // 4. A plan nobody has touched in a week that still has startable work.
+  //    Taken whole from the Insights computation rather than re-derived: two
+  //    definitions of "idle" would drift the first time one of them learned
+  //    about a new kind of activity.
+  const closed = new Set((facts.plans ?? []).filter((plan) => plan.closed).map((plan) => plan.slug));
+  for (const idle of facts.stalledPlans ?? []) {
+    if (closed.has(idle.slug)) continue;
+    const plan = (facts.plans ?? []).find((p) => p.slug === idle.slug);
+    out.push({
+      kind: 'stall',
+      severity: STALL_META['plan-idle'].severity,
+      subject: 'plan-idle',
+      slug: idle.slug,
+      title: `${idle.slug} — ${idle.days} days idle with ${idle.ready.length} phase${idle.ready.length === 1 ? '' : 's'} ready`,
+      need: `Nothing has touched this plan for ${idle.days} days, and phase`
+        + `${idle.ready.length === 1 ? ` ${idle.ready[0]} is` : `s ${idle.ready.join(', ')} are`} startable.`,
+      how: 'Start a run, pick the work up by hand, or close the plan if it is not happening — a plan that '
+        + 'is not being worked reports no progress, which is the honest thing for it to say.',
+      // The plan's own last write. Stable between polls and it moves exactly
+      // when the plan does, which is the only moment this ask is new again.
+      since: stableSince(plan?.updatedAt),
+      href: planHref(idle.slug, 'route'),
+      actions: [],
+    });
+  }
+
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * ruling — a decision worth remembering
+ * ------------------------------------------------------------------ */
+
+/**
+ * How far back a ruling is still worth a row.
+ *
+ * A ruling is never resolved and never goes away — the ledger is the record —
+ * so without a window every decision a plan ever made would be a row forever.
+ * Two weeks is the span over which "somebody should see this happened" is
+ * still true; after that it is history, and history is read on the run page.
+ */
+const RULING_INBOX_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
+/** And at most this many per plan, newest first, so one busy plan cannot own the list. */
+const RULING_INBOX_MAX_PER_PLAN = 20;
+
+/**
+ * One `fyi` row per recent ruling.
+ *
+ * `fyi` and not `needs-you`, because nothing is waiting: a ruling has already
+ * been acted on by the session that recorded it. The row exists so the
+ * decision is SEEN once — acknowledging it is the whole interaction, which is
+ * why it carries no action of its own beyond the inbox's own ack.
+ */
+function rulingDrafts(facts: InboxFacts, now: number): Draft[] {
+  const bySlug = new Map<string, Draft[]>();
+  const closed = new Set((facts.plans ?? []).filter((plan) => plan.closed).map((plan) => plan.slug));
+
+  for (const ruling of facts.rulings ?? []) {
+    if (!ruling?.slug || closed.has(ruling.slug)) continue;
+    const at = Date.parse(ruling.at);
+    if (!Number.isFinite(at) || now - at > RULING_INBOX_WINDOW_MS) continue;
+    const rows = bySlug.get(ruling.slug) ?? [];
+    rows.push({
+      kind: 'ruling',
+      severity: 'fyi',
+      // The ruling's own content-derived id. Stable across re-reads of an
+      // append-only file, which is what makes the ack stick.
+      subject: ruling.id,
+      slug: ruling.slug,
+      phase: ruling.phase,
+      title: `${ruling.slug} phase ${ruling.phase} — ${RULING_KIND_LABELS[ruling.kind as keyof typeof RULING_KIND_LABELS] ?? 'Ruling'}`,
+      need: ruling.what,
+      how: ruling.why
+        ? `Why: ${ruling.why}${ruling.costIfWrong ? ` · If it was wrong: ${ruling.costIfWrong}` : ''}`
+        : ruling.costIfWrong
+          ? `If it was wrong: ${ruling.costIfWrong}`
+          : 'Nothing is waiting on you. Acknowledge it to take it off the list; it stays in the ledger either way.',
+      since: new Date(at).toISOString(),
+      href: phaseHref(ruling.slug, ruling.phase),
+      actions: [],
+    });
+    bySlug.set(ruling.slug, rows);
+  }
+
+  return [...bySlug.values()].flatMap((rows) =>
+    rows.sort((a, b) => (a.since < b.since ? 1 : a.since > b.since ? -1 : 0)).slice(0, RULING_INBOX_MAX_PER_PLAN));
+}
+
+/* ------------------------------------------------------------------ *
  * health — the console's own
  * ------------------------------------------------------------------ */
 
@@ -1174,6 +1530,8 @@ export function buildInbox(facts: InboxFacts = {}, now: number = Date.now(), opt
     ...signInDrafts(facts),
     ...mcpDrafts(facts),
     ...lockDrafts(facts),
+    ...stallDrafts(facts, now),
+    ...rulingDrafts(facts, now),
     ...healthDrafts(facts),
   ];
 
