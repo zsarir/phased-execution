@@ -91,6 +91,16 @@ function mount(node: React.ReactElement) {
   return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
 }
 
+/*
+ * Every case here mounts a page through a dynamic `import()`, and vitest's
+ * default per-test timeout is five seconds. In isolation that is ample; under
+ * the full 95-file parallel suite it is not, and the failure surfaces as a
+ * bare "Test timed out" that reads like a hung assertion rather than a slow
+ * module load. Raised for the file, not retried — a test that genuinely hangs
+ * must still fail.
+ */
+vi.setConfig({ testTimeout: 20_000 });
+
 beforeEach(() => {
   vi.clearAllMocks();
   state.mockResolvedValue(BASE_STATE);

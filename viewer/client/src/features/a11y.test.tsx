@@ -253,14 +253,13 @@ async function mountAt(segments: string[], query: Record<string, string> = {}) {
  * it fourteen times; the default 5 s turns a slow assertion into a timeout
  * that reads like a page that never painted.
  *
- * `WAIT` — every destination is behind a `lazy()`, and this file is the only
- * one that resolves six of those chunks. Under the full 95-file suite the
- * workers contend and the first import has been seen to take past 10 s, which
- * surfaced as `now` failing with the Suspense fallback still on screen while
- * the same test passed in isolation and alongside its neighbours. The ceiling
- * is deliberately far above the observed worst case rather than retried: a
- * chunk that genuinely never resolves must still fail, and a retry would hide
- * exactly that.
+ * `WAIT` — every destination and every Settings section is behind a `lazy()`,
+ * and `findBy*`'s default is ONE second. In isolation a chunk resolves inside
+ * it; under the full 95-file parallel suite it does not, and `now` failed on
+ * three consecutive runs with the Suspense fallback still on screen. Both
+ * waits carry this explicitly. Raised rather than retried: a chunk that
+ * genuinely never resolves must still fail, and a retry would hide exactly
+ * that — as would leaving the default in place and calling the result flaky.
  */
 const TIMEOUT = 40_000;
 const WAIT = 30_000;
@@ -272,8 +271,10 @@ describe('axe — every destination', () => {
       async () => {
         const { container } = await mountAt(destination.route, destination.query);
         // Wait for the real content, not the skeleton: a skeleton is a div, and a
-        // page of divs passes every rule there is.
-        await screen.findAllByText(destination.settled);
+        // page of divs passes every rule there is — and wait EXPLICITLY, because
+        // the destination is behind a `lazy()` and `findBy`'s 1 s default is not
+        // enough for a chunk under a 95-file parallel suite.
+        await screen.findAllByText(destination.settled, undefined, { timeout: WAIT });
         await expectNoAxeViolations(container);
       },
       TIMEOUT,
