@@ -6,6 +6,71 @@ tags (`vX.Y.Z`), published by CI from the tag. The Claude Code **plugin** channe
 versionless — it tracks every commit to `main` — and `SKILL.md`'s own `metadata.version` tracks
 skill content, independent of these package releases.
 
+## [3.0.0] - 2026-08-22
+
+Phase Console grew fast along the *automation* axis over 2.0 → 2.3 — the outcome protocol, the
+situation classifier, the remediation ladder, convergence, session presence — and its interface grew
+**by accretion**: each capability got its own card, chip, verb or page. Measured on the 2.3 client
+before this release: 13 nav items, a 7-tab plan page, a 15-card Settings page with no address for
+any card, 34k LOC of app; four permission vocabularies; two QA checkboxes in one dialog; *Continue*
+meaning six different calls; *waiting* meaning five different things; the railway words
+Departed/Boarding beside the board's done/ready beside twelve record statuses; the same state
+painted on four or five surfaces; five status→tone tables that already disagreed; 61 % of all text
+at the 10.9 px `text-2xs` token. Meanwhile the server knew things no screen showed — the run
+journal (~120 event kinds, zero UI), the `$600/day` ladder cap (dead code), `verify-preflight` (no
+client wrapper), and errands that never pushed.
+
+3.0 is the rebuild. **Six destinations, one question each**, every older address still resolving,
+and the automation the server already did finally visible.
+
+- **Now** — *does anything need me, and what is running?* `GET /api/inbox` had answered since 2.3
+  and **no client had ever asked it**: the needs-you badge was the pending-approval count standing
+  in, so a run parked on an errand and a signed-out account both read zero. Four bands now — the
+  inbox with every kind acting inline, live lanes with heartbeat/cost/ETA, next up, plans in flight.
+  `#/dashboard`, `#/ready`, `#/pulse` and `#/notifications` retire into it, each keeping the half of
+  its address that meant something (`#/ready` → `#/now?focus=next`).
+- **Plans** — one toolbar, five tabs (was seven). The Route map gains a health panel and
+  **verify-preflight**, which the server had computed since 2.3 with the same extractor boarding
+  uses, wrote to the journal as prose, and where it predicted the dominant halt class 44 times with
+  nothing rendering it.
+- **Runs** — the journal, the timeline, per-phase **evidence** (claimed vs verified), **liveness**,
+  the **rulings** ledger, the live settings sheet, and settled-today against the day cap.
+- **Sessions** — `#/terminal` and `#/agent` were the same page twice, and each could disable *New*
+  because of sessions its own reader could not see. One list (lanes, agents, shells, foreign Claude
+  sessions), one pane, `#/sessions/:id` reading the kind off the record.
+- **Insights** — `#/stats` and the plan page's *Analysis* tab become one surface with a scope
+  (`?plan=`), in five bands ordered by the questions people actually arrive with: how long is left
+  (with the **basis** under the estimate), what it costs against the caps, this plan's QA verdicts,
+  how fast, what shape, on what.
+- **Settings** — fifteen cards become **eight addressed sections** at `#/settings/<section>`, each
+  named for the question it answers. A setting can be linked to now; before, the only way to give
+  one was *scroll down Settings until you find Automation*.
+- **The phone is first-class.** The key bar was 559 px wide inside a 390 px screen with `→` and
+  `Paste` off the edge, its own scroll disabled by a non-passive `touchstart`, keys firing on
+  `touchend` with no slop test (a swipe typed); the pty was born at 80×24 and the settled size was
+  dropped when the socket was not yet open; every key press yanked the terminal sideways; there was
+  no reconnect after backgrounding. All fixed, and every destination is measured at 320/360/390/430
+  and in landscape with no horizontal overflow, every tap target ≥ 44 px.
+- **Status is a system, not a colour.** One `status-vocab` module: every state is hue + icon + plain
+  word, contrast asserted from the stylesheet as a test, amber reserved for *needs you* alone.
+- **Accessibility.** The axe harness shipped in 2.3 and **nothing called it**; every destination and
+  every Settings section is now smoked against populated fixtures. A hash change is not a
+  navigation, so the app does by hand what a browser does for free: focus moves into the page, the
+  destination is announced in a live region, and there is a skip link.
+- **First paint 220.5 → 172.8 KB gz** (entry 128.2 → 80.7). The help sheet is mounted on every page
+  and imported its panel statically, putting the guide's eleven markdown bodies and `marked` in the
+  entry chunk for everyone. The entry budget read a comfortable 128.6 of 300 KB while this was true;
+  only entry + modulepreloads saw it, and that figure was advisory. It is a hard gate now.
+- **`prefs.density` was declared and read by nothing.** Wired the way the theme is: one attribute,
+  four tokens, every card and tile. Padding only — the 12 px type floor and the 44 px tap minimum
+  are contracts.
+- **`src/views/` is gone**, with a guard that refuses to let it come back, and `RunSetup` is the one
+  launch form with one permission vocabulary and schema parity against the server.
+
+Nothing is removed from the URL space: `#/dashboard` `#/ready` `#/pulse` `#/search` `#/guide`
+`#/stats` `#/notifications` `#/mcp` `#/terminal` `#/agent` and the three retired plan tabs all
+resolve, and the server may keep minting the older shapes.
+
 ## [2.3.0] - 2026-08-21
 
 Measured on the live state dir (19 runs, 14 plans, Aug 5–19), the autopilot stopped for a person far

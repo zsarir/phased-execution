@@ -159,7 +159,8 @@ you a cleaner window.
 
 ## Step 6 · Turn on push, and choose what it sends
 
-**Settings → Notifications** has two switches, and the difference between them is the whole point:
+**Settings ▸ Alerts** (`#/settings/alerts`) has two switches, and the difference between them is the
+whole point:
 
 | | What it is | When it fires |
 |---|---|---|

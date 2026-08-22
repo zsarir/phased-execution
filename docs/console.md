@@ -26,23 +26,28 @@ and the engine answers for exactly one plan at a time. The console is the portfo
 ready **right now** across every plan, which lock is holding what, which plan has stalled, how much
 work is left, and whether a plan's graph even lints.
 
-| Screen | Contents |
+The console is **six destinations**, a command palette, a bell drawer and a help sheet. Every older
+address still resolves — a bookmark, a handoff link or a push notification minted by an earlier
+version lands where its page went, keeping whichever half of the address still means something.
+
+| Destination | Answers |
 |---|---|
-| **Source** | Pick any repository with `docs/plans`. Recent choices are remembered; switch at any time from the left rail. |
-| **Plans** | Every plan with progress, ready phases, locks, QA regime and health. Newest activity first; filter by status, ready, locked or repo. |
-| **Route** | The plan as a transit map — phases are stations, dependencies are track, and each suggested session batch is a train threading the stations it carries. |
-| **Departures** | The board: state, size, dependencies, gates, locks and QA for every phase. |
-| **Phase** | Goal, read-first, files, steps, exit criteria, verification — plus that phase's handoff, gate status, lock and its **boot prompt**, ready to copy. |
-| **Handoffs** | Every handoff with its front-matter contract, body and the boot prompts it generated. |
-| **Analysis** | Critical path, bottleneck, best next phase, remaining weight and sessions, completion timeline, QA table, health issues. |
-| **Overview** | Context, architecture, session budget, the phase-graph table, end-to-end verification and the plan's memory entry. |
-| **Ready now** | Every ready phase across every plan, ranked by how much it unblocks. |
-| **Statistics** | Portfolio totals, velocity, completions calendar, size mix, repos, skills, target models, locks and every health issue. |
-| **Autopilot** | Drive a plan unattended: one `claude -p` per phase, the live session console, the approval queue, and the controls to pause, stop, retry, skip or run a single phase. |
-| **Agent** | Interactive `claude` sessions in the browser terminal — off unless started with `--allow-agent`; a launcher for model/effort/permission mode/first prompt/skills, and a **New plan with AI** wizard that authors a plan from a brief in the skill's own plan mode. |
-| **Terminal** | A real shell in the browser — off unless started with `--allow-terminal`; token-handshaked WebSocket, sessions that survive a reload, a phone key bar. |
-| **Search** | Full text across all plans and handoffs, grouped by plan. |
-| **Usage meters** | In the chrome on every page: each Claude account's 5-hour, weekly and per-model windows with reset countdowns — the same numbers `/usage` shows. Registration of additional accounts (sign-ins, `claude setup-token` tokens) sits in Settings behind `--allow-accounts`; every launch surface then offers an account per run and an on-limit policy (switch account / wait / pause). |
+| **Now** | *Does anything need me, and what is running?* The needs-you inbox with inline actions (approvals, gates, errands, expired accounts, stalled lanes), the live lanes with heartbeat, cost and ETA, what is next up across every plan, and the plans in flight. |
+| **Plans** | *Where is each plan on its route?* Every plan with progress, ready phases, locks, QA regime and health; open one for its Route (the transit map, plus a health panel and the verify-preflight prediction), Phases (state-grouped, with a drawer per phase carrying gate, lock, QA and evidence), Run, Handoffs and Source. |
+| **Runs** | *What has this cost and what happened?* The fleet table with settled-today against the day cap, and per run: the status strip, the ways forward, the lanes and their panes, the state-grouped phases with evidence, liveness and rulings, the timeline, and the journal. |
+| **Sessions** | *What processes exist?* One list for autopilot lanes, agent sessions, shells and the Claude sessions the presence hook reports — and one pane, the phone-first browser terminal, for the two kinds this console holds a pty for. |
+| **Insights** | *How long, how much, how fast?* The estimate and the basis under it, settled spend against the caps, a plan's QA verdicts, the velocity trend and completions calendar, the state and size mix, the locks and health issues, and the repos, skills and models the work runs on. Portfolio-wide, or scoped to one plan with `?plan=`. |
+| **Settings** | *What may this console do, and as whom?* Eight addressed sections — General, Appearance, Automation, Accounts, Alerts, MCP servers, Permissions, This process — each at `#/settings/<section>`, so a setting can be linked to from a handoff, a guide page or a note. |
+
+Riding on every page, on the query string rather than as pages of their own:
+
+| Overlay | What |
+|---|---|
+| **⌘ K palette** | Search across plans and handoffs, plus every verb and every destination by name. `/` opens it without a modifier. |
+| **Bell drawer** | What still needs a person, and the log of everything the console has announced — the same rows as Now's inbox, from the same component, so answering one on a phone clears it on the laptop. |
+| **Help sheet** | This guide, in the app, at `?help=<section>`. |
+| **Usage meters** | In the chrome on every page: each Claude account's 5-hour, weekly and per-model windows with reset countdowns — the same numbers `/usage` shows. Registering additional accounts sits in Settings ▸ Accounts behind `--allow-accounts`; every launch surface then offers an account per run and an on-limit policy (switch account / wait / pause). |
+| **Source picker** | Chromeless and full-screen at `#/source`, because until a root is open there is nothing to navigate to. Settings ▸ General is the door. |
 
 It **updates itself**: a watch on `docs/` pushes changes over server-sent events, so a handoff written
 by an agent session appears without a reload.

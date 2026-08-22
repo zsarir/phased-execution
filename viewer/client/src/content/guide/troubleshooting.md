@@ -86,5 +86,5 @@ so announcements arrive in the inbox and stop there. The Notifications page says
 Turning off the usage-limit alerts** for what that silences.
 
 **Two sessions on one phase.** Take the lock (`scripts/phase-lock.sh <slug> claim <N>`) before
-building, and release it when you stop. The Statistics page lists every claimed phase and how much
+building, and release it when you stop. Insights ▸ What shape the work is in lists every claimed phase and how much
 lease is left.

@@ -104,16 +104,19 @@ The full set — boot prompts, session batching, gate status, handoff scaffoldin
 
 ## Keyboard
 
-| Key | Goes to |
+Three keys, not eight. The 2.x list was seven single-letter jumps you had to memorise from a card you
+had to remember to visit. The palette replaced all of them with one chord that shows you its own
+contents — every destination, every plan, every run, every verb — and prints the chord on itself, in
+the header, on every page.
+
+| Key | Does |
 |---|---|
-| `/` | Search |
-| `r` | Ready now |
-| `p` | Plans |
-| `d` | Dashboard |
-| `s` | Statistics |
-| `g` | Guide |
-| `n` | Notifications |
-| `Esc` | Close a dialog |
+| `⌘ K` | The command palette — search and every verb |
+| `/` | The same, without a modifier |
+| `Esc` | Close a dialog, a sheet or the palette |
+
+Everything the old letters reached is in the palette by name: type `ready` for what is next up,
+`stats` or `insights` for the numbers, `guide` for this page.
 
 ## The eight states
 

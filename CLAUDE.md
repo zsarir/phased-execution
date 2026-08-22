@@ -35,7 +35,10 @@ PHASE_CONSOLE_TEST_ROOT=~/code/your-repo npm test   # + integration and engine-p
 node --test test/runner.test.ts                     # a single server test file
 npm run test:client           # client suite (Vitest + jsdom)
 npm run typecheck:client      # two programs: the app (DOM libs) and the service worker (WebWorker libs)
+npm run lint:client           # ESLint over client/src + shared (typescript-eslint, react-hooks) — zero warnings
+npm run format                # Prettier over the same files (`format:check` is what CI runs)
 npm run dev                   # Vite on :5173, proxying the live console on :4123
+npm run verify:dist           # build into client/.dist-verify + the gate — leaves the LIVE dist untouched
 npm run build                 # emit client/dist and stamp .build-rev
 npm run check:dist            # the build gate — run it after every build
 ```

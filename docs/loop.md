@@ -173,7 +173,7 @@ action: relaunch|heal, why, reboard[], rearm[], launched, phase, situation, rung
 `run.converge-failed`), and the flattened report rides the event stream as **`run:converge`** and
 answers `GET /api/converge` (`{automatic, everyMs, pending[], running[], reports[]}`) — the Pulse's
 **Converge** line ("re-boarded P12 (Never started → Re-board fresh) · released a stale claim on P3")
-is that view, and the `#/pulse` page states whether the loop runs by itself on this console.
+is that view, and Now's *Running now* band states whether the loop runs by itself on this console.
 `--no-converge` keeps the automatic passes off while Recover & continue still works; a console without
 `--allow-run` never converges (it cannot start anything).
 
@@ -227,7 +227,7 @@ seen, or the recorded `claude` pid is gone), **`live`** (seen within 24 h and no
 **`unknown`** (nobody reports it — an un-hooked machine, a lock with no `session=`). `GET
 /api/sessions/registry` lists them with the plan and phase they work; the SSE `sessions` event carries
 the `foreign` list; the Pulse draws live ones as lanes of their own kind (Terminal session · Console
-agent · Autopilot session) and the `#/pulse` page lists the rest under *Other sessions*.
+agent · Autopilot session) and `#/sessions` lists the rest.
 
 **The lock names its session.** `phase-lock.sh claim` writes `session=<id>` from `--session`,
 `$PE_SESSION_ID` (runner-injected — `spawn.ts` mints the id before the child exists and passes the same

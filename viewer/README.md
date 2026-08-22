@@ -94,25 +94,28 @@ the one thing every console must be able to do is stop.
 
 ## What it shows
 
-| Screen | Contents |
+The console is **six destinations**, three overlays that ride the query string, and a chromeless
+source picker. Every address an earlier version minted still resolves — a bookmark, a handoff link
+or a push payload from an older server lands where its page went, keeping whichever half of the
+address still means something (`#/ready` → `#/now?focus=next`, `#/plan/x/raw` →
+`#/plan/x/source?view=raw`, `#/terminal/abc` → `#/sessions/abc`).
+
+| Destination | Answers |
 |---|---|
-| **Source** | Pick any repository with `docs/plans`; recent choices are remembered and switchable at any time. |
-| **Plans** | Every plan with progress, ready phases, locks, QA regime and health. Newest activity first; filter by status, ready, locked or repo. |
-| **Route** | The plan as a transit map — phases are stations, dependencies are track, and each suggested session batch is a train threading the stations it carries. |
-| **Departures** | The board: state, size, dependencies, gates, locks and QA for every phase. Every phase table — here, in Phases, in Overview and in Autopilot — shows the same columns, including who holds a phase and how much of their lease is left. |
-| **Phase** | Goal, read-first, files, steps, exit criteria, verification, plus the phase's handoff, gate status, lock and boot prompt. |
-| **Handoffs** | Every handoff with its front-matter contract, body and the boot prompts it generated. |
-| **Analysis** | Critical path, bottleneck, best next phase, remaining weight and sessions, completion timeline, QA table, health issues. |
-| **Overview** | Context, architecture, session budget, the phase-graph table, end-to-end verification and the plan's memory entry. |
-| **Ready now** | Every ready phase across every plan, ranked by how much it unblocks, each with a copyable prompt. |
-| **Statistics** | Portfolio totals, velocity, completions calendar, size mix, repos, skills, models, locks and every health issue. |
-| **Autopilot** | Drive a plan unattended: one `claude -p` per phase, with the model, effort, skills and tool set chosen per run or per phase; the live session console; the approval queue; and the controls to pause, stop, retry, skip or run a single phase. A phase another session has **claimed** cannot be started — the console and the server both refuse, naming the holder, and the claim can be released from the row after a confirmation. A lapsed claim only warns. A **status header** carries a clock that advances on its own and an estimate of how much is left, and **What it is doing** shows the session's task list, its tool calls with durations and outcomes, and one lane per subagent. Every row expands to the phase's full detail. |
-| **Agent** | Interactive `claude` sessions in the browser terminal — off unless started with `--allow-agent`. A launcher for model, effort, permission mode, the first prompt and extra skills; a **New plan with AI** wizard that boots the skill's plan mode from your brief and links the plan the moment it exists; ended sessions offer their `claude --resume` command. The argv is built server-side from allowlisted fields — the browser never supplies a command. Also the target of **recovery** sessions (a stuck phase handed to a session with a prompt the server composes) and **QA reviews** (a finished phase handed to a fresh session carrying the skill's own QA brief). |
-| **Terminal** | A real shell in the browser — off unless the console was started with `--allow-terminal`. Token-handshaked WebSocket, durable sessions that survive a reload — and a browser close — a key bar for phone keyboards (including `⇧Tab`, claude's permission-mode cycle). |
-| **Dashboard** | What needs you now, each warning next to the verb that answers it: continue or dismiss a halted run, release a stale claim (one or all — the owner is read off the lock file), mark the inbox read, repair a plan that will not parse, or hand any of them to an AI recovery session. Plus every live session across every plan. |
-| **Notifications** | The inbox, and a switch per category that gates **every** delivery leg — no record, no live event, no `PHASE_CONSOLE_NOTIFY`, no push. Devices subscribed for push can only narrow what it allows. Pages mark their own records read as you read them. |
-| **Settings** | Permission rules with a builder that names the forms people get wrong, the notification and push registers, restart, and shut down. |
-| **Search** | Full text across all plans and handoffs, grouped by plan. |
+| **Now** | *Does anything need me, and what is running?* Four bands: the needs-you inbox with inline actions (approvals, gates, errands, expired accounts, stalled lanes — every kind acts in place, and the buttons come from the server's own `{endpoint, method, body}`, so a new kind ships working against a console nobody rebuilt); the live lanes with heartbeat, cost and ETA; what is next up across every plan; and the plans in flight. |
+| **Plans** | *Where is each plan on its route?* The list with progress, ready phases, locks, QA regime and health, filterable by status, ready, locked or repo. A plan opens on five tabs: **Route** (the transit map — phases are stations, dependencies are track, each suggested session batch is a train — plus the health panel and the verify-preflight prediction of how a phase will halt), **Phases** (state-grouped, with a drawer per phase carrying its goal, files, steps, verification, gate, lock, QA verdict and evidence), **Run**, **Handoffs** and **Source**. |
+| **Runs** | *What is this doing, why is it stopped, what did it cost?* The fleet table with settled-today against the day cap, and per run: the status strip, the ways forward (one renderer — there is no second place a remedy can appear), the lanes and their session panes, the state-grouped phases with evidence, liveness and rulings, the timeline and the journal. |
+| **Sessions** | *What processes exist, and can I get at one?* One list for autopilot lanes, agent sessions, shells and the Claude sessions the presence hook reports — and one pane, the phone-first browser terminal, for the two kinds this console holds a pty for. Agent sessions need `--allow-agent`, shells `--allow-terminal`; the list renders either way and says which flag is missing. |
+| **Insights** | *How long, how much, how fast, on what?* The estimate with the basis under it (`plan`, `portfolio` or `heuristic` — the same "≈ 3 days" means three different things), settled spend against the day cap and each run against its budget, a plan's QA verdicts and report paths, the velocity trend and completions calendar, the state/size mix, the locks and health issues, and the repos, skills and models the work runs on. Portfolio-wide, or one plan with `?plan=`. |
+| **Settings** | *What may this console do, and as whom?* Eight sections, each at its own `#/settings/<section>`: **General** (the directory, the engine, the keys), **Appearance** (theme, density, terminal renderer), **Automation** (the defaults every launch opens on, the ladder's caps, the stall thresholds), **Accounts**, **Alerts** (what is announced at all, and the devices), **MCP servers** (registry and catalog), **Permissions**, **This process** (what is running, the start command, the launcher, Tailscale, restart, shut down). |
+
+| Overlay | What |
+|---|---|
+| **⌘ K palette** | Search across every plan and handoff, plus every destination and verb by name. `/` opens it without a modifier. Three keys is the whole keyboard now — the 2.x list was seven single-letter jumps you had to memorise from a card you had to remember to visit. |
+| **Bell drawer** | Two panels: what still needs a person, and the log of everything the console has announced (including what arrived while nothing was open to hear it). The inbox rows are the same component Now renders, so answering one on a phone clears it on the laptop. |
+| **Help sheet** | The guide, in the app, at `?help=<section>` — eleven sections, deep-linkable to a single card. |
+| **Usage meters** | In the chrome on every page: each account's 5-hour, weekly and per-model windows with reset countdowns — the same numbers `/usage` shows. |
+| **Source picker** | `#/source`, chromeless and full-screen: until a root is open there is nothing to navigate to. Settings ▸ General is the door back to it. |
 
 The page updates itself: a watch on `docs/` pushes changes over server-sent events, so a handoff
 written by an agent session appears without a reload. It is also an installable PWA: the app shell
